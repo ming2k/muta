@@ -1205,6 +1205,7 @@ pub(super) async fn run_app_loop(
                         app.template_choice,
                         f,
                         &app.theme,
+                        &mut app.template_scroll,
                     )),
                     Modal::CustomProvider => {
                         let editing = app.custom_is_editing();
@@ -1228,7 +1229,7 @@ pub(super) async fn run_app_loop(
                             } else {
                                 Vec::new()
                             };
-                        Some(render::draw_custom_provider_editor(
+                            Some(render::draw_custom_provider_editor(
                             render::CustomEditorView {
                                 fields: &app.custom_fields,
                                 field: app.custom_field,
@@ -1246,6 +1247,7 @@ pub(super) async fn run_app_loop(
                             },
                             f,
                             &app.theme,
+                            &mut app.custom_scroll,
                         ))
                     }
                     Modal::AddModel => {
@@ -1268,6 +1270,7 @@ pub(super) async fn run_app_loop(
                             &app.input,
                             app.cursor_position,
                             &app.theme,
+                            &mut app.add_model_scroll,
                         ))
                     }
                     Modal::Help => {
@@ -2855,6 +2858,12 @@ pub(super) async fn run_app_loop(
                         app.question_scroll = app.question_scroll.saturating_sub(1);
                     } else if app.active_modal == Modal::TokenReport {
                         app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
+                    } else if app.active_modal == Modal::CustomProvider {
+                        app.custom_scroll = app.custom_scroll.saturating_sub(1);
+                    } else if app.active_modal == Modal::AddModel {
+                        app.add_model_scroll = app.add_model_scroll.saturating_sub(1);
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = app.template_scroll.saturating_sub(1);
                     } else {
                         // While a permission sheet is open the transcript stays
                         // scrollable, so the wheel / page keys drive the
@@ -2884,6 +2893,12 @@ pub(super) async fn run_app_loop(
                         app.question_scroll = app.question_scroll.saturating_add(1);
                     } else if app.active_modal == Modal::TokenReport {
                         app.token_report_scroll = app.token_report_scroll.saturating_add(1);
+                    } else if app.active_modal == Modal::CustomProvider {
+                        app.custom_scroll = app.custom_scroll.saturating_add(1);
+                    } else if app.active_modal == Modal::AddModel {
+                        app.add_model_scroll = app.add_model_scroll.saturating_add(1);
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = app.template_scroll.saturating_add(1);
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(4).min(app.max_scroll);
@@ -2910,6 +2925,8 @@ pub(super) async fn run_app_loop(
                     } else if app.active_modal == Modal::Question {
                         app.question_modal_follow = false;
                         app.question_scroll = app.question_scroll.saturating_sub(step as usize);
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = app.template_scroll.saturating_sub(step as usize);
                     } else {
                         app.follow_bottom = false;
                         app.pin_summary_line = None;
@@ -2934,6 +2951,8 @@ pub(super) async fn run_app_loop(
                     } else if app.active_modal == Modal::Question {
                         app.question_modal_follow = false;
                         app.question_scroll = app.question_scroll.saturating_add(step as usize);
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = app.template_scroll.saturating_add(step as usize);
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(step).min(app.max_scroll);
@@ -2958,6 +2977,8 @@ pub(super) async fn run_app_loop(
                     } else if app.active_modal == Modal::Question {
                         app.question_modal_follow = false;
                         app.question_scroll = 0;
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = 0;
                     } else {
                         app.follow_bottom = false;
                         app.pin_summary_line = None;
@@ -2982,6 +3003,8 @@ pub(super) async fn run_app_loop(
                     } else if app.active_modal == Modal::Question {
                         app.question_modal_follow = false;
                         app.question_scroll = usize::MAX;
+                    } else if app.active_modal == Modal::ProviderTemplate {
+                        app.template_scroll = usize::MAX;
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.max_scroll;

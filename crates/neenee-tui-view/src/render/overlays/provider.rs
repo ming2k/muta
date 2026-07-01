@@ -10,12 +10,12 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::layout::LayoutMap;
 
-use super::common::{caret_column, truncate_ellipsis};
+use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::modal::Modal;
 use crate::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
 };
 
 /// Draw the **two-stage** provider/model picker. Mirrors the input-history
@@ -504,17 +504,7 @@ pub fn draw_model_editor(
         modal_area(frame, Modal::ModelEditor).expect("model editor modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("Edit · {}", title),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, &format!("Edit · {title}"), theme);
 
     // Row 0: API key. Present for provider auth editing; hidden for
     // per-model/channel settings.
@@ -524,19 +514,33 @@ pub fn draw_model_editor(
     // Per-row content budget: the body rect width (already inside the modal's
     // inner padding). Used to right-align the effort/thinking selectors.
     let body_width = f.body.width as usize;
+    // Horizontal-viewport offset for the focused API-key row, so long keys
+    // scroll under the caret instead of spilling past the modal edge.
+    let mut api_key_off: usize = 0;
     let mut body: Vec<Line> = Vec::new();
     if show_key {
-        body.push(Line::from(vec![
-            Span::styled(format!(" {:<8}", "API key"), label_style),
+        let label = format!(" {:<8}", "API key");
+        let label_w = label.width();
+        let field_w = body_width.saturating_sub(label_w);
+        let key_off;
+        let value_span = if input.is_empty() {
+            key_off = 0;
+            Span::styled("enter key…".to_string(), Style::default().fg(theme.muted()))
+        } else if focused_field == 0 {
+            // Focused: caret-following viewport keeps the caret in view.
+            let (off, text) = field_viewport(input, cursor_position, field_w);
+            key_off = off;
+            Span::styled(text, Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD))
+        } else {
+            // Unfocused: width-capped ellipsis truncation.
+            key_off = 0;
             Span::styled(
-                if input.is_empty() {
-                    "enter key…".to_string()
-                } else {
-                    input.to_string()
-                },
+                truncate_ellipsis(input, field_w.max(1)),
                 Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ),
-        ]));
+            )
+        };
+        body.push(Line::from(vec![Span::styled(label, label_style), value_span]));
+        api_key_off = key_off;
     }
 
     // Row 1 (optional): reasoning effort, Anthropic only. The value is cycled
@@ -616,7 +620,15 @@ pub fn draw_model_editor(
             format!(" {:<8}", "API key")
         };
         let row_offset = if focused_field == 1 && show_key { 1 } else { 0 };
-        let cursor_x = body_rect.x + prefix.width() as u16 + caret_column(input, cursor_position);
+        // Subtract the focused field's viewport offset so the caret tracks the
+        // visible (scrolled) text, and clamp it to stay inside the body rect.
+        let caret_col = caret_column(input, cursor_position);
+        let off = if focused_field == 0 { api_key_off as u16 } else { 0 };
+        let max_x = body_rect.x + body_rect.width.saturating_sub(1);
+        let mut cursor_x = (body_rect.x + prefix.width() as u16 + caret_col).saturating_sub(off);
+        if cursor_x > max_x {
+            cursor_x = max_x;
+        }
         let cursor_y = body_rect.y + row_offset as u16;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
@@ -672,21 +684,12 @@ pub fn draw_add_model_editor(
     input: &str,
     cursor_position: usize,
     theme: &Theme,
+    scroll: &mut usize,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::AddModel).expect("add-model modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("＋ Add model · {provider_name}"),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, &format!("＋ Add model · {provider_name}"), theme);
 
     const LABEL_W: usize = 8;
     let label_span = Span::styled(
@@ -710,7 +713,16 @@ pub fn draw_add_model_editor(
     body.extend(suggestion_lines(suggestions, suggest_index, theme));
 
     let body_rect = f.body;
-    render_body(frame, body_rect, body, &mut 0, None, false, theme);
+    // Keep the highlighted suggestion on-screen while navigating with ↑/↓: the
+    // suggestion block starts at body row 2 (filter row + blank), so the
+    // highlight's visual row is `2 + suggest_index`. `render_body` follows that
+    // row, clamping/advancing the scroll offset to keep it visible.
+    let follow = if suggestions.is_empty() {
+        None
+    } else {
+        Some(2 + suggest_index)
+    };
+    render_body(frame, body_rect, body, scroll, follow, false, theme);
 
     if let Some(fo) = f.footer {
         render_modal_footer(
@@ -726,36 +738,36 @@ pub fn draw_add_model_editor(
         );
     }
 
-    // Caret on the filter field.
-    let prefix = format!(" {:<LABEL_W$}", "Model");
-    let cursor_x = body_rect.x + prefix.width() as u16 + caret_column(input, cursor_position);
-    frame.set_cursor_position((cursor_x, body_rect.y));
+    // Caret on the filter field (row 0). `render_body` advanced `scroll` so the
+    // followed suggestion stays visible; the caret row must track that offset
+    // so it lands on the rendered filter row rather than a scrolled-past line.
+    // When the filter row itself is scrolled out of view (scroll > 0), hide
+    // the caret: the user is reviewing suggestions, not editing the filter.
+    if *scroll == 0 {
+        let prefix = format!(" {:<LABEL_W$}", "Model");
+        let cursor_x = body_rect.x + prefix.width() as u16 + caret_column(input, cursor_position);
+        frame.set_cursor_position((cursor_x, body_rect.y));
+    }
     area
 }
 
 /// Draw the provider-template chooser: a short list of curated templates (Custom
 /// Anthropic relay / OpenAI-compatible / Gemini). Each row is a label + a muted
 /// one-line description; `↑/↓` move the highlight and Enter opens the editor.
+/// `scroll` is read AND written back so the offset stays consistent with the
+/// clamped body height; the highlighted template is followed on-screen so
+/// `↑/↓` navigation keeps it visible even when the list overflows the body.
 pub fn draw_provider_template_chooser(
     selected: usize,
     frame: &mut Frame,
     theme: &Theme,
+    scroll: &mut usize,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::ProviderTemplate)
         .expect("provider template chooser modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "＋ Add provider".to_string(),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "＋ Add provider", theme);
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {
@@ -780,7 +792,11 @@ pub fn draw_provider_template_chooser(
         body.push(Line::from(""));
     }
 
-    render_body(frame, f.body, body, &mut 0, None, false, theme);
+    // Each template occupies a 3-line block (label + description + blank); the
+    // highlighted block starts at `selected * 3`. Following that visual line
+    // keeps the whole highlighted entry in view as `↑/↓` wraps around.
+    let follow = selected.checked_mul(3);
+    render_body(frame, f.body, body, scroll, follow, false, theme);
 
     if let Some(fo) = f.footer {
         render_modal_footer(
@@ -833,6 +849,7 @@ pub fn draw_custom_provider_editor(
     view: CustomEditorView<'_>,
     frame: &mut Frame,
     theme: &Theme,
+    scroll: &mut usize,
 ) -> neenee_tui::Rect {
     let CustomEditorView {
         fields,
@@ -855,6 +872,16 @@ pub fn draw_custom_provider_editor(
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     const LABEL_W: usize = 9;
+    let body_width = f.body.width as usize;
+    let label_cell_w = 1 + LABEL_W; // leading space + padded label span
+    let field_w = body_width.saturating_sub(label_cell_w);
+    // Every focused field borrows the composer `input`, so the focused field's
+    // viewport offset is the same regardless of which one is focused.
+    let focus_off = if input.is_empty() {
+        0
+    } else {
+        field_viewport(input, cursor_position, field_w).0
+    };
     let field_label = |label: &str, focused: bool| {
         let style = if focused {
             Style::default()
@@ -879,15 +906,16 @@ pub fn draw_custom_provider_editor(
             Span::styled(val, value_style(focused))
         }
     };
-    // A text row borrows the input line when focused; the Token row masks its
-    // stored value when unfocused.
+    // Focused rows scroll under the caret via the viewport; unfocused rows are
+    // width-capped (Token's `•` mask truncates the same way). This keeps long
+    // keys/base URLs from overflowing the modal.
     let text_row = |focused: bool, label: &str, buf: &str, hint: &str, mask: bool| {
         let raw = if focused {
-            input.to_string()
+            field_viewport(input, cursor_position, field_w).1
         } else if mask {
-            "•".repeat(buf.chars().count())
+            truncate_ellipsis(&"•".repeat(buf.chars().count()), field_w.max(1))
         } else {
-            buf.to_string()
+            truncate_ellipsis(buf, field_w.max(1))
         };
         Line::from(vec![
             field_label(label, focused),
@@ -898,24 +926,14 @@ pub fn draw_custom_provider_editor(
     // committed model's display name.
     let model_row = |focused: bool| {
         let value = if focused {
-            placeholder(input.to_string(), true, "type to filter…")
+            placeholder(field_viewport(input, cursor_position, field_w).1, true, "type to filter…")
         } else {
-            Span::styled(model_display.to_string(), value_style(false))
+            Span::styled(truncate_ellipsis(model_display, field_w.max(1)), value_style(false))
         };
         Line::from(vec![field_label("Model", focused), value])
     };
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                title.to_string(),
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, title, theme);
 
     let token_hint = if editing {
         "blank = keep existing"
@@ -933,7 +951,8 @@ pub fn draw_custom_provider_editor(
         });
     }
     // Suggestion dropdown while the Model filter field is focused.
-    if fields.get(field as usize) == Some(&CustomField::Model) {
+    let model_focused = fields.get(field as usize) == Some(&CustomField::Model);
+    if model_focused {
         body.push(Line::from(""));
         body.push(Line::from(Span::styled(
             " Model matches".to_string(),
@@ -943,8 +962,16 @@ pub fn draw_custom_provider_editor(
     }
 
     let body_rect = f.body;
-    render_body(frame, body_rect, body, &mut 0, None, false, theme);
-
+    // While the Model filter is focused, keep the highlighted suggestion
+    // on-screen as ↑/↓ moves it. The suggestion block starts at
+    // `fields.len() + 2` (form rows + blank + "Model matches" header), so the
+    // highlight's visual row is that base plus `suggest_index`.
+    let follow = if model_focused && !suggestions.is_empty() {
+        Some(fields.len() + 2 + suggest_index)
+    } else {
+        None
+    };
+    render_body(frame, body_rect, body, scroll, follow, false, theme);
     if let Some(fo) = f.footer {
         let hints: Vec<FooterHint> = vec![
             FooterHint::secondary("Tab", "field"),
@@ -956,11 +983,26 @@ pub fn draw_custom_provider_editor(
     }
 
     // Caret on the focused field's row — every visible field borrows the input
-    // line (plain text for Name/URL/Token, the filter query for Model).
-    let row = field as u16;
-    let prefix_w = 1 + LABEL_W as u16; // leading space + padded label
-    let cursor_x = body_rect.x + prefix_w + caret_column(input, cursor_position);
-    let cursor_y = body_rect.y + row;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    // line (plain text for Name/URL/Token, the filter query for Model). Subtract
+    // the focused field's viewport offset and clamp to stay inside the body.
+    // The caret's vertical position must also account for `scroll`: render_body
+    // advanced it to keep the followed suggestion visible, so the focused field
+    // row may have scrolled off the top. Only show the caret when the field is
+    // still in the viewport (scroll <= row < scroll + visible); otherwise hide
+    // it (the user is reviewing suggestions below the form).
+    let row = field as usize;
+    let visible = body_rect.height as usize;
+    let in_view = (*scroll <= row) && (row < *scroll + visible);
+    if in_view {
+        let prefix_w = 1 + LABEL_W as u16; // leading space + padded label
+        let caret_col = caret_column(input, cursor_position);
+        let max_x = body_rect.x + body_rect.width.saturating_sub(1);
+        let mut cursor_x = (body_rect.x + prefix_w + caret_col).saturating_sub(focus_off as u16);
+        if cursor_x > max_x {
+            cursor_x = max_x;
+        }
+        let cursor_y = body_rect.y + (row - *scroll) as u16;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
     area
 }

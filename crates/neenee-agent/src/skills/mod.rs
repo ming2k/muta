@@ -38,16 +38,22 @@ pub mod tools;
 
 pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
 pub use neenee_core::SkillsConfig;
-pub use render::{build_skills_index, resolve_mentions};
+pub use render::resolve_mentions;
 pub use tools::{ListSkillsTool, UseSkillTool};
 
 use discovery::discover_all;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// Thread-safe in-memory registry of discovered skills.
 #[derive(Clone)]
 pub struct SkillRegistry {
     inner: Arc<RwLock<RegistryInner>>,
+    /// Lazily-populated cache of skill bodies, keyed by skill name. A body is
+    /// read from disk (via [`Skill::load_body`]) the first time it is
+    /// requested, then reused so repeated `use_skill` / implicit loads in the
+    /// same session never re-read the file.
+    bodies: Arc<RwLock<HashMap<String, String>>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -64,6 +70,7 @@ impl SkillRegistry {
     pub fn empty() -> Self {
         Self {
             inner: Arc::new(RwLock::new(RegistryInner::default())),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -80,6 +87,7 @@ impl SkillRegistry {
                 errors: Vec::new(),
                 config: config.clone(),
             })),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -97,6 +105,7 @@ impl SkillRegistry {
                 errors: result.errors,
                 config: config.clone(),
             })),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -130,6 +139,30 @@ impl SkillRegistry {
             inner.skills = skills;
             inner.errors.clear();
         }
+        if let Ok(mut bodies) = self.bodies.write() {
+            bodies.clear();
+        }
+    }
+
+    /// Resolve a skill's body by name, loading it from disk on first access
+    /// and caching the result for the lifetime of this registry.
+    ///
+    /// Returns `None` when no skill with that name is registered, and an
+    /// `Err` only if the body genuinely cannot be read.
+    pub fn body_for(&self, name: &str) -> Option<Result<String, String>> {
+        let skill = self.lock().get(name)?;
+        if let Ok(bodies) = self.bodies.read() {
+            if let Some(cached) = bodies.get(name) {
+                return Some(Ok(cached.clone()));
+            }
+        }
+        let body = skill.load_body();
+        if let Ok(ref text) = body {
+            if let Ok(mut bodies) = self.bodies.write() {
+                bodies.insert(name.to_string(), text.clone());
+            }
+        }
+        Some(body)
     }
 }
 
@@ -145,15 +178,6 @@ impl RegistryGuard<'_> {
 
     pub fn list(&self) -> Vec<Skill> {
         self.guard.skills.clone()
-    }
-
-    pub fn enabled_skills(&self) -> Vec<Skill> {
-        self.guard
-            .skills
-            .iter()
-            .filter(|s| s.enabled)
-            .cloned()
-            .collect()
     }
 
     pub fn resolve_mentions(&self, text: &str) -> Vec<Skill> {

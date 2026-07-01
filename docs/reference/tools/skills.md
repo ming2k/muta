@@ -85,7 +85,7 @@ All user-level paths resolve through the central `Dirs` layer
 the full override stack and [Persistence and the XDG
 layout](../../explanation/persistence.md) for the conceptual model.
 
-The catalog is built by `build_skills_index` and injected into the system
-prompt by `Agent::build_system_prompt`. Skills whose names are mentioned in a
-user message are auto-loaded by `Agent::inject_implicit_skills` when their
-policy allows implicit invocation.
+The catalog is **not** injected into the system prompt. Skills are discovered
+on demand via `list_skills` and loaded via `use_skill`. Skills whose names are
+mentioned in a user message are auto-loaded by `Agent::inject_implicit_skills`
+when their policy allows implicit invocation.

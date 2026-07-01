@@ -71,6 +71,7 @@ pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
         | Modal::ModelEditor
         | Modal::CustomProvider
         | Modal::AddModel => apply_modal_field_paste(app, read),
+        Modal::Question => apply_question_other_paste(app, read),
         _ => {}
     }
 }
@@ -152,7 +153,47 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
     }
 }
 
-/// Modal-field paste: splice text inline at the cursor, stripping newlines
+/// Question-modal "Other" field paste. Unlike the readline modals, this field
+/// owns its own buffer (`QuestionModel::other_text`) rather than borrowing
+/// `App::input`, so it can't reuse [`apply_modal_field_paste`]. The text is
+/// spliced through the model's pure `update` as a [`QuestionAction::Paste`],
+/// which appends it to the current question's "Other" field (newlines stripped
+/// first). A no-op if the modal was closed or a real option is highlighted by
+/// the time the (async) read lands. Images are rejected with a toast since the
+/// field has no attachment staging. See [`apply_clipboard_paste`].
+fn apply_question_other_paste(app: &mut App, read: ClipboardRead) {
+    match read {
+        ClipboardRead::Text(text) => {
+            // Single-line: drop newlines the same way the modal-field path
+            // does, since the "Other" field is a one-line text surface.
+            let stripped: String = text.chars().filter(|&c| c != '\n' && c != '\r').collect();
+            let chars = stripped.chars().count();
+            if chars == 0 {
+                return;
+            }
+            if let Some(qm) = app.question.take() {
+                app.question = Some(
+                    qm.update(crate::tui::question_model::QuestionAction::Paste(stripped))
+                        .0,
+                );
+            }
+            app.copy_toast_message =
+                format!("pasted {chars} char{}", if chars == 1 { "" } else { "s" });
+            app.copy_toast_failed = false;
+            app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
+        }
+        ClipboardRead::Image { .. } => {
+            app.copy_toast_message = "can't paste image into this field".to_string();
+            app.copy_toast_failed = true;
+            app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
+        }
+        ClipboardRead::Empty => {
+            app.copy_toast_message = "clipboard is empty".to_string();
+            app.copy_toast_failed = true;
+            app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
+        }
+    }
+}
 /// to preserve single-line semantics (the provider editor's API-key and
 /// model-id fields, the picker filter, and the history search query are all
 /// single-line). Image pastes are dropped with a short toast since the

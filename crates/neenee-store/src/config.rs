@@ -151,6 +151,9 @@ pub enum UserTransport {
     /// Anthropic-compatible `/messages` endpoint. Used by opencode-go's
     /// MiniMax/Qwen models and any Anthropic-format relay.
     Anthropic,
+    /// Google Gemini native API — speaks the official `/v1beta` REST surface
+    /// (`generateContent`/`streamGenerateContent`). Use for Google's own API or
+    /// a relay that forwards model ids verbatim.
     GeminiNative,
 }
 
@@ -318,6 +321,13 @@ pub struct Config {
     // Google / Gemini. The `google` provider is multi-model: the active Gemini
     // model lives in `default_model`, so there is no per-provider model slot.
     pub gemini_api_key: Option<String>,
+    /// Versioned base URL for the built-in `google` Gemini provider. Defaults to
+    /// Google's official API; override (`GEMINI_BASE_URL` env first) to point at
+    /// a Gemini-format relay/中转站 (supply its host with the `/v1beta` prefix —
+    /// the provider appends `/models/{id}:generateContent` itself). One key
+    /// authenticates every Gemini model; the active model id lives in
+    /// `default_model`.
+    pub gemini_base_url: Option<String>,
     // Moonshot / Kimi Code (membership platform). The `kimi-code` preset pins
     // its model id via the provider registry, so the model override is kept
     // only for config/schema compatibility.
@@ -554,6 +564,7 @@ impl Default for Config {
             openai_api_key: None,
             openai_model: Some("gpt-4o".to_string()),
             gemini_api_key: None,
+            gemini_base_url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
             moonshot_api_key: None,
             moonshot_model: Some("kimi-k2.7-code".to_string()),
             deepseek_api_key: None,
@@ -908,6 +919,7 @@ mod tests {
         let mut cfg = Config {
             openai_api_key: Some("sk-openai".to_string()),
             anthropic_base_url: Some("https://ai.hihusky.com/v1/messages".to_string()),
+            gemini_base_url: Some("https://gemini-relay.example.com/v1beta".to_string()),
             ..Default::default()
         };
         cfg.providers.push(UserProviderConfig {
@@ -939,6 +951,10 @@ mod tests {
         assert!(
             on_disk.contains("https://ai.hihusky.com/v1/messages"),
             "anthropic_base_url (endpoint, not a secret) was redacted"
+        );
+        assert!(
+            on_disk.contains("https://gemini-relay.example.com/v1beta"),
+            "gemini_base_url (endpoint, not a secret) was redacted"
         );
 
         // credentials.toml holds the keys.

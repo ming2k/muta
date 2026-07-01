@@ -110,6 +110,22 @@ impl Skill {
     pub fn allows_implicit_invocation(&self) -> bool {
         self.enabled && self.policy.allow_implicit_invocation
     }
+
+    /// Read and return this skill's body text on demand.
+    ///
+    /// The body is stripped of its YAML frontmatter and trimmed. Discovery
+    /// leaves [`Skill::content`] empty deliberately; call this (typically via
+    /// [`SkillRegistry::body_for`](crate::skills::SkillRegistry), which caches
+    /// the result) when the body is actually needed. For an in-memory/embedded
+    /// skill whose `source` is not a real path, this returns `Ok(String::new())`.
+    pub fn load_body(&self) -> Result<String, String> {
+        let raw = match std::fs::read_to_string(&self.source) {
+            Ok(s) => s,
+            Err(_) => return Ok(String::new()),
+        };
+        let (_frontmatter, body) = split_frontmatter(&raw);
+        Ok(body.trim().to_string())
+    }
 }
 
 /// Raw frontmatter extracted from a `SKILL.md` file.
@@ -127,12 +143,17 @@ struct SkillFrontmatter {
     dependencies: Vec<SkillDependency>,
 }
 
-/// Parse a skill file into a [`Skill`].
+/// Parse a skill file's frontmatter into a [`Skill`] without reading its body.
+///
+/// The body is loaded lazily on demand via [`Skill::load_body`] (typically
+/// through [`SkillRegistry::body_for`](crate::skills::SkillRegistry)) — so
+/// discovering a large catalog costs only the frontmatter reads, and body text
+/// enters memory only when a skill is actually used.
 ///
 /// `root` is the skill directory; `source` is the `SKILL.md` path inside it.
-/// If the file has no YAML frontmatter, the whole file is treated as the body
-/// and the name is derived from the parent directory.
-pub fn parse_skill_file(
+/// If the file has no YAML frontmatter, the name is derived from the parent
+/// directory.
+pub fn parse_skill_metadata(
     source: &Path,
     root: &Path,
     scope: SkillScope,
@@ -144,7 +165,7 @@ pub fn parse_skill_file(
 }
 
 /// Parse skill content already loaded into memory (e.g. from a compile-time
-/// embed). Shares schema interpretation with [`parse_skill_file`] so the
+/// embed). Shares schema interpretation with [`parse_skill_metadata`] so the
 /// on-disk and embedded paths can never drift.
 pub fn parse_skill_from_str(
     source: &Path,
@@ -153,7 +174,7 @@ pub fn parse_skill_from_str(
     enabled: bool,
     raw: &str,
 ) -> Result<Skill, String> {
-    let (frontmatter, body) = split_frontmatter(raw);
+    let (frontmatter, _body) = split_frontmatter(raw);
     let meta: SkillFrontmatter = if frontmatter.is_empty() {
         SkillFrontmatter::default()
     } else {
@@ -176,7 +197,11 @@ pub fn parse_skill_from_str(
         scope,
         source: source.to_path_buf(),
         root: root.to_path_buf(),
-        content: body.trim().to_string(),
+        // Body is intentionally left empty at discovery time. It is loaded
+        // lazily via `Skill::load_body` only when the skill is actually used,
+        // so an enabled-but-unused skill never pays the memory cost of its
+        // (often large) body.
+        content: String::new(),
         policy: meta.policy.unwrap_or_default(),
         dependencies: meta.dependencies,
         tags: meta.tags,
@@ -225,11 +250,13 @@ mod tests {
         )
         .unwrap();
 
-        let skill = parse_skill_file(&path, &dir, SkillScope::Repo, true).unwrap();
+        let skill = parse_skill_metadata(&path, &dir, SkillScope::Repo, true).unwrap();
         assert_eq!(skill.name, "rust-expert");
         assert_eq!(skill.description, "Rust help");
         assert_eq!(skill.scope, SkillScope::Repo);
-        assert!(skill.content.contains("# Body"));
+        // Body is lazy: empty at discovery, present after load_body.
+        assert!(skill.content.is_empty());
+        assert!(skill.load_body().unwrap().contains("# Body"));
         assert!(skill.policy.allow_implicit_invocation);
     }
 
@@ -241,10 +268,10 @@ mod tests {
         let path = root.join("SKILL.md");
         std::fs::write(&path, "# Just body").unwrap();
 
-        let skill = parse_skill_file(&path, &root, SkillScope::User, true).unwrap();
+        let skill = parse_skill_metadata(&path, &root, SkillScope::User, true).unwrap();
         assert_eq!(skill.name, "my-skill");
         assert!(skill.description.is_empty());
-        assert!(skill.content.contains("Just body"));
+        assert!(skill.load_body().unwrap().contains("Just body"));
     }
 
     #[test]
@@ -254,6 +281,6 @@ mod tests {
         let path = dir.join("SKILL.md");
         std::fs::write(&path, "---\nname: ''\n---\nbody").unwrap();
 
-        assert!(parse_skill_file(&path, &dir, SkillScope::Repo, true).is_err());
+        assert!(parse_skill_metadata(&path, &dir, SkillScope::Repo, true).is_err());
     }
 }

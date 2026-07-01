@@ -1,30 +1,18 @@
 //! Help / keybindings modal.
 
-use neenee_tui::{
-    Frame, Modifier, Paragraph, Span, {Line, Style},
-};
+use neenee_tui::{Frame, Modifier, Span, {Line, Style}};
 
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
 };
 
 pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::Help).expect("help modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "Help",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Help", theme);
 
     let key = |k: &str| {
         Span::styled(

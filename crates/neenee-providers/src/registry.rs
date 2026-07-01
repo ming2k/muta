@@ -132,8 +132,24 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// The Gemini model ids the built-in `google` provider serves (native Gemini
-/// API, one key). Each id exists in the model registry.
-pub const GOOGLE_BUILTIN_MODELS: &[&str] = &["gemini-2.5-flash", "gemini-2.0-flash"];
+/// API, one key). Each id exists in the model registry. The set is the
+/// canonical text-generation family that Google plus common relays/中转站
+/// advertise — image/embedding/video/audio-only models are excluded since an
+/// agent only consumes the `generateContent` text surface.
+pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
+    // ── Gemini 3.x ──
+    "gemini-3.5-flash",
+    "gemini-3-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview-customtools",
+    // ── Gemini 2.5 ──
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+    // ── Gemini 2.0 (still widely served by relays) ──
+    "gemini-2.0-flash",
+];
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash + Pro over
 /// the OpenAI-compatible API, one key). Each id exists in the model registry.
@@ -186,9 +202,17 @@ impl OpenAiProviderSpec {
 /// attributed to the logical model even after a mid-session switch.
 pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn Provider> {
     match &channel.transport {
-        Transport::GeminiNative => Arc::new(
-            GeminiProvider::new(channel.api_key.clone(), channel.model.clone())
-                .with_id(entry_id.to_string()),
+        Transport::GeminiNative {
+            base_url,
+            user_agent,
+        } => Arc::new(
+            GeminiProvider::with_base_url_and_user_agent(
+                channel.api_key.clone(),
+                channel.model.clone(),
+                base_url,
+                user_agent,
+            )
+            .with_id(entry_id.to_string()),
         ),
         Transport::Anthropic {
             base_url,

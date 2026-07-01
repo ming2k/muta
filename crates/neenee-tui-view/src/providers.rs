@@ -99,8 +99,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "Native Google Gemini API — serves the Gemini family",
         protocol: "gemini",
         models: neenee_providers::GOOGLE_BUILTIN_MODELS,
-        needs_url: false,
-        url_hint: "",
+        needs_url: true,
+        url_hint: "https://generativelanguage.googleapis.com/v1beta",
         needs_model: false,
     },
 ];
@@ -117,16 +117,23 @@ pub fn provider_template_label_for(protocol: &str) -> String {
 }
 
 /// The ordered editor fields shown when **editing** an existing user provider:
-/// Name, Base URL (unless the provider speaks native Gemini), and Token. The
-/// Model field is omitted — models (and their per-model reasoning, ADR-0046)
-/// are managed in the stage-2 list.
+/// Name, Base URL, and Token. The Model field is omitted — models (and their
+/// per-model reasoning, ADR-0046) are managed in the stage-2 list. The Base URL
+/// is editable for every protocol, including native Gemini (a 中转站/relay
+/// supplies its versioned host, e.g. `https://relay.example.com/v1beta`).
 pub fn edit_fields(protocol: &str) -> Vec<CustomField> {
-    let mut fields = vec![CustomField::Name];
-    if protocol != "gemini" {
-        fields.push(CustomField::BaseUrl);
-    }
-    fields.push(CustomField::Token);
-    fields
+    let _ = protocol;
+    vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+}
+
+/// Whether a protocol's model set is *closed*: the candidate list is the full,
+/// fixed set and the add-model overlay must NOT offer a free-text fallback.
+/// OpenAI-compatible and Anthropic relays serve an open, evolving model set, so
+/// typing an unlisted id is legitimate; native Gemini is a closed family — its
+/// models are enumerated by Google and forwarded verbatim by relays, so an
+/// arbitrary id is almost certainly a typo or hallucination, not a real model.
+pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
+    matches!(protocol_wire, "gemini")
 }
 
 /// The registry model ids that match a custom protocol's wire format, used as the
@@ -402,6 +409,51 @@ mod tests {
         let anthropic = protocol_model_candidates("anthropic");
         assert!(anthropic.contains(&"claude-opus-4-8"));
         assert!(!anthropic.contains(&"gpt-4o"));
+    }
+
+    #[test]
+    fn gemini_candidate_set_is_the_canonical_family() {
+        // The native-Gemini candidate list mirrors the ids Google plus common
+        // relays/中转站 serve — so a Custom Gemini provider offers real models,
+        // not hallucinated preview ids. Image/embedding/video-only models are
+        // excluded (an agent only consumes the text generateContent surface).
+        let gemini = protocol_model_candidates("gemini");
+        for id in [
+            "gemini-3.5-flash",
+            "gemini-3-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+        ] {
+            assert!(gemini.contains(&id), "gemini candidate set missing {id}");
+        }
+        // Image-generation variants must NOT be in the text agent's candidate set.
+        assert!(
+            !gemini.contains(&"gemini-2.5-flash-image"),
+            "image-only model leaked into gemini candidates"
+        );
+    }
+
+    #[test]
+    fn gemini_model_set_is_closed_others_open() {
+        // A closed set means the add-model overlay offers no free-text fallback:
+        // the candidate list is the complete family, so an unmatched id is a
+        // typo. OpenAI/Anthropic relays serve an open, evolving set, so typing
+        // an unlisted id stays legitimate there.
+        assert!(
+            protocol_model_set_closed("gemini"),
+            "native Gemini must be a closed model set"
+        );
+        assert!(
+            !protocol_model_set_closed("openai"),
+            "OpenAI-compatible relays keep an open model set"
+        );
+        assert!(
+            !protocol_model_set_closed("anthropic"),
+            "Anthropic relays keep an open model set"
+        );
     }
 
     #[test]

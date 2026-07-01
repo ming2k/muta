@@ -85,6 +85,48 @@ pub fn caret_column(display: &str, cursor_position: usize) -> u16 {
     neenee_tui::text::cursor_column(display, byte) as u16
 }
 
+/// A single-line input's horizontal viewport (caret-following): the mechanism
+/// that keeps long API-key / Token values from overflowing the modal. Returns
+/// `(offset, text)` where `text` is the substring of `display` visible within
+/// `width` display columns and `offset` is the leftmost visible column (the
+/// screen caret column is the caret column minus this offset). Scrolling only
+/// kicks in once the caret would leave the window, and the caret is anchored at
+/// 3/4 across the window so typing forward stays as jitter-free as a normal
+/// text input. Width-aware so wide glyphs never desync the budget.
+pub fn field_viewport(display: &str, cursor_position: usize, width: usize) -> (usize, String) {
+    use unicode_width::UnicodeWidthChar;
+    if width == 0 {
+        return (0, String::new());
+    }
+    let total = display.width();
+    if total <= width {
+        return (0, display.to_string());
+    }
+    let n = cursor_position.min(display.chars().count());
+    let caret_col = display.chars().take(n).fold(0usize, |acc, c| {
+        acc + UnicodeWidthChar::width(c).unwrap_or(1)
+    });
+
+    let mut offset = caret_col.saturating_sub(width * 3 / 4);
+    if offset + width > total {
+        offset = total.saturating_sub(width);
+    }
+
+    let mut text = String::new();
+    let mut col = 0usize;
+    for c in display.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(1);
+        if col >= offset && col < offset + width {
+            text.push(c);
+        }
+        col += cw;
+        if col >= offset + width {
+            break;
+        }
+    }
+    (offset, text)
+}
+
 /// Draw the unified provider editor Two fields — API key
 /// (masked) and model id — with `Tab` cycling focus. The composer input line
 /// is borrowed for the focused field's value; `key_buf` / `model_buf` hold the

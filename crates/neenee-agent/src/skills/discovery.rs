@@ -2,7 +2,7 @@
 
 use super::SkillsConfig;
 use super::bundled;
-use super::metadata::{Skill, SkillScope, parse_skill_file};
+use super::metadata::{Skill, SkillScope, parse_skill_metadata};
 use super::remote::{cached_remote_roots, fetch_remote_repo};
 use neenee_store::paths;
 use std::collections::HashMap;
@@ -191,7 +191,7 @@ fn discover_local_skills(
         {
             let source = entry.path();
             let skill_root = source.parent().unwrap_or(root).to_path_buf();
-            match parse_skill_file(source, &skill_root, scope, true) {
+            match parse_skill_metadata(source, &skill_root, scope, true) {
                 Ok(mut skill) => {
                     if config.is_disabled(&skill.name) {
                         skill.enabled = false;
@@ -307,7 +307,13 @@ mod tests {
         let skill = &result.skills[0];
         assert_eq!(skill.scope, SkillScope::Repo, "higher-priority source wins");
         assert_eq!(skill.description, "high");
-        assert_eq!(skill.content, "high body");
+        // Body is loaded lazily, so it is empty right after discovery...
+        assert!(
+            skill.content.is_empty(),
+            "body is not read at discovery time"
+        );
+        // ...and resolves on demand from the winning source.
+        assert_eq!(skill.load_body().unwrap(), "high body");
 
         let _ = std::fs::remove_dir_all(&low);
         let _ = std::fs::remove_dir_all(&high);

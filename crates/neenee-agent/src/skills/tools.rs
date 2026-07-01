@@ -39,19 +39,29 @@ impl Tool for UseSkillTool {
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let name = args["name"].as_str().ok_or("Missing 'name'")?;
 
-        let registry = self.registry.lock();
-        if let Some(skill) = registry.get(name) {
-            let files = list_skill_files(&skill.root);
-            Ok(format!(
-                "[Skill '{}' loaded]\n{}\n[/Skill]\n\nSkill files:\n{}",
-                skill.name, skill.content, files
-            ))
-        } else {
-            Err(format!(
-                "Skill '{}' not found. Available skills can be discovered via the system prompt or list_skills.",
-                name
-            ))
-        }
+        // Snapshot only the metadata we need (name, root) under the read lock,
+        // then release it before reading the body — keeps lock scope tight.
+        let (skill_name, files) = {
+            let registry = self.registry.lock();
+            let Some(skill) = registry.get(name) else {
+                return Err(format!(
+                    "Skill '{}' not found. Use the list_skills tool to discover available skills.",
+                    name
+                ));
+            };
+            (skill.name.clone(), list_skill_files(&skill.root))
+        };
+
+        // Body is loaded lazily (and cached) on first use of this skill.
+        let content = self
+            .registry
+            .body_for(name)
+            .ok_or_else(|| format!("Skill '{}' not found.", name))??;
+
+        Ok(format!(
+            "[Skill '{}' loaded]\n{}\n[/Skill]\n\nSkill files:\n{}",
+            skill_name, content, files
+        ))
     }
 }
 

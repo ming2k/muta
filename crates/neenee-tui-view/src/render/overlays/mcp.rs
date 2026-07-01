@@ -8,9 +8,7 @@
 //! session, and `r` reconnects it. Data comes from the session-context
 //! snapshot's `mcp` pane (the same snapshot `/session` and `/tools` use).
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Style};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};
@@ -19,7 +17,7 @@ use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
     FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_spec, render_body, render_modal_footer,
+    modal_frame, modal_header, modal_spec, render_body, render_modal_footer,
 };
 
 /// Draw the MCP manager modal: a centered, dismissable, selectable list of the
@@ -144,17 +142,7 @@ pub fn draw_mcp_modal(
     let area = content_modal_area(frame, Modal::Mcp, desired).expect("mcp modal has geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                "MCP servers",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "MCP servers", theme);
 
     let body_rect = f.body;
     let visible = body_rect.height as usize;

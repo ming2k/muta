@@ -10,9 +10,7 @@
 //! overview stays a glanceable summary and the tool list gets a focused,
 //! selectable, scrollable surface of its own.
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Style};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};
@@ -21,7 +19,7 @@ use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
     FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_spec, render_body, render_modal_footer,
+    modal_frame, modal_header, modal_spec, render_body, render_modal_footer,
 };
 
 /// Draw the tools manager modal: a centered, dismissable, selectable list of
@@ -143,17 +141,7 @@ pub fn draw_tools_modal(
     let area = content_modal_area(frame, Modal::Tools, desired).expect("tools modal has geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                "Tools",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Tools", theme);
 
     let body_rect = f.body;
     let visible = body_rect.height as usize;

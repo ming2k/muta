@@ -1,4 +1,6 @@
-//! Google Gemini native provider (REST to `generativelanguage.googleapis.com`).
+//! Google Gemini native provider (REST to the versioned Gemini base, default
+//! `https://generativelanguage.googleapis.com/v1beta`; overridable for a
+//! 中转站/relay).
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -8,10 +10,19 @@ use serde_json::{Value, json};
 
 use crate::{decode_response_json, ensure_success, transport_error};
 
+/// Official Gemini REST base, versioned. The provider appends the per-call
+/// model path (`/models/{id}:generateContent` / `:streamGenerateContent`), so a
+/// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
+pub const GEMINI_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+
 pub struct GeminiProvider {
     pub api_key: String,
     pub model: String,
     pub id: String,
+    /// Versioned base URL (`.../v1beta`). The provider appends the per-call
+    /// path (`/models/{id}:generateContent` / `:streamGenerateContent`).
+    pub base_url: String,
+    pub user_agent: String,
     /// Stash for the `usageMetadata` object returned by the most recent
     /// request, drained by [`Provider::take_last_usage`].
     last_usage: std::sync::Mutex<Option<TokenUsage>>,
@@ -19,12 +30,12 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(api_key: String, model: String) -> Self {
-        Self {
+        Self::with_base_url_and_user_agent(
             api_key,
             model,
-            id: "gemini".to_string(),
-            last_usage: std::sync::Mutex::new(None),
-        }
+            GEMINI_DEFAULT_BASE_URL,
+            crate::NEENEE_USER_AGENT,
+        )
     }
 
     /// Set the attribution id (provider/solution id) so assistant responses are
@@ -32,6 +43,45 @@ impl GeminiProvider {
     pub fn with_id(mut self, id: String) -> Self {
         self.id = id;
         self
+    }
+
+    /// Build a provider targeting a custom versioned base URL (e.g. a
+    /// Gemini-format relay) with an explicit `User-Agent`. A trailing slash on
+    /// `base_url` is tolerated (stripped).
+    pub fn with_base_url_and_user_agent(
+        api_key: String,
+        model: String,
+        base_url: &str,
+        user_agent: &str,
+    ) -> Self {
+        Self {
+            api_key,
+            model,
+            id: "gemini".to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            user_agent: user_agent.to_string(),
+            last_usage: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+/// Augment a transport-layer error with model-specific guidance. For native
+/// Gemini, a `404 NOT_FOUND` almost always means the upstream (a relay/中转站
+/// or even Google itself) does not serve this model id — not a transient fault
+/// and not a malformed request. Pointing this out saves the user from assuming
+/// the client is broken. Other statuses pass through unchanged.
+fn clarify_error(err: String, model: &str, base_url: &str) -> String {
+    if err.contains("HTTP 404") || err.contains("\"status\": \"NOT_FOUND\"") {
+        format!(
+            "{err}\n\n\
+             Gemini returned 404 for model `{model}`. The upstream at {base_url} does \
+             not serve this model — it may advertise it in /v1beta/models but still \
+             reject it, or the id may be deprecated/preview-only. Switch to a model the \
+             relay actually serves (e.g. gemini-2.5-flash / gemini-2.5-pro), or pick a \
+             different provider."
+        )
+    } else {
+        err
     }
 }
 
@@ -149,24 +199,31 @@ impl Provider for GeminiProvider {
     async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
         let client = reqwest::Client::new();
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
+            "{}/models/{}:generateContent?key={}",
+            self.base_url, self.model, self.api_key
         );
 
         let body = gemini_request_body(messages);
 
         let response = client
             .post(&url)
+            .header("User-Agent", &self.user_agent)
             .json(&body)
             .send()
             .await
             .map_err(|error| transport_error("Gemini", error))?;
-        let response = ensure_success(response, "Gemini").await?;
+        let response = ensure_success(response, "Gemini")
+            .await
+            .map_err(|e| clarify_error(e, &self.model, &self.base_url))?;
 
         let response_json: Value = decode_response_json(response, "Gemini").await?;
 
         if let Some(err) = response_json.get("error") {
-            return Err(format!("Gemini Error: {}", err));
+            return Err(clarify_error(
+                format!("Gemini Error: {}", err),
+                &self.model,
+                &self.base_url,
+            ));
         }
 
         let candidates = response_json
@@ -222,19 +279,22 @@ impl Provider for GeminiProvider {
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-            self.model, self.api_key
+            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+            self.base_url, self.model, self.api_key
         );
 
         let body = gemini_request_body(messages);
 
         let response = client
             .post(&url)
+            .header("User-Agent", &self.user_agent)
             .json(&body)
             .send()
             .await
             .map_err(|error| transport_error("Gemini", error))?;
-        let response = ensure_success(response, "Gemini").await?;
+        let response = ensure_success(response, "Gemini")
+            .await
+            .map_err(|e| clarify_error(e, &self.model, &self.base_url))?;
 
         // SSE byte reassembly (incl. multi-byte UTF-8 split across chunks) is
         // handled by `sse::data_payloads`; here we only map each payload to the
@@ -319,5 +379,31 @@ mod tests {
             "[tool result]\nfile contents"
         );
         assert_eq!(body["contents"][1]["parts"][1]["text"], "next");
+    }
+
+    #[test]
+    fn default_constructor_targets_official_base() {
+        // `new` resolves the official versioned base; the per-call path is
+        // appended at request time, not stored on the base.
+        let p = GeminiProvider::new("k".to_string(), "gemini-2.5-flash".to_string());
+        assert_eq!(
+            p.base_url,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(p.user_agent, crate::NEENEE_USER_AGENT);
+    }
+
+    #[test]
+    fn custom_base_url_strips_trailing_slash() {
+        // A relay/中转站 base supplied with a trailing slash must not yield a
+        // double slash in the appended model path.
+        let p = GeminiProvider::with_base_url_and_user_agent(
+            "k".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "https://relay.example.com/v1beta/",
+            "relay-agent/1.0",
+        );
+        assert_eq!(p.base_url, "https://relay.example.com/v1beta");
+        assert_eq!(p.user_agent, "relay-agent/1.0");
     }
 }

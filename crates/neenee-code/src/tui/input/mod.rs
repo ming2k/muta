@@ -112,6 +112,17 @@ fn edits_input_field(
     }
 }
 
+/// Whether the question modal's "Other" free-text row is the active editing
+/// surface. Unlike the modals covered by [`edits_input_field`], the question
+/// field does NOT borrow `App::input` (it owns `QuestionModel::other_text`),
+/// so it must not be lumped into `edits_input_field` — that would also enable
+/// the readline ops (Ctrl+A/E/W/U/K, Home/End, word-delete Backspace) which
+/// all mutate `App::input` and would corrupt an unrelated buffer. Only the
+/// paste paths (Ctrl+V, bracketed paste) route into this field.
+fn question_other_field(context: &InputContext) -> bool {
+    context.active_modal == super::Modal::Question && context.question_other_highlighted
+}
+
 /// Result of processing an input event.
 #[derive(Debug, PartialEq)]
 pub enum InputAction {
@@ -1174,7 +1185,14 @@ pub fn process_event(
                 // inserts the text at the cursor (main prompt), or splices it
                 // inline into the modal field (modals).
                 KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
+                    if question_other_field(&context) {
+                        // The "Other" field owns its own buffer (not
+                        // `App::input`), so it can't share `edits_input_field`
+                        // with the readline modals. Route through the same
+                        // async paste path; the event loop applies the read to
+                        // `QuestionModel::other_text`.
+                        InputAction::Paste
+                    } else if edits_input_field(
                         context.active_modal,
                         context.history_searching,
                         context.model_searching,
@@ -1878,7 +1896,11 @@ pub fn process_event(
             // splice it inline into the focused field in the free-text
             // modals (provider editor, provider picker filter, history
             // search).
-            if edits_input_field(
+            if question_other_field(&context) {
+                // The "Other" field owns its own buffer; route the bracketed
+                // payload into it via the event loop's paste apply.
+                InputAction::BracketedPaste(text)
+            } else if edits_input_field(
                 context.active_modal,
                 context.history_searching,
                 context.model_searching,

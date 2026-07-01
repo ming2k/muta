@@ -9,15 +9,14 @@
 //!
 //! The default system sections ([`IdentityPreamble`], [`ConcisenessGuidance`],
 //! [`ToneGuidance`], [`TodoGuidance`], [`PersistenceGuidance`],
-//! [`PursuitObjective`], [`AskUserGuidance`], [`DelegationGuidance`],
-//! [`SkillsIndex`]) compose the system message in rank order: sections that
+//! [`PursuitObjective`], [`AskUserGuidance`], [`DelegationGuidance`])
+//! compose the system message in rank order: sections that
 //! need a visual gap include a leading `\n` in their own `render`, so joining
 //! on a single `\n` preserves a stable layout.
 //!
 //! [`Agent::inject_implicit_skills`] stays here for now (it is a user-channel
 //! injection); ADR-0039 stage 4 will fold it into a user-channel section.
 
-use crate::skills;
 use crate::{
     Agent, InjectionKind, InjectionOrigin, Message, PromptChannel, PromptContext, PromptRegistry,
     PromptSection, Role,
@@ -113,9 +112,8 @@ impl PromptSection for ConcisenessGuidance {
 
 /// Model-specific guidance. Each model behaves differently, so the resolved
 /// model's `Model::model_guidance` is the per-model hook for whatever
-/// behavioral nudge it needs (e.g. GLM's anti-loop instructions). Renders it
-/// verbatim when non-empty — the model entry is the single source of truth.
-/// Empty for Claude/GPT/Gemini.
+/// behavioral nudge it needs. Renders it verbatim when non-empty — the model
+/// entry is the single source of truth. Empty for all known models today.
 struct ModelGuidance;
 
 impl PromptSection for ModelGuidance {
@@ -305,35 +303,14 @@ impl PromptSection for DelegationGuidance {
     }
 }
 
-/// The skills catalog, when any skills are registered. Leading `\n`
-/// separates it from the paragraphs above.
-struct SkillsIndex;
-
-impl PromptSection for SkillsIndex {
-    fn id(&self) -> &'static str {
-        "system.skills_index"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
-    }
-    fn rank(&self) -> u32 {
-        60
-    }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
-        ctx.skills_index.is_some()
-    }
-    fn render(&self, ctx: &PromptContext) -> Option<String> {
-        let index = ctx.skills_index.as_ref()?;
-        Some(format!("\n{index}"))
-    }
-}
-
 /// Build the registry with the default system-channel sections, in rank
 /// order. Called once from [`Agent::new`]; an embedding may add more sections
 /// (or reorder / disable these) afterwards via the registry handle.
+///
+/// Note: skills are deliberately *not* injected into the system prompt. The
+/// model discovers them lazily via the `list_skills` tool and loads bodies on
+/// demand via `use_skill`. Injecting a catalog up front bloats every turn for
+/// a benefit the tools already cover.
 pub(crate) fn default_prompt_registry() -> PromptRegistry {
     let mut registry = PromptRegistry::new();
     registry.register(IdentityPreamble);
@@ -345,7 +322,6 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
     registry.register(PursuitObjective);
     registry.register(AskUserGuidance);
     registry.register(DelegationGuidance);
-    registry.register(SkillsIndex);
     registry
 }
 
@@ -474,14 +450,6 @@ impl Agent {
     /// Derive the read-only prompt context from live agent state. Owned plain
     /// data (ADR-0039): rebuilt each round, no `&Agent` leaks into sections.
     pub(crate) fn build_prompt_context(&self, messages: &[Message]) -> PromptContext {
-        let skills_index = {
-            let registry = self.skills_registry.lock();
-            if registry.list().is_empty() {
-                None
-            } else {
-                Some(skills::build_skills_index(&registry.enabled_skills()))
-            }
-        };
         let tool_names: Vec<String> = self
             .visible_tools()
             .iter()
@@ -498,7 +466,6 @@ impl Agent {
             identity_preamble: self.identity.preamble(),
             pursuit: self.get_pursuit(),
             tool_names,
-            skills_index,
             last_visible_user_text,
             model_guidance,
         }
@@ -540,7 +507,6 @@ impl Agent {
             return;
         }
 
-        let registry = self.skills_registry.lock();
         let already_loaded: std::collections::HashSet<String> = messages
             .iter()
             .filter(|m| m.role == Role::User && m.hidden)
@@ -552,17 +518,25 @@ impl Agent {
             })
             .collect();
 
-        for skill in registry.resolve_mentions(&text) {
-            if already_loaded.contains(&skill.name) {
+        let mentioned: Vec<String> = {
+            let registry = self.skills_registry.lock();
+            registry
+                .resolve_mentions(&text)
+                .into_iter()
+                .map(|s| s.name)
+                .filter(|name| !already_loaded.contains(name))
+                .collect()
+        };
+
+        for name in mentioned {
+            // Body is loaded lazily (and cached) on first use of this skill.
+            let Some(Ok(content)) = self.skills_registry.body_for(&name) else {
                 continue;
-            }
+            };
             messages.push(Message::injected(
                 Role::User,
-                format!(
-                    "[Skill '{}' loaded]\n{}\n[/Skill]",
-                    skill.name, skill.content
-                ),
-                InjectionOrigin::new(InjectionKind::ImplicitSkill).with_reason(skill.name.clone()),
+                format!("[Skill '{}' loaded]\n{}\n[/Skill]", name, content),
+                InjectionOrigin::new(InjectionKind::ImplicitSkill).with_reason(name),
             ));
         }
     }

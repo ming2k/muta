@@ -45,16 +45,44 @@ api_key_env = "ACME_API_KEY"        # env var wins over the inline key below
 model = "acme-1"
 ```
 
+A **native-Gemini relay / 中转站** uses `GeminiNative`. The `base_url` is the
+versioned base (carry the `/v1beta` prefix — the `/models/{id}:generateContent`
+path is appended for you). Auth stays on the `?key=` query param:
+
+```toml
+default_provider = "my-gemini-relay"
+
+[[providers]]
+id = "my-gemini-relay"
+name = "My Gemini Relay"
+
+[[providers.channels]]
+label = "default"
+transport = "GeminiNative"
+base_url = "https://relay.example.com/v1beta"
+api_key_env = "GEMINI_RELAY_KEY"
+model = "gemini-2.5-flash"
+```
+
+To redirect the **built-in** `google` preset instead (so `/provider switch
+google` and `default_provider = "google"` route through the relay), set the
+top-level `gemini_base_url` (or export `GEMINI_BASE_URL`):
+
+```toml
+default_provider = "google"
+gemini_base_url = "https://relay.example.com/v1beta"
+```
+
 Per-channel fields:
 
 | Field | Meaning |
 |-------|---------|
-| `transport` | `OpenAiCompat`, `GeminiNative`, or `Llama` |
-| `base_url` | Full chat-completions URL (OpenAI-compatible) or server root (Llama) |
+| `transport` | `OpenAiCompat`, `Anthropic`, `GeminiNative`, or `Llama` |
+| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), **versioned Gemini base** (native Gemini, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you), or server root (Llama) |
 | `api_key_env` | Env var name read first; empty values fall through |
 | `api_key` | Inline key, used when `api_key_env` is unset or empty |
 | `model` | Wire model id; falls back to the entry `id` when omitted |
-| `user_agent` | OpenAI-compatible only |
+| `user_agent` | OpenAI-compatible and native Gemini |
 
 An entry whose `id` matches a built-in replaces it entirely; a new `id` is
 appended. One entry may carry several `channels` (e.g. a model reachable

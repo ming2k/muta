@@ -78,6 +78,10 @@ pub enum QuestionAction {
     InsertChar(char),
     /// Delete the last character from the "Other" field.
     Backspace,
+    /// Paste a string into the "Other" field at the end. Newlines are stripped
+    /// first by the caller so the field stays single-line, matching the
+    /// inline-edit modal fields. No-op unless "Other" is highlighted.
+    Paste(String),
     /// Submit all answers (Enter). For single-select this submits the
     /// highlighted option; for multi-select it submits the whole toggle set.
     Submit,
@@ -323,6 +327,18 @@ impl QuestionModel {
                     && let Some(text) = self.other_text.get_mut(q)
                 {
                     text.pop();
+                }
+                Vec::new()
+            }
+            QuestionAction::Paste(pasted) => {
+                // Same gating as InsertChar/Backspace: only the "Other" row
+                // has a text surface. The caller (event loop) has already
+                // stripped newlines, so this is a plain append.
+                let other_idx = self.other_index_of(q);
+                if self.highlight == other_idx
+                    && let Some(text) = self.other_text.get_mut(q)
+                {
+                    text.push_str(&pasted);
                 }
                 Vec::new()
             }
@@ -624,6 +640,55 @@ mod tests {
     fn backspace_when_not_on_other_is_noop() {
         let m = QuestionModel::open(single_select_req()); // highlight 0
         let (m, _) = m.update(QuestionAction::Backspace);
+        assert_eq!(m.other_text(), &[""]);
+    }
+
+    #[test]
+    fn paste_appends_to_other_field() {
+        // Focus "Other", type one char, then paste a string — the paste
+        // appends after the existing text (cursor is always at the end).
+        let m = QuestionModel::open(single_select_req());
+        let m = m.update(QuestionAction::Select(3)).0; // focus Other (idx 2)
+        let m = m.update(QuestionAction::InsertChar('h')).0;
+        let (m, _) = m.update(QuestionAction::Paste("ello world".to_string()));
+        assert_eq!(m.other_text(), &["hello world"]);
+    }
+
+    #[test]
+    fn paste_when_not_on_other_is_noop() {
+        // A real option is highlighted, so paste must not touch other_text.
+        let m = QuestionModel::open(single_select_req()); // highlight 0
+        let (m, _) = m.update(QuestionAction::Paste("nope".to_string()));
+        assert_eq!(m.other_text(), &[""]);
+    }
+
+    #[test]
+    fn paste_then_submit_carries_the_text() {
+        // End-to-end: paste into "Other", submit — the reply carries the
+        // pasted text rather than the literal "Other".
+        let m = QuestionModel::open(single_select_req());
+        let m = m.update(QuestionAction::Select(3)).0; // focus Other
+        let m = m.update(QuestionAction::Paste("custom".to_string())).0;
+        let (_, eff) = m.update(QuestionAction::Submit);
+        assert_eq!(
+            eff,
+            vec![
+                QuestionEffect::Reply {
+                    request_id: "q1".into(),
+                    answers: vec![vec!["custom".to_string()]],
+                },
+                QuestionEffect::Closed {
+                    request_id: "q1".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_empty_string_is_noop() {
+        let m = QuestionModel::open(single_select_req());
+        let m = m.update(QuestionAction::Select(3)).0; // focus Other
+        let (m, _) = m.update(QuestionAction::Paste(String::new()));
         assert_eq!(m.other_text(), &[""]);
     }
 

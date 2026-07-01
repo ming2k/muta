@@ -63,11 +63,11 @@ pub struct Model {
     pub format: WireFormat,
     /// Model-specific prompt guidance injected into the system prompt as a
     /// `ModelGuidance` section. Because each model behaves differently,
-    /// this is the per-model hook for any behavioral nudge a model needs
-    /// (e.g. GLM's throughput / anti-loop instructions). Empty when
-    /// the model needs none (Claude, GPT, Gemini). The model entry is the
-    /// single source of truth; the prompt engine just renders whatever the
-    /// resolved model carries.
+    /// this is the per-model hook for any behavioral nudge a model needs.
+    /// Empty for all known models today; a model entry is free to carry
+    /// non-empty guidance when it needs one. The model entry is the single
+    /// source of truth; the prompt engine just renders whatever the resolved
+    /// model carries.
     pub model_guidance: &'static str,
     /// The reasoning-effort levels this model honors, ascending. Used as the
     /// clamp range when a user requests an effort the model doesn't support.
@@ -94,25 +94,6 @@ impl Model {
 ///
 /// `fallback_model` is defined in this module.
 ///
-/// Model-specific guidance for the GLM family. GLM models historically get
-/// stuck re-issuing identical tool calls without making progress; that is now
-/// caught deterministically by the read-loop guard (`nudge`), so the prompt
-/// guidance focuses on throughput instead: batch independent calls, don't
-/// re-read freshly-edited files, and keep answers short. The prompt engine
-/// injects it via `ModelGuidance` when the resolved model carries a non-empty
-/// value.
-pub const GLM_GUIDANCE: &str = "\
-# Tool usage policy\n\
-- Batch independent tool calls in a single assistant message — e.g. read \
-several files at once, or run `git status` and `git diff` together. Only \
-wait for a result when a later call needs an earlier one's output.\n\
-- Avoid repeating the same tool with the same parameters once you have \
-useful results. Use the result to take the next step (e.g. pick one match, \
-read that file, then act); do not search again in a loop.\n\
-- Do not re-read a file you just edited — the edit tool already verified it.\n\
-- Keep final answers short: a few lines for a small change, a brief list \
-for a larger one.";
-
 pub const KNOWN_MODELS: &[Model] = &[
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
     Model {
@@ -124,7 +105,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         tool_call: true,
         vision: false,
         format: WireFormat::OpenAiCompat,
-        model_guidance: GLM_GUIDANCE,
+        model_guidance: "",
         effort_levels: &[],
     },
     Model {
@@ -136,7 +117,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         tool_call: true,
         vision: false,
         format: WireFormat::OpenAiCompat,
-        model_guidance: GLM_GUIDANCE,
+        model_guidance: "",
         effort_levels: &[],
     },
     Model {
@@ -148,7 +129,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         tool_call: true,
         vision: false,
         format: WireFormat::OpenAiCompat,
-        model_guidance: GLM_GUIDANCE,
+        model_guidance: "",
         effort_levels: &[],
     },
     Model {
@@ -160,7 +141,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         tool_call: true,
         vision: false,
         format: WireFormat::OpenAiCompat,
-        model_guidance: GLM_GUIDANCE,
+        model_guidance: "",
         effort_levels: &[],
     },
     // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
@@ -308,9 +289,99 @@ pub const KNOWN_MODELS: &[Model] = &[
         effort_levels: &[],
     },
     // ── Gemini (Google) ────────────────────────────────────────────────────
+    // Native Gemini REST surface (`generateContent`/`streamGenerateContent`).
+    // The id strings mirror Google's official naming and the ids relay/中转站
+    // gateways advertise — so a relay-served model resolves to real metadata
+    // instead of a generic fallback. See ADR for the configurable
+    // `gemini_base_url`.
+    Model {
+        id: "gemini-3.5-flash",
+        name: "Gemini 3.5 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
+        id: "gemini-3.1-pro-preview-customtools",
+        name: "Gemini 3.1 Pro Preview (Custom Tools)",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
     Model {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.5-flash-lite",
+        name: "Gemini 2.5 Flash-Lite",
         family: "gemini",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
@@ -610,6 +681,37 @@ mod tests {
         assert_eq!(resolve("minimax-m3").format, WireFormat::AnthropicCompat);
         // models.dev records qwen3.* as openai-compatible under opencode-go.
         assert_eq!(resolve("qwen3.7-max").format, WireFormat::OpenAiCompat);
+    }
+
+    #[test]
+    fn gemini_models_resolve_with_native_format_and_family() {
+        // Every id the google/中转站 relay advertises must resolve to real
+        // metadata (native Gemini wire format + the gemini family), so a
+        // Custom Gemini channel never falls back to the generic OpenAI-shaped
+        // stub. Newer preview ids are the ones that previously resolved to the
+        // fallback — this guards them.
+        for id in [
+            "gemini-3.5-flash",
+            "gemini-3-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ] {
+            let m = resolve(id);
+            assert_eq!(m.format, WireFormat::Gemini, "{id} must be native Gemini");
+            assert_eq!(m.family, "gemini", "{id} family");
+            assert!(m.tool_call, "{id} must support tool calls");
+            assert!(m.vision, "{id} must be multimodal");
+            assert!(
+                m.context_window >= 1_000_000,
+                "{id} context window: {}",
+                m.context_window
+            );
+        }
     }
 
     #[test]

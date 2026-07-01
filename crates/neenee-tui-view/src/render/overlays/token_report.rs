@@ -8,9 +8,7 @@
 //! this session.
 
 use neenee_core::TokenSourceReport;
-use neenee_tui::{
-    Color, Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Color, Frame, {Line, Span}, Modifier, Style};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::placeholder;
@@ -19,7 +17,7 @@ use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
     FooterHint, content_modal_area, content_modal_probe, modal_chrome_rows, modal_frame,
-    modal_spec, render_body, render_modal_footer,
+    modal_header, modal_spec, render_body, render_modal_footer,
 };
 
 /// Draw the token bill (list) or, when `detail` is set, the per-model breakdown
@@ -77,17 +75,7 @@ pub fn draw_token_report_modal(
         .expect("token-report modal has geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                title,
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, &title, theme);
 
     render_body(frame, f.body, body, scroll, None, false, theme);
 

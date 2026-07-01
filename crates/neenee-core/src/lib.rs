@@ -84,7 +84,9 @@ pub use events::{
 };
 pub use hooks::{Hook, HookContext, HookEvent, HookEventKind, HookOutcome, SessionSource};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
-pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
+pub use model::{
+    KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model,
+};
 pub use nudgeconfig::NudgeConfig;
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

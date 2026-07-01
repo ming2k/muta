@@ -31,7 +31,7 @@ pub(crate) use neenee_tui_view::completion::CompletionKind;
 pub(crate) use neenee_tui_view::modal::{ActivityTab, Modal, Recess};
 pub(crate) use neenee_tui_view::providers::{
     CustomField, PROVIDER_TEMPLATES, model_display_name, protocol_model_candidates,
-    provider_template_label_for, providers_filtered_from,
+    protocol_model_set_closed, provider_template_label_for, providers_filtered_from,
 };
 
 use crossterm::{
@@ -974,16 +974,19 @@ pub async fn run_tui(
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
         custom_suggest_index: 0,
+        custom_scroll: 0,
         custom_edit_id: None,
         custom_name: String::new(),
         custom_base_url: String::new(),
         custom_token: String::new(),
         custom_model: String::new(),
         template_choice: 0,
+        template_scroll: 0,
         model_search: false,
         picker_provider: None,
         add_model_provider: None,
         add_model_choice: 0,
+        add_model_scroll: 0,
         model_scroll: 0,
         model_modal_follow: true,
         key_status: HashMap::new(),

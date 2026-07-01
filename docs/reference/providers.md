@@ -61,7 +61,7 @@ env vars are data in that table, not hard-coded per struct.
 | `default_provider` | Struct | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|--------|----------|-------------|-----------|--------------------------|
 | `openai` | `OpenAiCompatProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-4o`, `gpt-4o-mini` |
-| `gemini` | `GeminiProvider` | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}` | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-2.5-flash` (default), `gemini-2.0-flash`, `gemini-1.5-pro` |
+| `gemini` | `GeminiProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../crates/neenee-providers/src/registry.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
 | `llama` | `LlamaServerProvider` | `${LLAMA_BASE_URL}/v1/chat/completions` | none | `LLAMA_MODEL` | user-supplied |
 
 Notes:

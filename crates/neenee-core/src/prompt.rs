@@ -61,15 +61,12 @@ pub struct PromptContext {
     pub pursuit: Option<Pursuit>,
     /// Names of the tools admitted this turn (e.g. `["ask_user", ...]`).
     pub tool_names: Vec<String>,
-    /// Pre-rendered skills-index string, if any skills are enabled.
-    pub skills_index: Option<String>,
     /// Concatenation of the latest visible user text (used by mention-style
     /// sections such as implicit-skill load).
     pub last_visible_user_text: String,
-    /// Model-specific guidance from the resolved model. Empty for most
-    /// models; non-empty when the model entry carries a
-    /// `Model::model_guidance` (e.g. GLM family). Rendered verbatim by
-    /// `ModelGuidance`.
+    /// Model-specific guidance from the resolved model. Empty for all
+    /// known models today; non-empty when a model entry carries a
+    /// `Model::model_guidance`. Rendered verbatim by `ModelGuidance`.
     pub model_guidance: &'static str,
 }
 

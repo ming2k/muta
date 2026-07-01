@@ -8,17 +8,16 @@
 //! `App::transcript_layout`(App::transcript_layout). `Esc`
 //! returns to the config root.
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Modifier, Style};
 
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::layout::Strategy;
 use crate::render::primitives::{
-    FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_spec, render_body, render_modal_footer,
+    FooterHint, HeaderPart, content_modal_area, content_modal_probe, contrast_fg,
+    modal_chrome_rows, modal_frame, modal_header_parts, modal_spec, render_body,
+    render_modal_footer,
 };
 
 /// One selectable layout strategy + its human description.
@@ -151,20 +150,18 @@ pub fn draw_config_layout_modal(
         .expect("config layout modal geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("Configuration › ", Style::default().fg(theme.muted())),
-                Span::styled(
-                    "Layout",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            h,
-        );
-    }
+    modal_header_parts(
+        frame,
+        f.header,
+        &[
+            HeaderPart::Text {
+                text: "Configuration › ",
+                accent: false,
+            },
+            HeaderPart::title("Layout"),
+        ],
+        theme,
+    );
 
     let body_rect = f.body;
     let follow = selected_line;

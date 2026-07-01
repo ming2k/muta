@@ -1,32 +1,6 @@
-//! Formatting skills for the system prompt and resolving user mentions.
+//! Formatting skills for resolving user mentions.
 
 use super::metadata::Skill;
-
-/// Build a compact skills catalog for the system prompt.
-pub fn build_skills_index(skills: &[Skill]) -> String {
-    let enabled: Vec<&Skill> = skills.iter().filter(|s| s.enabled).collect();
-    if enabled.is_empty() {
-        return "No skills discovered.".to_string();
-    }
-
-    let mut lines = vec![
-        "Available skills (call use_skill to load full content, or mention a skill by name):"
-            .to_string(),
-    ];
-    for skill in enabled {
-        let scope = format!("[{}]", skill.scope);
-        let desc = if skill.description.as_str().trim().is_empty() {
-            skill
-                .short_description
-                .as_deref()
-                .unwrap_or("No description")
-        } else {
-            skill.description.as_str()
-        };
-        lines.push(format!("  - {} {}: {}", scope, skill.name, desc));
-    }
-    lines.join("\n")
-}
 
 /// Build a verbose listing similar to what list_skills returns.
 pub fn format_skill_list(skills: &[Skill]) -> String {
@@ -50,10 +24,12 @@ pub fn format_skill_list(skills: &[Skill]) -> String {
 
 /// Resolve which skills a piece of text is referring to.
 ///
-/// Matches:
+/// Matches only explicit intent:
 /// - `@skill-name`
 /// - `skill://skill-name` or `skill://path/to/SKILL.md`
-/// - the plain skill name as a standalone token
+///
+/// A plain skill name as a loose token does NOT match — that was too eager
+/// and pulled skill bodies into context on coincidental word overlap.
 pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
     let mut matched = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -86,43 +62,12 @@ fn is_mentioned(text: &str, name: &str, source: &std::path::Path) -> bool {
         return true;
     }
 
-    // Plain name as a standalone token. We consider tokens to be separated by
-    // whitespace or common punctuation.
-    for token in tokenize(text) {
-        if token == name {
-            return true;
-        }
-    }
-
+    // Deliberately do NOT match the plain skill name as a loose token: a
+    // coincidental word in the user's message ("pdf", "docx", ...) would
+    // otherwise pull the full skill body into context as a hidden user
+    // message. Implicit loading now requires an explicit signal — @mention
+    // or a skill:// URI.
     false
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                ',' | '.'
-                    | ';'
-                    | ':'
-                    | '!'
-                    | '?'
-                    | '('
-                    | ')'
-                    | '['
-                    | ']'
-                    | '{'
-                    | '}'
-                    | '<'
-                    | '>'
-                    | '"'
-                    | '\''
-                    | '`'
-            )
-    })
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
-    .collect()
 }
 
 #[cfg(test)]
@@ -156,10 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn resolves_plain_name_token() {
+    fn does_not_match_plain_name_token() {
+        // A plain skill name as a loose token must NOT trigger implicit
+        // loading — only @mention or skill:// should.
         let skills = vec![sample_skill("rust-expert")];
         let mentions = resolve_mentions("rust-expert: review this", &skills);
-        assert_eq!(mentions.len(), 1);
+        assert!(mentions.is_empty());
     }
 
     #[test]

@@ -8,15 +8,13 @@
 //! added (compaction, hooks, permissions defaults, …), they each get a row
 //! here and a dedicated sub-page module under `overlays/`.
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Style};
 
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
     FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_spec, render_body, render_modal_footer,
+    modal_frame, modal_header, modal_spec, render_body, render_modal_footer,
 };
 
 /// One configurable category row in the config root modal.
@@ -113,17 +111,7 @@ pub fn draw_config_modal(
         content_modal_area(frame, Modal::Config, desired).expect("config modal has geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "Configuration",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Configuration", theme);
 
     let body_rect = f.body;
     let follow = selected_line;

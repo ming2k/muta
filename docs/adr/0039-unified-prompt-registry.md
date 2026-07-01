@@ -9,7 +9,16 @@
 > and store-owned prompts were investigated and **deliberately not migrated**
 > (templates already centralized, no defect, registry would be ceremony) —
 > see the Migration section. The `sections`-on-`SubagentProfile` field is
-> deferred until a profile needs a different section set.
+> > deferred until a profile needs a different section set.
+>
+> **Revision (skills section removed).** The registry's `system.skills_index`
+> section (`SkillsIndex`) was removed. Skills are no longer injected into the
+> system prompt at all — discovery is delegated to the `list_skills` tool and
+> bodies load on demand via `use_skill`. This drops per-turn prompt bloat
+> (every enabled skill's catalog entry used to ship in the system message) for
+> no loss of capability, since the tools already cover discovery and loading.
+> The `PromptContext.skills_index` field and `skills::build_skills_index` were
+> deleted in the same change.
 
 ## Context
 

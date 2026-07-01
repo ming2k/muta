@@ -497,6 +497,11 @@ pub struct App {
     /// Highlight index into the live suggestion list for the provider editor's
     /// Model **filter** field (type to filter, `↑/↓` to move, committed live).
     pub custom_suggest_index: usize,
+    /// Scroll offset for the custom-provider editor body. Rendered body sets
+    /// the upper bound automatically.
+    pub custom_scroll: usize,
+    /// Scroll offset for the add-model overlay body.
+    pub add_model_scroll: usize,
     /// When `Some(id)`, the provider editor is **editing** the existing user
     /// provider `id` (meta only: Name/Base URL/Token; models stay managed in the
     /// stage-2 list). `None` is create mode.
@@ -511,6 +516,10 @@ pub struct App {
     /// Selected row of the provider-template chooser ([`Modal::ProviderTemplate`]),
     /// indexing [`crate::tui::PROVIDER_TEMPLATES`]. Cycled with `↑/↓`.
     pub template_choice: usize,
+    /// Scroll offset for the provider-template chooser body. The rendered body
+    /// sets the upper bound automatically (via `render_body`), and `↑/↓` move
+    /// the selection so the chosen template stays on-screen.
+    pub template_scroll: usize,
     /// Whether the model picker's **search sub-layer** is active. The picker
     /// ([`Modal::Provider`]) opens in browse mode (`false`): a plain ranked list
     /// with no query field. Pressing `/` enters search (`true`), which borrows
@@ -1117,6 +1126,7 @@ impl App {
     pub fn open_provider_template_chooser(&mut self) {
         self.active_modal = Modal::ProviderTemplate;
         self.template_choice = 0;
+        self.template_scroll = 0;
         self.input.clear();
         self.set_cursor(0);
         self.picker_provider = None;
@@ -1244,21 +1254,28 @@ impl App {
     }
 
     /// Move the Model suggestion highlight, committing the newly-highlighted
-    /// suggestion live. No-op when the Model field is not focused.
+    /// suggestion live. When the Model field is NOT focused, scrolls the modal
+    /// body instead.
     pub fn move_custom_suggestion(&mut self, forward: bool) {
-        if self.current_custom_field() != Some(CustomField::Model) {
-            return;
-        }
-        let len = self.custom_model_suggestions().len();
-        if len == 0 {
-            return;
-        }
-        self.custom_suggest_index = if forward {
-            (self.custom_suggest_index + 1) % len
+        if self.current_custom_field() == Some(CustomField::Model) {
+            let len = self.custom_model_suggestions().len();
+            if len == 0 {
+                return;
+            }
+            self.custom_suggest_index = if forward {
+                (self.custom_suggest_index + 1) % len
+            } else {
+                (self.custom_suggest_index + len - 1) % len
+            };
+            self.commit_custom_suggestion();
         } else {
-            (self.custom_suggest_index + len - 1) % len
-        };
-        self.commit_custom_suggestion();
+            // Non-Model fields: ↑/↓ scroll the modal body.
+            if forward {
+                self.custom_scroll = self.custom_scroll.saturating_add(1);
+            } else {
+                self.custom_scroll = self.custom_scroll.saturating_sub(1);
+            }
+        }
     }
 
     /// React to a change in the Model filter query: reset the highlight to the
@@ -1373,23 +1390,27 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// The protocol wire string ("anthropic" / "gemini" / "openai") for the
+    /// provider the add-model overlay targets, derived from its active model.
+    /// `None` when the overlay is closed or the provider is gone.
+    fn add_model_wire(&self) -> Option<&'static str> {
+        let id = self.add_model_provider.as_deref()?;
+        let row = self.provider_picker.rows.iter().find(|r| r.id == id)?;
+        let format = neenee_core::resolve_model(&row.model).format;
+        Some(match format {
+            neenee_core::WireFormat::AnthropicCompat => "anthropic",
+            neenee_core::WireFormat::Gemini => "gemini",
+            neenee_core::WireFormat::OpenAiCompat => "openai",
+        })
+    }
+
     /// The model candidate list for the add-model overlay: the registry models
     /// matching the targeted custom provider's wire format (derived from its
     /// active model). Empty when the overlay is closed or the provider is gone.
     pub fn add_model_candidates(&self) -> Vec<&'static str> {
-        let Some(id) = self.add_model_provider.as_deref() else {
-            return Vec::new();
-        };
-        let Some(row) = self.provider_picker.rows.iter().find(|r| r.id == id) else {
-            return Vec::new();
-        };
-        let format = neenee_core::resolve_model(&row.model).format;
-        let wire = match format {
-            neenee_core::WireFormat::AnthropicCompat => "anthropic",
-            neenee_core::WireFormat::Gemini => "gemini",
-            neenee_core::WireFormat::OpenAiCompat => "openai",
-        };
-        crate::tui::protocol_model_candidates(wire)
+        self.add_model_wire()
+            .map(crate::tui::protocol_model_candidates)
+            .unwrap_or_default()
     }
 
     /// Number of selectable rows in the picker's current stage — stage-2 model
@@ -1438,7 +1459,10 @@ impl App {
 
     /// The add-model overlay's suggestions matching the live filter: the
     /// provider's protocol candidates that fuzzy-match, plus the raw typed text
-    /// as a custom id when it is not already a candidate.
+    /// as a custom id when it is not already a candidate. The free-text
+    /// fallback is suppressed for closed model sets (native Gemini): the
+    /// candidate list is the complete, fixed family, so an unmatched query is a
+    /// typo rather than a real model and must not be creatable from the overlay.
     pub fn add_model_suggestions(&self) -> Vec<String> {
         let q = self.input.trim();
         let mut out: Vec<String> = self
@@ -1452,7 +1476,12 @@ impl App {
             })
             .map(|s| s.to_string())
             .collect();
-        if !q.is_empty() && !out.iter().any(|m| m == q) {
+        // Only open protocols (OpenAI/Anthropic relays) accept an arbitrary id;
+        // a closed set (Gemini) restricts choice to its enumerated candidates.
+        let closed = self
+            .add_model_wire()
+            .is_some_and(crate::tui::protocol_model_set_closed);
+        if !closed && !q.is_empty() && !out.iter().any(|m| m == q) {
             out.push(q.to_string());
         }
         out

@@ -4,7 +4,8 @@
 
 use crate::modal::{Modal, Recess};
 use neenee_tui::{
-    Constraint, Direction, Frame, Layout, Line, Margin, Rect, {Block as RtBlock, Clear, Paragraph},
+    Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
+    {Block as RtBlock, Clear, Paragraph},
     {Color, Span, Style},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -533,6 +534,69 @@ fn truncate_to_width(s: &str, max: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// Render the unified modal title into the header rect produced by
+/// [`modal_frame`]. This is the single place every centered modal's
+/// `brand + BOLD` title is painted, so the header style no longer needs to be
+/// repeated per-component. The two-line variants (a muted breadcrumb followed
+/// by a brand title, e.g. `Configuration › Layout`) pass the parts via
+/// [`HeaderPart`]; the common case is a single [`HeaderPart::title`].
+pub(super) fn modal_header(
+    frame: &mut Frame,
+    header: Option<Rect>,
+    title: &str,
+    theme: &Theme,
+) {
+    modal_header_parts(frame, header, &[HeaderPart::title(title)], theme);
+}
+
+/// A styled segment of a modal header line, laid out left-to-right.
+#[derive(Clone, Copy)]
+pub(super) enum HeaderPart<'a> {
+    /// The primary title: `brand` color, bold.
+    Title(&'a str),
+    /// A leading/trailing muted segment (e.g. the `Configuration › ` breadcrumb
+    /// or `← ` back affordance). `accent` makes it the brand tone instead.
+    Text { text: &'a str, accent: bool },
+}
+
+impl<'a> HeaderPart<'a> {
+    pub(super) const fn title(text: &'a str) -> Self {
+        HeaderPart::Title(text)
+    }
+}
+
+/// Render a multi-part modal header. `parts` is laid out in order on one line.
+pub(super) fn modal_header_parts(
+    frame: &mut Frame,
+    header: Option<Rect>,
+    parts: &[HeaderPart<'_>],
+    theme: &Theme,
+) {
+    let Some(h) = header else { return };
+    let spans: Vec<Span<'static>> = parts
+        .iter()
+        .map(|part| match *part {
+            HeaderPart::Title(text) => Span::styled(
+                text.to_string(),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            HeaderPart::Text { text, accent } => Span::styled(
+                text.to_string(),
+                if accent {
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.muted())
+                },
+            ),
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(Line::from(spans)), h);
 }
 
 /// Paint the unified modal chrome and split the content area into sections.

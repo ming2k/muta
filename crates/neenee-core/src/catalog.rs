@@ -56,8 +56,14 @@ pub enum Transport {
         thinking: Option<crate::ThinkingMode>,
     },
     /// Google Gemini native API (`generativelanguage.googleapis.com`). The model
-    /// id and API key are read from the owning [`Channel`].
-    GeminiNative,
+    /// id and API key are read from the owning [`Channel`]. `base_url` is the
+    /// versioned base (default `https://generativelanguage.googleapis.com/v1beta`);
+    /// the provider appends `/models/{model}:generateContent` (or the `:stream`
+    /// variant), so a 中转站/relay supplies its host with the `/v1beta` prefix.
+    GeminiNative {
+        base_url: String,
+        user_agent: String,
+    },
 }
 
 impl Transport {
@@ -69,7 +75,7 @@ impl Transport {
         match self {
             Transport::OpenAiCompat { .. }
             | Transport::Anthropic { .. }
-            | Transport::GeminiNative => true,
+            | Transport::GeminiNative { .. } => true,
         }
     }
 }

@@ -5,15 +5,13 @@
 //! command. It lists every cached "always allow" rule for the session, with
 //! per-row revoke (`Space`) and a clear-all action (`c`).
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, Line};
 
 use super::common::{placeholder, selectable_row};
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
 };
 
 /// Draw the permissions manager modal: a centered, dismissable list of cached
@@ -31,17 +29,7 @@ pub fn draw_permissions_manager(
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // ── Header ──
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                "Permissions",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Permissions", theme);
 
     // ── Body: the rule list ──
     let rules = session_context

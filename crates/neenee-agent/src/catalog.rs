@@ -43,7 +43,16 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
         .clone()
         .unwrap_or_else(|| fallback_model.to_string());
     let transport = match uc.transport {
-        UserTransport::GeminiNative => Transport::GeminiNative,
+        UserTransport::GeminiNative => Transport::GeminiNative {
+            base_url: uc
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:8080/v1beta".to_string()),
+            user_agent: uc
+                .user_agent
+                .clone()
+                .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+        },
         UserTransport::Anthropic => {
             // ADR-0046: reasoning is opt-in. A custom Anthropic relay channel
             // opts the model in to reasoning when the user has configured an
@@ -341,13 +350,26 @@ fn anthropic_builtin_entry(config: &Config) -> ProviderEntry {
 }
 
 /// The `google` provider: the Gemini family over the native Gemini API, one key
-/// (`GEMINI_API_KEY` then `config.gemini_api_key`).
+/// (`GEMINI_API_KEY` then `config.gemini_api_key`). The base URL is
+/// *configurable*: `gemini_base_url` (env `GEMINI_BASE_URL` first) supplies the
+/// versioned base, defaulting to Google's official API, so the same preset
+/// serves the official endpoint or any Gemini-format relay/中转站 with no code
+/// change.
 fn google_builtin_entry(config: &Config) -> ProviderEntry {
     let api_key =
         env_or_config(Some("GEMINI_API_KEY"), config.gemini_api_key.clone()).unwrap_or_default();
-    multi_model_builtin_entry(config, "google", api_key, GOOGLE_BUILTIN_MODELS, || {
-        Transport::GeminiNative
-    })
+    let base_url = env_or_config(Some("GEMINI_BASE_URL"), config.gemini_base_url.clone())
+        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string());
+    multi_model_builtin_entry(
+        config,
+        "google",
+        api_key,
+        GOOGLE_BUILTIN_MODELS,
+        move || Transport::GeminiNative {
+            base_url: base_url.clone(),
+            user_agent: NEENEE_USER_AGENT.to_string(),
+        },
+    )
 }
 
 /// The `deepseek` provider: DeepSeek V4 Flash + Pro over the OpenAI-compatible
@@ -413,7 +435,10 @@ fn catalog_driven_entry(config: &Config, provider: &ModelsDevProvider) -> Provid
                     effort: None,
                     thinking: None,
                 },
-                WireFormat::Gemini => Transport::GeminiNative,
+                WireFormat::Gemini => Transport::GeminiNative {
+                    base_url: full_url,
+                    user_agent: user_agent.clone(),
+                },
                 _ => Transport::OpenAiCompat {
                     base_url: full_url,
                     user_agent: user_agent.clone(),
@@ -716,7 +741,7 @@ fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAiCompat { base_url, .. } => ("openai".to_string(), base_url.clone()),
         Transport::Anthropic { base_url, .. } => ("anthropic".to_string(), base_url.clone()),
-        Transport::GeminiNative => ("gemini".to_string(), String::new()),
+        Transport::GeminiNative { base_url, .. } => ("gemini".to_string(), base_url.clone()),
     }
 }
 
@@ -743,7 +768,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             effort: None,
             thinking: None,
         },
-        Transport::GeminiNative => ProviderModelInfo {
+        Transport::GeminiNative { .. } => ProviderModelInfo {
             model: channel.model.clone(),
             protocol: "gemini".to_string(),
             effort: None,
@@ -1079,7 +1104,10 @@ mod tests {
     #[test]
     fn google_default_model_selects_its_gemini_channel() {
         // google is multi-model: default_model picks which Gemini channel is
-        // active; every channel uses the native Gemini transport.
+        // active; every channel uses the native Gemini transport. ENV_GUARD is
+        // held because the built-in entry reads `GEMINI_BASE_URL` (and other
+        // `GEMINI_*` vars) — a parallel test mutating them must not leak in.
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = bare_config();
         config.default_model = Some("gemini-2.0-flash".to_string());
         let entries = build_catalog(&config);
@@ -1090,8 +1118,14 @@ mod tests {
         assert_eq!(entry.default_channel().unwrap().model, "gemini-2.0-flash");
         assert!(matches!(
             entry.default_channel().unwrap().transport,
-            Transport::GeminiNative
+            Transport::GeminiNative { .. }
         ));
+        // The built-in default base URL resolves to Google's official endpoint.
+        if let Transport::GeminiNative { base_url, .. } =
+            &entry.default_channel().unwrap().transport
+        {
+            assert_eq!(base_url, "https://generativelanguage.googleapis.com/v1beta");
+        }
     }
 
     #[test]
@@ -1164,6 +1198,7 @@ mod tests {
                     transport: UserTransport::GeminiNative,
                     api_key_env: Some("GEMINI_STUDIO_KEY".to_string()),
                     model: Some("gemini-2.5-flash".to_string()),
+                    base_url: Some("https://relay.example.com/v1beta".to_string()),
                     ..Default::default()
                 },
                 UserChannelConfig {
@@ -1212,6 +1247,76 @@ mod tests {
         assert_eq!(relay.api_key, "inline-key");
         unsafe {
             std::env::remove_var("GEMINI_STUDIO_KEY");
+        }
+    }
+
+    #[test]
+    fn user_gemini_native_channel_carries_relay_base_url() {
+        // A 中转站 wired onto a native-Gemini channel supplies the versioned
+        // base URL; it must land on the transport verbatim (the provider
+        // appends the `/models/{id}:generateContent` path itself).
+        let entries = build_catalog(&gemini_two_channel_config());
+        let entry = entries.iter().find(|e| e.id == "gemini").unwrap();
+        let studio = entry.channels.iter().find(|c| c.label == "Studio").unwrap();
+        match &studio.transport {
+            Transport::GeminiNative { base_url, .. } => {
+                assert_eq!(base_url, "https://relay.example.com/v1beta");
+            }
+            other => panic!("Studio must be native Gemini, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_gemini_native_channel_defaults_base_url_when_unset() {
+        // A native-Gemini channel with no base_url falls back to the localhost
+        // relay default (mirrors the OpenAI/Anthropic unset-channel contract),
+        // never to Google's official endpoint — only the built-in `google`
+        // preset resolves the official default.
+        let mut config = bare_config();
+        config.providers = vec![UserProviderConfig {
+            id: "gemini".to_string(),
+            name: None,
+            channels: vec![UserChannelConfig {
+                label: "default".to_string(),
+                transport: UserTransport::GeminiNative,
+                api_key: Some("k".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
+                ..Default::default()
+            }],
+            default_channel: 0,
+        }];
+        let entries = build_catalog(&config);
+        let entry = entries.iter().find(|e| e.id == "gemini").unwrap();
+        match &entry.default_channel().unwrap().transport {
+            Transport::GeminiNative { base_url, .. } => {
+                assert_eq!(base_url, "http://localhost:8080/v1beta");
+            }
+            other => panic!("expected native Gemini, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_base_url_env_overrides_official_default() {
+        // The built-in `google` preset reads GEMINI_BASE_URL first, then the
+        // config slot, falling back to the official endpoint — same contract as
+        // the anthropic relay (ADR for the configurable Claude relay).
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("GEMINI_BASE_URL", "https://relay.example.com/v1beta");
+        }
+        let mut config = bare_config();
+        config.gemini_base_url = Some("https://from-config.example.com/v1beta".to_string());
+        let entries = build_catalog(&config);
+        unsafe {
+            std::env::remove_var("GEMINI_BASE_URL");
+        }
+        let entry = entries.iter().find(|e| e.id == "google").unwrap();
+        match &entry.default_channel().unwrap().transport {
+            Transport::GeminiNative { base_url, .. } => {
+                // env wins over config.
+                assert_eq!(base_url, "https://relay.example.com/v1beta");
+            }
+            other => panic!("google must be native Gemini, got {other:?}"),
         }
     }
 

@@ -774,9 +774,11 @@ mod tests {
             );
             draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
             // Provider-template chooser.
-            draw_provider_template_chooser(0, f, &theme);
+            let mut template_scroll = 0;
+            draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
             // Provider editor (OpenAI-compatible template) on the Model filter field.
             use crate::providers::CustomField;
+            let mut scroll = 0;
             draw_custom_provider_editor(
                 CustomEditorView {
                     fields: &[
@@ -800,6 +802,7 @@ mod tests {
                 },
                 f,
                 &theme,
+                &mut scroll,
             );
             {
                 let mut scroll = 0;

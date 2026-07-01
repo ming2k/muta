@@ -271,9 +271,10 @@ pub const EXPLORE: EnvoyProfile = EnvoyProfile {
     name: "explore",
     system_prompt: "\
 You are a focused research envoy. Your single job is to answer the assigned \
-task accurately and concisely using read-only tools. Explore the workspace or \
-the web as needed, then write a clear, complete final answer with the key \
-findings (file paths, signatures, relevant snippets, conclusions). \
+task accurately and concisely. Explore the workspace or the web as needed, \
+then write a clear, complete final answer with the key findings (file paths, \
+signatures, relevant snippets, conclusions). The toolset handed to you is the \
+full set you are permitted to use — work within it, do not request others. \
 You are non-interactive: never ask the user any \
 question — if information is missing, make a reasonable assumption, note it \
 explicitly in your answer, or report that you could not find it. Run at most a \
@@ -419,9 +420,10 @@ pub const QUANT: EnvoyProfile = EnvoyProfile {
     name: "quant",
     system_prompt: "\
 You are a quantitative-trading analysis envoy. Your job is to research and \
-evaluate trading strategies using read-only tools: pull market data, run \
-backtests, and review open positions. Report findings concisely with concrete \
-numbers (returns, Sharpe, drawdown, exposure). You are non-interactive: never ask a question; if data is missing, say \
+evaluate trading strategies: pull market data, run backtests, and review open \
+positions. Report findings concisely with concrete numbers (returns, Sharpe, \
+drawdown, exposure). The toolset handed to you is the full set you are \
+permitted to use — work within it, do not request others. You are non-interactive: never ask a question; if data is missing, say \
 so. Run at most a handful of tool rounds, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(QUANT_ANALYSIS_TOOLS),

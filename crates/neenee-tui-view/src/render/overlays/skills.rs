@@ -7,15 +7,13 @@
 //! This replaces the Skills tab that previously lived inside the `/session`
 //! modal, giving skills their own dedicated surface.
 
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Style};
 
 use super::common::{placeholder, selectable_row};
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
 };
 
 /// Draw the skills modal.
@@ -36,17 +34,7 @@ pub fn draw_skills_modal(
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // ── Header ──
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                "Skills",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Skills", theme);
 
     // ── Body: the skill list with optional detail expansion ──
     let skills = session_context.map(|s| s.skills.as_slice()).unwrap_or(&[]);

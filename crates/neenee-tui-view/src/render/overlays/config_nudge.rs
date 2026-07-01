@@ -9,16 +9,15 @@
 //! re-seeds the snapshot the modal reads.
 
 use neenee_core::NudgeConfig;
-use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
-};
+use neenee_tui::{Frame, {Line, Span}, Style};
 
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
-    FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_spec, render_body, render_modal_footer,
+    FooterHint, HeaderPart, content_modal_area, content_modal_probe, contrast_fg,
+    modal_chrome_rows, modal_frame, modal_header_parts, modal_spec, render_body,
+    render_modal_footer,
 };
 
 /// Row index of the `enabled` toggle in the field list. `Space` only toggles
@@ -148,20 +147,18 @@ pub fn draw_config_nudge_modal(
         .expect("config nudge modal geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("← ", Style::default().fg(theme.muted())),
-                Span::styled(
-                    "Nudge",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])),
-            h,
-        );
-    }
+    modal_header_parts(
+        frame,
+        f.header,
+        &[
+            HeaderPart::Text {
+                text: "← ",
+                accent: false,
+            },
+            HeaderPart::title("Nudge"),
+        ],
+        theme,
+    );
 
     let body_rect = f.body;
     let follow = selected_line;
