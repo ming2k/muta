@@ -7,15 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-03
+
 ### Added
 
-- **Gemini Native now supports native tool calls.** The Google/Gemini provider
-  now sends tool schemas as Gemini `functionDeclarations`, parses
-  `functionCall` parts into neenee tool calls, streams function-call events,
-  replays tool results as `functionResponse` parts, and preserves Gemini
-  thought signatures on function-call and text parts for stateless multi-turn
-  replay. Gemini no longer has to rely solely on JSON-in-text fallback for
-  filesystem and shell tools.
+- **Gemini native tool calls.** The Google/Gemini provider now sends tool
+  schemas as Gemini `functionDeclarations`, parses `functionCall` parts into
+  neenee tool calls, streams function-call events, and replays tool results as
+  `functionResponse` parts, while preserving Gemini thought signatures on
+  function-call and text parts for stateless multi-turn replay. Gemini no
+  longer relies solely on the JSON-in-text fallback for filesystem and shell
+  tools.
+
+- **Versioned Gemini relay base URLs.** The native Gemini transport now carries
+  a configurable versioned base URL (default
+  `https://generativelanguage.googleapis.com/v1beta`), so the built-in `google`
+  provider and custom Gemini relays/中转站 share one code path — configured via
+  `gemini_base_url`/`GEMINI_BASE_URL` or the custom-provider Base URL field.
+
+- **GPT-5.5 / 5.4 / 5.4-mini registered** as frontier OpenAI models (1M and
+  400K context windows); the GPT-4o family is annotated as legacy (kept
+  registered so existing configs and older sessions still resolve metadata).
+
+### Changed
+
+- **Per-protocol SDK crates.** The monolithic `neenee-providers` vendor
+  adapters are split into dedicated `neenee-ai-sdk-{core,openai,anthropic,
+  google}` crates that own the transport/protocol layer (endpoint config, SSE
+  reassembly, request/response shape), leaving `neenee-providers` as the thin
+  registry. `/debug preview` now reflects the provider-wire body (via
+  `Message::to_wire`) rather than the internal `Message` struct.
+
+- **Anti-doomloop guard renamed** across the stack: `nudge` → `doom_guard`
+  (`nudge.rs` → `doom_guard.rs`, `NudgeConfig` → `DoomGuardConfig`, with all
+  call sites updated).
+
+- **TUI transcript layouts renamed**: `compact` → `default`
+  (`layout_default.rs`) and `turn_band` → `legacy` (`legacy.rs`); existing
+  configs migrate automatically via `from_config()`.
+
+- **Debug subcommands renamed**: `/debug context` → `/debug preview`,
+  `/debug network` → `/debug trace`.
+
+- **Shared modal UI primitives.** A single `modal_header`/
+  `modal_header_parts` primitive now routes every centered overlay through one
+  path, and a caret-following `field_viewport` lets long token/base-URL fields
+  scroll within the modal. The Gemini add-model overlay now treats Gemini as a
+  *closed* model set (no free-text fallback; an unmatched id is reported as a
+  typo, and a transport 404 is clarified as "upstream does not serve this
+  model").
+
+### Removed
+
+- **`GLM_GUIDANCE` constant dropped.** All known models now carry empty
+  guidance; the read-loop nudge handles GLM deterministically instead of
+  injecting per-model prompt text.
 
 ## [0.14.3] - 2026-07-02
 
@@ -993,7 +1039,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/ming2k/neenee/releases/tag/v0.15.0
 [0.14.3]: https://github.com/ming2k/neenee/releases/tag/v0.14.3
 [0.14.2]: https://github.com/ming2k/neenee/releases/tag/v0.14.2
 [0.14.1]: https://github.com/ming2k/neenee/releases/tag/v0.14.1
