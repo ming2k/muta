@@ -164,7 +164,7 @@ pub struct Agent {
     /// switch and the thresholds atomically; the round-boundary path reads
     /// `enabled` and the per-turn guard reads the thresholds when it is
     /// constructed (`TurnState::guards_default`).
-    nudge_config: Arc<std::sync::RwLock<neenee_core::NudgeConfig>>,
+    doom_guard_config: Arc<std::sync::RwLock<neenee_core::DoomGuardConfig>>,
     /// Whether the model may supply stdin bytes for a `bash` call it emits
     /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
     /// `[principal] allow_model_stdin`. Lock-free so the dispatch site reads
@@ -354,10 +354,9 @@ impl TurnState {
     /// [`Agent::apply_guard_actions`] — so the guard state is always present
     /// even when disabled (it just never fires). Per-turn: lives and dies
     /// with this `TurnState` so loop state never crosses turns.
-    fn guards_default(config: neenee_core::NudgeConfig) -> crate::loop_guard::RoundGuardState {
-        let mut registry = crate::loop_guard::GuardRegistry::new();
-        registry.register(Box::new(crate::loop_guard::ReadLoopGuard::new(config)));
-        crate::loop_guard::RoundGuardState::new(registry)
+    fn guards_default(config: neenee_core::DoomGuardConfig) -> crate::loop_guard::RoundGuardState {
+        crate::loop_guard::RoundGuardState::new()
+            .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
     }
 }
 
@@ -440,7 +439,9 @@ impl Agent {
             context_prune_threshold_tokens: Arc::new(std::sync::Mutex::new(0)),
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
-            nudge_config: Arc::new(std::sync::RwLock::new(neenee_core::NudgeConfig::default())),
+            doom_guard_config: Arc::new(std::sync::RwLock::new(
+                neenee_core::DoomGuardConfig::default(),
+            )),
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reviews: crate::default_reviews(),
             operation_scope: std::sync::Mutex::new(neenee_core::OperationScope::unrestricted()),
@@ -537,7 +538,7 @@ impl Agent {
     /// skills mentioned in the latest visible user turn against a borrowed
     /// message list, exactly as the next turn would (`prepare_turn_messages`),
     /// but with no provider call and no mutation of live turn history. Powers
-    /// the `/debug context` snapshot so it captures the *real* request shape —
+    /// the `/debug preview` so it captures the *real* request shape —
     /// including the freshly composed system prompt and injected skills —
     /// rather than a degenerate reconstruction.
     pub fn prepare_turn_messages_debug(&self, messages: &mut Vec<Message>) {
@@ -604,24 +605,29 @@ impl Agent {
     ///
     /// Wired from `[principal.nudge]` in `config.toml` at startup, mutated at
     /// runtime by the `/config` modal, and forced to
-    /// [`NudgeConfig::disabled`] on envoys and the review diagnostic so they
-    /// run unobstructed regardless of user settings.
-    pub fn set_nudge_config(&self, config: neenee_core::NudgeConfig) {
-        *self.nudge_config.write().unwrap_or_else(|e| e.into_inner()) = config;
+    /// [`neenee_core::DoomGuardConfig::disabled`] on envoys and the review
+    /// diagnostic so they run unobstructed regardless of user settings.
+    pub fn set_doom_guard_config(&self, config: neenee_core::DoomGuardConfig) {
+        *self
+            .doom_guard_config
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = config;
     }
 
-    /// Snapshot of the live nudge configuration. The `/config` modal reads
+    /// Snapshot of the live doom-guard configuration. The `/config` modal reads
     /// this to render the current values; the round boundary reads
-    /// `enabled` to gate `Self::apply_guard_actions`.
-    pub fn nudge_config(&self) -> neenee_core::NudgeConfig {
-        *self.nudge_config.read().unwrap_or_else(|e| e.into_inner())
+    /// `enabled` to gate the pre-dispatch doom check.
+    pub fn doom_guard_config(&self) -> neenee_core::DoomGuardConfig {
+        *self
+            .doom_guard_config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether the deterministic read-loop guard is currently armed (allowed
-    /// to inject). Convenience wrapper over [`Self::nudge_config`] for the
-    /// round-boundary fast path.
-    pub fn nudge_enabled(&self) -> bool {
-        self.nudge_config().enabled
+    /// Whether the doom guard is currently armed (allowed to block). Convenience
+    /// wrapper over [`Self::doom_guard_config`] for the round-boundary fast path.
+    pub fn doom_guard_enabled(&self) -> bool {
+        self.doom_guard_config().enabled
     }
 
     /// Enable or disable the model-supplied-stdin path for `bash` (L3.5 α).
@@ -1394,7 +1400,7 @@ impl Agent {
         self.provider.prepare_tools(&visible);
         let turn_start = std::time::Instant::now();
         let mut state = TurnState {
-            guards: TurnState::guards_default(self.nudge_config()),
+            guards: TurnState::guards_default(self.doom_guard_config()),
             ..TurnState::default()
         };
         let mut tool_rounds = 0;
@@ -1473,7 +1479,6 @@ impl Agent {
                 self.project_context_if_needed(messages, cancel).await?;
                 // Mid-turn save point (ADR-0035): see the streaming path.
                 self.fire_round_persist(messages).await?;
-                self.apply_guard_actions(messages, &mut state, &mut on_event);
                 self.run_turn_hooks(messages, &state, tool_rounds).await;
                 continue;
             }
@@ -1516,7 +1521,7 @@ impl Agent {
         self.provider.prepare_tools(&visible);
         let turn_start = std::time::Instant::now();
         let mut state = TurnState {
-            guards: TurnState::guards_default(self.nudge_config()),
+            guards: TurnState::guards_default(self.doom_guard_config()),
             ..TurnState::default()
         };
         let mut tool_rounds = 0;
@@ -1729,7 +1734,6 @@ impl Agent {
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.
                 self.fire_round_persist(messages).await?;
-                self.apply_guard_actions(messages, &mut state, &mut on_event);
                 self.run_turn_hooks(messages, &state, tool_rounds).await;
                 continue;
             }
@@ -1803,13 +1807,49 @@ impl Agent {
             } else {
                 state.consecutive_readonly_rounds = 0;
             }
-            // Feed the round's tool-call data to the guard state. The guards
-            // consume it at the round boundary.
-            let round_calls: Vec<(String, String)> = tool_calls
+
+            // Pre-dispatch doom-loop check (the decisive intervention). Before
+            // any tool runs this round, ask the doom guard whether any call is a
+            // repeat of one already issued this turn. A repeat is blocked here
+            // and now — the tool never executes, so its result never enters
+            // context. Unlike the post-hoc read-loop guard, this covers all
+            // watched tools (bash/webfetch/edit/...), not just reads, and trips
+            // on the *first* repeat (threshold = 2). `Block` records the
+            // repeated signatures into the per-turn mask, so the per-call
+            // `is_blocked` filter below short-circuits them without re-running
+            // the guard. We surface the guard's message as a notice + a hidden
+            // user message so the model learns the call is refused.
+            let doom_calls: Vec<(&str, &str)> = tool_calls
                 .iter()
-                .map(|c| (c.name.clone(), c.arguments.clone()))
+                .map(|c| (c.name.as_str(), c.arguments.as_str()))
                 .collect();
-            state.guards.set_round(round_calls, all_read);
+            let doom_action = state.guards.check_doom_ahead(&doom_calls);
+            let doom_message: Option<String> = match &doom_action {
+                crate::loop_guard::GuardAction::Block { message, .. } => {
+                    tracing::warn!(
+                        blocked = ?state.guards.blocked_summary(),
+                        "doom guard blocked a repeating tool call before execution"
+                    );
+                    on_event(AgentEvent::Notice(
+                        AgentNotice::new(
+                            NoticeKind::NudgeInjected,
+                            NoticeSeverity::Warning,
+                            "Repeating tool call blocked",
+                            NoticeSource::TurnGuard,
+                        )
+                        .with_body(
+                            "The agent tried to re-run a tool call it already issued this turn. \
+                             The call was blocked before it ran — the result it already has is \
+                             unchanged, so re-running it cannot help. The agent must change \
+                             approach (or call `abort`).",
+                        )
+                        .with_surface(NoticeSurface::Toast),
+                    ));
+                    Some(message.clone())
+                }
+                _ => None,
+            };
+
             // Emit all ToolCall events up front.
             let call_ids: Vec<String> = tool_calls
                 .iter()
@@ -1824,24 +1864,23 @@ impl Agent {
                     arguments: call.arguments.clone(),
                 });
             }
-            // Signature-level loop guard (ADR-0036): a read call whose canonical
-            // signature is in the per-turn block mask — set by a guard that saw
-            // the model repeat it past a nudge — is short-circuited here, before
-            // execution. The model gets an explanatory error instead of the
-            // content, so it is physically unable to re-enter the loop. Only
-            // read-tier calls can be masked; writes/commands are never blocked
-            // by the read-loop guard. Blocked calls are split out so the rest
-            // run concurrently exactly as before. Each blocked call is given the
-            // same ToolResult event an executed call would get, so the UI never
-            // sees an orphaned running step.
+            // Signature-level loop guard (ADR-0036): a call whose canonical
+            // signature is in the per-turn block mask — set either by the
+            // read-loop guard (a repeat that escalated past a nudge) or by the
+            // doom guard above (any watched tool's first repeat) — is
+            // short-circuited here, before execution. The model gets an
+            // explanatory error instead of the content/side-effect, so it is
+            // physically unable to re-enter the loop. Blocked calls are split
+            // out so the rest run concurrently exactly as before. Each blocked
+            // call is given the same ToolResult event an executed call would
+            // get, so the UI never sees an orphaned running step.
             let blocked_output = |name: &str| {
                 ToolOutput::Text(format!(
-                    "[loop guard] This read ({name}) is blocked for the rest of the turn \
-                     because it was repeated past a steering warning. Re-reading it \
-                     cannot help: the content is already in context above. Act on it \
-                     now (e.g. use edit_file/write_file with the text you already \
-                     captured), read a *different* file or line range, or, if you \
-                     cannot proceed, say so explicitly or call `abort`."
+                    "[loop guard] This call ({name}) is blocked for the rest of the turn \
+                     because it was a repeat of one already issued this turn. Re-running it \
+                     cannot help: the result is already in context above. Act on it now \
+                     (use what you already have, try a *different* command/file/query), or, \
+                     if you cannot proceed, say so explicitly or call `abort`."
                 ))
             };
             let mut results: Vec<Option<(ToolOutput, u64)>> =
@@ -1850,13 +1889,11 @@ impl Agent {
                 .iter()
                 .enumerate()
                 .filter(|(idx, c)| {
-                    if self.tool_target_is_unspecified(&c.name, &c.arguments)
-                        && state.guards.is_blocked(&c.name, &c.arguments)
-                    {
+                    if state.guards.is_blocked(&c.name, &c.arguments) {
                         tracing::warn!(
                             tool = %c.name,
                             args = %c.arguments,
-                            "read blocked by turn-loop guard signature mask"
+                            "tool call blocked by turn-loop guard signature mask"
                         );
                         let output = blocked_output(&c.name);
                         let id = &call_ids[*idx];
@@ -1867,13 +1904,13 @@ impl Agent {
                             AgentNotice::new(
                                 NoticeKind::NudgeInjected,
                                 NoticeSeverity::Warning,
-                                "Blocked repeating read",
+                                "Blocked repeating tool call",
                                 NoticeSource::TurnGuard,
                             )
                             .with_body(format!(
-                                "A read ({}) was blocked by the loop guard — it is the same \
-                                 read the agent has repeated past a warning. Use the content \
-                                 already in context, or read something different.",
+                                "A tool call ({}) was blocked by the loop guard — it is a \
+                                 repeat of a call already issued this turn. Use the result \
+                                 already in context, or try a different call.",
                                 c.name,
                             ))
                             .with_surface(NoticeSurface::Toast),
@@ -1935,6 +1972,18 @@ impl Agent {
             // If the user denied permission for any call, stop the turn here
             // instead of feeding the (possibly partial) results back to the
             // model and asking it to continue.
+            // If the doom guard blocked any repeats this round, deliver its
+            // consolidated message as a hidden user note alongside the blocked
+            // tool results, so the model learns *why* its call was refused and
+            // what to do instead. Non-terminating: the turn continues with the
+            // (now masked) signatures hard-blocked for subsequent rounds.
+            if let Some(message) = doom_message {
+                messages.push(Message::injected(
+                    Role::User,
+                    message,
+                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
+                ));
+            }
             return Ok(!denied);
         }
 
@@ -1957,46 +2006,59 @@ impl Agent {
             } else {
                 state.consecutive_readonly_rounds = 0;
             }
-            state
+            // Pre-dispatch doom check, mirroring the native path: catch a repeat
+            // *before* the text-fallback tool runs.
+            let doom_action = state
                 .guards
-                .set_round(vec![(call.name.clone(), call.arguments.clone())], all_read);
+                .check_doom_ahead(&[(call.name.as_str(), call.arguments.as_str())]);
+            let doom_message: Option<String> = match &doom_action {
+                crate::loop_guard::GuardAction::Block { message, .. } => {
+                    tracing::warn!(
+                        tool = %call.name,
+                        args = %call.arguments,
+                        "text-fallback call blocked by doom guard before execution"
+                    );
+                    Some(message.clone())
+                }
+                _ => None,
+            };
             let call_id = format!("call_{}", uuid::Uuid::new_v4());
             on_event(AgentEvent::ToolCall {
                 id: call_id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
             });
-            // Signature-level loop guard: short-circuit a blocked read before it
+            // Signature-level loop guard: short-circuit a blocked call before it
             // executes (ADR-0036). Same contract as the native path — the model
-            // gets an explanatory error instead of the content.
-            let result = if all_read && state.guards.is_blocked(&call.name, &call.arguments) {
+            // gets an explanatory error instead of the content. Covers any tool
+            // masked by either the read-loop guard or the doom guard above.
+            let result = if state.guards.is_blocked(&call.name, &call.arguments) {
                 tracing::warn!(
                     tool = %call.name,
                     args = %call.arguments,
-                    "text-fallback read blocked by turn-loop guard signature mask"
+                    "text-fallback call blocked by turn-loop guard signature mask"
                 );
                 on_event(AgentEvent::Notice(
                     AgentNotice::new(
                         NoticeKind::NudgeInjected,
                         NoticeSeverity::Warning,
-                        "Blocked repeating read",
+                        "Blocked repeating tool call",
                         NoticeSource::TurnGuard,
                     )
                     .with_body(format!(
-                        "A read ({}) was blocked by the loop guard — it is the same \
-                         read the agent has repeated past a warning. Use the content \
-                         already in context, or read something different.",
+                        "A tool call ({}) was blocked by the loop guard — it is a repeat \
+                         of a call already issued this turn. Use the result already in \
+                         context, or try a different call.",
                         call.name,
                     ))
                     .with_surface(NoticeSurface::Toast),
                 ));
                 let output = ToolOutput::Text(format!(
-                    "[loop guard] This read ({}) is blocked for the rest of the turn \
-                     because it was repeated past a steering warning. Re-reading it \
-                     cannot help: the content is already in context above. Act on it \
-                     now (e.g. use edit_file/write_file with the text you already \
-                     captured), read a *different* file or line range, or, if you \
-                     cannot proceed, say so explicitly or call `abort`.",
+                    "[loop guard] This call ({}) is blocked for the rest of the turn \
+                     because it was a repeat of one already issued this turn. Re-running it \
+                     cannot help: the result is already in context above. Act on it now \
+                     (use what you already have, try a *different* command/file/query), or, \
+                     if you cannot proceed, say so explicitly or call `abort`.",
                     call.name,
                 ));
                 on_event(AgentEvent::ToolResult {
@@ -2025,6 +2087,13 @@ impl Agent {
             );
             self.run_post_tool_hooks(&call, &result, duration_ms, messages)
                 .await;
+            if let Some(message) = doom_message {
+                messages.push(Message::injected(
+                    Role::User,
+                    message,
+                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
+                ));
+            }
             return Ok(!denied);
         }
 
@@ -2213,92 +2282,6 @@ impl Agent {
                 context,
                 InjectionOrigin::new(InjectionKind::Hook(HookEventKind::Turn)),
             ));
-        }
-    }
-
-    /// Consult the turn-guard registry for the round just dispatched and apply
-    /// the resulting action. `Inject` appends a steering nudge as a hidden user
-    /// message (non-terminating); `Abort` would terminate the turn. Gated by
-    /// the live [`NudgeConfig::enabled`] flag so envoys and the review
-    /// diagnostic run unobstructed. Mirrored at both loop boundaries.
-    fn apply_guard_actions<F>(
-        &self,
-        messages: &mut Vec<Message>,
-        state: &mut TurnState,
-        on_event: &mut F,
-    ) where
-        F: FnMut(AgentEvent) + Send,
-    {
-        if !self.nudge_enabled() {
-            return;
-        }
-        match state.guards.take_action() {
-            crate::loop_guard::GuardAction::Continue => {}
-            crate::loop_guard::GuardAction::Inject(nudge) => {
-                tracing::debug!("turn guard tripped; injecting steering nudge");
-                on_event(AgentEvent::Notice(
-                    AgentNotice::new(
-                        NoticeKind::NudgeInjected,
-                        NoticeSeverity::Warning,
-                        "Steering nudge injected",
-                        NoticeSource::TurnGuard,
-                    )
-                    .with_body(
-                        "The agent repeated a read pattern, so a hidden steering note was added before the next model request.",
-                    )
-                    .with_surface(NoticeSurface::Toast),
-                ));
-                messages.push(Message::injected(
-                    Role::User,
-                    nudge,
-                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
-                ));
-            }
-            crate::loop_guard::GuardAction::Block { message, .. } => {
-                // `take_action` already recorded the blocked signatures in the
-                // per-turn mask, so dispatch will short-circuit any matching
-                // read from now on. Here we just surface the rationale to the
-                // model (same hidden-message vehicle as a nudge) and notify the
-                // UI that the looped read is now hard-blocked.
-                tracing::warn!(
-                    blocked = ?state.guards.blocked_summary(),
-                    "turn guard hard-blocked a looping read signature for the turn"
-                );
-                on_event(AgentEvent::Notice(
-                    AgentNotice::new(
-                        NoticeKind::NudgeInjected,
-                        NoticeSeverity::Warning,
-                        "Looping read blocked",
-                        NoticeSource::TurnGuard,
-                    )
-                    .with_body(
-                        "The agent ignored a steering nudge and kept repeating a read, so \
-                         that read is now hard-blocked for the rest of the turn. It must \
-                         act on what it has, read something different, or call `abort`.",
-                    )
-                    .with_surface(NoticeSurface::Toast),
-                ));
-                messages.push(Message::injected(
-                    Role::User,
-                    message,
-                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
-                ));
-            }
-            crate::loop_guard::GuardAction::Abort(reason) => {
-                tracing::warn!("turn guard aborted turn: {reason}");
-                on_event(AgentEvent::Notice(
-                    AgentNotice::new(
-                        NoticeKind::NudgeInjected,
-                        NoticeSeverity::Error,
-                        "Turn guard aborted the turn",
-                        NoticeSource::TurnGuard,
-                    )
-                    .with_body(reason)
-                    .with_surface(NoticeSurface::Banner),
-                ));
-                // Abort is surfaced as a terminal nudge for now; a future
-                // guard that needs a hard turn-kill can return Err here.
-            }
         }
     }
 

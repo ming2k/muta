@@ -364,7 +364,7 @@ impl Message {
     /// by construction (it simply never reads them); `to_wire` makes that
     /// projection explicit and reusable. It is the single source of truth for
     /// "what the model actually sees", independent of any one SDK's
-    /// `message_obj` — used by `/debug context`, which must dump the wire
+    /// `message_obj` — used by `/debug preview`, which must dump the wire
     /// request body, not the internal [`Message`] struct that also carries
     /// durable-session sidecars.
     pub fn to_wire(&self) -> Message {
@@ -497,7 +497,7 @@ mod tests {
         // A Tool-role envoy result carries a heavy nested transcript + meta +
         // attribution + origin. `to_wire` must drop all of those (the provider
         // never sees them) while keeping role/content/tool_call_id. This is the
-        // contract `/debug context` relies on to dump the real request body
+        // contract `/debug preview` relies on to dump the real request body
         // rather than the internal `Message` struct that also carries
         // durable-session sidecars.
         let call = ToolCall {

@@ -9,8 +9,8 @@ use super::common::{one_line, relative_time_compact, truncate_ellipsis};
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, contrast_fg, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, modal_area, modal_frame, modal_header,
+    render_body, render_modal_footer,
 };
 
 /// Draw the sessions picker: each row shows the session overview plus its
@@ -86,7 +86,16 @@ pub fn draw_sessions_modal(
         body.push(Line::from(spans));
     }
 
-    render_body(frame, f.body, body, &mut 0, Some(selected), false, theme);
+    render_body(
+        frame,
+        f.body,
+        body,
+        &mut 0,
+        Some(selected),
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
 
     if let Some(fo) = f.footer {
         render_modal_footer(

@@ -332,7 +332,6 @@ impl PromptSection for DelegationGuidance {
     }
 }
 
-
 /// Guidance for creating and modifying files with `write_file` / `edit_file`.
 /// Active only when a file-editing tool is admitted this turn, so a read-only
 /// or tool-less agent is unaffected. Mirrors [`AskUserGuidance`] /

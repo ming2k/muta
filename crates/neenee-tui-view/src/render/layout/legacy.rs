@@ -1,17 +1,17 @@
-//! The original transcript layout: messages flush against each other with
-//! single-row gaps, and adjacent collapsed tool steps stack with no gap at all.
+//! The original (legacy) transcript layout: messages flush against each other
+//! with single-row gaps, and adjacent collapsed tool steps stack with no gap at
+//! all.
 //!
 //! This is a verbatim extraction of the message loop that lived in
 //! `draw_transcript` before the `layout` split. Behavior is byte-for-byte
-//! identical to the pre-refactor renderer; it is the reference strategy and
-//! the default.
+//! identical to the pre-refactor renderer.
 
 use super::{Stream, TranscriptLayout};
 
 /// Original flush-stack layout. See the module docs.
-pub struct Compact;
+pub struct Legacy;
 
-impl TranscriptLayout for Compact {
+impl TranscriptLayout for Legacy {
     fn run(&mut self, stream: &mut Stream<'_, '_>) {
         let messages_len = stream.messages.len();
         for mi in 0..messages_len {

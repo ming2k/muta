@@ -54,6 +54,7 @@ compiler enforces the one-way boundary.
 | Module | Responsibility |
 |--------|----------------|
 | `render/` | The widget tree (transcript, steps, tools, overlays, chrome, composer). Entry point `render/mod.rs`. |
+| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, and option rows. |
 | `document` | Semantic document model: `TranscriptMessage`, `Block`, `MessageKind`, markdown parsing. |
 | `layout` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing. |
 | `selection` | `SelectionState`, text/cell selection, character-boundary snapping. |
@@ -123,7 +124,7 @@ about higher ones:
 ```text
   leaves    tools/*  ·  overlays/{help,session,provider,…}
               │ build on
-  mid-tier  disclosure/  ·  overlays/common  ·  composer  ·  chrome
+  mid-tier  components/  ·  disclosure/  ·  composer  ·  chrome
               │ build on
   base      primitives  ·  text_layout  ·  markdown_table
               │ tokens
@@ -137,12 +138,14 @@ about higher ones:
   gutter/wrapping core reused by message bodies, code blocks, and tools.
 - **`theme` / `design`** — the only places colors and fixed measurements are
   defined; every component reads tokens from here instead of hard-coding.
+- **`components/`** — composed, reusable view pieces: modal pages, selectable
+  lists, scroll bodies, width-aware modal footers, toasts, transcript notices,
+  and question option rows. These are still pure render helpers; event
+  handling and action logic stay in the app shell.
 - **`disclosure/`** — the collapsible-step state machine (`Disclosure`,
   `Interaction`) and shared header rendering, reused by every `tools/*` renderer.
-- **`overlays/common`** — modal frame/header/scroll helpers reused by every
-  modal in `overlays/`.
-- **`render/layout/`** — transcript arrangement strategies (`compact`,
-  `turn_band`) selected by `[tui] transcript_layout`.
+- **`render/layout/`** — transcript arrangement strategies (`default`,
+  `legacy`) selected by `[tui] transcript_layout`.
 
 The leaves (`tools/*`, the per-modal overlays) are intentionally thin: they
 compose the mid-tier and base helpers rather than re-implementing wrapping,
@@ -152,5 +155,6 @@ panels, or color logic.
 
 - [ADR-0038](../../adr/0038-in-house-grid-diff-rendering-engine.md) — the engine.
 - [index.md](index.md) — component reference and the full source-file map.
+- [components.md](components.md) — reusable render-component lookup table.
 - [layout.md](layout.md) — frame measurements, footer stack, modal modes.
 - [step-state.md](step-state.md) — the disclosure/interaction state machine.

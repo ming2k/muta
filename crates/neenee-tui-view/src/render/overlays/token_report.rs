@@ -77,9 +77,9 @@ pub fn draw_token_report_modal(
         .expect("token-report modal has geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, &title, theme);
+    modal_header(frame, f.header, title, theme);
 
-    render_body(frame, f.body, body, scroll, None, false, theme);
+    render_body(frame, f.body, body, scroll, None, 0, false, theme);
 
     if let Some(fo) = f.footer {
         render_modal_footer(frame, fo, &footer, theme);

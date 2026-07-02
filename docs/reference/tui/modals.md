@@ -18,8 +18,9 @@ expressed in one of three ways:
 
 ## Shared chrome
 
-Every centered modal goes through the same primitives in
-`crates/neenee-tui-view/src/render/primitives.rs`:
+Every centered modal uses the same low-level primitives and, where possible,
+the shared modal component in
+`crates/neenee-tui-view/src/render/components/modal.rs`:
 
 - `recess_backdrop(frame, modal.recess(), theme)` is called once per frame by
   the event loop *after* the transcript and chrome are drawn and *before* the
@@ -35,6 +36,10 @@ Every centered modal goes through the same primitives in
   vertically split into `header(Length 1) → gap(Length 1) → body(Min 0) →
   gap(Length 1) → footer(Length 1)`. Header/footer/gap rows are omitted when
   not requested.
+- `draw_modal_page(ModalPage { ... })` composes geometry, frame chrome,
+  header, `ScrollBody`, and modal footer hints for simple centered modals.
+- `draw_selectable_list_page(SelectableListPage { ... })` adds selected-row
+  follow scrolling and item/empty footer selection for list modals.
 
 ```text
                 ┌──── centered_rect(px_w, px_h) ────┐
@@ -48,7 +53,8 @@ Every centered modal goes through the same primitives in
                 └───────────────────────────────────┘
 ```
 
-The two [toasts](#toasts) are non-modal and use a different `toast` helper.
+The two [toasts](#toasts) are non-modal and use `ToastBubble` from
+`render/components/toast.rs`.
 
 ## Overview
 
@@ -386,7 +392,7 @@ Two tabs cycled with `←`/`→`:
 ## Toasts
 
 Transient top-right notifications rendered above all other chrome. Both
-use a 3-row panel via the private `toast` helper, positioned at
+use a 3-row panel via the shared toast component, positioned at
 `x = term_w − toast_w − 2, y = 1, w = min(text, 58) + 2`, with thick
 left+right borders colored by variant.
 
@@ -404,10 +410,14 @@ left+right borders colored by variant.
 
 ## Source
 
-All modals live in `crates/neenee-tui-view/src/render/overlays/` (one
-renderer file per modal: `provider`, `permission`, `history`, `help`,
-`session`, `tools`, `permissions_manager`, `activity`, `tool_step_detail`, `toast`,
-plus shared `common`). Shared primitives (`recess_backdrop`, `centered_rect`,
-`modal_frame`, `panel_block`, `toast`) are in
+Modal-specific renderers live in `crates/neenee-tui-view/src/render/overlays/`
+(one renderer file per modal: `provider`, `permission`, `history`, `help`,
+`session`, `tools`, `permissions_manager`, `activity`, `tool_step_detail`,
+`toast`, plus feature-specific helpers). Shared composed pieces live in
+`crates/neenee-tui-view/src/render/components/`: `modal`, `list`, `scroll`,
+`footer`, `toast`, and `options` cover the common modal shell, selectable list
+body, scroll body, footer hints, notification bubble, and question option
+rows. Low-level primitives (`recess_backdrop`, `centered_rect`,
+`modal_frame`, `panel_block`, raw `render_body`) remain in
 `crates/neenee-tui-view/src/render/primitives.rs`. The chrome-hiding flag is
 read by `draw_transcript` in `crates/neenee-tui-view/src/render/mod.rs`.

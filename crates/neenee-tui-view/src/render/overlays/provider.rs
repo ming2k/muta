@@ -15,7 +15,8 @@ use crate::modal::Modal;
 use crate::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
+    render_modal_footer,
 };
 
 /// Draw the **two-stage** provider/model picker. Mirrors the input-history
@@ -137,7 +138,16 @@ pub fn draw_models_modal(
     } else {
         None
     };
-    render_body(frame, f.body, body, scroll, follow, false, theme);
+    render_body(
+        frame,
+        f.body,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
 
     if let Some(fo) = f.footer {
         // Stage-2 browse on a custom provider exposes `d` to remove the
@@ -575,7 +585,7 @@ pub fn draw_model_editor(
     }
 
     let body_rect = f.body;
-    render_body(frame, body_rect, body, &mut 0, None, false, theme);
+    render_body(frame, body_rect, body, &mut 0, None, 0, false, theme);
 
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
@@ -664,6 +674,7 @@ fn suggestion_lines(suggestions: &[String], highlight: usize, theme: &Theme) -> 
 /// Draw the add-model overlay for a custom provider: a Model **filter** field
 /// (type to filter) plus the matching suggestion list. `↑/↓` move the highlight;
 /// Enter adds the highlighted model (or the typed id when nothing matches).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_add_model_editor(
     frame: &mut Frame,
     provider_name: &str,
@@ -715,7 +726,16 @@ pub fn draw_add_model_editor(
     } else {
         Some(2 + suggest_index)
     };
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
+    render_body(
+        frame,
+        body_rect,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
 
     if let Some(fo) = f.footer {
         render_modal_footer(
@@ -782,14 +802,23 @@ pub fn draw_provider_template_chooser(
             format!("     {}", template.description),
             Style::default().fg(theme.muted()),
         )));
-        body.push(Line::from(""));
     }
 
-    // Each template occupies a 3-line block (label + description + blank); the
-    // highlighted block starts at `selected * 3`. Following that visual line
-    // keeps the whole highlighted entry in view as `↑/↓` wraps around.
-    let follow = selected.checked_mul(3);
-    render_body(frame, f.body, body, scroll, follow, false, theme);
+    // Each template is a 2-line block (label + description, no blank gap) so
+    // the chooser stays compact; the highlighted block starts at
+    // `selected * 2`. Following that visual line keeps the highlighted entry
+    // in view as `↑/↓` wraps around.
+    let follow = selected.checked_mul(2);
+    render_body(
+        frame,
+        f.body,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
 
     if let Some(fo) = f.footer {
         render_modal_footer(
@@ -971,7 +1000,16 @@ pub fn draw_custom_provider_editor(
     } else {
         None
     };
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
+    render_body(
+        frame,
+        body_rect,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
     if let Some(fo) = f.footer {
         let hints: Vec<FooterHint> = vec![
             FooterHint::secondary("Tab", "field"),

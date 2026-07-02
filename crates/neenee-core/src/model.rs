@@ -264,6 +264,49 @@ pub const KNOWN_MODELS: &[Model] = &[
         effort_levels: &[],
     },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
+    // The current frontier chat family served over the OpenAI chat-completions
+    // API. All reason (surfaced via the `reasoning_content` stream) and take
+    // text+image input. Context windows and pricing per OpenAI's model docs;
+    // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
+    Model {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        family: "gpt",
+        context_window: 400_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
+    // remains only behind the TTS/transcribe specialized models) but kept
+    // registered so existing configs and older sessions still resolve metadata.
     Model {
         id: "gpt-4o",
         name: "GPT-4o",

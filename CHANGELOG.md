@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pasted images) is restored into the input box for re-editing. Later interrupt
   phases (mid-stream drop, tool cancel) are unchanged.
 
-- **`/debug context` — dry-run the next *wire* request as a file dump.** A
+- **`/debug preview` — dry-run the next *wire* request as a file dump.** A
   dev-only subcommand snapshots the provider-**wire** body the next turn would
   send (the minimal shape the provider serializes — `role`/`content`/`tool_calls`/
   `tool_call_id`/`images`/`reasoning_content` only), with a simulated `This is a
@@ -101,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set. The full JSON (messages + tool schemas + provider/model identity +
   context window + active pursuit) is persisted to one owner-only file under the
   per-project `debug/` dir for offline inspection. **No** provider call is made
-  and nothing is mutated. Pairs with `/debug network` (which captures real
+  and nothing is mutated. Pairs with `/debug trace` (which captures real
   round-trips).
 
 ### Changed

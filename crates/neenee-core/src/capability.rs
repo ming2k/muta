@@ -112,13 +112,13 @@ pub trait Provider: Send + Sync {
         ProviderPromptHints::default()
     }
 
-    /// Toggle network capture for debugging. When `enabled` is true, every
+    /// Toggle capture for debugging. When `enabled` is true, every
     /// request flowing through this provider is serialized — request messages,
     /// the streamed/returned response, provider id, model, and a timestamp — to
     /// one JSON file under `dir` (one file per round-trip). When `enabled` is
     /// false, capture stops and `dir` is ignored. Default is a no-op; the
     /// runtime proxy (`ProxyProvider`) overrides it so capture survives
-    /// mid-session `/provider` swaps. See the `/debug network` command.
+    /// mid-session `/provider` swaps. See the `/debug trace` command.
     ///
     /// This lives at the semantic layer (`Vec<Message>` in / events out), not
     /// the HTTP byte layer: request URLs, headers, and transport bytes are not
@@ -127,7 +127,7 @@ pub trait Provider: Send + Sync {
     /// HTTP client.
     fn set_debug_capture(&self, _enabled: bool, _dir: PathBuf) {}
 
-    /// Whether network capture is currently armed on this provider. Defaults to
+    /// Whether capture is currently armed on this provider. Defaults to
     /// `false`; the runtime proxy overrides it to report the live toggle state.
     fn debug_capture_enabled(&self) -> bool {
         false

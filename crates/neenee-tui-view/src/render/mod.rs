@@ -2,6 +2,7 @@
 //! while recording semantic-to-screen layout information.
 
 mod chrome;
+mod components;
 mod composer;
 mod design;
 mod disclosure;
@@ -199,7 +200,7 @@ pub struct TranscriptView<'a> {
     pub logo: Option<&'a [String]>,
     pub theme: &'a Theme,
     /// Which layout strategy to arrange messages with. Selectable via
-    /// `[tui] transcript_layout`; defaults to [`layout::Strategy::Compact`].
+    /// `[tui] transcript_layout`; defaults to [`layout::Strategy::Default`].
     pub layout: layout::Strategy,
     /// Per-message laid-out height cache (Stage 2). Lets the transcript pass
     /// skip the expensive text-wrapping of messages that are entirely outside

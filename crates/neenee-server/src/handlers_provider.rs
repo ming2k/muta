@@ -238,7 +238,7 @@ pub async fn edit(
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted config + the picker snapshot without switching.
     if config.default_provider == id {
-        let model = catalog::resolved_model_name(config, &id);
+        let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage);
         activate(
             config,
             agent,
@@ -377,7 +377,8 @@ pub async fn edit_model(
         tracing::warn!(?error, "could not persist provider model settings");
     }
 
-    let active_model = catalog::resolved_model_name(config, &provider_id);
+    let active_model =
+        catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage);
     if config.default_provider == provider_id && active_model == model {
         activate(
             config,
@@ -432,7 +433,7 @@ pub async fn edit_model_reasoning(
 
     // Re-activate if this model is the live one so the change applies now.
     let provider_id = &config.default_provider;
-    let active_model = catalog::resolved_model_name(config, provider_id);
+    let active_model = catalog::resolved_model_name_with_usage(config, provider_id, provider_usage);
     if active_model == model {
         activate(
             config,
@@ -494,7 +495,7 @@ pub async fn delete(
 
     if was_active {
         let fallback = config.default_provider.clone();
-        let model = catalog::resolved_model_name(config, &fallback);
+        let model = catalog::resolved_model_name_with_usage(config, &fallback, provider_usage);
         activate(
             config,
             agent,
@@ -589,8 +590,12 @@ async fn activate(
 
     let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
     // Record the switch as an activation so the picker's recency
-    // ordering tracks it. Best-effort: telemetry is rebuildable.
+    // ordering tracks it. Both the provider and the exact model are bumped:
+    // provider recency drives stage-1 order, model recency drives stage-2
+    // order, and pinning the model under this provider makes a re-open land
+    // on it. Best-effort: telemetry is rebuildable.
     provider_usage.record(&provider_type);
+    provider_usage.record_model(&provider_type, &model);
     if let Err(error) = provider_usage.save() {
         tracing::warn!(?error, "could not persist model usage telemetry");
     }
@@ -650,14 +655,15 @@ pub async fn set_default_model(
     reseed_prune_threshold(agent, config);
     // Tool-description overrides track the live model id.
     reseed_tool_variants(agent, config);
+    let model_name = catalog::resolved_model_name_with_usage(config, &id, provider_usage);
     provider_usage.record(&id);
+    provider_usage.record_model(&id, &model_name);
     if let Err(error) = provider_usage.save() {
         tracing::warn!(?error, "could not persist model usage telemetry");
     }
-    let model_name = catalog::resolved_model_name(config, &id);
     let _ = resp_tx.send(AgentResponse::ProviderSwitched {
         provider: id.clone(),
-        model: model_name,
+        model: model_name.clone(),
     });
     let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(

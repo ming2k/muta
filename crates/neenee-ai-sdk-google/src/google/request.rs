@@ -313,7 +313,10 @@ mod tests {
                 Message::new(Role::System, "pursuit and tools"),
                 Message::new(Role::User, "continue"),
             ],
-            BodyInput { tool_specs: None, include_thoughts: false },
+            BodyInput {
+                tool_specs: None,
+                include_thoughts: false,
+            },
         );
 
         assert_eq!(
@@ -331,7 +334,10 @@ mod tests {
                 Message::new(Role::Tool, "file contents"),
                 Message::new(Role::User, "next"),
             ],
-            BodyInput { tool_specs: None, include_thoughts: false },
+            BodyInput {
+                tool_specs: None,
+                include_thoughts: false,
+            },
         );
 
         assert_eq!(body["contents"][1]["role"], "user");
@@ -380,7 +386,10 @@ mod tests {
         );
         // Reasoning text is only surfaced when explicitly requested, and the
         // flag lives under generationConfig.thinkingConfig.
-        assert_eq!(body["generationConfig"]["thinkingConfig"]["includeThoughts"], true);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
     }
 
     #[test]
@@ -421,7 +430,10 @@ mod tests {
                 },
                 Message::tool_result(&call, "Cargo.toml"),
             ],
-            BodyInput { tool_specs: None, include_thoughts: false },
+            BodyInput {
+                tool_specs: None,
+                include_thoughts: false,
+            },
         );
 
         assert_eq!(
@@ -472,7 +484,10 @@ mod tests {
                     ..Message::new(Role::Tool, "ignored")
                 },
             ],
-            BodyInput { tool_specs: None, include_thoughts: false },
+            BodyInput {
+                tool_specs: None,
+                include_thoughts: false,
+            },
         );
 
         let parts = body["contents"][1]["parts"].as_array().unwrap();

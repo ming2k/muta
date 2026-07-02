@@ -109,7 +109,7 @@ pub enum Modal {
     ConfigNudge,
     /// Transcript layout sub-page of the config manager. Reached from
     /// [`Modal::Config`] by selecting the "Layout" row. Lists the layout
-    /// strategies (Compact / Round-band); `Space` or `Enter` applies the
+    /// strategies (Round-band / Legacy); `Space` or `Enter` applies the
     /// selected strategy, which is sent as `AgentRequest::UpdateTuiLayout`
     /// and persisted to `config.toml`. The harness replies with
     /// `AgentResponse::TuiLayoutUpdated`, which re-seeds

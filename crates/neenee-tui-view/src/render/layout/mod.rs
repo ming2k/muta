@@ -28,8 +28,8 @@
 //! New strategies are added by implementing the trait and wiring a match arm
 //! in [`Strategy::build`].
 
-pub mod compact;
-pub mod turn_band;
+pub mod layout_default;
+pub mod legacy;
 
 use neenee_tui::{Frame, Rect};
 
@@ -45,31 +45,31 @@ use crate::render::design::MESSAGE_GAP_ROWS;
 /// Which layout strategy to use for the transcript message stream.
 ///
 /// Selectable via `[tui] transcript_layout` in `config.toml`; the default is
-/// [`Strategy::Compact`], which reproduces the original renderer exactly.
+/// [`Strategy::Default`], which reproduces the original renderer exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Strategy {
     #[default]
-    Compact,
-    TurnBand,
+    Default,
+    Legacy,
 }
 
 impl Strategy {
     /// Parse a `config.toml` value into a strategy, case-insensitively.
-    /// Unknown / empty values fall back to the default (Compact) rather than
+    /// Unknown / empty values fall back to the default rather than
     /// erroring, so a typo never blocks startup.
     pub fn from_config(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "turn_band" | "roundband" | "round" | "bands" | "grouped" => Self::TurnBand,
-            "compact" | "flush" | "default" | "" => Self::Compact,
-            _ => Self::Compact,
+            "legacy" => Self::Legacy,
+            "default" | "compact" | "flush" | "" => Self::Default,
+            _ => Self::Default,
         }
     }
 
     /// Construct the concrete layout for this strategy.
     pub fn build(self) -> Box<dyn TranscriptLayout> {
         match self {
-            Self::Compact => Box::new(compact::Compact),
-            Self::TurnBand => Box::new(turn_band::TurnBand),
+            Self::Default => Box::new(layout_default::Default),
+            Self::Legacy => Box::new(legacy::Legacy),
         }
     }
 }

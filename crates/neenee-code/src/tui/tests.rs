@@ -611,7 +611,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         path_scan_cache: None,
         current_pursuit: None,
         session_context: None,
-        nudge_config: neenee_core::NudgeConfig::default(),
+        nudge_config: neenee_core::DoomGuardConfig::default(),
         loop_status: "idle".to_string(),
         activity_status: String::new(),
         unattended: false,
@@ -729,7 +729,7 @@ fn completions_classifies_slash_input_as_slash_kind() {
 fn openai_template() -> &'static crate::tui::providers::ProviderTemplate {
     crate::tui::PROVIDER_TEMPLATES
         .iter()
-        .find(|t| t.label == "Custom OpenAI-compatible")
+        .find(|t| t.label == "OpenAI (sub2api)")
         .expect("openai-compatible template")
 }
 

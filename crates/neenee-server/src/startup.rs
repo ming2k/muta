@@ -71,7 +71,7 @@ define_builtin_commands! {
     Skill       = "/skill"        : "Load a skill by name",
     Init        = "/init"         : "Initialize a .neenee/ config tree",
     Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
-    Debug       = "/debug"        : "Debug tools: /debug network on|off, /debug context (dry run)",
+    Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
     Help        = "/help"         : "Show available commands and keybindings",
     Exit        = "/exit"         : "Exit the program",
 }

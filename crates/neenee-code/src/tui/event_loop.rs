@@ -103,11 +103,11 @@ pub(super) struct UiRuntime {
     /// round-trip completes. Each manager renders a lightweight placeholder
     /// while this is `None`.
     pub session_context: Arc<Mutex<Option<neenee_core::SessionContextSnapshot>>>,
-    /// Live nudge config snapshot, mirrored from
-    /// `AgentResponse::NudgeConfigUpdated`. The `/config` modal reads this
-    /// each frame; edits go out as `AgentRequest::UpdateNudgeConfig` and the
+    /// Live doom-guard config snapshot, mirrored from
+    /// `AgentResponse::DoomGuardConfigUpdated`. The `/config` modal reads this
+    /// each frame; edits go out as `AgentRequest::UpdateDoomGuardConfig` and the
     /// reply updates this cell.
-    pub nudge_config: Arc<Mutex<neenee_core::NudgeConfig>>,
+    pub nudge_config: Arc<Mutex<neenee_core::DoomGuardConfig>>,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. The
     /// render loop copies it into `App::todos` each frame so the Activity
     /// modal stays in sync with the agent's state.
@@ -2609,8 +2609,8 @@ pub(super) async fn run_app_loop(
                         1 => {
                             app.active_modal = Modal::ConfigLayout;
                             app.modal_index = match app.transcript_layout {
-                                crate::tui::render::layout::Strategy::Compact => 0,
-                                crate::tui::render::layout::Strategy::TurnBand => 1,
+                                crate::tui::render::layout::Strategy::Default => 0,
+                                crate::tui::render::layout::Strategy::Legacy => 1,
                             };
                             app.config_scroll = 0;
                         }
@@ -2645,7 +2645,7 @@ pub(super) async fn run_app_loop(
                     if app.modal_index == crate::tui::render::overlays::config_nudge::ROW_ENABLED {
                         let mut cfg = app.nudge_config;
                         cfg.enabled = !cfg.enabled;
-                        let _ = app.tx.send(AgentRequest::UpdateNudgeConfig(cfg));
+                        let _ = app.tx.send(AgentRequest::UpdateDoomGuardConfig(cfg));
                     }
                 }
                 input::InputAction::ConfigNudgeAdjust { delta } => {
@@ -2658,7 +2658,7 @@ pub(super) async fn run_app_loop(
                         crate::tui::render::overlays::config_nudge::apply_threshold_delta(
                             &mut cfg, row, delta,
                         );
-                        let _ = app.tx.send(AgentRequest::UpdateNudgeConfig(cfg));
+                        let _ = app.tx.send(AgentRequest::UpdateDoomGuardConfig(cfg));
                     }
                 }
                 input::InputAction::McpToggle => {

@@ -200,16 +200,16 @@ impl Dirs {
         self.project_dir(project_root).join("sessions")
     }
 
-    /// Per-project `/debug network` capture directory: `projects/<bucket>/network`.
+    /// Per-project `/debug trace` capture directory: `projects/<bucket>/network`.
     /// Each provider round-trip is written here as one owner-only JSON file
-    /// while network capture is armed. Mirror of the `sessions/` layout; the
+    /// while tracing is armed. Mirror of the `sessions/` layout; the
     /// directory is created lazily on first write by `atomic_write_bytes`.
     pub fn project_network_dir(&self, project_root: &Path) -> PathBuf {
         self.project_dir(project_root).join("network")
     }
 
-    /// Per-project `/debug context` snapshot directory: `projects/<bucket>/debug`.
-    /// One owner-only JSON file is written here per `/debug context` invocation —
+    /// Per-project `/debug preview` directory: `projects/<bucket>/debug`.
+    /// One owner-only JSON file is written here per `/debug preview` invocation —
     /// a dry-run of the request that *would* be sent (rebuilt system message +
     /// auto-loaded skills + message list + tool schemas + token pressure),
     /// without calling the provider. The directory is created lazily on first
@@ -295,6 +295,16 @@ static DEFAULT: OnceLock<Dirs> = OnceLock::new();
 /// compiles the static but never reads it (every accessor is `#[cfg(test)]`).
 #[cfg(test)]
 static TEST_OVERRIDE: RwLock<Option<Dirs>> = RwLock::new(None);
+
+/// Single process-wide lock that **every** test touching [`set_test_default`]
+/// must hold for the duration of its override. Without this, tests in
+/// different modules each used their own per-module lock (`config`'s
+/// `PATHS_GUARD`, `session`'s `GLOBAL_GUARD`), so two such tests ran
+/// concurrently and stomped the shared `TEST_OVERRIDE` — a flaky cross-test
+/// race. Routing all of them through one lock serialises the critical section
+/// regardless of which module the test lives in.
+#[cfg(test)]
+pub static TEST_OVERRIDE_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Install the process-wide [`Dirs`]. Idempotent: subsequent calls in the same
 /// process are no-ops (the first value wins), matching production semantics.

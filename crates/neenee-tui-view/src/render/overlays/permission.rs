@@ -9,6 +9,7 @@ use neenee_core::{PermissionRequest, UserQuestionRequest};
 use crate::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::modal::Modal;
 use crate::render::Theme;
+use crate::render::components::options::QuestionOptionRow;
 use crate::render::primitives::{
     FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
@@ -184,7 +185,7 @@ pub fn draw_question_modal(
     } else {
         None
     };
-    render_body(frame, f.body, body_lines, scroll, follow, false, theme);
+    render_body(frame, f.body, body_lines, scroll, follow, 0, false, theme);
     record_question_hits(hit_map, f.body, &option_rows, *scroll);
 
     // Place the real terminal cursor in the "Other" free-text field — the only
@@ -315,7 +316,7 @@ fn push_wrapped_styled(
 
 #[allow(clippy::too_many_arguments)]
 fn render_question_option(
-    lines: &mut Vec<Line>,
+    lines: &mut Vec<Line<'static>>,
     _index: usize,
     label: &str,
     description: Option<&str>,
@@ -325,108 +326,14 @@ fn render_question_option(
     body_width: usize,
     theme: &Theme,
 ) {
-    // No row-number prefix and no `❯` focus glyph — the hover is signalled
-    // purely by the font color of the highlighted row (brand tone + bold),
-    // not by a background band.
-    //
-    // Marker policy:
-    // - Multi-select: a `[x]`/`[ ]` checkbox, because selection is a separate
-    //   toggle set from the highlight — the checkbox is the only way to tell
-    //   a *selected* row from a merely *hovered* one.
-    // - Single-select: no marker. The highlight is *live* (it moves with
-    //   ↑/↓ and commits immediately), so the highlighted row is, by
-    //   definition, the selected one. Showing a radio dot would be redundant
-    //   with the brand-colored highlight and would imply a two-step
-    //   (mark-then-confirm) flow that does not exist.
-    let (marker, marker_style) = if multi_select {
-        let m = if is_selected { "[x]" } else { "[ ]" };
-        let style = if is_selected {
-            Style::default().fg(theme.ok()).add_modifier(Modifier::BOLD)
-        } else if is_highlighted {
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.muted())
-        };
-        (m, style)
-    } else {
-        // Single-select: no marker. Use an empty span styled as the muted
-        // baseline so the line keeps the same indentation rhythm as the
-        // multi-select rows.
-        ("", Style::default().fg(theme.muted()))
-    };
-
-    let text_style = if is_highlighted {
-        Style::default()
-            .fg(theme.brand())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.fg())
-    };
-
-    // Keep the label column aligned whether or not a marker is shown: the
-    // prefix reserves a fixed-width slot ("  [x] " for multi-select, "    "
-    // for the marker-less single-select) so single- and multi-select rows
-    // line up the same.
-    let first_prefix = format!("  {} ", marker);
-    let continuation_prefix = "     ";
-    push_wrapped_styled_with_prefix_style(
-        lines,
-        &first_prefix,
-        continuation_prefix,
+    QuestionOptionRow {
         label,
-        marker_style,
-        text_style,
-        body_width,
-    );
-
-    if let Some(desc) = description {
-        let desc_style = if is_highlighted {
-            Style::default().fg(theme.brand())
-        } else {
-            Style::default().fg(theme.dim())
-        };
-        push_wrapped_styled(lines, "     ", "     ", desc, desc_style, body_width);
+        description,
+        selected: is_selected,
+        highlighted: is_highlighted,
+        multi_select,
     }
-}
-
-fn push_wrapped_styled_with_prefix_style(
-    lines: &mut Vec<Line>,
-    first_prefix: &str,
-    continuation_prefix: &str,
-    text: &str,
-    first_prefix_style: Style,
-    text_style: Style,
-    body_width: usize,
-) {
-    let first_width = first_prefix.width();
-    let continuation_width = continuation_prefix.width();
-    let wrap_width = body_width
-        .saturating_sub(first_width.max(continuation_width))
-        .max(1);
-    let wrapped = wrap_text(text, wrap_width);
-    if wrapped.is_empty() {
-        lines.push(Line::from(vec![Span::styled(
-            first_prefix.to_string(),
-            first_prefix_style,
-        )]));
-        return;
-    }
-
-    for (idx, wrapped_line) in wrapped.into_iter().enumerate() {
-        if idx == 0 {
-            lines.push(Line::from(vec![
-                Span::styled(first_prefix.to_string(), first_prefix_style),
-                Span::styled(wrapped_line.text, text_style),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled(continuation_prefix.to_string(), Style::default()),
-                Span::styled(wrapped_line.text, text_style),
-            ]));
-        }
-    }
+    .push_lines(lines, body_width, theme);
 }
 
 /// Draw a blocking tool permission request inline, replacing the composer

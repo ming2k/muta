@@ -151,16 +151,16 @@ impl SkillRegistry {
     /// `Err` only if the body genuinely cannot be read.
     pub fn body_for(&self, name: &str) -> Option<Result<String, String>> {
         let skill = self.lock().get(name)?;
-        if let Ok(bodies) = self.bodies.read() {
-            if let Some(cached) = bodies.get(name) {
-                return Some(Ok(cached.clone()));
-            }
+        if let Ok(bodies) = self.bodies.read()
+            && let Some(cached) = bodies.get(name)
+        {
+            return Some(Ok(cached.clone()));
         }
         let body = skill.load_body();
-        if let Ok(ref text) = body {
-            if let Ok(mut bodies) = self.bodies.write() {
-                bodies.insert(name.to_string(), text.clone());
-            }
+        if let Ok(ref text) = body
+            && let Ok(mut bodies) = self.bodies.write()
+        {
+            bodies.insert(name.to_string(), text.clone());
         }
         Some(body)
     }

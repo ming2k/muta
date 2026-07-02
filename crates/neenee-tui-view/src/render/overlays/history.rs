@@ -9,7 +9,8 @@ use crate::layout::LayoutMap;
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, contrast_fg, modal_area, modal_frame, render_body, render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, modal_area, modal_frame, render_body,
+    render_modal_footer,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -90,7 +91,7 @@ pub fn draw_history_modal(
 
     if preview {
         let body = preview_body(history, ranked, modal_index, theme);
-        render_body(frame, f.body, body, scroll, None, true, theme);
+        render_body(frame, f.body, body, scroll, None, 0, true, theme);
     } else {
         let body = list_body(history, ranked, modal_index, theme, f.body.width as usize);
         let follow = if follow_selection {
@@ -98,7 +99,16 @@ pub fn draw_history_modal(
         } else {
             None
         };
-        render_body(frame, f.body, body, scroll, follow, false, theme);
+        render_body(
+            frame,
+            f.body,
+            body,
+            scroll,
+            follow,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
     }
 
     if let Some(fo) = f.footer {

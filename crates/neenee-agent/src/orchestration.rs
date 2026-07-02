@@ -59,7 +59,7 @@ pub fn turn(session_id: &str, event: RoundEvent) -> AgentResponse {
 
 pub struct ProxyProvider {
     pub holder: Arc<RwLock<Arc<dyn Provider>>>,
-    /// Whether `/debug network` capture is armed. Read on every call so the
+    /// Whether `/debug trace` is armed. Read on every call so the
     /// toggle takes effect for the very next round-trip.
     debug_enabled: Arc<AtomicBool>,
     /// Dump directory while capture is on; `None` when off.
@@ -267,7 +267,7 @@ impl Provider for ProxyProvider {
     }
 }
 
-// ── /debug network capture ────────────────────────────────────────────
+// ── /debug trace ──────────────────────────────────────────────
 
 /// A queued capture record awaiting its response. Held across the inner call
 /// (for `chat`) or inside a [`CapturedStream`] (for the streaming paths) and

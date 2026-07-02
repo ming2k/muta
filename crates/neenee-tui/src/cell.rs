@@ -214,13 +214,6 @@ impl Style {
             ..self
         }
     }
-    /// Deprecated alias retained for any in-tree caller; prefer
-    /// [`Style::add_modifier`].
-    #[deprecated(note = "use add_modifier")]
-    pub fn with_add(self, add: Modifier) -> Self {
-        self.add_modifier(add)
-    }
-
     /// The default "nothing rendered" style: default fg, default bg, no attrs.
     /// A cell styled this way reads as the terminal's default for both colors.
     pub const RESET: Style = Style {

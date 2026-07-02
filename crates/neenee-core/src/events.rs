@@ -2,7 +2,7 @@
 //! responses ([`AgentResponse`]), live turn events ([`AgentEvent`]), and the
 //! small data records they carry.
 
-use crate::{ImagePart, Message, NudgeConfig, Pursuit, ToolOutput, ToolStream};
+use crate::{DoomGuardConfig, ImagePart, Message, Pursuit, ToolOutput, ToolStream};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,20 +200,20 @@ pub enum AgentRequest {
     /// `/sessions`), and emits [`AgentResponse::SideViewClosed`]. Sent by
     /// the TUI when the user presses `Esc` / `Ctrl+C` inside the side view.
     ExitSideView,
-    /// Update the nudge configuration at runtime (from the `/config` modal).
-    /// The harness writes the new config to `config.toml`, calls
-    /// `Agent::set_nudge_config`, and replies with
-    /// [`AgentResponse::NudgeConfigUpdated`] so the modal reflects the
+    /// Update the doom-guard configuration at runtime (from the `/config`
+    /// modal). The harness writes the new config to `config.toml`, calls
+    /// `Agent::set_doom_guard_config`, and replies with
+    /// [`AgentResponse::DoomGuardConfigUpdated`] so the modal reflects the
     /// persisted state. The `enabled` flag takes effect on the next round
-    /// boundary; the thresholds take effect on the next turn (per-turn guard
+    /// boundary; the window size takes effect on the next turn (per-turn guard
     /// state is rebuilt fresh each turn).
-    UpdateNudgeConfig(NudgeConfig),
+    UpdateDoomGuardConfig(DoomGuardConfig),
     /// Update the transcript layout preference (from the `/config` modal).
     /// The harness writes the new value to `config.toml`'s `[tui]
     /// transcript_layout` and replies with [`AgentResponse::TuiLayoutUpdated`]
     /// carrying the persisted string so the modal re-renders from the
-    /// authoritative state. The value is a raw config string ("compact" /
-    /// "turn_band"); interpretation into a [`crate`] layout `Strategy`
+    /// authoritative state. The value is a raw config string ("default" /
+    /// "legacy"); interpretation into a [`crate`] layout `Strategy`
     /// happens in the renderer, keeping the core free of render types.
     UpdateTuiLayout(String),
 }
@@ -275,11 +275,11 @@ pub enum AgentResponse {
     /// and re-sent after any mutation handled by the harness
     /// ([`AgentRequest::RevokePermission`] / [`AgentRequest::ToggleTool`]).
     SessionContext(SessionContextSnapshot),
-    /// The nudge configuration was updated (from the `/config` modal via
-    /// [`AgentRequest::UpdateNudgeConfig`]). Carries the persisted config so
+    /// The doom-guard configuration was updated (from the `/config` modal via
+    /// [`AgentRequest::UpdateDoomGuardConfig`]). Carries the persisted config so
     /// the modal re-renders from the authoritative state — the TOML write
     /// is the source of truth, not the TUI's optimistic local edit.
-    NudgeConfigUpdated(NudgeConfig),
+    DoomGuardConfigUpdated(DoomGuardConfig),
     /// The transcript layout preference was updated (from the `/config` modal
     /// via [`AgentRequest::UpdateTuiLayout`]). Carries the persisted config
     /// string so the modal re-renders from the authoritative state — the TOML
@@ -579,6 +579,11 @@ pub struct ProviderModelInfo {
     /// Effective extended-thinking state for Anthropic-protocol channels.
     /// `None` for protocols that do not expose a thinking knob.
     pub thinking: Option<bool>,
+    /// Unix epoch milliseconds of this model's last activation. `None` if the
+    /// model has never been activated, which the stage-2 list sorts as
+    /// "oldest". Added late, so it defaults on deserialize for older snapshots.
+    #[serde(default)]
+    pub last_used_ms: Option<u64>,
 }
 
 /// Full snapshot of provider-picker state: which provider is the current

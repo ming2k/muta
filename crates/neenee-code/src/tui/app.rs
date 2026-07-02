@@ -293,11 +293,11 @@ pub struct App {
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Refreshed each frame from the response listener.
     pub session_context: Option<neenee_core::SessionContextSnapshot>,
-    /// Live nudge config snapshot, mirrored from
-    /// `AgentResponse::NudgeConfigUpdated` each frame. The `/config` modal
-    /// reads this to render the current thresholds and enabled state; edits
-    /// go out as `AgentRequest::UpdateNudgeConfig`.
-    pub nudge_config: neenee_core::NudgeConfig,
+    /// Live doom-guard config snapshot, mirrored from
+    /// `AgentResponse::DoomGuardConfigUpdated` each frame. The `/config` modal
+    /// reads this to render the current window and enabled state; edits go out
+    /// as `AgentRequest::UpdateDoomGuardConfig`.
+    pub nudge_config: neenee_core::DoomGuardConfig,
     pub loop_status: String,
     pub activity_status: String,
     /// Whether write-tool permission prompts are bypassed this session
@@ -409,12 +409,13 @@ pub struct App {
     /// affordance. `None` whenever the pointer is elsewhere or an overlay
     /// modal is open.
     pub hovered_step: Option<usize>,
-    /// Global tool-step density (false = Compact default, true = Comfortable:
+    /// Global tool-step density (false = legacy default, true = Comfortable:
     /// new tool steps spawn expanded). Shared with the response listener.
     pub tool_density: Arc<AtomicBool>,
     /// Which layout strategy arranges the transcript message stream. Selected
-    /// via `[tui] transcript_layout`; defaults to Compact (the original
-    /// flush-stack layout). See `crate::tui::render::layout::Strategy`.
+    /// via `[tui] transcript_layout`; defaults to the round-banded layout (each
+    /// tool round grouped under a labelled header). See
+    /// `crate::tui::render::layout::Strategy`.
     pub transcript_layout: crate::tui::render::layout::Strategy,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means

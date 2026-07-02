@@ -87,10 +87,15 @@ impl ProviderTemplate {
 pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         label: "OpenAI",
-        description: "OpenAI API — GPT-4o family",
+        description: "OpenAI API — GPT-5.5 family",
         protocol: "openai",
         models: neenee_providers::OPENAI_BUILTIN_MODELS,
-        needs_url: true,
+        // Official endpoint: the base URL is fixed and pre-filled from
+        // `default_url`, so the editor hides the Base URL field. The model
+        // collection (`OPENAI_BUILTIN_MODELS`) is seeded as channels — the
+        // user only supplies a name and token, and the stage-2 picker lists
+        // the served models.
+        needs_url: false,
         url_hint: "https://api.openai.com/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.openai.com/v1/chat/completions"),
@@ -123,7 +128,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "DeepSeek V4 Flash + Pro over OpenAI chat completions",
         protocol: "openai",
         models: neenee_providers::DEEPSEEK_BUILTIN_MODELS,
-        needs_url: true,
+        // Official endpoint: the base URL is fixed and pre-filled from
+        // `default_url`, so the editor hides the Base URL field — the user
+        // only supplies a name and token.
+        needs_url: false,
         url_hint: "https://api.deepseek.com/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.deepseek.com/v1/chat/completions"),
@@ -134,7 +142,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "Moonshot Kimi coding-plan endpoint",
         protocol: "openai",
         models: &["kimi-k2.7-code"],
-        needs_url: true,
+        // Official endpoint: base URL is fixed and pre-filled, no field shown.
+        needs_url: false,
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
@@ -145,7 +154,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "Z.AI coding-plan endpoint",
         protocol: "openai",
         models: &["glm-5.2"],
-        needs_url: true,
+        // Official endpoint: base URL is fixed and pre-filled, no field shown.
+        needs_url: false,
         url_hint: "https://api.z.ai/api/coding/paas/v4/chat/completions",
         needs_model: false,
         default_url: Some("https://api.z.ai/api/coding/paas/v4/chat/completions"),
@@ -163,8 +173,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
     },
     ProviderTemplate {
-        label: "Custom Anthropic (Claude relay)",
-        description: "Anthropic /messages relay — serves the Claude family",
+        label: "Anthropic (sub2api)",
+        description: "Anthropic sub2api relay",
         protocol: "anthropic",
         models: neenee_providers::ANTHROPIC_BUILTIN_MODELS,
         needs_url: true,
@@ -174,24 +184,13 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
     },
     ProviderTemplate {
-        label: "Custom OpenAI-compatible",
-        description: "Any OpenAI chat-completions relay — you pick the model",
+        label: "OpenAI (sub2api)",
+        description: "OpenAI sub2api relay",
         protocol: "openai",
         models: &[],
         needs_url: true,
         url_hint: "https://relay.example.com/v1/chat/completions",
         needs_model: true,
-        default_url: None,
-        user_agent: None,
-    },
-    ProviderTemplate {
-        label: "Custom Gemini",
-        description: "Native Google Gemini API — serves the Gemini family",
-        protocol: "gemini",
-        models: neenee_providers::GOOGLE_BUILTIN_MODELS,
-        needs_url: true,
-        url_hint: "https://generativelanguage.googleapis.com/v1beta",
-        needs_model: false,
         default_url: None,
         user_agent: None,
     },
@@ -211,7 +210,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     // stage 2 the moment the relay accepts it.
     ProviderTemplate {
         label: "Antigravity (sub2api)",
-        description: "Gemini-native 中转站 — gemini-3.1-pro / gemini-3-flash",
+        description: "Antigravity sub2api relay",
         protocol: "gemini",
         models: &[
             "gemini-3-flash",
@@ -315,6 +314,9 @@ pub struct RankedModel {
     pub protocol: String,
     pub effort: Option<String>,
     pub thinking: Option<bool>,
+    /// Unix epoch milliseconds of this model's last activation (`None` = never,
+    /// sorts as oldest). Drives the stage-2 recency sort.
+    pub last_used_ms: Option<u64>,
     /// The fuzzy match against `label`, or `None` in browse mode (empty query),
     /// where every row is shown unhighlighted.
     pub m: Option<fuzzy::FuzzyMatch>,
@@ -352,6 +354,19 @@ impl RankedProvider {
     /// stage-2 model picker). Single-model providers activate directly.
     pub fn is_multi_model(&self) -> bool {
         self.models.len() > 1
+    }
+}
+
+/// Most-recently-used-first ordering of two models by their last-activation
+/// timestamps. `None` (never activated) sorts as oldest. The caller applies a
+/// stable tiebreaker (catalog order / label) so this never has to.
+fn model_order(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
+    // Both present → descending; one present → it wins; neither → equal.
+    match (a, b) {
+        (Some(a), Some(b)) => b.cmp(&a),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
     }
 }
 
@@ -415,9 +430,10 @@ pub fn providers_filtered_from(
 }
 
 /// Build the **stage-2** model rows for a single provider: one [`RankedModel`]
-/// per model the provider serves (in snapshot order — a curated, predictable
-/// list), fuzzy-filtered by `query` against the model display name. `row_idx`
-/// indexes into `picker.rows`; an out-of-range index yields no rows.
+/// per model the provider serves, fuzzy-filtered by `query` against the model
+/// display name, sorted most-recently-used first (catalog order as the stable
+/// fallback). `row_idx` indexes into `picker.rows`; an out-of-range index
+/// yields no rows.
 pub fn provider_models_filtered_from(
     picker: &ProviderPickerSnapshot,
     row_idx: usize,
@@ -455,9 +471,16 @@ pub fn provider_models_filtered_from(
             protocol: info.protocol,
             effort: info.effort,
             thinking: info.thinking,
+            last_used_ms: info.last_used_ms,
             m,
         });
     }
+    // Most-recently-used first; `None` (never activated) sorts as oldest, and
+    // catalog order (the iteration order above) is the stable tiebreaker so a
+    // never-used provider keeps its curated model sequence.
+    rows.sort_by(|a, b| {
+        model_order(a.last_used_ms, b.last_used_ms).then_with(|| a.label.cmp(&b.label))
+    });
     rows
 }
 
@@ -725,5 +748,47 @@ mod tests {
         let rows = provider_models_filtered_from(&snapshot, idx, "");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].model, "kimi-k2.7-code");
+    }
+
+    #[test]
+    fn stage2_sorts_most_recently_used_model_first() {
+        // Build an OpenAI row whose two models carry per-model last-used
+        // timestamps: gpt-4o-mini was used more recently than gpt-4o, so it
+        // must sort above gpt-4o even though gpt-4o is listed first (catalog
+        // order).
+        let mut snapshot = sample();
+        let openai = snapshot.rows.iter_mut().find(|r| r.id == "openai").unwrap();
+        openai.model_info = vec![
+            ProviderModelInfo {
+                model: "gpt-4o".to_string(),
+                protocol: "openai".to_string(),
+                effort: None,
+                thinking: None,
+                last_used_ms: Some(100),
+            },
+            ProviderModelInfo {
+                model: "gpt-4o-mini".to_string(),
+                protocol: "openai".to_string(),
+                effort: None,
+                thinking: None,
+                last_used_ms: Some(5_000),
+            },
+        ];
+        let idx = snapshot.rows.iter().position(|r| r.id == "openai").unwrap();
+        let rows = provider_models_filtered_from(&snapshot, idx, "");
+        assert_eq!(rows[0].model, "gpt-4o-mini", "most-recently-used first");
+        assert_eq!(rows[1].model, "gpt-4o");
+    }
+
+    #[test]
+    fn stage2_never_used_models_keep_catalog_order() {
+        // When no model has a recency timestamp, the stage-2 list falls back
+        // to the curated catalog order (here gpt-4o before gpt-4o-mini) plus a
+        // stable label tiebreaker.
+        let snapshot = sample();
+        let idx = snapshot.rows.iter().position(|r| r.id == "openai").unwrap();
+        let rows = provider_models_filtered_from(&snapshot, idx, "");
+        let ids: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(ids, vec!["gpt-4o", "gpt-4o-mini"]);
     }
 }

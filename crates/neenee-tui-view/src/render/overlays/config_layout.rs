@@ -14,12 +14,12 @@ use neenee_tui::{
 
 use crate::modal::Modal;
 use crate::render::Theme;
+use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
+use crate::render::components::scroll::ScrollBody;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::layout::Strategy;
 use crate::render::primitives::{
-    FooterHint, HeaderPart, content_modal_area, content_modal_probe, contrast_fg,
-    modal_chrome_rows, modal_frame, modal_header_parts, modal_spec, render_body,
-    render_modal_footer,
+    FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe, contrast_fg,
 };
 
 /// One selectable layout strategy + its human description.
@@ -36,14 +36,14 @@ struct LayoutOption {
 fn options() -> [LayoutOption; 2] {
     [
         LayoutOption {
-            config_value: "compact",
-            label: "Compact",
-            description: "Original flush stack: tight gaps, batched tool calls",
-        },
-        LayoutOption {
-            config_value: "turn_band",
+            config_value: "default",
             label: "Round-band",
             description: "Each tool round grouped under a labelled header",
+        },
+        LayoutOption {
+            config_value: "legacy",
+            label: "Legacy",
+            description: "Original flush stack: tight gaps, batched tool calls",
         },
     ]
 }
@@ -89,8 +89,8 @@ pub fn draw_config_layout_modal(
     const PREFIX_W: usize = GUTTER_W + 2; // gutter + glyph
 
     let current_value = match current {
-        Strategy::Compact => "compact",
-        Strategy::TurnBand => "turn_band",
+        Strategy::Default => "default",
+        Strategy::Legacy => "legacy",
     };
 
     for (i, opt) in options().iter().enumerate() {
@@ -146,40 +146,32 @@ pub fn draw_config_layout_modal(
         Style::default().fg(theme.muted()),
     )));
 
-    let spec = modal_spec(Modal::ConfigLayout).expect("config layout modal geometry");
-    let desired = body.len() as u16 + modal_chrome_rows(spec);
-    let area = content_modal_area(frame, Modal::ConfigLayout, desired)
-        .expect("config layout modal geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header_parts(
+    let header = [
+        HeaderPart::Text {
+            text: "Configuration › ",
+            accent: false,
+        },
+        HeaderPart::title("Layout"),
+    ];
+    draw_modal_page(
         frame,
-        f.header,
-        &[
-            HeaderPart::Text {
-                text: "Configuration › ",
-                accent: false,
+        ModalPage {
+            modal: Modal::ConfigLayout,
+            size: ModalPageSize::Content,
+            header: ModalHeader::parts(&header),
+            body: ScrollBody {
+                lines: body,
+                scroll,
+                follow: selected_line,
+                edge_margin: SCROLL_EDGE_MARGIN,
+                wrap: false,
             },
-            HeaderPart::title("Layout"),
-        ],
-        theme,
-    );
-
-    let body_rect = f.body;
-    let follow = selected_line;
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
-
-    if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
+            footer_hints: &[
                 FooterHint::navigation("↑↓", "select"),
                 FooterHint::primary("Enter/Space", "apply"),
                 FooterHint::always("Esc", "back"),
             ],
-            theme,
-        );
-    }
-    area
+        },
+        theme,
+    )
 }

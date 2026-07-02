@@ -283,7 +283,7 @@ pub fn draw_activity_modal(
     // one already-indented `Line` per visual row. A second wrap pass here
     // would mangle the pre-sized budgets and re-introduce the continuation-
     // row indent bug (the whole reason the pre-wrap path exists).
-    render_body(frame, f.body, lines, scroll, None, false, theme);
+    render_body(frame, f.body, lines, scroll, None, 0, false, theme);
 
     if let Some(footer) = f.footer {
         render_modal_footer(

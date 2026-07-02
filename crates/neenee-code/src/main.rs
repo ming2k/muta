@@ -343,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // default to sensible values when the table is absent, so this is a no-op
     // for the common case — the nudge config defaults to disabled.
     agent.set_hard_stop_turns(config.principal.hard_stop_turns);
-    agent.set_nudge_config(config.principal.nudge);
+    agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);
 
     // Lifecycle event hooks (ADR-0025): each `[[hooks]]` entry runs a shell
@@ -410,7 +410,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initial values for TUI
     let initial_p_name = catalog::default_provider_id(&config).to_string();
-    let initial_m_name = catalog::resolved_model_name(&config, &initial_p_name);
+    let initial_m_name =
+        catalog::resolved_model_name_with_usage(&config, &initial_p_name, &provider_usage);
 
     // Spawn Agent Background Task
     // The agent background task takes ownership of `config`; pull the TUI

@@ -59,6 +59,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Activity bar](status-bar.md) | Breathing-dot liveness anchor + live status label + pursuit objective + todos progress + elapsed; clickable to open the Activity modal |
 | [Hint bar](hint-line.md) | Optional `[ SHELL ]` pill + model/context cluster |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
+| [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |
 
 ## Other reference
 
@@ -81,18 +82,19 @@ other. Paths below are relative to each crate's `src/`.
 | `render/design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
 | `render/theme.rs` | `Theme` (all color tokens) |
 | `render/primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |
+| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, and question option rows |
 | `render/text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
 | `render/message_body.rs` | `draw_message_body` (markdown text, user panels, code blocks) |
 | `render/disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |
 | `render/disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
 | `render/disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
-| `render/layout/` | Transcript arrangement strategies: `compact`, `turn_band` (selected by `[tui] transcript_layout`) |
+| `render/layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
 | `render/tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `render/composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
 | `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
-| `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_nudge`, `mcp`, `skills`, `tools`, `token_report`, `toast` — plus shared `common` helpers |
+| `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_nudge`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `render/empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
-| `render/notice.rs` | Transient notice/toast rendering |
+| `render/notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `render/components/notice.rs` |
 | `render/markdown_table.rs` | `build_table_render`, `shrink_column_widths` |
 | `document.rs` | Document model: `TranscriptMessage`, `Block` enum, `MessageKind`, markdown parsing, `parse_arguments_kv` |
 | `layout.rs` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing |

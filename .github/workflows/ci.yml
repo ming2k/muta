@@ -46,7 +46,7 @@ jobs:
       # with `-p` instead. Keep this list in sync with the workspace members
       # above minus the WIP `neenee-quant` / `neenee-quant-gui`.
       - run: |
-          cargo fmt --all --check \
+          cargo fmt --check \
             -p neenee-core \
             -p neenee-store \
             -p neenee-providers \

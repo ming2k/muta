@@ -172,7 +172,13 @@ impl Provider for GoogleProvider {
 
         let include_thoughts = model_reasons(&self.endpoint.model);
         let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(messages, request::BodyInput { tool_specs, include_thoughts })
+            request::body(
+                messages,
+                request::BodyInput {
+                    tool_specs,
+                    include_thoughts,
+                },
+            )
         });
 
         let response = client
@@ -216,7 +222,13 @@ impl Provider for GoogleProvider {
 
         let include_thoughts = model_reasons(&self.endpoint.model);
         let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(messages, request::BodyInput { tool_specs, include_thoughts })
+            request::body(
+                messages,
+                request::BodyInput {
+                    tool_specs,
+                    include_thoughts,
+                },
+            )
         });
 
         let response = client
@@ -252,7 +264,13 @@ impl Provider for GoogleProvider {
 
         let include_thoughts = model_reasons(&self.endpoint.model);
         let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(messages, request::BodyInput { tool_specs, include_thoughts })
+            request::body(
+                messages,
+                request::BodyInput {
+                    tool_specs,
+                    include_thoughts,
+                },
+            )
         });
 
         let response = client

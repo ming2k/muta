@@ -18,11 +18,9 @@ use unicode_width::UnicodeWidthStr;
 use super::common::{placeholder, truncate_ellipsis};
 use crate::modal::Modal;
 use crate::render::Theme;
-use crate::render::design::MODAL_INNER_H_PADDING;
-use crate::render::primitives::{
-    FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_header, modal_spec, render_body, render_modal_footer,
-};
+use crate::render::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
+use crate::render::components::modal::{ModalHeader, modal_body_width};
+use crate::render::primitives::FooterHint;
 
 /// Draw the tools manager modal: a centered, dismissable, selectable list of
 /// the session's tools. Each row shows an enabled glyph, the tool name, its
@@ -41,10 +39,7 @@ pub fn draw_tools_modal(
     // Width is independent of height, so probe a full-height rect first to learn
     // the body's content width, then build the list, then size the panel to the
     // content (clamped) so there is no slab of dead space below it.
-    let probe = content_modal_probe(frame, Modal::Tools).expect("tools modal has geometry");
-    let body_width = (probe.width as usize)
-        .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
-        .max(1);
+    let body_width = modal_body_width(frame, Modal::Tools);
 
     let tools = session_context.map(|s| s.tools.as_slice()).unwrap_or(&[]);
 
@@ -82,19 +77,9 @@ pub fn draw_tools_modal(
 
         for (i, tool) in tools.iter().enumerate() {
             let is_sel = i == modal_index;
-            let bg = if is_sel { theme.brand() } else { theme.panel() };
-            let fg = if is_sel {
-                contrast_fg(theme.brand())
-            } else {
-                theme.fg()
-            };
-            let dim = if is_sel {
-                contrast_fg(theme.brand())
-            } else {
-                theme.muted()
-            };
+            let style = row_style(is_sel, theme);
             let glyph_color = if is_sel {
-                fg
+                style.fg
             } else if tool.enabled {
                 theme.ok()
             } else {
@@ -120,60 +105,49 @@ pub fn draw_tools_modal(
                 selected_line = Some(body.len());
             }
             body.push(Line::from(vec![
-                Span::styled(" ".repeat(GUTTER_W), Style::default().bg(bg)),
-                Span::styled(format!("{glyph} "), Style::default().bg(bg).fg(glyph_color)),
+                Span::styled(" ".repeat(GUTTER_W), Style::default().bg(style.bg)),
+                Span::styled(
+                    format!("{glyph} "),
+                    Style::default().bg(style.bg).fg(glyph_color),
+                ),
                 Span::styled(
                     format!("{:<w$}  ", name, w = name_col),
-                    Style::default().bg(bg).fg(fg),
+                    Style::default().bg(style.bg).fg(style.fg),
                 ),
                 Span::styled(
                     format!("{:<w$}", src, w = SOURCE_W),
-                    Style::default().bg(bg).fg(dim),
+                    Style::default().bg(style.bg).fg(style.dim),
                 ),
-                Span::styled(format!("  {desc}"), Style::default().bg(bg).fg(dim)),
-                Span::styled(" ".repeat(pad), Style::default().bg(bg)),
-                Span::styled(badge, Style::default().bg(bg).fg(dim)),
+                Span::styled(
+                    format!("  {desc}"),
+                    Style::default().bg(style.bg).fg(style.dim),
+                ),
+                Span::styled(" ".repeat(pad), Style::default().bg(style.bg)),
+                Span::styled(badge, Style::default().bg(style.bg).fg(style.dim)),
             ]));
         }
     }
 
-    // ── Size the panel to the content and paint it ──
-    let spec = modal_spec(Modal::Tools).expect("tools modal has geometry");
-    let desired = body.len() as u16 + modal_chrome_rows(spec);
-    let area = content_modal_area(frame, Modal::Tools, desired).expect("tools modal has geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header(frame, f.header, "Tools", theme);
-
-    let body_rect = f.body;
-    let visible = body_rect.height as usize;
-    let content_lines = body.len();
     let has_tools = session_context
         .map(|s| !s.tools.is_empty())
         .unwrap_or(false);
-    let follow = if has_tools && follow_selection {
-        selected_line
-    } else {
-        None
-    };
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
-
-    if let Some(fo) = f.footer {
-        let hints: &[FooterHint] = if has_tools {
-            &[
+    draw_selectable_list_page(
+        frame,
+        SelectableListPage {
+            modal: Modal::Tools,
+            header: ModalHeader::title("Tools"),
+            lines: body,
+            scroll,
+            selected_line,
+            follow_selection,
+            has_items: has_tools,
+            item_footer_hints: &[
                 FooterHint::navigation("↑↓", "select"),
                 FooterHint::primary("Space", "toggle"),
                 FooterHint::always("Esc", "close"),
-            ]
-        } else if content_lines > visible {
-            &[
-                FooterHint::navigation("↑↓", "scroll"),
-                FooterHint::always("Esc", "close"),
-            ]
-        } else {
-            &[FooterHint::always("Esc", "close")]
-        };
-        render_modal_footer(frame, fo, hints, theme);
-    }
-    area
+            ],
+            empty_footer_hints: &[FooterHint::always("Esc", "close")],
+        },
+        theme,
+    )
 }

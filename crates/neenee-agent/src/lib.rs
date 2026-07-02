@@ -127,13 +127,13 @@ pub mod agent;
 pub use agent::{Agent, AgentIdentity};
 
 pub mod catalog;
+pub mod doom_guard;
 pub mod dynamic;
 pub mod hooks;
 pub mod modelsdev;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 mod hook_runner;
 pub mod loop_guard;
-pub mod nudge;
 pub mod orchestration;
 mod permission_store;
 // Shadows core's `prompt` module under the `pub use neenee_core::*` glob

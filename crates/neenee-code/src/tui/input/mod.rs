@@ -256,13 +256,13 @@ pub enum InputAction {
     /// Return from a config sub-page to the config root. Bound to `Esc`
     /// inside a sub-page (a second `Esc` closes the modal).
     ConfigBack,
-    /// Toggle the nudge master switch (`enabled`) in the nudge sub-page.
+    /// Toggle the doom-guard master switch (`enabled`) in the nudge sub-page.
     /// Bound to `Space` when the enabled row is selected.
     ConfigNudgeToggle,
-    /// Adjust the selected nudge threshold by `delta` (±1). Bound to `←`
+    /// Adjust the selected doom-guard value by `delta` (±1). Bound to `←`
     /// (delta = -1) and `→` (delta = +1) in the nudge sub-page. The harness
     /// persists the new config and replies with
-    /// `AgentResponse::NudgeConfigUpdated`.
+    /// `AgentResponse::DoomGuardConfigUpdated`.
     ConfigNudgeAdjust {
         delta: i32,
     },

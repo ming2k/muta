@@ -9,8 +9,8 @@
 use crate::fsutil;
 use crate::paths;
 use neenee_core::{
-    CompactionPolicy, HookEventKind, McpServerConfig, NudgeConfig, SkillsConfig, VariantSelection,
-    WebSearchConfig,
+    CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, SkillsConfig,
+    VariantSelection, WebSearchConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -34,8 +34,9 @@ pub const THINKING_KEY: &str = "thinking";
 /// # interrupts, or context compaction cannot relieve pressure (ADR-0009).
 /// # hard_stop_turns = 0
 ///
-/// # Anti-anchoring nudge for the deterministic read-loop guard. Default
-/// # disabled — opt in here or via the `/config` modal. See [`NudgeConfig`].
+/// # Doom-loop guard. Default disabled — opt in here or via the `/config`
+/// # modal. See [`DoomGuardConfig`]. (TOML key stays `nudge` for backward
+/// # compatibility.)
 /// # [principal.nudge]
 /// # enabled = false
 /// ```
@@ -57,17 +58,16 @@ pub struct PrincipalConfig {
     /// without it, stdin is structurally unreachable from the model's
     /// arguments. Wired through `Agent::set_allow_model_stdin`.
     pub allow_model_stdin: bool,
-    /// Anti-anchoring nudge configuration for the deterministic read-loop
-    /// guard (`neenee_agent::loop_guard`). Default **disabled** — opt in via
-    /// the `/config` modal or the `[principal.nudge]` sub-table. See
-    /// [`NudgeConfig`] for the per-field semantics.
-    pub nudge: NudgeConfig,
+    /// Doom-loop guard configuration (`neenee_agent::doom_guard`). Default
+    /// **disabled** — opt in via the `/config` modal or the `[principal.nudge]`
+    /// sub-table. See [`DoomGuardConfig`] for the per-field semantics.
+    pub nudge: DoomGuardConfig,
 }
 
-// `NudgeConfig` is defined in `neenee_core::nudgeconfig` and re-exported
-// above via `use neenee_core::NudgeConfig`. It is the `[principal.nudge]`
-// TOML table and the wire type for `AgentRequest::UpdateNudgeConfig`. See
-// `neenee_core::NudgeConfig` for the per-field semantics and defaults.
+// `DoomGuardConfig` is defined in `neenee_core::doomguardconfig` and re-exported
+// above via `use neenee_core::DoomGuardConfig`. It is the `[principal.nudge]`
+// TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
+// `neenee_core::DoomGuardConfig` for the per-field semantics and defaults.
 
 /// User-tunable frontend presentation, deserialized from the optional `[tui]`
 /// table of `config.toml`. This is the **pure-data** form shared by every
@@ -91,13 +91,13 @@ pub struct TuiConfig {
     /// ```
     pub default_expanded: HashMap<String, bool>,
     /// How the transcript message stream is arranged. Recognized values
-    /// (case-insensitive): `"compact"` (default — the original flush-stack
-    /// layout) and `"turn_band"` (each tool round is grouped into a labelled
-    /// band with a header row). Unknown / empty values fall back to compact.
+    /// (case-insensitive): `"default"` (default — each tool round is grouped
+    /// into a labelled band with a header row) and `"legacy"` (the original
+    /// flush-stack layout). Unknown / empty values fall back to default.
     ///
     /// ```toml
     /// [tui]
-    /// transcript_layout = "turn_band"
+    /// transcript_layout = "default"
     /// ```
     pub transcript_layout: String,
 }
@@ -404,7 +404,7 @@ pub struct Config {
     #[serde(default)]
     pub tui: TuiConfig,
     /// Principal behaviour (`[principal]` table): opt-in hard-stop budget and the
-    /// verify hard-nudge toggle. See [`PrincipalConfig`] for the per-field
+    /// doom-loop guard toggle. See [`PrincipalConfig`] for the per-field
     /// semantics and TOML examples.
     #[serde(default)]
     pub principal: PrincipalConfig,
@@ -895,9 +895,21 @@ mod tests {
     static PATHS_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// A fresh throwaway directory + the test paths override installed against
-    /// it. Drop the guard (returned here) to restore the default paths so the
-    /// next test starts clean.
-    fn sandbox_config_dir() -> (std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
+    /// it. Drop the returned guards (both the module lock and the crate-wide
+    /// override lock) to restore the default paths so the next test starts
+    /// clean.
+    ///
+    /// The crate-wide `paths::TEST_OVERRIDE_GUARD` is what actually serialises
+    /// against `session`'s override-touching tests; the per-module `PATHS_GUARD`
+    /// is kept for any intra-module shared state.
+    fn sandbox_config_dir() -> (
+        std::path::PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let override_guard = paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let guard = PATHS_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join(format!("neenee-creds-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -909,12 +921,12 @@ mod tests {
             runtime_dir: None,
         };
         paths::set_test_default(Some(dirs));
-        (tmp, guard)
+        (tmp, guard, override_guard)
     }
 
     #[test]
     fn save_redacts_keys_into_credentials_and_load_merges_back() {
-        let (tmp, _guard) = sandbox_config_dir();
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
 
         let mut cfg = Config {
             openai_api_key: Some("sk-openai".to_string()),
@@ -988,7 +1000,7 @@ mod tests {
 
     #[test]
     fn env_var_wins_over_credentials_and_inline() {
-        let (tmp, _guard) = sandbox_config_dir();
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
 
         // Seed an inline key in config.toml and a *different* key in
         // credentials.toml, then prove credentials beats inline (and env beats

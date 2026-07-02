@@ -7,9 +7,9 @@ use neenee_tui::{
     Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
     {Block as RtBlock, Clear, Paragraph}, {Color, Span, Style},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::Theme;
+pub(super) use super::components::footer::{FooterHint, modal_footer_text, render_modal_footer};
 #[cfg(test)]
 use super::design::PANEL_BAR_INSET;
 use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
@@ -200,8 +200,8 @@ pub(super) fn modal_spec(modal: Modal) -> Option<ModalSpec> {
             header: true,
             footer: true,
         },
-        // Layout sub-page: a short list of layout strategies (Compact /
-        // Round-band) plus a description line each. Content-sized, compact.
+        // Layout sub-page: a short list of layout strategies (Round-band /
+        // Legacy) plus a description line each. Content-sized.
         Modal::ConfigLayout => ModalSpec {
             width_percent: 64,
             height: ModalHeight::Content {
@@ -366,175 +366,6 @@ pub(super) struct ModalFrame {
     pub footer: Option<Rect>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum FooterPriority {
-    Always,
-    Primary,
-    Navigation,
-    Secondary,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct FooterHint {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub priority: FooterPriority,
-}
-
-impl FooterHint {
-    pub(super) const fn always(key: &'static str, label: &'static str) -> Self {
-        Self {
-            key,
-            label,
-            priority: FooterPriority::Always,
-        }
-    }
-
-    pub(super) const fn primary(key: &'static str, label: &'static str) -> Self {
-        Self {
-            key,
-            label,
-            priority: FooterPriority::Primary,
-        }
-    }
-
-    pub(super) const fn navigation(key: &'static str, label: &'static str) -> Self {
-        Self {
-            key,
-            label,
-            priority: FooterPriority::Navigation,
-        }
-    }
-
-    pub(super) const fn secondary(key: &'static str, label: &'static str) -> Self {
-        Self {
-            key,
-            label,
-            priority: FooterPriority::Secondary,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum FooterLabelMode {
-    Full,
-    Compact,
-}
-
-/// Render the one-line modal command strip with width-aware degradation.
-///
-/// Callers provide structured hints rather than pre-joined prose. The renderer
-/// first tries full labels, then compact key-only labels, then drops low
-/// priority hints. If the terminal is still too narrow it truncates the
-/// highest-priority compact set, with `Always` hints such as `Esc` kept last.
-pub(super) fn render_modal_footer(
-    frame: &mut Frame,
-    rect: Rect,
-    hints: &[FooterHint],
-    theme: &Theme,
-) {
-    frame.render_widget(modal_footer_line(hints, rect.width as usize, theme), rect);
-}
-
-pub(super) fn modal_footer_line(
-    hints: &[FooterHint],
-    width: usize,
-    theme: &Theme,
-) -> Paragraph<'static> {
-    let text = modal_footer_text(hints, width);
-    Paragraph::new(Line::from(Span::styled(
-        text,
-        Style::default().fg(theme.muted()),
-    )))
-}
-
-pub(super) fn modal_footer_text(hints: &[FooterHint], width: usize) -> String {
-    if width == 0 || hints.is_empty() {
-        return String::new();
-    }
-
-    let candidates = [
-        (FooterLabelMode::Full, None),
-        (FooterLabelMode::Compact, None),
-        (FooterLabelMode::Compact, Some(FooterPriority::Navigation)),
-        (FooterLabelMode::Full, Some(FooterPriority::Primary)),
-        (FooterLabelMode::Compact, Some(FooterPriority::Primary)),
-        (FooterLabelMode::Full, Some(FooterPriority::Always)),
-        (FooterLabelMode::Compact, Some(FooterPriority::Always)),
-    ];
-
-    for (mode, max_priority) in candidates {
-        let text = join_footer_hints(hints, mode, max_priority);
-        if !text.is_empty() && text.width() <= width {
-            return text;
-        }
-    }
-
-    truncate_to_width(
-        &join_footer_hints(
-            hints,
-            FooterLabelMode::Compact,
-            Some(FooterPriority::Always),
-        ),
-        width,
-    )
-}
-
-fn join_footer_hints(
-    hints: &[FooterHint],
-    mode: FooterLabelMode,
-    max_priority: Option<FooterPriority>,
-) -> String {
-    hints
-        .iter()
-        .filter(|hint| {
-            max_priority
-                .map(|max| footer_priority_rank(hint.priority) <= footer_priority_rank(max))
-                .unwrap_or(true)
-        })
-        .map(|hint| match mode {
-            FooterLabelMode::Full if !hint.label.is_empty() => {
-                format!("{} {}", hint.key, hint.label)
-            }
-            _ => hint.key.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-fn footer_priority_rank(priority: FooterPriority) -> u8 {
-    match priority {
-        FooterPriority::Always => 0,
-        FooterPriority::Primary => 1,
-        FooterPriority::Navigation => 2,
-        FooterPriority::Secondary => 3,
-    }
-}
-
-fn truncate_to_width(s: &str, max: usize) -> String {
-    if s.width() <= max {
-        return s.to_string();
-    }
-    if max == 0 {
-        return String::new();
-    }
-    if max == 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    let mut width = 0usize;
-    for c in s.chars() {
-        let cw = UnicodeWidthChar::width(c).unwrap_or(0).max(1);
-        if width + cw > max - 1 {
-            break;
-        }
-        out.push(c);
-        width += cw;
-    }
-    out.push('…');
-    out
-}
-
 /// Render the unified modal title into the header rect produced by
 /// [`modal_frame`]. This is the single place every centered modal's
 /// `brand + BOLD` title is painted, so the header style no longer needs to be
@@ -657,12 +488,26 @@ pub(super) fn modal_frame(
 /// screen — that's how list modals keep their selection visible without a
 /// separate scroll cursor. The body is rendered with `.scroll()` so anything
 /// past the visible window is clipped rather than silently truncated.
+///
+/// `edge_margin` keeps the followed row away from the top/bottom edges by an
+/// `edge_margin`-row band (when the viewport is tall enough), so `↑/↓`
+/// navigation never pins the highlight to the last visible line — there is
+/// always a buffer of context on the side being moved toward. Pass
+/// [`SCROLL_EDGE_MARGIN`] for a pure list (provider/model/template/skills/…
+/// pickers) where every followed row is a peer and context on both sides is
+/// meaningful; pass `0` for decision sheets and content viewers whose
+/// `follow` is an absolute body line in mixed header+row content (the
+/// question / permission sheets) or that scroll manually (help / activity),
+/// where edge-pinning reads better. A viewport too short for the band falls
+/// back to edge-pinning in either case.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_body(
     frame: &mut Frame,
     body_rect: Rect,
     lines: Vec<Line<'static>>,
     scroll: &mut usize,
     follow: Option<usize>,
+    edge_margin: usize,
     wrap: bool,
     theme: &Theme,
 ) {
@@ -672,11 +517,27 @@ pub(super) fn render_body(
     if let Some(idx) = follow
         && visible > 0
     {
-        if idx < *scroll {
+        // Margin band kept clear above and below the selection. Capped at
+        // `(visible - 1) / 2` so it never exceeds half the viewport — for a
+        // short viewport this collapses to 0 and the edge-pinning fallback
+        // below kicks in. `edge_margin == 0` selects pure edge-pinning.
+        let margin = edge_margin.min((visible - 1) / 2);
+        if margin > 0 {
+            let top_band = *scroll + margin;
+            let bottom_band = *scroll + visible - margin;
+            if idx < top_band {
+                *scroll = idx.saturating_sub(margin);
+            } else if idx >= bottom_band {
+                *scroll = idx - (visible - 1 - margin);
+            }
+        } else if idx < *scroll {
             *scroll = idx;
         } else if idx >= *scroll + visible {
             *scroll = idx.saturating_sub(visible.saturating_sub(1));
         }
+        // Re-clamp: a follow nudge can overshoot when content is shorter than
+        // the viewport, or when `idx` is near the very end.
+        *scroll = (*scroll).min(max_scroll);
     }
 
     let mut para = Paragraph::new(lines).scroll(*scroll as u16, 0);
@@ -690,6 +551,14 @@ pub(super) fn render_body(
     // when content overflows the body height.
     draw_scrollbar(frame, body_rect, *scroll, max_scroll, theme);
 }
+
+/// The number of context rows kept above and below a followed selection before
+/// the viewport begins to scroll. Keeps `↑/↓` movement from pinning the
+/// highlight to the last visible line. Pass this as `render_body`'s
+/// `edge_margin` for pure-list modals; only applies when the viewport is tall
+/// enough (at least `2 * SCROLL_EDGE_MARGIN + 1` body rows), otherwise the
+/// follow falls back to edge-pinning.
+pub(super) const SCROLL_EDGE_MARGIN: usize = 3;
 
 /// Draw a minimal one-column scrollbar in the body's rightmost column when
 /// the content overflows. Shows a thumb whose vertical position reflects the
@@ -750,7 +619,6 @@ fn draw_scrollbar(frame: &mut Frame, body: Rect, scroll: usize, max_scroll: usiz
 
 /// Index a buffer cell by absolute (x, y) via direct `content` indexing.
 /// The caller guarantees the coordinate lies inside `area`.
-#[allow(deprecated)]
 fn cell_at_index(buf: &mut neenee_tui::Grid, area: Rect, x: u16, y: u16) -> &mut neenee_tui::Cell {
     let idx = (y as usize - area.y as usize) * area.width as usize + (x as usize - area.x as usize);
     let cell = &mut buf.content[idx];

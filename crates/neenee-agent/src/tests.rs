@@ -669,9 +669,9 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
-    agent.set_nudge_config(neenee_core::NudgeConfig {
+    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::NudgeConfig::default()
+        ..neenee_core::DoomGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -1194,7 +1194,7 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
-    agent.set_nudge_config(neenee_core::NudgeConfig::disabled());
+    agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
 
     let (_events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
 
@@ -1204,26 +1204,33 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     let _ = outcome.unwrap();
 }
 
-/// Wiring test: three identical reads must trip the deterministic loop guard and
-/// land exactly one hidden anti-anchoring nudge in the turn history. Complements
-/// the unit tests in `loop_guard`, which cover the detector in isolation.
+/// End-to-end: the doom guard intercepts a *repeating bash command* before it
+/// executes. Unlike the read-loop guard (read-only, trips at threshold 3), the
+/// doom guard covers all watched tools and trips on the *first* repeat — so the
+/// second identical `bash` call never reaches the tool body, and the model sees
+/// a `[loop guard]` refusal instead of a fresh result. This is the integration
+/// proof that the guard fires pre-dispatch (the decisive fix): the repeat's
+/// side effect and output never enter context.
 #[tokio::test]
-async fn read_loop_guard_injects_one_nudge_after_repeated_reads() {
-    let read = || tool_round(&[("c", "reader", r#"{"path":"big.rs"}"#)]);
+async fn doom_guard_blocks_repeating_bash_before_execution() {
+    // Tool name is `bash` so it lands in the doom guard's watched set; the
+    // command locator makes two identical calls share a signature.
+    let bash = RecordingTool::read("bash", "BASH-OUT");
+    let calls = bash.calls_handle();
+    let cmd = || tool_round(&[("c", "bash", r#"{"command":"make test"}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            read(),
-            read(),
-            read(),
+            cmd(), // 1st: allowed, executes
+            cmd(), // 2nd: repeat → blocked before execution
             text_round("done"),
         ])),
-        vec![Arc::new(RecordingTool::read("reader", "R-out"))],
+        vec![Arc::new(bash)],
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
-    agent.set_nudge_config(neenee_core::NudgeConfig {
+    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::NudgeConfig::default()
+        ..neenee_core::DoomGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -1232,118 +1239,66 @@ async fn read_loop_guard_injects_one_nudge_after_repeated_reads() {
         .await;
     assert_eq!(outcome.unwrap().message.content, "done");
 
-    let nudges: Vec<&Message> = messages
-        .iter()
-        .filter(|m| m.origin.as_ref().map(|o| &o.kind) == Some(&InjectionKind::LoopReviewNudge))
-        .collect();
-    assert_eq!(nudges.len(), 1, "exactly one nudge for one loop streak");
-    assert!(
-        nudges[0].content.contains("reader big.rs"),
-        "nudge names the repeated read: {}",
-        nudges[0].content
-    );
-    assert!(nudges[0].hidden, "nudge is a hidden steering injection");
-}
-
-/// End-to-end: a model that keeps issuing the *same* read past the nudge gets
-/// that read hard-blocked at the dispatch layer. The `RecordingTool` must NOT
-/// be invoked for the blocked rounds (its call count proves the short-circuit
-/// ran before execution), and the model must receive a `[loop guard]` error
-/// `ToolResult` for each blocked read (proving the block message, not silent
-/// execution, reached the transcript). This is the integration counterpart to
-/// the `RoundGuardState::is_blocked` unit tests — it exercises the real
-/// `dispatch_tool_calls` → mask → short-circuit path through a mock provider.
-#[tokio::test]
-async fn read_loop_guard_hard_blocks_repeating_read_at_dispatch() {
-    let reader = RecordingTool::read("reader", "R-out");
-    let calls = reader.calls_handle();
-    // Eight identical reads (nudge at 3, block at 6; rounds 6-8 blocked), then
-    // a terminal text round so the turn completes.
-    let read = || tool_round(&[("c", "reader", r#"{"path":"big.rs"}"#)]);
-    let agent = Agent::new(
-        Arc::new(ScriptedProvider::new(vec![
-            read(),
-            read(),
-            read(),
-            read(),
-            read(),
-            read(),
-            read(),
-            read(),
-            text_round("done"),
-        ])),
-        vec![Arc::new(reader)],
-        crate::skills::SkillRegistry::empty(),
-        crate::AgentIdentity::default(),
-    );
-    agent.set_nudge_config(neenee_core::NudgeConfig {
-        enabled: true,
-        ..neenee_core::NudgeConfig::default()
-    });
-
-    let mut messages = vec![Message::new(Role::User, "go")];
-    let outcome = agent
-        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
-        .await;
-    assert_eq!(outcome.unwrap().message.content, "done");
-
-    // The tool body ran for the first 5 reads (before the block mask was set at
-    // round 6's boundary); reads 6, 7, 8 were short-circuited and never reached
-    // it. (ESCALATE_AT=6 fires the Block on the 6th read; the mask is checked
-    // from round 7 on, so rounds 7 and 8 are blocked too — 3 blocked reads.)
+    // The tool body ran exactly once — the 2nd call was intercepted pre-dispatch.
     let executed = calls.lock().unwrap().len();
-    assert!(
-        executed <= 6,
-        "the looping read should be blocked after round 6; tool ran {executed} times"
+    assert_eq!(
+        executed, 1,
+        "the repeating bash call must be blocked before execution; tool ran {executed} times"
     );
 
-    // Each blocked read produced a [loop guard] error as a tool-role message
-    // the model sees, proving the block is communicated (not silent).
-    let blocked_results: Vec<&Message> = messages
+    // The model received a [loop guard] refusal for the blocked call.
+    let blocked: Vec<&Message> = messages
         .iter()
-        .filter(|m| {
-            m.role == Role::Tool
-                && m.content.contains("[loop guard]")
-                && m.content.contains("blocked")
-        })
+        .filter(|m| m.role == Role::Tool && m.content.contains("[loop guard]"))
         .collect();
     assert!(
-        !blocked_results.is_empty(),
-        "at least one blocked read should surface a [loop guard] result to the model"
+        !blocked.is_empty(),
+        "the blocked bash call must surface a [loop guard] result to the model"
+    );
+
+    // A steering note was injected explaining the block.
+    let nudge = messages
+        .iter()
+        .find(|m| m.origin.as_ref().map(|o| o.kind) == Some(InjectionKind::LoopReviewNudge));
+    assert!(
+        nudge.is_some(),
+        "the doom guard must inject a steering note alongside the block"
     );
 }
 
-/// End-to-end: the block is surgical. A read blocked for `big.rs` does NOT
-/// block a read of a *different* file in the same turn — the model can still
-/// read other files, which is exactly the behavior that lets it recover.
+/// End-to-end: the doom block is surgical. A call blocked for `big.rs` does NOT
+/// block a different tool or a different file in the same turn — the model can
+/// still make progress, which is exactly the behavior that lets it recover.
 #[tokio::test]
-async fn read_loop_block_is_surgical_across_files() {
-    let big = RecordingTool::read("reader", "BIG");
-    let big_calls = big.calls_handle();
-    let other = RecordingTool::read("other", "OTHER");
-    let other_calls = other.calls_handle();
-    // Six reads of big.rs (blocks it), then a read of small.rs (must succeed),
-    // then done.
-    let read_big = || tool_round(&[("c", "reader", r#"{"path":"big.rs"}"#)]);
-    let read_small = || tool_round(&[("c", "other", r#"{"path":"small.rs"}"#)]);
+async fn doom_block_is_surgical_across_files() {
+    // Two distinct watched tools so the ToolSet routes them separately; the
+    // block is keyed on the full signature (`name|path`), so neither a
+    // different file under the same tool nor a different tool is masked.
+    let reader = RecordingTool::read("read_text", "READ");
+    let reader_calls = reader.calls_handle();
+    let lister = RecordingTool::read("list_dir", "LIST");
+    let lister_calls = lister.calls_handle();
+    // Two reads of big.rs (2nd is a repeat → blocked), then a read of small.rs
+    // (must succeed — different path), then a list_dir (must succeed — different
+    // tool), then done.
+    let read_big = || tool_round(&[("c", "read_text", r#"{"path":"big.rs"}"#)]);
+    let read_small = || tool_round(&[("c", "read_text", r#"{"path":"small.rs"}"#)]);
+    let list = || tool_round(&[("c", "list_dir", r#"{"path":"."}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            read_big(),
-            read_big(),
-            read_big(),
-            read_big(),
             read_big(),
             read_big(),
             read_small(),
+            list(),
             text_round("done"),
         ])),
-        vec![Arc::new(big), Arc::new(other)],
+        vec![Arc::new(reader), Arc::new(lister)],
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
-    agent.set_nudge_config(neenee_core::NudgeConfig {
+    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::NudgeConfig::default()
+        ..neenee_core::DoomGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -1352,53 +1307,64 @@ async fn read_loop_block_is_surgical_across_files() {
         .await;
     assert_eq!(outcome.unwrap().message.content, "done");
 
-    // The `other` tool (different file) ran exactly once — the big.rs block did
-    // not over-reach and block unrelated reads.
+    // The reader ran exactly once (big.rs 1st; 2nd blocked) and the small.rs
+    // read went through the same tool unblocked — so reader_calls is 2.
     assert_eq!(
-        other_calls.lock().unwrap().len(),
+        reader_calls.lock().unwrap().len(),
+        2,
+        "big.rs once + small.rs once (the repeat is blocked, the new file is not)"
+    );
+    // The different tool is entirely outside the big.rs block mask.
+    assert_eq!(
+        lister_calls.lock().unwrap().len(),
         1,
-        "a read of a different file must not be blocked by a big.rs block"
+        "a different tool must not be blocked by a big.rs block"
     );
     // And the small.rs read returned its real content, not a block error.
     assert!(
-        messages.iter().any(|m| m.content.contains("OTHER")),
+        messages.iter().any(|m| m.content.contains("READ")),
         "the unblocked read should return its real content"
     );
-    let _ = big_calls; // suppress unused warning; big.rs execution count is
-    // asserted in the sibling test above.
 }
 
-/// The guard is gated by `set_nudge_config`: disabled (the default), the same
-/// looping transcript injects no nudge (envoys and the review diagnostic rely
-/// on this). The test is explicit about the disabled state rather than
-/// relying on the default so the assertion stays meaningful if the default
-/// ever flips.
+/// The doom guard is gated by `set_nudge_config`: disabled (the default), a
+/// repeating call is neither blocked nor injected — envoys and the review
+/// diagnostic rely on this. The test is explicit about the disabled state
+/// rather than relying on the default so the assertion stays meaningful if the
+/// default ever flips.
 #[tokio::test]
-async fn read_loop_guard_suppressed_when_disabled() {
-    let read = || tool_round(&[("c", "reader", r#"{"path":"big.rs"}"#)]);
+async fn doom_guard_suppressed_when_disabled() {
+    let cmd = || tool_round(&[("c", "bash", r#"{"command":"make test"}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            read(),
-            read(),
-            read(),
+            cmd(),
+            cmd(),
+            cmd(),
             text_round("done"),
         ])),
-        vec![Arc::new(RecordingTool::read("reader", "R-out"))],
+        vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
-    agent.set_nudge_config(neenee_core::NudgeConfig::disabled());
+    agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
 
     let mut messages = vec![Message::new(Role::User, "go")];
     let _ = agent
         .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
         .await;
 
+    // Disabled guard injects no steering note and blocks nothing.
     assert!(
         messages
             .iter()
             .all(|m| m.origin.as_ref().map(|o| &o.kind) != Some(&InjectionKind::LoopReviewNudge)),
         "disabled guard must not inject"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content.contains("[loop guard]")),
+        "disabled guard must not block"
     );
 }
 
@@ -1870,7 +1836,7 @@ fn agent_config_defaults_match_runtime_constants() {
     assert_eq!(agent.get_hard_stop_turns(), 0);
 }
 
-// ── /debug network capture ────────────────────────────────────────────
+// ── /debug trace ──────────────────────────────────────────────
 
 /// A provider whose `stream_chat_events` emits a fixed two-event sequence, so
 /// the streaming capture path can be exercised deterministically.
@@ -1903,7 +1869,7 @@ fn capture_dir() -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn debug_network_capture_writes_one_file_per_chat() {
+async fn debug_trace_writes_one_file_per_chat() {
     use crate::orchestration::ProxyProvider;
     use std::sync::{Arc, RwLock};
 
@@ -1967,7 +1933,7 @@ async fn debug_network_capture_writes_one_file_per_chat() {
 }
 
 #[tokio::test]
-async fn debug_network_capture_aggregates_a_full_stream_into_one_file() {
+async fn debug_trace_aggregates_a_full_stream_into_one_file() {
     use crate::orchestration::ProxyProvider;
     use futures::StreamExt;
     use std::sync::{Arc, RwLock};

@@ -59,7 +59,7 @@ pub mod token_ledger;
 pub use token_ledger::{
     TokenRound, TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
 };
-pub mod nudgeconfig;
+pub mod doomguardconfig;
 pub mod prompt;
 pub mod session_review;
 pub mod session_title;
@@ -72,6 +72,7 @@ pub use capability::{
     ScopeTarget, Tool, VariantSelection, empty_variant_selection,
 };
 pub use catalog::{Channel, ProviderEntry, Transport};
+pub use doomguardconfig::DoomGuardConfig;
 pub use dynamic::DynamicCatalog;
 pub use envoy::{EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
@@ -85,7 +86,6 @@ pub use events::{
 pub use hooks::{Hook, HookContext, HookEvent, HookEventKind, HookOutcome, SessionSource};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
-pub use nudgeconfig::NudgeConfig;
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
     PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens, estimate_tokens,

@@ -1,4 +1,4 @@
-//! Option C: round-banded layout. Each tool round is grouped into a labelled
+//! The default transcript layout: each tool round is grouped into a labelled
 //! band with a header row (`round N · model · K calls`), so the history reads
 //! as discrete model-request chunks instead of one flush stream.
 //!
@@ -6,14 +6,14 @@
 //! A "round group" is a maximal run of consecutive assistant-side messages
 //! (tool steps, reasoning traces, envoy tasks, assistant text) that share the
 //! same `round` stamp. User messages and notices are *not* grouped — they
-//! flow as Compact does, with normal gaps, and act as group *terminators*:
-//! a group never spans across a user turn.
+//! flow as the legacy layout does, with normal gaps, and act as group
+//! *terminators*: a group never spans across a user turn.
 //!
 //! Tool steps carry a `round: Option<u64>` (1-indexed, stamped from the
 //! harness). Reasoning traces and assistant text in the same turn share it
 //! when stamped; when a message's round is `None` (legacy / restored sessions
-//! predating the stamp) it falls back to being rendered flush like Compact,
-//! without a band, so old transcripts stay readable.
+//! predating the stamp) it falls back to being rendered flush like the legacy
+//! layout, without a band, so old transcripts stay readable.
 //!
 //! ## Visual form
 //! Each group with a *known* round gets, immediately before its first
@@ -35,11 +35,10 @@ use crate::document::TranscriptMessage;
 
 use super::{Stream, TranscriptLayout};
 
-/// Round-banded layout. See module docs.
-#[derive(Default)]
-pub struct TurnBand;
+/// Round-banded default layout. See module docs.
+pub struct Default;
 
-impl TranscriptLayout for TurnBand {
+impl TranscriptLayout for Default {
     fn run(&mut self, stream: &mut Stream<'_, '_>) {
         let messages_len = stream.messages.len();
         let mut mi = 0;
@@ -81,8 +80,8 @@ impl TranscriptLayout for TurnBand {
 
                 // Render the group's messages flush (no inter-message gaps), so
                 // the round reads as one compact chunk. Tool steps inside a
-                // group stack flush exactly like Compact's collapsed rule, but
-                // unconditionally here (expanded steps still get their own body
+                // group stack flush exactly like the legacy layout's collapsed
+                // rule, but unconditionally here (expanded steps still get their own body
                 // via dispatch — the gap suppression only affects the blank
                 // *separator* row, not the body).
                 for gj in mi..group_end {
@@ -98,7 +97,7 @@ impl TranscriptLayout for TurnBand {
                 continue;
             }
 
-            // ── Non-grouped message: Compact behavior ───────────────────────
+            // ── Non-grouped message: legacy behavior ────────────────────────
             stream.badge(mi);
             stream.dispatch(mi);
 

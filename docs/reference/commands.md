@@ -30,7 +30,8 @@ Project and user-defined commands are covered under
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
 | `/export` | Export the current conversation to the clipboard as Markdown |
-| `/debug network [on\|off]` | Toggle per-project network capture for debugging |
+| `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
+| `/debug preview` | Dry-run the next request body to a file (no provider call) |
 | `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program |
 

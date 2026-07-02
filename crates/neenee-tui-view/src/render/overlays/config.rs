@@ -14,10 +14,9 @@ use neenee_tui::{
 
 use crate::modal::Modal;
 use crate::render::Theme;
-use crate::render::primitives::{
-    FooterHint, content_modal_area, content_modal_probe, contrast_fg, modal_chrome_rows,
-    modal_frame, modal_header, modal_spec, render_body, render_modal_footer,
-};
+use crate::render::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
+use crate::render::components::modal::{ModalHeader, modal_body_width};
+use crate::render::primitives::FooterHint;
 
 /// One configurable category row in the config root modal.
 struct ConfigCategory {
@@ -53,10 +52,7 @@ pub fn draw_config_modal(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let probe = content_modal_probe(frame, Modal::Config).expect("config modal has geometry");
-    let body_width = (probe.width as usize)
-        .saturating_sub(2 * crate::render::design::MODAL_INNER_H_PADDING as usize)
-        .max(1);
+    let body_width = modal_body_width(frame, Modal::Config);
 
     let cats = categories();
 
@@ -69,17 +65,7 @@ pub fn draw_config_modal(
 
     for (i, cat) in cats.iter().enumerate() {
         let is_sel = i == modal_index;
-        let bg = if is_sel { theme.brand() } else { theme.panel() };
-        let fg = if is_sel {
-            contrast_fg(theme.brand())
-        } else {
-            theme.fg()
-        };
-        let dim = if is_sel {
-            contrast_fg(theme.brand())
-        } else {
-            theme.muted()
-        };
+        let style = row_style(is_sel, theme);
         let glyph = if is_sel { "▸" } else { " " };
         let desc = cat.description;
         let desc_budget = body_width.saturating_sub(PREFIX_W + label_col + 2).max(1);
@@ -93,43 +79,40 @@ pub fn draw_config_modal(
             selected_line = Some(body.len());
         }
         body.push(Line::from(vec![
-            Span::styled(" ".repeat(GUTTER_W), Style::default().bg(bg)),
-            Span::styled(format!("{glyph} "), Style::default().bg(bg).fg(fg)),
+            Span::styled(" ".repeat(GUTTER_W), Style::default().bg(style.bg)),
+            Span::styled(
+                format!("{glyph} "),
+                Style::default().bg(style.bg).fg(style.fg),
+            ),
             Span::styled(
                 format!("{:<w$}", cat.label, w = label_col),
-                Style::default().bg(bg).fg(fg),
+                Style::default().bg(style.bg).fg(style.fg),
             ),
             Span::styled(
                 format!("  {desc_truncated}"),
-                Style::default().bg(bg).fg(dim),
+                Style::default().bg(style.bg).fg(style.dim),
             ),
-            Span::styled(" ".repeat(pad), Style::default().bg(bg)),
+            Span::styled(" ".repeat(pad), Style::default().bg(style.bg)),
         ]));
     }
 
-    let spec = modal_spec(Modal::Config).expect("config modal has geometry");
-    let desired = body.len() as u16 + modal_chrome_rows(spec);
-    let area =
-        content_modal_area(frame, Modal::Config, desired).expect("config modal has geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header(frame, f.header, "Configuration", theme);
-
-    let body_rect = f.body;
-    let follow = selected_line;
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
-
-    if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
+    draw_selectable_list_page(
+        frame,
+        SelectableListPage {
+            modal: Modal::Config,
+            header: ModalHeader::title("Configuration"),
+            lines: body,
+            scroll,
+            selected_line,
+            follow_selection: true,
+            has_items: !cats.is_empty(),
+            item_footer_hints: &[
                 FooterHint::navigation("↑↓", "select"),
                 FooterHint::primary("Enter", "open"),
                 FooterHint::always("Esc", "close"),
             ],
-            theme,
-        );
-    }
-    area
+            empty_footer_hints: &[FooterHint::always("Esc", "close")],
+        },
+        theme,
+    )
 }

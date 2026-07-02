@@ -1,47 +1,43 @@
-//! Nudge sub-page of the config manager modal.
+//! Doom-guard sub-page of the config manager modal.
 //!
 //! Reached from [`super::config`] by selecting the "Nudge" row. Shows the
-//! master `enabled` switch and the four tunable thresholds (`window`,
-//! `threshold`, `escalate_at`, `path_threshold`). `Space` toggles the
-//! enabled flag; `←`/`→` adjust the selected threshold; `Esc` returns to
-//! the config root. Edits are sent as `AgentRequest::UpdateNudgeConfig` and
-//! the harness replies with `AgentResponse::NudgeConfigUpdated`, which
-//! re-seeds the snapshot the modal reads.
+//! master `enabled` switch and the `window` size. `Space` toggles the
+//! enabled flag; `←`/`→` adjust the window; `Esc` returns to the config root.
+//! Edits are sent as `AgentRequest::UpdateDoomGuardConfig` and the harness
+//! replies with `AgentResponse::DoomGuardConfigUpdated`, which re-seeds the
+//! snapshot the modal reads.
 
-use neenee_core::NudgeConfig;
+use neenee_core::DoomGuardConfig;
 use neenee_tui::{
     Frame, Style, {Line, Span},
 };
 
 use crate::modal::Modal;
 use crate::render::Theme;
+use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
+use crate::render::components::scroll::ScrollBody;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
-    FooterHint, HeaderPart, content_modal_area, content_modal_probe, contrast_fg,
-    modal_chrome_rows, modal_frame, modal_header_parts, modal_spec, render_body,
-    render_modal_footer,
+    FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe, contrast_fg,
 };
 
 /// Row index of the `enabled` toggle in the field list. `Space` only toggles
-/// when this row is selected; threshold rows respond to `←`/`→` instead.
+/// when this row is selected; the `window` row responds to `←`/`→` instead.
 pub const ROW_ENABLED: usize = 0;
-/// Row index of `window`. (Followed by threshold, escalate_at, path_threshold.)
+/// Row index of `window`.
 pub const ROW_WINDOW: usize = 1;
-pub const ROW_THRESHOLD: usize = 2;
-pub const ROW_ESCALATE_AT: usize = 3;
-pub const ROW_PATH_THRESHOLD: usize = 4;
 
-/// Total number of rows in the nudge sub-page (enabled + 4 thresholds).
-pub const ROW_COUNT: usize = 5;
+/// Total number of rows in the doom-guard sub-page (enabled + window).
+pub const ROW_COUNT: usize = 2;
 
-/// Draw the nudge sub-page modal. `modal_index` is the selection cursor;
+/// Draw the doom-guard sub-page modal. `modal_index` is the selection cursor;
 /// `config` is the live snapshot from the harness. The caller sends
-/// `AgentRequest::UpdateNudgeConfig` when the user edits a field; the
+/// `AgentRequest::UpdateDoomGuardConfig` when the user edits a field; the
 /// harness reply re-seeds the snapshot so this renderer always reads the
 /// authoritative state.
 pub fn draw_config_nudge_modal(
     frame: &mut Frame,
-    config: &NudgeConfig,
+    config: &DoomGuardConfig,
     modal_index: usize,
     scroll: &mut usize,
     theme: &Theme,
@@ -58,8 +54,8 @@ pub fn draw_config_nudge_modal(
     // A one-line description of the whole sub-page, rendered before the
     // field list. Muted, not selectable.
     body.push(Line::from(Span::styled(
-        "Steers the model out of read-loops: injects a hidden nudge, then \
-         hard-blocks the looping read. Default is off.",
+        "Blocks a tool call before it runs when the same call was already issued \
+         this turn — interrupts doom loops of bash/read/edit/webfetch. Default is off.",
         Style::default().fg(theme.muted()),
     )));
     body.push(Line::from(""));
@@ -80,12 +76,6 @@ pub fn draw_config_nudge_modal(
             },
         ),
         ("window".to_string(), config.window.to_string()),
-        ("threshold".to_string(), config.threshold.to_string()),
-        ("escalate_at".to_string(), config.escalate_at.to_string()),
-        (
-            "path_threshold".to_string(),
-            config.path_threshold.to_string(),
-        ),
     ];
 
     for (i, (name, val)) in rows.iter().enumerate() {
@@ -143,72 +133,60 @@ pub fn draw_config_nudge_modal(
         ]));
     }
 
-    let spec = modal_spec(Modal::ConfigNudge).expect("config nudge modal geometry");
-    let desired = body.len() as u16 + modal_chrome_rows(spec);
-    let area = content_modal_area(frame, Modal::ConfigNudge, desired)
-        .expect("config nudge modal geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header_parts(
-        frame,
-        f.header,
+    let header = [
+        HeaderPart::Text {
+            text: "← ",
+            accent: false,
+        },
+        HeaderPart::title("Doom Guard"),
+    ];
+    let hints: &[FooterHint] = if modal_index == ROW_ENABLED {
         &[
-            HeaderPart::Text {
-                text: "← ",
-                accent: false,
+            FooterHint::navigation("↑↓", "select"),
+            FooterHint::primary("Space", "toggle"),
+            FooterHint::always("Esc", "back"),
+        ]
+    } else {
+        &[
+            FooterHint::navigation("↑↓", "select"),
+            FooterHint::primary("←→", "adjust"),
+            FooterHint::always("Esc", "back"),
+        ]
+    };
+    draw_modal_page(
+        frame,
+        ModalPage {
+            modal: Modal::ConfigNudge,
+            size: ModalPageSize::Content,
+            header: ModalHeader::parts(&header),
+            body: ScrollBody {
+                lines: body,
+                scroll,
+                follow: selected_line,
+                edge_margin: SCROLL_EDGE_MARGIN,
+                wrap: false,
             },
-            HeaderPart::title("Nudge"),
-        ],
+            footer_hints: hints,
+        },
         theme,
-    );
-
-    let body_rect = f.body;
-    let follow = selected_line;
-    render_body(frame, body_rect, body, scroll, follow, false, theme);
-
-    if let Some(fo) = f.footer {
-        let hints: &[FooterHint] = if modal_index == ROW_ENABLED {
-            &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("Space", "toggle"),
-                FooterHint::always("Esc", "back"),
-            ]
-        } else {
-            &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("←→", "adjust"),
-                FooterHint::always("Esc", "back"),
-            ]
-        };
-        render_modal_footer(frame, fo, hints, theme);
-    }
-    area
+    )
 }
 
 /// Short per-field hint shown to the right of the value.
 fn field_hint(name: &str) -> &'static str {
     match name {
         "enabled" => "master switch",
-        "window" => "sliding-window size (recent read rounds)",
-        "threshold" => "exact-signature occurrences to trip a nudge",
-        "escalate_at" => "escalate Inject → Block at this count",
-        "path_threshold" => "same-file many-offsets occurrences to trip",
+        "window" => "sliding-window size (recent watched rounds)",
         _ => "",
     }
 }
 
-/// Apply a ±1 delta to the threshold at `row_index` in the nudge sub-page.
-/// Row 0 (`enabled`) is not a threshold and must be excluded by the caller.
-/// Each threshold is clamped to `>= 1` so a value of 0 never disables the
-/// guard silently (use the `enabled` switch for that).
-pub fn apply_threshold_delta(config: &mut NudgeConfig, row_index: usize, delta: i32) {
-    let clamp = |v: u32, d: i32| (v as i32 + d).max(1) as u32;
+/// Apply a ±1 delta to the value at `row_index` in the doom-guard sub-page.
+/// Row 0 (`enabled`) is not adjustable and must be excluded by the caller.
+/// `window` is clamped to `>= 1`.
+pub fn apply_threshold_delta(config: &mut DoomGuardConfig, row_index: usize, delta: i32) {
     let clamp_usize = |v: usize, d: i32| (v as i32 + d).max(1) as usize;
-    match row_index {
-        ROW_WINDOW => config.window = clamp_usize(config.window, delta),
-        ROW_THRESHOLD => config.threshold = clamp(config.threshold, delta),
-        ROW_ESCALATE_AT => config.escalate_at = clamp(config.escalate_at, delta),
-        ROW_PATH_THRESHOLD => config.path_threshold = clamp(config.path_threshold, delta),
-        _ => {}
+    if row_index == ROW_WINDOW {
+        config.window = clamp_usize(config.window, delta);
     }
 }

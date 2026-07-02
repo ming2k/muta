@@ -10,29 +10,12 @@
 //!
 //! [`NoticeSeverity`]: crate::document::NoticeSeverity
 
-use neenee_tui::{
-    Frame, Paragraph, Rect, {Color, Style}, {Line, Span},
-};
+use neenee_tui::{Frame, Rect};
 
-use crate::document::{MessageKind, NoticeSeverity, TranscriptMessage};
+use crate::document::TranscriptMessage;
 
 use super::Theme;
-use super::text_layout::wrap_text;
-
-/// Severity presentation: the leading glyph and its color.
-///
-/// Centralizing this here is the whole point of the notice component —
-/// `ToolStatus::color` (in `render/tools/mod.rs`) owns the *tool-step* status
-/// palette, while this owns the *transcript-notice* palette, so the two stay
-/// consistent by construction (both read from `Theme`) without one depending
-/// on the other.
-fn severity_presentation(severity: NoticeSeverity, theme: &Theme) -> (&'static str, Color) {
-    match severity {
-        NoticeSeverity::Error => ("✖", theme.err()),
-        NoticeSeverity::Warning => ("!", theme.warn()),
-        NoticeSeverity::Info => ("ℹ", theme.info()),
-    }
-}
+use super::components::notice::{NoticeView, draw_notice_view};
 
 /// Render a notice message: a severity-colored glyph followed by the notice
 /// text, wrapped to the transcript body width. Mirrors the row-accounting
@@ -49,47 +32,13 @@ pub fn draw_notice(
     content_lines: &mut usize,
     theme: &Theme,
 ) {
-    let severity = match &msg.kind {
-        MessageKind::Notice { severity } => *severity,
-        _ => return,
-    };
-    let (glyph, color) = severity_presentation(severity, theme);
-
-    // The area arrives already inset by `draw_transcript`, so there is no
-    // outer gutter to prepend. The first line leads with the severity glyph +
-    // a space (2 cols); continuation lines indent by that same 2 cols so they
-    // align under the text. Wrap width reserves those 2 leading cols.
-    let glyph_segment = format!("{glyph} ");
-    let indent_cols = 2usize;
-    let body_wrap_width = area.width.saturating_sub(indent_cols as u16).max(1) as usize;
-
-    let lines = wrap_text(&msg.raw, body_wrap_width);
-    *content_lines += lines.len();
-
-    let base = Style::default().fg(color);
-    let glyph_style = Style::default().fg(color);
-    for (idx, wl) in lines.iter().enumerate() {
-        if *skip_rows > 0 {
-            *skip_rows = skip_rows.saturating_sub(1);
-            continue;
-        }
-        if *current_y >= area.y + area.height {
-            break;
-        }
-
-        let line = if idx == 0 {
-            Line::from(vec![
-                Span::styled(glyph_segment.clone(), glyph_style),
-                Span::styled(wl.text.clone(), base),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled(" ".repeat(indent_cols), Style::default()),
-                Span::styled(wl.text.clone(), base),
-            ])
-        };
-        let line_rect = Rect::new(area.x, *current_y, area.width, 1);
-        frame.render_widget(Paragraph::new(line), line_rect);
-        *current_y += 1;
-    }
+    draw_notice_view(
+        frame,
+        area,
+        NoticeView { message: msg },
+        skip_rows,
+        current_y,
+        content_lines,
+        theme,
+    );
 }

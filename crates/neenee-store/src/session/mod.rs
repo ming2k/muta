@@ -2108,11 +2108,20 @@ mod tests {
     /// Tests that touch process-global state (`paths::set_test_default` or
     /// process env vars) cannot run in parallel. We serialise them through
     /// this lock; pure-computation tests skip the guard.
+    ///
+    /// Note: this lock alone does **not** synchronise with `config`'s tests —
+    /// both modules independently touched the shared `paths::set_test_default`
+    /// through their own private locks, which raced. So the macro also acquires
+    /// the crate-wide `paths::TEST_OVERRIDE_GUARD`, the single lock every
+    /// override-touching test in the crate funnels through.
     static GLOBAL_GUARD: std::sync::LazyLock<tokio::sync::Mutex<()>> =
         std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     macro_rules! locked {
         ($body:block) => {{
+            let _override_guard = $crate::paths::TEST_OVERRIDE_GUARD
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let _guard = GLOBAL_GUARD.lock().await;
             $body
         }};
@@ -2284,6 +2293,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    // The crate-wide `paths::TEST_OVERRIDE_GUARD` (a std Mutex) is acquired
+    // inside `locked!` and held across the awaited body by design, so this
+    // test serialises against the synchronous `config` override tests. The
+    // single-threaded tokio test runtime means a held std guard cannot
+    // deadlock a peer task.
     async fn load_for_project_isolates_sessions_per_cwd() {
         locked!({
             let root =

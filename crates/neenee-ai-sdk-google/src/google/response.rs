@@ -233,7 +233,9 @@ fn thought_signature(part: &Value) -> Option<String> {
 /// `reasoning_content`, never folded into the answer `content` (otherwise the
 /// reasoning leaks into the visible reply).
 fn part_is_thought(part: &Value) -> bool {
-    part.get("thought").and_then(Value::as_bool).unwrap_or(false)
+    part.get("thought")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Augment a transport-layer error with model-specific guidance. For native

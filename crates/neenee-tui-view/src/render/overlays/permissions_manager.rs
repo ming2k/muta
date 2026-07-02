@@ -11,7 +11,8 @@ use super::common::{placeholder, selectable_row};
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
+    render_modal_footer,
 };
 
 /// Draw the permissions manager modal: a centered, dismissable list of cached
@@ -65,7 +66,16 @@ pub fn draw_permissions_manager(
     } else {
         Some(modal_index)
     };
-    render_body(frame, f.body, body, scroll, follow, false, theme);
+    render_body(
+        frame,
+        f.body,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
 
     // ── Footer ──
     if let Some(fo) = f.footer {

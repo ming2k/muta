@@ -6,16 +6,11 @@ use neenee_tui::{
 
 use crate::modal::Modal;
 use crate::render::Theme;
-use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, modal_header, render_body, render_modal_footer,
-};
+use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
+use crate::render::components::scroll::ScrollBody;
+use crate::render::primitives::FooterHint;
 
 pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Help).expect("help modal has fixed geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header(frame, f.header, "Help", theme);
-
     let key = |k: &str| {
         Span::styled(
             format!("{:<10}", k),
@@ -80,18 +75,24 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
         Line::from(""),
         Line::from(desc("Drag to select · Ctrl+C or Ctrl+Shift+C to copy.")),
     ];
-    render_body(frame, f.body, body, scroll, None, true, theme);
-
-    if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
+    draw_modal_page(
+        frame,
+        ModalPage {
+            modal: Modal::Help,
+            size: ModalPageSize::Fixed,
+            header: ModalHeader::title("Help"),
+            body: ScrollBody {
+                lines: body,
+                scroll,
+                follow: None,
+                edge_margin: 0,
+                wrap: true,
+            },
+            footer_hints: &[
                 FooterHint::navigation("↑↓", "scroll"),
                 FooterHint::always("Esc", "close"),
             ],
-            theme,
-        );
-    }
-    area
+        },
+        theme,
+    )
 }

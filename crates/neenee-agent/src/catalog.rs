@@ -457,25 +457,49 @@ pub fn build_provider_for_model(
 ///
 /// For multi-model providers, the active model is `config.default_model` when
 /// set (and served by the provider); otherwise the entry's default-channel
-/// model.
+/// model. (Does not consult usage telemetry — startup paths that only know
+/// the config use this; the picker uses [`active_model_id_for_entry`].)
 pub fn resolved_model_name(config: &Config, id: &str) -> String {
+    resolved_model_name_inner(config, id, &ProviderUsage::default())
+}
+
+/// The active model name resolved with usage telemetry so the last-activated
+/// model per provider wins over the bare default-channel fallback. Used where
+/// a live `usage` is available (status surfaces, re-activation).
+pub fn resolved_model_name_with_usage(config: &Config, id: &str, usage: &ProviderUsage) -> String {
+    resolved_model_name_inner(config, id, usage)
+}
+
+fn resolved_model_name_inner(config: &Config, id: &str, usage: &ProviderUsage) -> String {
     build_catalog(config)
         .iter()
         .find(|e| e.id == id)
-        .map(|entry| active_model_id_for_entry(config, entry))
+        .map(|entry| active_model_id_for_entry(config, entry, usage))
         .unwrap_or_else(|| "mock-model".to_string())
 }
 
-/// The active wire model id for an already-built entry: `config.default_model`
-/// when the entry serves it, otherwise the entry's default-channel model.
-/// Shared by [`resolved_model_name`] and [`build_picker_state`] so both pick the
-/// same active model without rebuilding the catalog per row.
-fn active_model_id_for_entry(config: &Config, entry: &ProviderEntry) -> String {
+/// The active wire model id for an already-built entry, resolved from usage
+/// telemetry: `config.default_model` wins when the entry serves it, otherwise
+/// the provider's last-activated model (so re-opening a provider lands on the
+/// exact model it was left at), finally the entry's default-channel model.
+/// Shared by [`resolved_model_name`] and [`build_picker_state`] so both pick
+/// the same active model without rebuilding the catalog per row.
+fn active_model_id_for_entry(
+    config: &Config,
+    entry: &ProviderEntry,
+    usage: &ProviderUsage,
+) -> String {
     config
         .default_model
         .as_deref()
         .filter(|m| entry.offers_model(m))
         .map(|m| m.to_string())
+        .or_else(|| {
+            usage
+                .last_model_for(&entry.id)
+                .filter(|m| entry.offers_model(m))
+                .map(|m| m.to_string())
+        })
         .or_else(|| entry.default_channel().map(|channel| channel.model.clone()))
         .unwrap_or_else(|| "mock-model".to_string())
 }
@@ -506,12 +530,22 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 .default_channel()
                 .map(channel_protocol_and_base_url)
                 .unwrap_or_default();
+            let model = active_model_id_for_entry(config, entry, usage);
+            let model_info = entry
+                .channels
+                .iter()
+                .map(channel_model_info)
+                .map(|mut info| {
+                    info.last_used_ms = usage.model_last_used_ms(&info.model);
+                    info
+                })
+                .collect();
             ProviderPickerRow {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
-                model: active_model_id_for_entry(config, entry),
+                model,
                 models: entry.channels.iter().map(|c| c.model.clone()).collect(),
-                model_info: entry.channels.iter().map(channel_model_info).collect(),
+                model_info,
                 builtin: entry.builtin,
                 protocol,
                 base_url,
@@ -550,6 +584,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 protocol: "anthropic".to_string(),
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
+                last_used_ms: None,
             }
         }
         Transport::OpenAiCompat { .. } => ProviderModelInfo {
@@ -557,12 +592,14 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             protocol: "openai".to_string(),
             effort: None,
             thinking: None,
+            last_used_ms: None,
         },
         Transport::GeminiNative { .. } => ProviderModelInfo {
             model: channel.model.clone(),
             protocol: "gemini".to_string(),
             effort: None,
             thinking: None,
+            last_used_ms: None,
         },
     }
 }
@@ -604,7 +641,7 @@ mod tests {
     fn legacy_builtin_key_migrates_to_named_instance() {
         let mut config = bare_config();
         config.default_provider = "openai".to_string();
-        config.default_model = Some("gpt-4o-mini".to_string());
+        config.default_model = Some("gpt-5.4-mini".to_string());
         config.openai_api_key = Some("sk-old".to_string());
 
         assert!(migrate_legacy_provider_instances(&mut config));
@@ -617,7 +654,7 @@ mod tests {
             .find(|entry| entry.id == "openai")
             .expect("migrated openai instance");
         assert_eq!(entry.name, "OpenAI");
-        assert_eq!(entry.default_channel().unwrap().model, "gpt-4o-mini");
+        assert_eq!(entry.default_channel().unwrap().model, "gpt-5.4-mini");
         assert_eq!(entry.default_channel().unwrap().api_key, "sk-old");
         assert!(!entry.builtin);
     }
@@ -758,6 +795,59 @@ mod tests {
         assert_eq!(info.protocol, "anthropic");
         assert_eq!(info.effort.as_deref(), Some("high"));
         assert_eq!(info.thinking, Some(true));
+    }
+
+    #[test]
+    fn resolved_model_honors_per_provider_last_used_model() {
+        // A multi-model custom provider: with no config `default_model` and no
+        // usage telemetry, the active model is the default channel. After a
+        // model is recorded as used under that provider, resolving the active
+        // model (via usage) lands on it, and the picker row mirrors it — so a
+        // provider re-opens on the exact model it was left at.
+        use neenee_store::config::{UserChannelConfig, UserProviderConfig, UserTransport};
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "relay".to_string(),
+            name: Some("Relay".to_string()),
+            channels: vec![
+                UserChannelConfig {
+                    label: "alpha".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    model: Some("alpha".to_string()),
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "beta".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    model: Some("beta".to_string()),
+                    ..Default::default()
+                },
+            ],
+            default_channel: 0,
+        });
+        config.default_provider = "relay".to_string();
+
+        // No usage → default channel model (alpha).
+        assert_eq!(
+            resolved_model_name_with_usage(&config, "relay", &ProviderUsage::default()),
+            "alpha"
+        );
+
+        // Record `beta` under `relay`: it becomes the resolved active model.
+        let mut usage = ProviderUsage::default();
+        usage.record_model("relay", "beta");
+        assert_eq!(
+            resolved_model_name_with_usage(&config, "relay", &usage),
+            "beta"
+        );
+
+        // The picker row's `model` (the displayed active model) mirrors this.
+        let picker = build_picker_state(&config, &usage);
+        let row = picker.rows.iter().find(|r| r.id == "relay").unwrap();
+        assert_eq!(row.model, "beta");
+        // And the stage-2 model list surfaces beta's recency on its info row.
+        let beta_info = row.model_info.iter().find(|i| i.model == "beta").unwrap();
+        assert!(beta_info.last_used_ms.is_some());
     }
 
     #[test]

@@ -507,18 +507,18 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
             AgentRequest::ExitSideView => {
                 crate::handlers_session::exit_side_view(&side, &active_view_side, &resp_tx).await;
             }
-            AgentRequest::UpdateNudgeConfig(new_config) => {
-                // Persist the updated nudge config to config.toml, apply it
+            AgentRequest::UpdateDoomGuardConfig(new_config) => {
+                // Persist the updated doom-guard config to config.toml, apply it
                 // to the live agent, and reply with the persisted snapshot so
                 // the `/config` modal re-renders from the authoritative state.
                 config.principal.nudge = new_config;
                 if let Err(error) = config.save() {
                     let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Could not save nudge config: {error}"
+                        "Could not save doom-guard config: {error}"
                     )));
                 } else {
-                    agent.set_nudge_config(new_config);
-                    let _ = resp_tx.send(AgentResponse::NudgeConfigUpdated(new_config));
+                    agent.set_doom_guard_config(new_config);
+                    let _ = resp_tx.send(AgentResponse::DoomGuardConfigUpdated(new_config));
                 }
             }
             AgentRequest::UpdateTuiLayout(layout) => {

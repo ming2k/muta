@@ -90,8 +90,8 @@ pub async fn dispatch(
             // Handled in the TUI: `/config` opens the config manager modal
             // locally (intercepted in input.rs as `InputAction::OpenConfig`),
             // so it is never forwarded here as a SlashCommand. The modal
-            // reads the live `nudge_config` snapshot and sends
-            // `AgentRequest::UpdateNudgeConfig` to mutate settings.
+            // reads the live `doom_guard_config` snapshot and sends
+            // `AgentRequest::UpdateDoomGuardConfig` to mutate settings.
         }
         Some(BuiltinCmd::Tools) => {
             // Handled in TUI (`/tools` opens the tools manager modal
@@ -1039,20 +1039,20 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Debug) => {
-            // /debug network on|off — arm/disarm semantic network capture at
+            // /debug trace on|off — arm/disarm semantic call tracing at
             // the ProxyProvider layer. Each provider round-trip (request
             // messages + streamed/returned response) is then written as one
             // JSON file under the per-project `network/` directory. Captures
             // the `Vec<Message>` exchange — not raw HTTP bytes — so API keys
             // in headers/query strings never land on disk.
             match parts.get(1).copied() {
-                Some("network") => {
+                Some("trace") => {
                     let next = match parts.get(2).map(|s| s.to_lowercase()).as_deref() {
                         Some("on") | Some("true") | Some("1") => Some(true),
                         Some("off") | Some("false") | Some("0") => Some(false),
                         Some(other) => {
                             let _ = resp_tx.send(AgentResponse::Error(format!(
-                                "Unknown value '{other}'. Use `/debug network on|off`."
+                                "Unknown value '{other}'. Use `/debug trace on|off`."
                             )));
                             return;
                         }
@@ -1064,15 +1064,15 @@ pub async fn dispatch(
                     let _ = resp_tx.send(turn(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Network capture {}: each provider round-trip {} written to\n  {}",
+                            "Trace {}: each provider round-trip {} written to\n  {}",
                             if enabled { "ON" } else { "OFF" },
                             if enabled { "is" } else { "will no longer be" },
                             dir.display(),
                         )),
                     ));
                 }
-                Some("context") => {
-                    // /debug context — dev-only dry run. Projects the *wire*
+                Some("preview") => {
+                    // /debug preview — dev-only dry run. Projects the *wire*
                     // body of the next request (the minimal shape the provider
                     // serializes) to disk, with a simulated `This is a test.`
                     // probe user message appended so the snapshot reflects
@@ -1118,7 +1118,7 @@ pub async fn dispatch(
                     // for offline inspection.
                     let dir = neenee_store::paths::get().project_debug_dir(project_root_for_side);
                     let stamp = timestamp.format("%Y%m%d-%H%M%S%.3f");
-                    let file = dir.join(format!("{stamp}_context.json"));
+                    let file = dir.join(format!("{stamp}_preview.json"));
                     let record = serde_json::json!({
                         "timestamp": timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                         "session_id": session_id,
@@ -1143,14 +1143,14 @@ pub async fn dispatch(
                                 neenee_store::fsutil::atomic_write_bytes(&file, &bytes)
                             {
                                 let _ = resp_tx.send(AgentResponse::Error(format!(
-                                    "Context snapshot write failed: {error}"
+                                    "Preview write failed: {error}"
                                 )));
                                 return;
                             }
                         }
                         Err(error) => {
                             let _ = resp_tx.send(AgentResponse::Error(format!(
-                                "Context snapshot serialize failed: {error}"
+                                "Preview serialize failed: {error}"
                             )));
                             return;
                         }
@@ -1164,7 +1164,7 @@ pub async fn dispatch(
                     let _ = resp_tx.send(turn(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Context snapshot (dry run, wire body, probe \"This is a test.\") — \
+                            "Preview (dry run, wire body, probe \"This is a test.\") — \
                              {provider_id}/{model_name}: ~{tokens} tokens {window_str}, {} \
                              message(s), {n_tools} tool(s). Full JSON: {file_path}",
                             messages.len(),
@@ -1173,19 +1173,19 @@ pub async fn dispatch(
                 }
                 Some(other) => {
                     let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Unknown debug target '{other}'. Available: network, context. \
-                         Usage: `/debug network on|off` or `/debug context`."
+                        "Unknown debug target '{other}'. Available: trace, preview. \
+                         Usage: `/debug trace on|off` or `/debug preview`."
                     )));
                 }
                 None => {
-                    let network_on = agent.provider.debug_capture_enabled();
+                    let trace_on = agent.provider.debug_capture_enabled();
                     let _ = resp_tx.send(turn(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Debug status:\n- network: {}\n\nUsage:\n\
-                             - `/debug network on|off` — capture each provider round-trip\n\
-                             - `/debug context` — dry-run the next request to disk",
-                            if network_on { "ON" } else { "OFF" },
+                            "Debug status:\n- trace: {}\n\nUsage:\n\
+                             - `/debug trace on|off` — trace each provider round-trip\n\
+                             - `/debug preview` — dry-run the next request to disk",
+                            if trace_on { "ON" } else { "OFF" },
                         )),
                     ));
                 }

@@ -185,12 +185,12 @@ pub async fn run_tui(
     // (revoke / toggle). `None` until the first response lands.
     let session_context = Arc::new(Mutex::new(None::<SessionContextSnapshot>));
     let session_context_clone = session_context.clone();
-    // Live nudge config snapshot, mirrored from the harness whenever
-    // `AgentResponse::NudgeConfigUpdated` arrives. The `/config` modal reads
-    // this each frame to render the current thresholds and enabled state;
-    // edits are sent back as `AgentRequest::UpdateNudgeConfig` and the
+    // Live doom-guard config snapshot, mirrored from the harness whenever
+    // `AgentResponse::DoomGuardConfigUpdated` arrives. The `/config` modal reads
+    // this each frame to render the current window and enabled state; edits
+    // are sent back as `AgentRequest::UpdateDoomGuardConfig` and the
     // harness's reply updates this cell.
-    let nudge_config = Arc::new(Mutex::new(neenee_core::NudgeConfig::default()));
+    let nudge_config = Arc::new(Mutex::new(neenee_core::DoomGuardConfig::default()));
     let nudge_config_clone = nudge_config.clone();
     // Global tool-step density (true = Comfortable: new tool steps spawn
     // expanded). Shared with the response listener so steps created mid-turn
@@ -836,8 +836,8 @@ pub async fn run_tui(
                     let mut msgs = messages_clone.write().await;
                     push_local_notice(&mut msgs, NoticeSeverity::Error, msg);
                 }
-                AgentResponse::NudgeConfigUpdated(config) => {
-                    // Mirror the persisted nudge config into the TUI's
+                AgentResponse::DoomGuardConfigUpdated(config) => {
+                    // Mirror the persisted doom-guard config into the TUI's
                     // snapshot so the `/config` modal re-renders from the
                     // authoritative state. The modal reads this field when
                     // it is open; the write is a single assignment.
@@ -915,7 +915,7 @@ pub async fn run_tui(
         path_scan_cache: None,
         current_pursuit: None,
         session_context: None,
-        nudge_config: neenee_core::NudgeConfig::default(),
+        nudge_config: neenee_core::DoomGuardConfig::default(),
         loop_status: "idle".to_string(),
         activity_status: String::new(),
         unattended: false,
