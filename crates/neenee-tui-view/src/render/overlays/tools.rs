@@ -10,7 +10,9 @@
 //! overview stays a glanceable summary and the tool list gets a focused,
 //! selectable, scrollable surface of its own.
 
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};

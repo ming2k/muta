@@ -34,7 +34,6 @@ pub use edit::EditFileTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use list::ListDirTool;
-pub use project::InitConfigTool;
 pub use read::{ReadTextTerseTool, ReadTextTool};
 pub use read_image::ReadImageTool;
 pub(crate) use web::html_to_text;

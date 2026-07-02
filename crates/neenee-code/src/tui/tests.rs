@@ -667,6 +667,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_protocol_wire: String::new(),
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
+        custom_user_agent: None,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,
@@ -728,7 +729,7 @@ fn completions_classifies_slash_input_as_slash_kind() {
 fn openai_template() -> &'static crate::tui::providers::ProviderTemplate {
     crate::tui::PROVIDER_TEMPLATES
         .iter()
-        .find(|t| t.protocol == "openai")
+        .find(|t| t.label == "Custom OpenAI-compatible")
         .expect("openai-compatible template")
 }
 
@@ -739,6 +740,15 @@ fn anthropic_template() -> &'static crate::tui::providers::ProviderTemplate {
         .iter()
         .find(|t| t.protocol == "anthropic")
         .expect("anthropic relay template")
+}
+
+/// The Antigravity (sub2api) relay template — a Gemini-native 中转站 with a
+/// pre-filled base URL and the three relay-specific model ids seeded.
+fn antigravity_template() -> &'static crate::tui::providers::ProviderTemplate {
+    crate::tui::PROVIDER_TEMPLATES
+        .iter()
+        .find(|t| t.label == "Antigravity (sub2api)")
+        .expect("antigravity template")
 }
 
 #[test]
@@ -782,6 +792,34 @@ fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
     assert!(app.custom_models.iter().any(|m| m.starts_with("claude-")));
     // …and there is no Model field (models are fixed by the template).
     assert!(!app.custom_fields.contains(&crate::tui::CustomField::Model));
+}
+
+#[test]
+fn antigravity_template_prefills_url_and_seeds_relay_models() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_custom_provider_editor(antigravity_template());
+    assert_eq!(app.custom_protocol_wire, "gemini");
+    // The relay host is pre-filled so the user only types a name + token; an
+    // empty base_url would otherwise fall back to localhost in the catalog.
+    assert_eq!(
+        app.custom_base_url,
+        "https://ai.hihusky.com/antigravity/v1beta"
+    );
+    // The three effort-tiered / non-preview ids are seeded as channels, with
+    // the working models first (AddProvider activates channels[0] by default).
+    assert_eq!(
+        app.custom_models,
+        vec![
+            "gemini-3-flash".to_string(),
+            "gemini-3.1-pro-low".to_string(),
+            "gemini-3.1-pro-high".to_string(),
+        ]
+    );
+    // No free-text Model field — the closed Gemini family is the seed.
+    assert!(!app.custom_fields.contains(&crate::tui::CustomField::Model));
+    // Name and Token still start empty (the user supplies them).
+    assert!(app.custom_name.is_empty());
+    assert!(app.custom_token.is_empty());
 }
 
 #[test]

@@ -5,8 +5,7 @@
 use crate::modal::{Modal, Recess};
 use neenee_tui::{
     Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
-    {Block as RtBlock, Clear, Paragraph},
-    {Color, Span, Style},
+    {Block as RtBlock, Clear, Paragraph}, {Color, Span, Style},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -542,12 +541,7 @@ fn truncate_to_width(s: &str, max: usize) -> String {
 /// repeated per-component. The two-line variants (a muted breadcrumb followed
 /// by a brand title, e.g. `Configuration › Layout`) pass the parts via
 /// [`HeaderPart`]; the common case is a single [`HeaderPart::title`].
-pub(super) fn modal_header(
-    frame: &mut Frame,
-    header: Option<Rect>,
-    title: &str,
-    theme: &Theme,
-) {
+pub(super) fn modal_header(frame: &mut Frame, header: Option<Rect>, title: &str, theme: &Theme) {
     modal_header_parts(frame, header, &[HeaderPart::title(title)], theme);
 }
 

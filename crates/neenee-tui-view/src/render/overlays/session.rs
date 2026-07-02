@@ -1,6 +1,8 @@
 //! Sessions picker.
 
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{one_line, relative_time_compact, truncate_ellipsis};

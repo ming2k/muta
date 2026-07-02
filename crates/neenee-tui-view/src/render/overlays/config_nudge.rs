@@ -9,7 +9,9 @@
 //! re-seeds the snapshot the modal reads.
 
 use neenee_core::NudgeConfig;
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 
 use crate::modal::Modal;
 use crate::render::Theme;

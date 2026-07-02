@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini Native now supports native tool calls.** The Google/Gemini provider
+  now sends tool schemas as Gemini `functionDeclarations`, parses
+  `functionCall` parts into neenee tool calls, streams function-call events,
+  replays tool results as `functionResponse` parts, and preserves Gemini
+  thought signatures on function-call and text parts for stateless multi-turn
+  replay. Gemini no longer has to rely solely on JSON-in-text fallback for
+  filesystem and shell tools.
+
 ## [0.14.3] - 2026-07-02
 
 ### Fixed
@@ -78,14 +88,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pasted images) is restored into the input box for re-editing. Later interrupt
   phases (mid-stream drop, tool cancel) are unchanged.
 
-- **`/debug context` — dry-run the next request as a file dump.** A dev-only
-  subcommand snapshots the exact model-visible context the next turn would send
-  (rebuilt head system message, auto-loaded skills, message list, tool schemas,
-  provider/model identity, context window, estimated token pressure, and active
-  pursuit) **without** calling the provider or mutating any state. The full JSON
-  (messages + tool schemas) is persisted to one owner-only file under the
-  per-project `debug/` dir for offline inspection. Pairs with `/debug network`
-  (which captures real round-trips).
+- **`/debug context` — dry-run the next *wire* request as a file dump.** A
+  dev-only subcommand snapshots the provider-**wire** body the next turn would
+  send (the minimal shape the provider serializes — `role`/`content`/`tool_calls`/
+  `tool_call_id`/`images`/`reasoning_content` only), with a simulated `This is a
+  test.` probe user message appended so the snapshot reflects "what if the user
+  sent this now". Out-of-band fields (nested envoy `children`, `envoy_meta`,
+  attribution, injection `origin`, `hidden`) are stripped via `Message::to_wire`,
+  so the dump shows what the model actually sees — not the internal `Message`
+  struct that also carries durable-session sidecars. The head system message is
+  rebuilt, skills auto-load, and token/byte pressure is estimated on the wire
+  set. The full JSON (messages + tool schemas + provider/model identity +
+  context window + active pursuit) is persisted to one owner-only file under the
+  per-project `debug/` dir for offline inspection. **No** provider call is made
+  and nothing is mutated. Pairs with `/debug network` (which captures real
+  round-trips).
 
 ### Changed
 

@@ -17,12 +17,13 @@ use neenee_core::{
 };
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, NEENEE_USER_AGENT,
-    OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OpenAiProviderSpec,
+    OPENAI_BUILTIN_MODELS,
 };
 use neenee_store::config::{Config, UserChannelConfig, UserProviderConfig, UserTransport};
 use neenee_store::provider_usage::ProviderUsage;
 
-use crate::modelsdev::{self, ModelsDevProvider};
+#[cfg(test)]
+use neenee_providers::OPENAI_PROVIDER_SPECS;
 
 /// The effective default provider id from `config.default_provider`.
 pub fn default_provider_id(config: &Config) -> &str {
@@ -145,477 +146,272 @@ fn env_or_config(env_var: Option<&str>, config_value: Option<String>) -> Option<
         .or(config_value)
 }
 
-/// The per-provider API key stored in config. Centralized so the catalog is the
-/// only place that maps a model id to its config field. Replaces the former
-/// `config_api_key` free function in `main.rs`.
-fn config_key_for(config: &Config, id: &str) -> Option<String> {
-    match id {
-        "openai" => config.openai_api_key.clone(),
-        "google" => config.gemini_api_key.clone(),
-        "kimi-code" => config.moonshot_api_key.clone(),
-        "deepseek" => config.deepseek_api_key.clone(),
-        "zai-code" => config.zai_api_key.clone(),
-        "opencode-go" => config.opencode_go_api_key.clone(),
-        "anthropic" => config.anthropic_api_key.clone(),
-        _ => None,
-    }
-}
-
-/// The per-provider model override stored in config. Replaces the former
-/// `config_model` free function in `main.rs`.
-fn config_model_for(config: &Config, id: &str) -> Option<String> {
-    match id {
-        "kimi-code" => config.moonshot_model.clone(),
-        "zai-code" => config.zai_model.clone(),
-        // Multi-model built-ins: the active model lives in the shared
-        // `default_model` field, not a per-provider slot.
-        "openai" | "opencode-go" | "anthropic" | "google" | "deepseek" => {
-            config.default_model.clone()
-        }
-        _ => None,
-    }
-}
-
-/// Attach the built-in display metadata (name, description) to a raw `(id,
-/// channels)` pair. Model-level metadata (context window, capabilities) is
-/// resolved on demand from the model registry via [`ProviderEntry::context_window`].
-/// Falls back to the raw id as the name when no metadata is registered.
-fn entry_with_metadata(id: &str, channels: Vec<Channel>, builtin: bool) -> ProviderEntry {
-    let (name, description) = builtin_provider_metadata(id)
-        .map(|(n, d)| (n.to_string(), d.to_string()))
-        .unwrap_or_else(|| (id.to_string(), String::new()));
-    ProviderEntry {
-        id: id.to_string(),
-        name,
-        description,
-        channels,
-        default_channel: 0,
-        builtin,
-    }
-}
-
-/// Build a single-channel entry for an OpenAI-compatible registry preset.
-fn openai_compat_entry_from_spec(config: &Config, spec: &OpenAiProviderSpec) -> ProviderEntry {
-    let api_key =
-        env_or_config(Some(spec.env_api_key), config_key_for(config, spec.id)).unwrap_or_default();
-    // A pinned `fixed_model` always wins; otherwise env override, then config,
-    // then the spec default.
-    let model = if let Some(fixed) = spec.fixed_model {
-        fixed.to_string()
-    } else {
-        env_or_config(Some(spec.env_model), config_model_for(config, spec.id))
-            .unwrap_or_else(|| spec.default_model.to_string())
-    };
-    let user_agent = spec
-        .default_user_agent
-        .unwrap_or(NEENEE_USER_AGENT)
-        .to_string();
-    let name = builtin_provider_metadata(spec.id)
-        .map(|(n, _)| n.to_string())
-        .unwrap_or_else(|| spec.id.to_string());
-    let channel = Channel {
-        id: "default".to_string(),
-        label: name.clone(),
-        transport: Transport::OpenAiCompat {
-            base_url: spec.base_url.to_string(),
-            user_agent,
-        },
-        api_key,
-        model,
-    };
-    entry_with_metadata(spec.id, vec![channel], true)
-}
-
-/// Build a multi-model built-in provider entry: one channel per id in `models`,
-/// all sharing `api_key` and the transport produced by `make_transport` (the
-/// same endpoint for every model). `config.default_model` selects the active
-/// channel. Backs the `anthropic`, `google`, and `deepseek` built-ins — each
-/// hosts several models behind one key, distinguished only by transport.
-fn multi_model_builtin_entry(
-    config: &Config,
-    id: &str,
-    api_key: String,
-    models: &[&str],
-    make_transport: impl Fn() -> Transport,
-) -> ProviderEntry {
-    let channels: Vec<Channel> = models
+/// Build the catalog from configured provider instances only.
+///
+/// Provider kinds such as OpenAI, Anthropic, Gemini, and relay presets are now
+/// templates in the add-provider UI. A concrete catalog row exists only after
+/// the user adds a named instance.
+pub fn build_catalog(config: &Config) -> Vec<ProviderEntry> {
+    config
+        .providers
         .iter()
-        .map(|&model_id| Channel {
-            id: model_id.to_string(),
-            label: neenee_core::model::resolve(model_id).name.to_string(),
-            transport: make_transport(),
-            api_key: api_key.clone(),
-            model: model_id.to_string(),
-        })
-        .collect();
-    let default_channel = config
-        .default_model
+        .map(user_provider_to_entry)
+        .collect()
+}
+
+/// One-time hard migration from the legacy implicit built-in config fields to
+/// explicit named provider instances. Returns true when `config` changed and
+/// should be saved.
+pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
+    let mut changed = false;
+    let legacy_default = config.default_provider.clone();
+    let legacy_model = config.default_model.clone();
+    let openai_key = config.openai_api_key.take();
+    let google_key = config.gemini_api_key.take();
+    let google_base_url = config
+        .gemini_base_url
         .as_deref()
-        .and_then(|m| channels.iter().position(|c| c.model == m))
-        .unwrap_or(0);
-    let (name, description) = builtin_provider_metadata(id)
-        .map(|(n, d)| (n.to_string(), d.to_string()))
-        .unwrap_or_else(|| (id.to_string(), String::new()));
-    ProviderEntry {
-        id: id.to_string(),
-        name,
-        description,
-        channels,
-        default_channel,
-        builtin: true,
-    }
-}
+        .unwrap_or("https://generativelanguage.googleapis.com/v1beta")
+        .to_string();
+    let kimi_key = config.moonshot_api_key.take();
+    let deepseek_key = config.deepseek_api_key.take();
+    let zai_key = config.zai_api_key.take();
+    let anthropic_key = config.anthropic_api_key.take();
+    let anthropic_base_url = config
+        .anthropic_base_url
+        .as_deref()
+        .unwrap_or("https://api.anthropic.com/v1/messages")
+        .to_string();
+    let legacy_key_present = [
+        openai_key.as_ref(),
+        google_key.as_ref(),
+        kimi_key.as_ref(),
+        deepseek_key.as_ref(),
+        zai_key.as_ref(),
+        anthropic_key.as_ref(),
+        config.opencode_go_api_key.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|key| !key.trim().is_empty());
 
-/// The configurable Anthropic `/messages` provider (`anthropic`). The endpoint
-/// is *configurable*: `anthropic_base_url` (env `ANTHROPIC_BASE_URL` first)
-/// supplies the full `/messages` URL, defaulting to Anthropic's official API, so
-/// the same preset serves the official API or any relay with no code change. One
-/// key (`ANTHROPIC_API_KEY` then `config.anthropic_api_key`) authenticates every
-/// Claude model.
-/// Apply per-model reasoning settings (`[model_reasoning."<model-id>"]`) to
-/// every Anthropic-protocol channel in `entry`. A per-model entry is the
-/// **only** source of effort/thinking now (ADR-0046: reasoning is opt-in, and
-/// the per-model `[model_reasoning]` table is the single surface for it).
-///
-/// Opt-in semantics — "what you write is what you think":
-/// - No entry at all → the channel keeps its default (thinking **off**, no
-///   explicit effort). The model does not reason on its own.
-/// - An entry exists → reasoning is opted in: thinking defaults **on** (the
-///   recommended mode for Claude) unless the entry explicitly sets
-///   `thinking = false`. Effort, if set, is applied; otherwise the model's
-///   default (`high`) is used and `output_config` is omitted on the wire.
-///   This is the "写的默认有 think 且为对应 effort" contract.
-///
-/// Non-Anthropic channels are left untouched. ADR-0045: Anthropic effort/
-/// thinking are model-level properties, not provider-level.
-///
-/// This is the single point the built-in `anthropic` provider and the
-/// catalog-driven Anthropic relays route through, so a setting keyed by model
-/// id applies wherever that model is served.
-fn apply_per_model_reasoning(entry: &mut ProviderEntry, config: &Config) {
-    for channel in &mut entry.channels {
-        let model_id = channel.model.as_str();
-        let Some(settings) = config.model_reasoning.for_model(model_id) else {
-            continue;
-        };
-        if let Transport::Anthropic {
-            effort, thinking, ..
-        } = &mut channel.transport
-        {
-            // A per-model entry opts the model in to reasoning. Thinking
-            // defaults ON (the recommended Claude mode); an explicit
-            // `thinking = false` keeps it off. Effort applies only if set,
-            // else the model default stands.
-            *thinking = Some(match settings.thinking {
-                Some(false) => ThinkingMode::Off,
-                _ => ThinkingMode::Adaptive,
-            });
-            if let Some(eff) = settings.effort.as_deref().and_then(Effort::parse) {
-                *effort = Some(eff);
-            }
-        }
-    }
-}
-
-fn anthropic_builtin_entry(config: &Config) -> ProviderEntry {
-    let api_key = env_or_config(Some("ANTHROPIC_API_KEY"), config.anthropic_api_key.clone())
-        .unwrap_or_default();
-    let base_url = env_or_config(
-        Some("ANTHROPIC_BASE_URL"),
-        config.anthropic_base_url.clone(),
-    )
-    .unwrap_or_else(|| "https://api.anthropic.com/v1/messages".to_string());
-    // ADR-0046: reasoning is opt-in per model. The built-in `anthropic` provider
-    // no longer carries provider-wide effort/thinking defaults — every channel
-    // starts with thinking off and no explicit effort, and a per-model
-    // `[model_reasoning]` entry is the single way to turn it on (handled by
-    // `apply_per_model_reasoning` below). The legacy flat `anthropic_effort`/
-    // `anthropic_thinking` config keys are no longer read here.
-    let mut entry = multi_model_builtin_entry(
+    changed |= migrate_legacy_instance(
         config,
-        "anthropic",
-        api_key,
-        ANTHROPIC_BUILTIN_MODELS,
-        move || Transport::Anthropic {
-            base_url: base_url.clone(),
-            user_agent: NEENEE_USER_AGENT.to_string(),
-            effort: None,
-            thinking: None,
-        },
+        "openai",
+        "OpenAI",
+        UserTransport::OpenAiCompat,
+        "https://api.openai.com/v1/chat/completions",
+        None,
+        OPENAI_BUILTIN_MODELS,
+        openai_key,
+        legacy_model.as_deref(),
     );
-    // Per-model `[model_reasoning]` entries are now the ONLY source of effort/
-    // thinking for the built-in provider.
-    apply_per_model_reasoning(&mut entry, config);
-    entry
-}
-
-/// The `google` provider: the Gemini family over the native Gemini API, one key
-/// (`GEMINI_API_KEY` then `config.gemini_api_key`). The base URL is
-/// *configurable*: `gemini_base_url` (env `GEMINI_BASE_URL` first) supplies the
-/// versioned base, defaulting to Google's official API, so the same preset
-/// serves the official endpoint or any Gemini-format relay/中转站 with no code
-/// change.
-fn google_builtin_entry(config: &Config) -> ProviderEntry {
-    let api_key =
-        env_or_config(Some("GEMINI_API_KEY"), config.gemini_api_key.clone()).unwrap_or_default();
-    let base_url = env_or_config(Some("GEMINI_BASE_URL"), config.gemini_base_url.clone())
-        .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string());
-    multi_model_builtin_entry(
+    changed |= migrate_legacy_instance(
         config,
         "google",
-        api_key,
+        "Google Gemini",
+        UserTransport::GeminiNative,
+        &google_base_url,
+        None,
         GOOGLE_BUILTIN_MODELS,
-        move || Transport::GeminiNative {
-            base_url: base_url.clone(),
-            user_agent: NEENEE_USER_AGENT.to_string(),
-        },
-    )
-}
+        google_key,
+        legacy_model.as_deref(),
+    );
+    changed |= migrate_legacy_instance(
+        config,
+        "kimi-code",
+        "Kimi Code",
+        UserTransport::OpenAiCompat,
+        "https://api.kimi.com/coding/v1/chat/completions",
+        Some("opencode/0.1.0"),
+        &["kimi-k2.7-code"],
+        kimi_key,
+        legacy_model.as_deref(),
+    );
+    changed |= migrate_legacy_instance(
+        config,
+        "deepseek",
+        "DeepSeek",
+        UserTransport::OpenAiCompat,
+        "https://api.deepseek.com/v1/chat/completions",
+        None,
+        DEEPSEEK_BUILTIN_MODELS,
+        deepseek_key,
+        legacy_model.as_deref(),
+    );
+    changed |= migrate_legacy_instance(
+        config,
+        "zai-code",
+        "ZAI Code",
+        UserTransport::OpenAiCompat,
+        "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        Some("opencode/1.17.10"),
+        &["glm-5.2"],
+        zai_key,
+        legacy_model.as_deref(),
+    );
+    changed |= migrate_legacy_instance(
+        config,
+        "anthropic",
+        "Anthropic",
+        UserTransport::Anthropic,
+        &anthropic_base_url,
+        None,
+        ANTHROPIC_BUILTIN_MODELS,
+        anthropic_key,
+        legacy_model.as_deref(),
+    );
 
-/// The `deepseek` provider: DeepSeek V4 Flash + Pro over the OpenAI-compatible
-/// API, one key (`DEEPSEEK_API_KEY` then `config.deepseek_api_key`).
-fn deepseek_builtin_entry(config: &Config) -> ProviderEntry {
-    let api_key = env_or_config(Some("DEEPSEEK_API_KEY"), config.deepseek_api_key.clone())
-        .unwrap_or_default();
-    multi_model_builtin_entry(config, "deepseek", api_key, DEEPSEEK_BUILTIN_MODELS, || {
-        Transport::OpenAiCompat {
-            base_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-            user_agent: NEENEE_USER_AGENT.to_string(),
+    if let Some(key) = config
+        .opencode_go_api_key
+        .take()
+        .filter(|k| !k.trim().is_empty())
+        && !config.providers.iter().any(|p| p.id == "opencode-go")
+    {
+        let channels = opencode_go_seed_channels(key);
+        if !channels.is_empty() {
+            let default_channel = legacy_model
+                .as_deref()
+                .and_then(|model| {
+                    channels
+                        .iter()
+                        .position(|channel| channel.model.as_deref() == Some(model))
+                })
+                .unwrap_or(0);
+            config.providers.push(UserProviderConfig {
+                id: "opencode-go".to_string(),
+                name: Some("OpenCode Go".to_string()),
+                channels,
+                default_channel,
+            });
+            changed = true;
         }
-    })
+    }
+
+    if config.openai_model.take().is_some()
+        | config.moonshot_model.take().is_some()
+        | config.zai_model.take().is_some()
+        | config.default_model.take().is_some()
+        | config.gemini_base_url.take().is_some()
+        | config.anthropic_base_url.take().is_some()
+        | config.anthropic_effort.take().is_some()
+        | config.anthropic_thinking.take().is_some()
+    {
+        changed = true;
+    }
+    if legacy_key_present {
+        changed = true;
+    }
+
+    if !config
+        .providers
+        .iter()
+        .any(|provider| provider.id == config.default_provider)
+    {
+        config.default_provider = if config.providers.iter().any(|p| p.id == legacy_default) {
+            legacy_default
+        } else {
+            config
+                .providers
+                .first()
+                .map(|p| p.id.clone())
+                .unwrap_or_default()
+        };
+        changed = true;
+    }
+
+    changed
 }
 
-/// The models.dev provider ids neenee treats as "catalog-driven": their model
-/// lists, wire formats, and endpoints come entirely from the models.dev
-/// mirror, so adding a model there appears here with zero code changes. Any
-/// provider id in this set whose models.dev entry exists and whose API key
-/// resolves gets a catalog entry built from the directory.
-const CATALOG_DRIVEN_PROVIDERS: &[&str] = &["opencode-go"];
-
-/// Build a catalog entry for a models.dev-driven provider. Every model the
-/// directory lists becomes a channel; the transport (OpenAI `/chat/completions`
-/// vs Anthropic `/messages`) is derived from the model's wire format, which is
-/// itself derived from the model's `provider.npm` override or the provider's
-/// `npm`. The API key resolves from the provider's `env` field or the
-/// per-provider config slot.
-///
-/// This is the opencode-style "zero hardcoding" path: models.dev is the source
-/// of truth for what models exist and how to reach them. When the cache is
-/// absent (first run, offline), the caller falls back to the compiled-in
-/// `KNOWN_MODELS` registry via [`fallback_catalog_driven_entry`].
-fn catalog_driven_entry(config: &Config, provider: &ModelsDevProvider) -> ProviderEntry {
-    let api_key = provider
-        .env
-        .first()
-        .and_then(|env_var| env_or_config(Some(env_var), config_key_for(config, &provider.id)))
-        .unwrap_or_default();
-    let user_agent = NEENEE_USER_AGENT.to_string();
-    let base = if provider.api.is_empty() {
-        String::new()
-    } else {
-        provider.api.clone()
+#[allow(clippy::too_many_arguments)]
+fn migrate_legacy_instance(
+    config: &mut Config,
+    id: &str,
+    name: &str,
+    transport: UserTransport,
+    base_url: &str,
+    user_agent: Option<&str>,
+    models: &[&str],
+    api_key: Option<String>,
+    active_model: Option<&str>,
+) -> bool {
+    let Some(api_key) = api_key.filter(|k| !k.trim().is_empty()) else {
+        return false;
     };
-    // Stable display order: sort by model id so the picker list is predictable.
-    let mut models: Vec<_> = provider.models.values().collect();
-    models.sort_by(|a, b| a.id.cmp(&b.id));
-    let channels: Vec<Channel> = models
+    if config.providers.iter().any(|p| p.id == id) {
+        return false;
+    }
+    let channels: Vec<UserChannelConfig> = models
         .iter()
-        .map(|m| {
-            let format = modelsdev::model_wire_format(provider, m);
-            let suffix = modelsdev::endpoint_suffix(format);
-            let full_url = if base.is_empty() {
-                String::new()
-            } else {
-                format!("{base}{suffix}")
-            };
-            let transport = match format {
-                WireFormat::AnthropicCompat => Transport::Anthropic {
-                    base_url: full_url,
-                    user_agent: user_agent.clone(),
-                    effort: None,
-                    thinking: None,
-                },
-                WireFormat::Gemini => Transport::GeminiNative {
-                    base_url: full_url,
-                    user_agent: user_agent.clone(),
-                },
-                _ => Transport::OpenAiCompat {
-                    base_url: full_url,
-                    user_agent: user_agent.clone(),
-                },
-            };
-            Channel {
-                id: m.id.clone(),
-                label: m.name.clone(),
-                transport,
-                api_key: api_key.clone(),
-                model: m.id.clone(),
-            }
+        .map(|model| UserChannelConfig {
+            label: (*model).to_string(),
+            transport,
+            api_key_env: None,
+            api_key: Some(api_key.clone()),
+            model: Some((*model).to_string()),
+            base_url: Some(base_url.to_string()),
+            user_agent: user_agent.map(str::to_string),
+            effort: None,
+            thinking: None,
         })
         .collect();
-    let default_channel = config
-        .default_model
-        .as_deref()
-        .and_then(|m| channels.iter().position(|c| c.model == m))
+    let default_channel = active_model
+        .and_then(|model| {
+            channels
+                .iter()
+                .position(|channel| channel.model.as_deref() == Some(model))
+        })
         .unwrap_or(0);
-    let (name, description) = builtin_provider_metadata(&provider.id)
-        .map(|(n, d)| (n.to_string(), d.to_string()))
-        .unwrap_or_else(|| (provider.name.clone(), String::new()));
-    let mut entry = ProviderEntry {
-        id: provider.id.clone(),
-        name,
-        description,
+    config.providers.push(UserProviderConfig {
+        id: id.to_string(),
+        name: Some(name.to_string()),
         channels,
         default_channel,
-        builtin: true,
-    };
-    // Per-model `[model_reasoning]` applies to catalog-driven Anthropic models
-    // (e.g. MiniMax/Qwen behind opencode-go) too.
-    apply_per_model_reasoning(&mut entry, config);
-    entry
+    });
+    true
 }
 
-/// A compiled-in fallback for a catalog-driven provider when the models.dev
-/// cache is absent (first run, offline). Uses the `KNOWN_MODELS` registry to
-/// produce a best-effort entry so the provider is still selectable. Once the
-/// cache is refreshed the dynamic entry replaces this on the next catalog
-/// rebuild.
-fn fallback_catalog_driven_entry(config: &Config, provider_id: &str) -> ProviderEntry {
-    let api_key = env_or_config(Some("OPENCODE_API_KEY"), config.opencode_go_api_key.clone())
-        .unwrap_or_default();
-    let user_agent = NEENEE_USER_AGENT.to_string();
-    // Derive the endpoint root from the known provider id. This is the only
-    // hardcoding left, and only on the offline fallback path.
-    let base = match provider_id {
-        "opencode-go" => "https://opencode.ai/zen/go/v1",
-        _ => "",
-    };
-    // Every known model whose format resolves to a served model gets a channel.
-    // This is a subset (only models in KNOWN_MODELS), but it keeps the provider
-    // usable offline.
-    let channels: Vec<Channel> = neenee_core::KNOWN_MODELS
+fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
+    let mut models: Vec<_> = neenee_core::KNOWN_MODELS
         .iter()
         .filter(|m| {
-            // Only include models relevant to this provider. opencode-go serves
-            // the open coding models; a precise filter isn't possible offline,
-            // so include models that are commonly served by relays.
             matches!(
                 m.family,
                 "glm" | "kimi" | "deepseek" | "mimo" | "minimax" | "qwen"
             )
         })
-        .map(|m| {
-            let suffix = modelsdev::endpoint_suffix(m.format);
-            let full_url = format!("{base}{suffix}");
-            let transport = match m.format {
-                WireFormat::AnthropicCompat => Transport::Anthropic {
-                    base_url: full_url,
-                    user_agent: user_agent.clone(),
-                    effort: None,
-                    thinking: None,
-                },
-                _ => Transport::OpenAiCompat {
-                    base_url: full_url,
-                    user_agent: user_agent.clone(),
-                },
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(b.id));
+    models
+        .into_iter()
+        .map(|model| {
+            let (transport, base_url) = match model.format {
+                WireFormat::AnthropicCompat => (
+                    UserTransport::Anthropic,
+                    "https://opencode.ai/zen/go/v1/messages",
+                ),
+                WireFormat::Gemini => (
+                    UserTransport::GeminiNative,
+                    "https://opencode.ai/zen/go/v1beta",
+                ),
+                WireFormat::OpenAiCompat => (
+                    UserTransport::OpenAiCompat,
+                    "https://opencode.ai/zen/go/v1/chat/completions",
+                ),
             };
-            Channel {
-                id: m.id.to_string(),
-                label: m.name.to_string(),
+            UserChannelConfig {
+                label: model.id.to_string(),
                 transport,
-                api_key: api_key.clone(),
-                model: m.id.to_string(),
+                api_key_env: None,
+                api_key: Some(api_key.clone()),
+                model: Some(model.id.to_string()),
+                base_url: Some(base_url.to_string()),
+                user_agent: None,
+                effort: None,
+                thinking: None,
             }
         })
-        .collect();
-    let default_channel = config
-        .default_model
-        .as_deref()
-        .and_then(|m| channels.iter().position(|c| c.model == m))
-        .unwrap_or(0);
-    let (name, description) = builtin_provider_metadata(provider_id)
-        .map(|(n, d)| (n.to_string(), d.to_string()))
-        .unwrap_or_else(|| (provider_id.to_string(), String::new()));
-    let mut entry = ProviderEntry {
-        id: provider_id.to_string(),
-        name,
-        description,
-        channels,
-        default_channel,
-        builtin: true,
-    };
-    // Apply per-model reasoning on the offline fallback path too, for parity
-    // with the online catalog-driven entry.
-    apply_per_model_reasoning(&mut entry, config);
-    entry
-}
-
-/// Build the catalog by materializing every known provider from `config`.
-///
-/// Order is registry presets first, then bespoke providers, then the mock
-/// fixture. Order does not affect behavior — all lookups are by id — but a
-/// stable order makes the catalog readable in debug output and (later) the
-/// picker's default pre-search listing.
-pub fn build_catalog(config: &Config) -> Vec<ProviderEntry> {
-    let mut entries: Vec<ProviderEntry> = Vec::new();
-
-    // OpenAI-compatible registry presets.
-    for spec in OPENAI_PROVIDER_SPECS {
-        entries.push(openai_compat_entry_from_spec(config, spec));
-    }
-
-    // OpenAI (chat-completions) — one multi-model provider (gpt-4o + gpt-4o-mini),
-    // one key. The active model lives in `config.default_model`.
-    let openai_api_key =
-        env_or_config(Some("OPENAI_API_KEY"), config.openai_api_key.clone()).unwrap_or_default();
-    entries.push(multi_model_builtin_entry(
-        config,
-        "openai",
-        openai_api_key,
-        OPENAI_BUILTIN_MODELS,
-        || Transport::OpenAiCompat {
-            base_url: "https://api.openai.com/v1/chat/completions".to_string(),
-            user_agent: NEENEE_USER_AGENT.to_string(),
-        },
-    ));
-
-    // Google (Gemini family, native API) — one multi-model provider.
-    entries.push(google_builtin_entry(config));
-
-    // DeepSeek (V4 Flash + Pro, OpenAI-compatible) — one multi-model provider.
-    entries.push(deepseek_builtin_entry(config));
-
-    // Configurable Anthropic `/messages` relay hosting the Claude family. The
-    // endpoint URL comes from config (defaulting to Anthropic's official API),
-    // so the same preset serves the official API or any relay.
-    entries.push(anthropic_builtin_entry(config));
-
-    // Catalog-driven providers (opencode-go): model lists, wire formats, and
-    // endpoints come from the models.dev mirror — zero hardcoding. When the
-    // cache is present each provider gets a dynamic entry built from the
-    // directory; when absent (first run, offline) a compiled-in fallback keeps
-    // the provider selectable.
-    let models_dev = modelsdev::load();
-    for &pid in CATALOG_DRIVEN_PROVIDERS {
-        let entry = match models_dev.as_ref().and_then(|c| c.get(pid)) {
-            Some(provider) => catalog_driven_entry(config, provider),
-            None => fallback_catalog_driven_entry(config, pid),
-        };
-        entries.push(entry);
-    }
-
-    // User-defined models: override built-ins by id, or
-    // append new models. A user entry may carry several channels, finally
-    // enabling multi-channel delivery (e.g. Gemini via Studio and Vertex).
-    for user_entry in config.providers.iter().map(user_provider_to_entry) {
-        if let Some(existing) = entries.iter_mut().find(|e| e.id == user_entry.id) {
-            *existing = user_entry;
-        } else {
-            entries.push(user_entry);
-        }
-    }
-
-    entries
+        .collect()
 }
 
 /// Resolve the active provider for a given provider id from `config`. Returns
@@ -706,16 +502,10 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
     let rows = entries
         .iter()
         .map(|entry| {
-            // Protocol / base-URL are only meaningful for user-defined providers,
-            // whose edit form pre-fills from them; built-ins leave them empty.
-            let (protocol, base_url) = if entry.builtin {
-                (String::new(), String::new())
-            } else {
-                entry
-                    .default_channel()
-                    .map(channel_protocol_and_base_url)
-                    .unwrap_or_default()
-            };
+            let (protocol, base_url) = entry
+                .default_channel()
+                .map(channel_protocol_and_base_url)
+                .unwrap_or_default();
             ProviderPickerRow {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
@@ -795,6 +585,45 @@ mod tests {
     }
 
     #[test]
+    fn empty_config_has_no_provider_instances() {
+        let config = bare_config();
+        assert!(build_catalog(&config).is_empty());
+        assert_eq!(
+            build_picker_state(&config, &ProviderUsage::default())
+                .rows
+                .len(),
+            0
+        );
+        assert_eq!(
+            build_provider_for(&config, default_provider_id(&config)).provider_id(),
+            "mock"
+        );
+    }
+
+    #[test]
+    fn legacy_builtin_key_migrates_to_named_instance() {
+        let mut config = bare_config();
+        config.default_provider = "openai".to_string();
+        config.default_model = Some("gpt-4o-mini".to_string());
+        config.openai_api_key = Some("sk-old".to_string());
+
+        assert!(migrate_legacy_provider_instances(&mut config));
+        assert!(config.openai_api_key.is_none());
+        assert!(config.default_model.is_none());
+        assert_eq!(config.default_provider, "openai");
+
+        let entry = build_catalog(&config)
+            .into_iter()
+            .find(|entry| entry.id == "openai")
+            .expect("migrated openai instance");
+        assert_eq!(entry.name, "OpenAI");
+        assert_eq!(entry.default_channel().unwrap().model, "gpt-4o-mini");
+        assert_eq!(entry.default_channel().unwrap().api_key, "sk-old");
+        assert!(!entry.builtin);
+    }
+
+    #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn catalog_contains_every_builtin_preset() {
         let entries = build_catalog(&bare_config());
         let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
@@ -815,6 +644,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn opencode_go_hosts_both_wire_formats() {
         let entries = build_catalog(&bare_config());
         let entry = entries
@@ -849,6 +679,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn anthropic_relay_hosts_claude_family_over_messages() {
         let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
@@ -875,6 +706,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn anthropic_relay_base_url_is_configurable() {
         // A custom relay address (e.g. a self-hosted proxy) flows through config
         // with no code change — the load-bearing requirement for users whose
@@ -929,6 +761,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn built_in_anthropic_applies_per_model_reasoning_overrides() {
         // ADR-0046: reasoning is opt-in per model. A `[model_reasoning]` entry
         // keyed by model id opts that model in; an explicit `thinking = false`
@@ -981,6 +814,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn per_model_entry_presence_defaults_thinking_on() {
         // ADR-0046 opt-in contract: a `[model_reasoning]` entry's mere presence
         // opts the model in to reasoning — thinking defaults ON unless the
@@ -1036,6 +870,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn anthropic_default_model_selects_its_channel_and_builds() {
         let mut config = bare_config();
         config.default_model = Some("claude-sonnet-4-6".to_string());
@@ -1049,6 +884,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn opencode_go_default_model_selects_its_channel() {
         let mut config = bare_config();
         config.default_model = Some("minimax-m3".to_string());
@@ -1061,6 +897,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn build_provider_for_model_picks_anthropic_transport_for_minimax() {
         // Selecting minimax-m3 under opencode-go must build a provider whose
         // model id is minimax-m3 (the Anthropic /messages path), proving the
@@ -1072,6 +909,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn kimi_code_uses_kimi_code_platform() {
         let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
@@ -1102,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn google_default_model_selects_its_gemini_channel() {
         // google is multi-model: default_model picks which Gemini channel is
         // active; every channel uses the native Gemini transport. ENV_GUARD is
@@ -1129,6 +968,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn deepseek_hosts_flash_and_pro_as_one_provider() {
         // The two DeepSeek models are now channels of one `deepseek` provider,
         // both over the OpenAI-compatible transport at the DeepSeek endpoint.
@@ -1170,6 +1010,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn cloud_providers_report_not_ready_without_key() {
         let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
@@ -1296,6 +1137,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn gemini_base_url_env_overrides_official_default() {
         // The built-in `google` preset reads GEMINI_BASE_URL first, then the
         // config slot, falling back to the official endpoint — same contract as
@@ -1376,6 +1218,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn openai_is_a_multi_model_builtin_with_gpt_4o_default() {
         // OpenAI is now a multi-model provider: its picker row lists every
         // OPENAI_BUILTIN_MODELS entry and defaults to gpt-4o.

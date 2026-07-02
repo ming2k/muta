@@ -91,7 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         suggestions
     };
 
-    let config = Config::load();
+    let mut config = Config::load();
+    if catalog::migrate_legacy_provider_instances(&mut config)
+        && let Err(error) = config.save()
+    {
+        tracing::warn!(?error, "could not persist provider instance migration");
+    }
 
     // Resolve the project root early: it feeds the per-project lock, the
     // session store, and the embedding index. CLI parsing happened at the top

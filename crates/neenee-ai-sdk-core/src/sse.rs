@@ -25,7 +25,7 @@ use crate::transport_error;
 /// frame split across network chunks. Each yielded item is one SSE `data:`
 /// event's payload — finer-grained and more responsive than batching by
 /// network chunk, and the standard shape expected of an SSE reader.
-pub(crate) fn data_payloads(
+pub fn data_payloads(
     response: reqwest::Response,
     provider: &'static str,
 ) -> BoxStream<'static, Result<String, String>> {

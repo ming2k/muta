@@ -13,7 +13,12 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
+        "Create a new file or replace an entire existing file's contents. \
+         Use this when creating a file or when the change spans most of the \
+         file; for a small localized change to an existing file prefer \
+         edit_file. Writes are atomic (temp + rename) so an interrupted turn \
+         never leaves a corrupt or half-written file. Do not write files \
+         through the shell (echo >, printf >, cat >)."
     }
     fn parameters(&self) -> serde_json::Value {
         json!({

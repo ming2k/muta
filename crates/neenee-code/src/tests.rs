@@ -53,7 +53,6 @@ fn registry_collects_all_self_registered_tools() {
         "ask_user",
         "webfetch",
         "websearch",
-        "init_config",
         "use_skill",
         "list_skills",
     ] {

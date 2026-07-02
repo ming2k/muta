@@ -68,6 +68,11 @@ pub struct PromptContext {
     /// known models today; non-empty when a model entry carries a
     /// `Model::model_guidance`. Rendered verbatim by `ModelGuidance`.
     pub model_guidance: &'static str,
+    /// Provider/protocol-specific prompt guidance from the active provider.
+    /// This is intentionally factual and narrow: the SDK/provider may describe
+    /// how its wire protocol projects tools, thinking, or replay metadata, but
+    /// the agent still owns identity, workflow, and behavior policy.
+    pub provider_guidance: &'static str,
 }
 
 impl PromptContext {
@@ -76,6 +81,17 @@ impl PromptContext {
     pub fn empty() -> Self {
         Self::default()
     }
+}
+
+/// Narrow prompt hints exposed by a concrete provider implementation.
+///
+/// The provider owns protocol facts (e.g. how tool results or thinking replay
+/// are represented on its wire surface), while the agent owns whether and where
+/// those facts are inserted into its system prompt. Empty by default for test
+/// providers and simple adapters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderPromptHints {
+    pub system_guidance: &'static str,
 }
 
 /// A self-contained, declaratively-registered fragment of a prompt.

@@ -232,24 +232,9 @@ fn provider_list_body(
         .clamp(1, avail.saturating_sub(10).max(1))
         .min(28);
 
-    let header_line = |label: &str| {
-        Line::from(Span::styled(
-            format!(" {label}"),
-            Style::default()
-                .fg(theme.muted())
-                .add_modifier(Modifier::BOLD),
-        ))
-    };
-
     let mut body: Vec<Line> = Vec::new();
     let mut selected_visual = 0usize;
-    let mut prev_builtin: Option<bool> = None;
     for (sel, rp) in providers.iter().enumerate() {
-        // Section header at each group boundary (built-ins first, then custom).
-        if prev_builtin != Some(rp.builtin) {
-            body.push(header_line(if rp.builtin { "Built-in" } else { "Custom" }));
-            prev_builtin = Some(rp.builtin);
-        }
         if sel == modal_index {
             selected_visual = body.len();
         }
@@ -259,18 +244,11 @@ fn provider_list_body(
         let g = RowGlyphs::new(theme, is_selected, rp.favorite, is_current);
 
         // Suffix: the active model's display name, plus a `· N ›` count badge
-        // that hints the row drills into the model list. Multi-model providers
-        // always drill; a custom (user-defined) provider drills too — even with
-        // a single model — because its stage-2 list is the only surface where
-        // models can be added/removed. Built-in single-model presets activate
-        // directly, so they show no badge.
+        // that hints the row drills into the model list. Provider rows are
+        // configured instances now, so every row drills into stage 2 where
+        // models can be activated, added, removed, or edited.
         let model_name = crate::providers::model_display_name(&rp.model);
-        let drills = rp.is_multi_model() || !rp.builtin;
-        let suffix = if drills {
-            format!("{model_name} · {} ›", rp.models.len())
-        } else {
-            model_name
-        };
+        let suffix = format!("{model_name} · {} ›", rp.models.len());
 
         // Pad / truncate the name to the shared column so suffixes align.
         let name = truncate_ellipsis(&rp.label, name_col);
@@ -530,7 +508,10 @@ pub fn draw_model_editor(
             // Focused: caret-following viewport keeps the caret in view.
             let (off, text) = field_viewport(input, cursor_position, field_w);
             key_off = off;
-            Span::styled(text, Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD))
+            Span::styled(
+                text,
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            )
         } else {
             // Unfocused: width-capped ellipsis truncation.
             key_off = 0;
@@ -539,7 +520,10 @@ pub fn draw_model_editor(
                 Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
             )
         };
-        body.push(Line::from(vec![Span::styled(label, label_style), value_span]));
+        body.push(Line::from(vec![
+            Span::styled(label, label_style),
+            value_span,
+        ]));
         api_key_off = key_off;
     }
 
@@ -623,7 +607,11 @@ pub fn draw_model_editor(
         // Subtract the focused field's viewport offset so the caret tracks the
         // visible (scrolled) text, and clamp it to stay inside the body rect.
         let caret_col = caret_column(input, cursor_position);
-        let off = if focused_field == 0 { api_key_off as u16 } else { 0 };
+        let off = if focused_field == 0 {
+            api_key_off as u16
+        } else {
+            0
+        };
         let max_x = body_rect.x + body_rect.width.saturating_sub(1);
         let mut cursor_x = (body_rect.x + prefix.width() as u16 + caret_col).saturating_sub(off);
         if cursor_x > max_x {
@@ -689,7 +677,12 @@ pub fn draw_add_model_editor(
     let area = modal_area(frame, Modal::AddModel).expect("add-model modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, &format!("＋ Add model · {provider_name}"), theme);
+    modal_header(
+        frame,
+        f.header,
+        &format!("＋ Add model · {provider_name}"),
+        theme,
+    );
 
     const LABEL_W: usize = 8;
     let label_span = Span::styled(
@@ -926,9 +919,16 @@ pub fn draw_custom_provider_editor(
     // committed model's display name.
     let model_row = |focused: bool| {
         let value = if focused {
-            placeholder(field_viewport(input, cursor_position, field_w).1, true, "type to filter…")
+            placeholder(
+                field_viewport(input, cursor_position, field_w).1,
+                true,
+                "type to filter…",
+            )
         } else {
-            Span::styled(truncate_ellipsis(model_display, field_w.max(1)), value_style(false))
+            Span::styled(
+                truncate_ellipsis(model_display, field_w.max(1)),
+                value_style(false),
+            )
         };
         Line::from(vec![field_label("Model", focused), value])
     };

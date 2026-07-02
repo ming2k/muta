@@ -355,6 +355,49 @@ pub const KNOWN_MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
+    // ── sub2api / antigravity relay (ai.hihusky.com) ──────────────────────
+    // A Gemini-native 中转站 that advertises effort-tiered 3.1 Pro variants
+    // (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST surface
+    // (`/v1beta/models/{id}:generateContent`), so the metadata mirrors the
+    // Gemini family; the relay forwards the model id verbatim. The wire
+    // responses include `thoughtSignature`/`thoughtsTokenCount`, so these
+    // reason like the rest of the 3.x family.
+    Model {
+        id: "gemini-3.1-pro-high",
+        name: "Gemini 3.1 Pro High",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3.1-pro-low",
+        name: "Gemini 3.1 Pro Low",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-flash",
+        name: "Gemini 3 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Gemini,
+        model_guidance: "",
+        effort_levels: &[],
+    },
     Model {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
@@ -696,6 +739,9 @@ mod tests {
             "gemini-3-flash-preview",
             "gemini-3.1-pro-preview",
             "gemini-3.1-pro-preview-customtools",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "gemini-3-flash",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
             "gemini-2.5-flash-lite",

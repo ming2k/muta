@@ -259,6 +259,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                 protocol,
                 base_url,
                 api_key,
+                user_agent,
                 models,
             } => {
                 crate::handlers_provider::add(
@@ -271,6 +272,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     protocol,
                     base_url,
                     api_key,
+                    user_agent,
                     models,
                 )
                 .await;

@@ -973,6 +973,7 @@ pub async fn run_tui(
         custom_protocol_wire: String::new(),
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
+        custom_user_agent: None,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,

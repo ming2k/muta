@@ -118,11 +118,12 @@ pub async fn add(
     protocol: String,
     base_url: String,
     api_key: String,
+    user_agent: Option<String>,
     models: Vec<String>,
 ) {
     use neenee_store::config::{UserChannelConfig, UserProviderConfig, UserTransport};
 
-    let id = custom_provider_id(&name);
+    let id = unique_provider_id(config, &name);
     let transport = match protocol.as_str() {
         "anthropic" => UserTransport::Anthropic,
         "gemini" => UserTransport::GeminiNative,
@@ -152,7 +153,7 @@ pub async fn add(
             api_key: api_key.clone(),
             model: Some(model.to_string()),
             base_url: base_url.clone(),
-            user_agent: None,
+            user_agent: user_agent.clone(),
             effort: None,
             thinking: None,
         })
@@ -169,12 +170,7 @@ pub async fn add(
         channels,
         default_channel: 0,
     };
-    // Replace any existing custom provider with the same derived id, else append.
-    if let Some(existing) = config.providers.iter_mut().find(|p| p.id == id) {
-        *existing = entry;
-    } else {
-        config.providers.push(entry);
-    }
+    config.providers.push(entry);
     config.default_provider = id.clone();
     // Record the first seeded model as the active model so the picker and status
     // surfaces land on it.
@@ -543,6 +539,20 @@ fn custom_provider_id(name: &str) -> String {
     }
 }
 
+fn unique_provider_id(config: &Config, name: &str) -> String {
+    let base = custom_provider_id(name);
+    if !config.providers.iter().any(|p| p.id == base) {
+        return base;
+    }
+    for n in 2usize.. {
+        let candidate = format!("{base}-{n}");
+        if !config.providers.iter().any(|p| p.id == candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded suffix search must eventually find an id")
+}
+
 /// Shared tail of [`switch`] and [`add`]: rebuild the active provider through the
 /// catalog (so api-key / endpoint / user-agent resolution matches startup), swap
 /// it into the shared holder, re-seed mid-turn relief, and push the key + picker
@@ -670,6 +680,21 @@ mod tests {
         // Symbol-only / empty names fall back to a usable id.
         assert_eq!(custom_provider_id("***"), "custom");
         assert_eq!(custom_provider_id(""), "custom");
+    }
+
+    #[test]
+    fn unique_provider_id_suffixes_colliding_instance_names() {
+        let mut config = Config::default();
+        config.providers.push(UserProviderConfig {
+            id: "openai".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(unique_provider_id(&config, "OpenAI"), "openai-2");
+        config.providers.push(UserProviderConfig {
+            id: "openai-2".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(unique_provider_id(&config, "OpenAI"), "openai-3");
     }
 
     #[test]

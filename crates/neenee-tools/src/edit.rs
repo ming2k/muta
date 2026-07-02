@@ -132,9 +132,14 @@ impl Tool for EditFileTool {
         "edit_file"
     }
     fn description(&self) -> &str {
-        "Apply a targeted edit to a file by replacing old_string with new_string. \
-         The old_string must appear exactly once; fails if not found or if the \
-         match is ambiguous."
+        "Modify an existing file with a targeted edit: replace one unique block \
+         of text (old_string) with new_string. This is the preferred tool for \
+         changing part of an existing file — the match must be unique; it \
+         fails if not found or if the match is ambiguous, so no accidental \
+         edits land in the wrong place. Prefer this over rewriting the whole \
+         file with write_file, and over editing through the shell (sed, \
+         perl -i, awk -i). Use write_file only when creating a file or \
+         replacing its entire contents."
     }
     fn parameters(&self) -> serde_json::Value {
         json!({

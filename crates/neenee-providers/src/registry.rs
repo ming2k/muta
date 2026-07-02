@@ -6,7 +6,7 @@ use neenee_core::catalog::{Channel, Transport};
 use std::sync::Arc;
 
 use crate::{
-    AnthropicMessagesProvider, GeminiProvider, NEENEE_USER_AGENT, OpenAiCompatProvider,
+    AnthropicMessagesProvider, GoogleProvider, NEENEE_USER_AGENT, OpenAiCompatProvider,
     ThinkingConfig,
 };
 
@@ -182,14 +182,8 @@ impl OpenAiProviderSpec {
         let agent = user_agent
             .or_else(|| self.default_user_agent.map(str::to_string))
             .unwrap_or_else(|| NEENEE_USER_AGENT.to_string());
-        let mut provider = OpenAiCompatProvider::with_base_url_and_user_agent(
-            api_key,
-            model,
-            self.base_url,
-            &agent,
-        );
-        provider.id = self.id.to_string();
-        provider
+        OpenAiCompatProvider::with_base_url_and_user_agent(api_key, model, self.base_url, &agent)
+            .with_id(self.id.to_string())
     }
 }
 
@@ -206,7 +200,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             base_url,
             user_agent,
         } => Arc::new(
-            GeminiProvider::with_base_url_and_user_agent(
+            GoogleProvider::with_base_url_and_user_agent(
                 channel.api_key.clone(),
                 channel.model.clone(),
                 base_url,
@@ -220,13 +214,13 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             effort,
             thinking,
         } => {
-            let mut provider = AnthropicMessagesProvider::with_user_agent(
+            let mut provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
                 channel.api_key.clone(),
                 channel.model.clone(),
                 base_url,
                 user_agent,
-            );
-            provider.id = entry_id.to_string();
+            )
+            .with_id(entry_id.to_string());
             // Cap the response length at the model's registered output limit so
             // high-output models (MiniMax M3) are not truncated by the default.
             if let Some(max_tokens) = anthropic_model_max_tokens(&channel.model) {
@@ -254,13 +248,13 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             base_url,
             user_agent,
         } => {
-            let mut provider = OpenAiCompatProvider::with_base_url_and_user_agent(
+            let provider = OpenAiCompatProvider::with_base_url_and_user_agent(
                 channel.api_key.clone(),
                 channel.model.clone(),
                 base_url,
                 user_agent,
-            );
-            provider.id = entry_id.to_string();
+            )
+            .with_id(entry_id.to_string());
             Arc::new(provider)
         }
     }
@@ -282,15 +276,15 @@ mod spec_tests {
 
         let provider = spec.build("test-key".to_string(), None, None);
         assert_eq!(
-            provider.base_url,
+            provider.endpoint.base_url(),
             "https://api.kimi.com/coding/v1/chat/completions"
         );
-        assert_eq!(provider.model, "kimi-k2.7-code");
+        assert_eq!(provider.endpoint.model_id(), "kimi-k2.7-code");
         // The Kimi Code platform requires a recognized coding-agent UA.
-        assert_eq!(provider.user_agent, "opencode/0.1.0");
+        assert_eq!(provider.endpoint.user_agent(), "opencode/0.1.0");
         // The registry stamps the preset id onto the concrete provider so
         // assistant responses can be attributed to "kimi-code".
-        assert_eq!(provider.id, "kimi-code");
+        assert_eq!(provider.endpoint.id(), "kimi-code");
         assert_eq!(provider.provider_id(), "kimi-code");
         assert_eq!(provider.model(), "kimi-k2.7-code");
     }
@@ -363,7 +357,7 @@ mod build_tests {
         // max_tokens, not the provider's flat 8192 default. Construct directly
         // so the typed field is readable (the trait object returned by
         // build_provider_for_channel is not downcastable).
-        let provider = AnthropicMessagesProvider::with_user_agent(
+        let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
             "k".to_string(),
             "minimax-m3".to_string(),
             "https://opencode.ai/zen/go/v1/messages",
@@ -380,7 +374,7 @@ mod build_tests {
     fn claude_models_cap_max_tokens_above_the_flat_default() {
         // Claude's registered output limit must lift the request cap above the
         // provider's flat 8192 default so long agent turns are not truncated.
-        let opus = AnthropicMessagesProvider::with_user_agent(
+        let opus = AnthropicMessagesProvider::with_base_url_and_user_agent(
             "k".to_string(),
             "claude-opus-4-8".to_string(),
             "https://ai.hihusky.com/v1/messages",

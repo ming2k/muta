@@ -225,7 +225,7 @@ the `usage` object it previously discarded:
 |----------|---------------|-----------|
 | **Anthropic** (`anthropic_compat.rs`) | top-level `usage.input_tokens` / `output_tokens` | `message_delta` event's cumulative `usage` → `Usage` event |
 | **OpenAI-compat** (`openai_compat.rs`) | top-level `usage.{prompt,completion,total}_tokens` | requests `stream_options.include_usage`; terminal chunk's `usage` → `Usage` event |
-| **Gemini** (`gemini.rs`) | `usageMetadata.{prompt,candidates,total}TokenCount` | *(same non-streaming path)* |
+| **Gemini** (`neenee-ai-sdk-google`) | `usageMetadata.{prompt,candidates,total}TokenCount` | `usageMetadata` in stream payloads → `Usage` event |
 
 Each adapter implements `Provider::usage_supported() -> true` and stashes the
 parsed `TokenUsage` in an internal `Mutex`, drained by `take_last_usage()`. The

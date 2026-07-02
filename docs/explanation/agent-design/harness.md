@@ -47,9 +47,11 @@ alongside the full message history. The provider is stateless across turns.
 The OpenAI-compatible providers declare schemas natively: the registry
 presets (`kimi-code`, `deepseek-v4-flash`, `deepseek-v4-pro`, `zai-code`) and
 the bespoke `openai` entry all share one adapter, so they inherit native tool
-declaration. The Gemini and Llama adapters do not override the default and
-never send a `tools` field; tool calls on those providers travel only through
-the universal fallback below.
+declaration. The Gemini adapter converts the same schema set into Gemini
+`functionDeclarations` and replays results as `functionResponse` parts.
+The Llama adapter does not override the default and never sends a `tools`
+field; tool calls on that provider travel only through the universal fallback
+below.
 
 ### Observed: reasoning
 

@@ -83,10 +83,12 @@ runtimes implement. Two runtime behaviors matter to neenee:
   `tool_calls` entirely from deltas where they have no new data. neenee's
   parser treats every delta field as optional.
 
-Providers that do not implement `stream_chat_events` (Gemini,
-LlamaServer) fall back to the trait default, which wraps `stream_chat` and
-emits only `TextDelta` events. They cannot surface reasoning or stream
-tool-call deltas even when the underlying service might support them.
+Providers that do not implement `stream_chat_events` fall back to the trait
+default, which wraps `stream_chat` and emits only `TextDelta` events. They
+cannot surface reasoning or stream tool-call deltas even when the underlying
+service might support them. Gemini implements this event path for text,
+usage, and native function-call parts, but it does not currently surface a
+reasoning channel.
 
 ## Why providers differ
 
@@ -100,17 +102,21 @@ layers:
   `tool_choice`, `reasoning_content`, and SSE tool-call deltas. The registry
   presets are pure data, so they inherit every capability from that one
   shared implementation.
-- **Gemini** (`GeminiProvider`) speaks a different request shape
-  (`systemInstruction`, `model`/`user` roles, no `tools` field). neenee does
-  not bridge Gemini's native function-calling API; tool calls fall through
-  to the universal text protocol.
+- **Gemini** (`GoogleProvider`) speaks a different request shape
+  (`systemInstruction`, `model`/`user` roles, and
+  `tools[].functionDeclarations`). neenee bridges Gemini's native
+  function-calling API by converting the internal OpenAI-shaped tool schema
+  into Gemini declarations, reading `functionCall` parts, and replaying tool
+  results as `functionResponse` parts.
 - **LlamaServer** (`LlamaServerProvider`) targets an OpenAI-compatible
   endpoint but does not implement `prepare_tools` or `stream_chat_events`.
   The adapter treats the server as a text-only channel even when the
   underlying runtime (typically vLLM) could accept `tools`. Tool calls
   therefore fall through to the universal text protocol.
 
-The practical consequence: on Gemini and LlamaServer the model must emit
+The practical consequence: Gemini and OpenAI-compatible providers can use
+native structured tool calls. On LlamaServer, or any future provider that
+omits native tool support, the model must emit
 `{"tool": "<name>", "arguments": {…}}` as ordinary assistant text, which the
 client parses back into a tool call after the fact. See
 [Tool rounds](agent-design/rounds-and-turns.md) for the fallback mechanics.

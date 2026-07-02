@@ -1,73 +1,9 @@
 //! neenee configuration initialization.
 //!
-//! `InitConfigTool` materializes a `.neenee/` configuration tree in a
-//! directory (skills, commands, agents) and is reused by both the
-//! `init_config` tool and the `/init` slash command.
+//! `init_neenee_config` materializes a `.neenee/` configuration tree in a
+//! directory (skills, commands, agents) for the `/init` slash command.
 
-use async_trait::async_trait;
-use neenee_core::Tool;
-use serde_json::json;
-use std::path::{Path, PathBuf};
-
-/// Initialize a `.neenee/` configuration tree in a new or existing project.
-pub struct InitConfigTool;
-
-#[async_trait]
-impl Tool for InitConfigTool {
-    fn name(&self) -> &str {
-        "init_config"
-    }
-    fn description(&self) -> &str {
-        "Initialize a neenee configuration tree (`.neenee/` with skills, commands, and agents \
-         directories, plus an AGENTS.md guide) in the given directory. Idempotent: existing files \
-         are never overwritten. Use when the user wants to set up neenee for a project."
-    }
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Directory to initialize (default current dir)" }
-            },
-            "required": []
-        })
-    }
-    fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
-        let path = serde_json::from_str::<serde_json::Value>(arguments)
-            .ok()
-            .and_then(|value| value.get("path")?.as_str().map(str::to_string))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| ".".to_string());
-        neenee_core::ScopeTarget::Path(std::path::PathBuf::from(path))
-    }
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let args: serde_json::Value =
-            serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let base = args["path"].as_str().unwrap_or(".");
-        let base_path = PathBuf::from(base);
-        std::fs::create_dir_all(&base_path)
-            .map_err(|e| format!("Failed to access '{}': {}", base, e))?;
-        let created = init_neenee_config(&base_path)?;
-        if created.is_empty() {
-            return Ok(format!(
-                "neenee is already configured in '{}'. Nothing to do.",
-                base
-            ));
-        }
-        Ok(format!(
-            "Initialized neenee configuration in '{}'.\nCreated:\n{}",
-            base,
-            created
-                .iter()
-                .map(|path| format!("- {}", path))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
-    }
-}
-
-// --- Self-registration -----------------------------------------------------
-
-neenee_core::register_tool!(InitConfigFactory => InitConfigTool);
+use std::path::Path;
 
 /// Materialize a `.neenee/` tree. Returns the list of newly created relative
 /// paths (existing files are left untouched and not reported).

@@ -67,6 +67,7 @@ pub enum AgentRequest {
         protocol: String,
         base_url: String,
         api_key: String,
+        user_agent: Option<String>,
         models: Vec<String>,
     },
     /// Edit a user-defined provider's metadata in place (display name, protocol,

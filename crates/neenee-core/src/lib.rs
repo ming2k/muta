@@ -84,16 +84,16 @@ pub use events::{
 };
 pub use hooks::{Hook, HookContext, HookEvent, HookEventKind, HookOutcome, SessionSource};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
-pub use model::{
-    KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model,
-};
+pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
 pub use nudgeconfig::NudgeConfig;
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
     PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens, estimate_tokens,
     prune_tool_results,
 };
-pub use prompt::{PromptChannel, PromptContext, PromptRegistry, PromptSection};
+pub use prompt::{
+    PromptChannel, PromptContext, PromptRegistry, PromptSection, ProviderPromptHints,
+};
 pub use session_review::{DEFAULT_REVIEWER_HARD_STOP, ReviewStatus, ReviewVerdict, SessionReview};
 pub use session_title::{TITLE_MAX_LEN, clean_title};
 pub use skillsconfig::SkillsConfig;

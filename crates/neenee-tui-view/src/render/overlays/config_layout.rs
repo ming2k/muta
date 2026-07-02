@@ -8,7 +8,9 @@
 //! `App::transcript_layout`(App::transcript_layout). `Esc`
 //! returns to the config root.
 
-use neenee_tui::{Frame, {Line, Span}, Modifier, Style};
+use neenee_tui::{
+    Frame, Modifier, Style, {Line, Span},
+};
 
 use crate::modal::Modal;
 use crate::render::Theme;

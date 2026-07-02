@@ -5,7 +5,7 @@
 
 use crate::pursuits::TokenUsage;
 use crate::tool_output::StdinPolicy;
-use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
+use crate::{EnvoyEvent, Message, ProviderPromptHints, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,15 @@ pub trait Provider: Send + Sync {
     /// Companion to [`Provider::provider_id`]; defaults to an empty string.
     fn model(&self) -> String {
         String::new()
+    }
+
+    /// Provider/protocol-specific prompt hints for the agent's system prompt.
+    ///
+    /// This is not the agent's behavior contract. Providers should expose only
+    /// narrow facts about their wire format or replay requirements; the agent's
+    /// prompt registry decides if and how those hints are rendered.
+    fn prompt_hints(&self) -> ProviderPromptHints {
+        ProviderPromptHints::default()
     }
 
     /// Toggle network capture for debugging. When `enabled` is true, every

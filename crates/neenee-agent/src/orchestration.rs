@@ -133,6 +133,13 @@ impl Provider for ProxyProvider {
             .model()
     }
 
+    fn prompt_hints(&self) -> neenee_core::ProviderPromptHints {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .prompt_hints()
+    }
+
     fn set_debug_capture(&self, enabled: bool, dir: PathBuf) {
         self.debug_enabled.store(enabled, Ordering::SeqCst);
         *self

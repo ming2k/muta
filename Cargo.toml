@@ -2,6 +2,10 @@
 members = [
     "crates/neenee-core",
     "crates/neenee-store",
+    "crates/neenee-ai-sdk-core",
+    "crates/neenee-ai-sdk-openai",
+    "crates/neenee-ai-sdk-anthropic",
+    "crates/neenee-ai-sdk-google",
     "crates/neenee-providers",
     "crates/neenee-tools",
     "crates/neenee-quant",

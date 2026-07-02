@@ -68,6 +68,9 @@ impl Tool for ListDirTool {
                 // Prune ignored dirs (build output / deps) the same way grep and
                 // glob do, so the three tools agree about the tree.
                 .filter_entry(|e| {
+                    if e.depth() == 0 {
+                        return true;
+                    }
                     let name = e.file_name().to_string_lossy();
                     !name.starts_with('.') && !should_skip_path(e.path())
                 })

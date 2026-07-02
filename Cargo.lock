@@ -1564,6 +1564,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "neenee-ai-sdk-anthropic"
+version = "0.14.3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "neenee-ai-sdk-core",
+ "neenee-core",
+ "reqwest",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "neenee-ai-sdk-core"
+version = "0.14.3"
+dependencies = [
+ "futures",
+ "httpdate",
+ "neenee-core",
+ "reqwest",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "neenee-ai-sdk-google"
+version = "0.14.3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "neenee-ai-sdk-core",
+ "neenee-core",
+ "reqwest",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "neenee-ai-sdk-openai"
+version = "0.14.3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "neenee-ai-sdk-core",
+ "neenee-core",
+ "reqwest",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "neenee-code"
 version = "0.14.3"
 dependencies = [
@@ -1620,14 +1672,14 @@ version = "0.14.3"
 dependencies = [
  "async-trait",
  "futures",
- "httpdate",
  "mockito",
+ "neenee-ai-sdk-anthropic",
+ "neenee-ai-sdk-core",
+ "neenee-ai-sdk-google",
+ "neenee-ai-sdk-openai",
  "neenee-core",
- "reqwest",
  "serde_json",
  "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]

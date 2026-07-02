@@ -46,9 +46,12 @@ schemas:
 | `tools` | the cached schema set is non-empty |
 | `tool_choice` | same condition as `tools` |
 
-When the provider has no native function calling (`GeminiProvider`,
-`LlamaServerProvider`), neither field is sent and the body uses a
-different shape. See [Tool rounds](agent-design/rounds-and-turns.md) for the fallback.
+Providers with a different native contract convert the same cached schema set
+at the adapter boundary. `GoogleProvider` sends Gemini
+`functionDeclarations` instead of OpenAI `tools`/`tool_choice`.
+Providers with no native function calling, such as `LlamaServerProvider`, send
+no tool declaration and rely on the universal text fallback. See
+[Tool rounds](agent-design/rounds-and-turns.md) for the fallback.
 
 Orphan `tool` messages whose `tool_call_id` has no matching preceding
 assistant `tool_calls` are filtered before the body is serialized. This

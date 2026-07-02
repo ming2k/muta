@@ -132,8 +132,7 @@ fn permission_scope(&self, arguments: &str) -> String {
 
 `json_string` (`crates/neenee-tools/src/lib.rs`) extracts a JSON field
 from the arguments string and falls back to `"*"`. Existing scopes: file
-tools use the `path` argument, `bash` uses the full `command` text,
-`init_config` uses the `path` argument. Pick a scope that distinguishes
+tools use the `path` argument, `bash` uses the full `command` text. Pick a scope that distinguishes
 meaningfully different invocations but is stable across retries of the same
 invocation.
 
@@ -224,9 +223,11 @@ Then exercise the tool manually:
 2. Ask the model to perform a task that should trigger the new tool.
 3. Confirm the tool step renders with the right name, arguments, and
    result.
-4. Switch to `GeminiProvider` or `LlamaServerProvider` and repeat. The
-   model should emit the universal fallback JSON and the tool should still
-   execute through `parse_tool_call`.
+4. Switch to `GoogleProvider` (`GeminiNative`) and repeat to confirm a second
+   native tool-call wire format works.
+5. Switch to `LlamaServerProvider`, or another provider that omits
+   `prepare_tools`, and repeat. The model should emit the universal fallback
+   JSON and the tool should still execute through `parse_tool_call`.
 
 If the tool is `Write`, also confirm the permission modal appears on first
 use and that an `Always` decision is cached against the scope returned by

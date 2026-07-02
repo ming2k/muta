@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct TestProvider;
+struct HintProvider;
 struct PermissionTestProvider(AtomicUsize);
 struct StreamingToolProvider(AtomicUsize);
 struct WriteTestTool;
@@ -24,6 +25,26 @@ impl Provider for TestProvider {
         _messages: Vec<Message>,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
+    }
+}
+
+#[async_trait]
+impl Provider for HintProvider {
+    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+        Ok(Message::new(Role::Assistant, "done"))
+    }
+
+    async fn stream_chat(
+        &self,
+        _messages: Vec<Message>,
+    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    fn prompt_hints(&self) -> neenee_core::ProviderPromptHints {
+        neenee_core::ProviderPromptHints {
+            system_guidance: "Provider protocol hint.",
+        }
     }
 }
 
@@ -179,6 +200,21 @@ fn pursuit_is_injected_into_system_prompt() {
     let prompt = messages[0].content.clone();
 
     assert!(prompt.contains("ship the harness"));
+}
+
+#[test]
+fn provider_prompt_hints_are_injected_into_system_prompt() {
+    let agent = Agent::new(
+        Arc::new(HintProvider),
+        Vec::new(),
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+
+    let mut messages: Vec<Message> = Vec::new();
+    agent.ensure_system_prompt(&mut messages);
+
+    assert!(messages[0].content.contains("Provider protocol hint."));
 }
 
 /// Regression for ADR-0039 stage 6: the `/review` reviewer envoy's head

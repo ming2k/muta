@@ -56,6 +56,15 @@ pub struct ProviderTemplate {
     /// Whether the editor exposes a free-text Model field (OpenAI-compatible
     /// relays serve an open model set; the others seed `models`).
     pub needs_model: bool,
+    /// A concrete relay endpoint pre-filled into the Base URL field on open
+    /// (create mode), so a relay-specific template works without the user
+    /// typing the host. `None` for the generic templates — their `url_hint` is
+    /// a placeholder only and the field starts empty, since the user supplies
+    /// their own relay host. When set, the user can still edit the value.
+    pub default_url: Option<&'static str>,
+    /// Template-specific user agent. Most providers use the default agent, but
+    /// the coding-plan endpoints validate this header.
+    pub user_agent: Option<&'static str>,
 }
 
 impl ProviderTemplate {
@@ -77,6 +86,83 @@ impl ProviderTemplate {
 /// The provider templates offered when adding a provider, in display order.
 pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
+        label: "OpenAI",
+        description: "OpenAI API — GPT-4o family",
+        protocol: "openai",
+        models: neenee_providers::OPENAI_BUILTIN_MODELS,
+        needs_url: true,
+        url_hint: "https://api.openai.com/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.openai.com/v1/chat/completions"),
+        user_agent: None,
+    },
+    ProviderTemplate {
+        label: "Anthropic",
+        description: "Claude models over the Anthropic /messages API",
+        protocol: "anthropic",
+        models: neenee_providers::ANTHROPIC_BUILTIN_MODELS,
+        needs_url: true,
+        url_hint: "https://api.anthropic.com/v1/messages",
+        needs_model: false,
+        default_url: Some("https://api.anthropic.com/v1/messages"),
+        user_agent: None,
+    },
+    ProviderTemplate {
+        label: "Google Gemini",
+        description: "Native Gemini API — Google AI Studio or compatible relay",
+        protocol: "gemini",
+        models: neenee_providers::GOOGLE_BUILTIN_MODELS,
+        needs_url: true,
+        url_hint: "https://generativelanguage.googleapis.com/v1beta",
+        needs_model: false,
+        default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
+        user_agent: None,
+    },
+    ProviderTemplate {
+        label: "DeepSeek",
+        description: "DeepSeek V4 Flash + Pro over OpenAI chat completions",
+        protocol: "openai",
+        models: neenee_providers::DEEPSEEK_BUILTIN_MODELS,
+        needs_url: true,
+        url_hint: "https://api.deepseek.com/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.deepseek.com/v1/chat/completions"),
+        user_agent: None,
+    },
+    ProviderTemplate {
+        label: "Kimi Code",
+        description: "Moonshot Kimi coding-plan endpoint",
+        protocol: "openai",
+        models: &["kimi-k2.7-code"],
+        needs_url: true,
+        url_hint: "https://api.kimi.com/coding/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
+        user_agent: Some("opencode/0.1.0"),
+    },
+    ProviderTemplate {
+        label: "ZAI Code",
+        description: "Z.AI coding-plan endpoint",
+        protocol: "openai",
+        models: &["glm-5.2"],
+        needs_url: true,
+        url_hint: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.z.ai/api/coding/paas/v4/chat/completions"),
+        user_agent: Some("opencode/1.17.10"),
+    },
+    ProviderTemplate {
+        label: "OpenCode Go",
+        description: "opencode.ai relay — OpenAI-compatible coding models",
+        protocol: "openai",
+        models: &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"],
+        needs_url: true,
+        url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
+        user_agent: None,
+    },
+    ProviderTemplate {
         label: "Custom Anthropic (Claude relay)",
         description: "Anthropic /messages relay — serves the Claude family",
         protocol: "anthropic",
@@ -84,6 +170,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_url: true,
         url_hint: "https://relay.example.com/v1/messages",
         needs_model: false,
+        default_url: None,
+        user_agent: None,
     },
     ProviderTemplate {
         label: "Custom OpenAI-compatible",
@@ -93,6 +181,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_url: true,
         url_hint: "https://relay.example.com/v1/chat/completions",
         needs_model: true,
+        default_url: None,
+        user_agent: None,
     },
     ProviderTemplate {
         label: "Custom Gemini",
@@ -102,6 +192,37 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_url: true,
         url_hint: "https://generativelanguage.googleapis.com/v1beta",
         needs_model: false,
+        default_url: None,
+        user_agent: None,
+    },
+    // Antigravity — a sub2api-style Gemini-native 中转站
+    // (ai.hihusky.com/antigravity/v1beta). The relay forwards model ids
+    // verbatim to the Gemini REST surface, so the `gemini` protocol reaches
+    // it unchanged. The base URL is pre-filled (the relay host is fixed); the
+    // user only types a display name and token. The three effort-tiered /
+    // non-preview ids are seeded as channels — they resolve in the model
+    // registry, so the stage-2 list and add-model overlay see real metadata.
+    //
+    // Model order is deliberate: `AddProvider` activates the FIRST seeded
+    // model as the default, and `gemini-3.1-pro-high` is currently rejected
+    // by the relay for every request shape (HTTP 400 INVALID_ARGUMENT — a
+    // relay-side defect, not a config issue; `-low` and `flash` work). So the
+    // two working models lead and `-high` sits last, still selectable from
+    // stage 2 the moment the relay accepts it.
+    ProviderTemplate {
+        label: "Antigravity (sub2api)",
+        description: "Gemini-native 中转站 — gemini-3.1-pro / gemini-3-flash",
+        protocol: "gemini",
+        models: &[
+            "gemini-3-flash",
+            "gemini-3.1-pro-low",
+            "gemini-3.1-pro-high",
+        ],
+        needs_url: true,
+        url_hint: "https://ai.hihusky.com/antigravity/v1beta",
+        needs_model: false,
+        default_url: Some("https://ai.hihusky.com/antigravity/v1beta"),
+        user_agent: None,
     },
 ];
 
@@ -289,13 +410,7 @@ pub fn providers_filtered_from(
             m,
         });
     }
-    // Built-in providers group first, then user-defined ones; within each group
-    // the shared favorite → last-used → name order applies.
-    rows.sort_by(|a, b| {
-        b.builtin
-            .cmp(&a.builtin)
-            .then_with(|| provider_order(picker, &a.id, &b.id, &a.name, &b.name))
-    });
+    rows.sort_by(|a, b| provider_order(picker, &a.id, &b.id, &a.name, &b.name));
     rows
 }
 
@@ -437,6 +552,88 @@ mod tests {
     }
 
     #[test]
+    fn gemini_candidate_set_includes_antigravity_relay_models() {
+        // The Antigravity (sub2api) relay ids are registered in KNOWN_MODELS as
+        // native Gemini, so the add-model overlay for a Gemini provider offers
+        // them (the closed-set policy has real candidates to pick from).
+        let gemini = protocol_model_candidates("gemini");
+        for id in [
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "gemini-3-flash",
+        ] {
+            assert!(
+                gemini.contains(&id),
+                "antigravity relay model {id} missing from gemini candidates"
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_template_is_offered_with_prefilled_url_and_seeded_models() {
+        // The Antigravity (sub2api) relay ships as a curated template so a user
+        // adds it from "＋ Add provider" without editing config.toml. Its host
+        // is fixed, so the base URL is pre-filled (`default_url`); the three
+        // effort-tiered / non-preview ids are seeded; and it speaks the gemini
+        // protocol (no free-text Model field — the closed family is the seed).
+        let tmpl = PROVIDER_TEMPLATES
+            .iter()
+            .find(|t| t.label == "Antigravity (sub2api)")
+            .expect("antigravity template offered in the chooser");
+        assert_eq!(tmpl.protocol, "gemini");
+        assert_eq!(
+            tmpl.models,
+            &[
+                "gemini-3-flash",
+                "gemini-3.1-pro-low",
+                "gemini-3.1-pro-high"
+            ]
+        );
+        assert_eq!(
+            tmpl.default_url,
+            Some("https://ai.hihusky.com/antigravity/v1beta")
+        );
+        assert!(tmpl.needs_url, "exposes a Base URL field (pre-filled)");
+        assert!(
+            !tmpl.needs_model,
+            "no free-text Model field — models are seeded"
+        );
+        // The editor fields are Name / Base URL / Token (no Model).
+        assert_eq!(
+            tmpl.fields(),
+            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+        );
+    }
+
+    #[test]
+    fn builtin_templates_prefill_official_urls_generic_relays_do_not() {
+        // Provider-kind templates are now first-class instance templates and
+        // pre-fill their official endpoint. Generic relay templates still leave
+        // the URL empty because the user supplies the host.
+        let builtin_labels = [
+            "OpenAI",
+            "Anthropic",
+            "Google Gemini",
+            "DeepSeek",
+            "Kimi Code",
+            "ZAI Code",
+            "OpenCode Go",
+            "Antigravity (sub2api)",
+        ];
+        for t in PROVIDER_TEMPLATES {
+            if builtin_labels.contains(&t.label) {
+                assert!(t.default_url.is_some(), "{:?} should pre-fill", t.label);
+            } else {
+                assert!(
+                    t.default_url.is_none(),
+                    "{:?} generic relay must not pre-fill",
+                    t.label
+                );
+            }
+        }
+    }
+
+    #[test]
     fn gemini_model_set_is_closed_others_open() {
         // A closed set means the add-model overlay offers no free-text fallback:
         // the candidate list is the complete family, so an unmatched id is a
@@ -490,13 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn stage1_groups_builtins_before_custom() {
+    fn stage1_no_longer_groups_builtins_before_custom() {
         let snapshot = sample();
         let rows = providers_filtered_from(&snapshot, "");
-        // Every built-in precedes every custom provider.
-        let first_custom = rows.iter().position(|r| !r.builtin).unwrap();
-        assert!(rows[..first_custom].iter().all(|r| r.builtin));
-        assert!(rows[first_custom..].iter().all(|r| !r.builtin));
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["anthropic", "kimi-code", "my-relay", "openai"]);
     }
 
     #[test]

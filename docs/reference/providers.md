@@ -21,9 +21,9 @@ Three capability surfaces matter for tool-using agents:
 
 | Provider | Native tools | Reasoning | Structured streaming | Source |
 |----------|--------------|-----------|----------------------|--------|
-| `OpenAiCompatProvider` | yes | yes | yes | `openai_compat.rs` |
+| `OpenAiCompatProvider` | yes | yes | yes | `neenee-ai-sdk-openai` |
 | OpenAI-compatible registry presets | yes | yes | yes | `OpenAiProviderSpec` (delegates to `OpenAiCompatProvider`) |
-| `GeminiProvider` | no | no | no | `gemini.rs` |
+| `GoogleProvider` (`GeminiNative`) | yes | no | yes | `neenee-ai-sdk-google` |
 | `LlamaServerProvider` | no | no | no | `llama.rs` |
 | `MockProvider` | no | no | no | `mock.rs` |
 
@@ -31,10 +31,11 @@ The four OpenAI-compatible presets in `OPENAI_PROVIDER_SPECS`
 (`kimi-code`, `deepseek-v4-flash`, `deepseek-v4-pro`, `zai-code`) are built by
 `OpenAiProviderSpec::build`, which returns an `OpenAiCompatProvider` with its
 `id` field set to the preset identifier. They therefore inherit every
-capability of `OpenAiCompatProvider`. `GeminiProvider` and `LlamaServerProvider`
-are standalone adapters that never override `prepare_tools` and never send a
-`tools` field; tool calls on those providers travel only through the
-universal fallback.
+capability of `OpenAiCompatProvider`. `GoogleProvider` is a standalone
+Gemini-native adapter: it converts the same internal tool schemas into Gemini
+`functionDeclarations`, parses `functionCall` parts, and replays tool results
+as `functionResponse` parts. `LlamaServerProvider` remains text-only; tool
+calls on that provider travel through the universal fallback.
 
 ## Provider catalog
 
@@ -61,7 +62,7 @@ env vars are data in that table, not hard-coded per struct.
 | `default_provider` | Struct | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|--------|----------|-------------|-----------|--------------------------|
 | `openai` | `OpenAiCompatProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-4o`, `gpt-4o-mini` |
-| `gemini` | `GeminiProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../crates/neenee-providers/src/registry.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
+| `gemini` | `GoogleProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../crates/neenee-providers/src/registry.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
 | `llama` | `LlamaServerProvider` | `${LLAMA_BASE_URL}/v1/chat/completions` | none | `LLAMA_MODEL` | user-supplied |
 
 Notes:

@@ -1229,7 +1229,7 @@ pub(super) async fn run_app_loop(
                             } else {
                                 Vec::new()
                             };
-                            Some(render::draw_custom_provider_editor(
+                        Some(render::draw_custom_provider_editor(
                             render::CustomEditorView {
                                 fields: &app.custom_fields,
                                 field: app.custom_field,
@@ -2147,6 +2147,7 @@ pub(super) async fn run_app_loop(
                                     protocol,
                                     base_url,
                                     api_key,
+                                    user_agent: app.custom_user_agent.clone(),
                                     models,
                                 });
                                 app.input = std::mem::take(&mut app.stashed_input);

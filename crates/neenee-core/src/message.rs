@@ -349,6 +349,43 @@ impl Message {
         self.envoy_meta = Some(meta);
         self
     }
+
+    /// Project this message to its provider-**wire** form: the minimal shape a
+    /// provider request body serializes. Strips every out-of-band field —
+    /// nested envoy [`children`](Self::children),
+    /// [`envoy_meta`](Self::envoy_meta), injection [`origin`](Self::origin),
+    /// [`hidden`](Self::hidden), [`provider`](Self::provider)/[`model`](Self::model)
+    /// attribution, [`provider_meta`](Self::provider_meta), and the storage/UI
+    /// sidecars [`content_blob`](Self::content_blob)/[`display_content`](Self::display_content) — keeping only
+    /// `role`, `content`, `tool_calls`, `tool_call_id`, `images`, and
+    /// `reasoning_content` (which Anthropic replays as a `thinking` block).
+    ///
+    /// Each concrete provider's request builder ignores the out-of-band fields
+    /// by construction (it simply never reads them); `to_wire` makes that
+    /// projection explicit and reusable. It is the single source of truth for
+    /// "what the model actually sees", independent of any one SDK's
+    /// `message_obj` — used by `/debug context`, which must dump the wire
+    /// request body, not the internal [`Message`] struct that also carries
+    /// durable-session sidecars.
+    pub fn to_wire(&self) -> Message {
+        Message {
+            role: self.role,
+            content: self.content.clone(),
+            content_blob: None,
+            display_content: None,
+            reasoning_content: self.reasoning_content.clone(),
+            provider_meta: None,
+            tool_calls: self.tool_calls.clone(),
+            tool_call_id: self.tool_call_id.clone(),
+            images: self.images.clone(),
+            provider: None,
+            model: None,
+            hidden: false,
+            children: None,
+            envoy_meta: None,
+            origin: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +489,43 @@ mod tests {
         assert!(
             m.children.is_none(),
             "empty children should collapse to None"
+        );
+    }
+
+    #[test]
+    fn to_wire_strips_children_and_sidecars_keeps_wire_fields() {
+        // A Tool-role envoy result carries a heavy nested transcript + meta +
+        // attribution + origin. `to_wire` must drop all of those (the provider
+        // never sees them) while keeping role/content/tool_call_id. This is the
+        // contract `/debug context` relies on to dump the real request body
+        // rather than the internal `Message` struct that also carries
+        // durable-session sidecars.
+        let call = ToolCall {
+            id: "c".to_string(),
+            name: "envoy".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let m = Message::tool_result(&call, "[envoy result]: summary")
+            .with_children(vec![Message::new(Role::Assistant, "envoy internal turn")])
+            .with_envoy_meta(EnvoyMeta::default())
+            .with_attribution("kimi", "kimi-code")
+            .with_origin(InjectionOrigin::new(InjectionKind::EnvoySteer));
+
+        let w = m.to_wire();
+        assert_eq!(w.role, Role::Tool);
+        assert_eq!(w.content, "[envoy result]: summary");
+        assert_eq!(w.tool_call_id.as_deref(), Some("c"));
+        assert!(w.children.is_none(), "children must be stripped");
+        assert!(w.envoy_meta.is_none(), "envoy_meta must be stripped");
+        assert!(
+            w.provider.is_none() && w.model.is_none(),
+            "attribution stripped"
+        );
+        assert!(w.origin.is_none(), "origin stripped");
+        assert!(!w.hidden, "hidden reset to false");
+        assert!(
+            w.content_blob.is_none() && w.display_content.is_none(),
+            "storage/UI sidecars stripped"
         );
     }
 

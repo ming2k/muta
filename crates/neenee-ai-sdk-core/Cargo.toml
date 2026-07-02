@@ -1,0 +1,17 @@
+[package]
+name = "neenee-ai-sdk-core"
+version = "0.14.3"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[dependencies]
+neenee-core = { path = "../neenee-core" }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+httpdate = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -8,7 +8,9 @@
 //! this session.
 
 use neenee_core::TokenSourceReport;
-use neenee_tui::{Color, Frame, {Line, Span}, Modifier, Style};
+use neenee_tui::{
+    Color, Frame, Modifier, Style, {Line, Span},
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::placeholder;

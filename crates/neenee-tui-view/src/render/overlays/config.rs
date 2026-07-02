@@ -8,7 +8,9 @@
 //! added (compaction, hooks, permissions defaults, …), they each get a row
 //! here and a dedicated sub-page module under `overlays/`.
 
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 
 use crate::modal::Modal;
 use crate::render::Theme;

@@ -136,8 +136,8 @@ arms still works through its env vars.
 ## Path 3: Standalone adapter (incompatible contract)
 
 Use this path only when the provider's contract is genuinely incompatible with
-OpenAI Chat Completions. `GeminiProvider` and `LlamaServerProvider` are the
-existing examples, in `crates/neenee-providers/src/`.
+OpenAI Chat Completions. `GoogleProvider` and `LlamaServerProvider` are the
+existing examples, exposed through `crates/neenee-providers/src/`.
 
 Implement a `Provider` struct with at minimum `chat` and `stream_chat`, and
 decide explicitly for each optional method:
@@ -183,8 +183,8 @@ Then exercise the provider end-to-end:
 4. Run `/provider switch acme <model>` from inside the TUI and confirm the
    header updates and the new model is used.
 5. Repeat the tool-call test on a provider that uses the universal fallback
-   (`gemini` or `llama`) to confirm the new provider behaves consistently
-   across both transports.
+   (`llama`, or a test adapter that omits `prepare_tools`) to confirm the new
+   provider behaves consistently across both transports.
 
 ## Update documentation
 

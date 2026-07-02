@@ -1072,18 +1072,32 @@ pub async fn dispatch(
                     ));
                 }
                 Some("context") => {
-                    // /debug context — dev-only dry run. Snapshots the exact
-                    // request the next turn would send (rebuilt head system
-                    // message + auto-loaded skills, mirroring
-                    // `prepare_turn_messages`) and persists the full record to
-                    // the per-project `debug/` dir for offline inspection. NO
-                    // provider call is made; nothing is mutated. Reported to
-                    // the transcript as a single summary line — the on-disk
-                    // JSON is the source of truth for details.
+                    // /debug context — dev-only dry run. Projects the *wire*
+                    // body of the next request (the minimal shape the provider
+                    // serializes) to disk, with a simulated `This is a test.`
+                    // probe user message appended so the snapshot reflects
+                    // "what the LLM context would look like if the user sent
+                    // this now". Out-of-band fields (nested envoy children,
+                    // envoy_meta, attribution, origin, hidden) are stripped via
+                    // `Message::to_wire` — the dump shows what the model
+                    // actually sees, not the internal `Message` struct that
+                    // also carries durable-session sidecars. NO provider call
+                    // is made; nothing is mutated. Reported to the transcript
+                    // as a single summary line — the on-disk JSON is the source
+                    // of truth for details.
                     let messages = {
                         let mut snapshot = history.lock().await.clone();
+                        // Append the probe BEFORE prepare so it participates in
+                        // implicit-skill injection and lands as the final wire
+                        // user message the provider would receive.
+                        snapshot.push(Message::new(neenee_core::Role::User, "This is a test."));
                         agent.prepare_turn_messages_debug(&mut snapshot);
+                        // Project to the wire form: this is what the provider
+                        // request body would contain (no children / sidecars).
                         snapshot
+                            .into_iter()
+                            .map(|m| m.to_wire())
+                            .collect::<Vec<_>>()
                     };
                     let provider_id = agent.provider.provider_id();
                     let model_name = agent.provider.model();
@@ -1150,9 +1164,9 @@ pub async fn dispatch(
                     let _ = resp_tx.send(turn(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Context snapshot (dry run) — {provider_id}/{model_name}: \
-                             ~{tokens} tokens {window_str}, {} message(s), {n_tools} tool(s). \
-                             Full JSON: {file_path}",
+                            "Context snapshot (dry run, wire body, probe \"This is a test.\") — \
+                             {provider_id}/{model_name}: ~{tokens} tokens {window_str}, {} \
+                             message(s), {n_tools} tool(s). Full JSON: {file_path}",
                             messages.len(),
                         )),
                     ));

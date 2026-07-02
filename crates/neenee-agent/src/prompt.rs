@@ -141,6 +141,35 @@ impl PromptSection for ModelGuidance {
     }
 }
 
+/// Provider/protocol-specific guidance. Concrete SDK providers expose narrow
+/// facts about their wire projection; the prompt registry owns rendering them.
+struct ProviderGuidance;
+
+impl PromptSection for ProviderGuidance {
+    fn id(&self) -> &'static str {
+        "system.provider_guidance"
+    }
+    fn channel(&self) -> PromptChannel {
+        PromptChannel::System
+    }
+    fn kind(&self) -> InjectionKind {
+        InjectionKind::SystemPrompt
+    }
+    fn rank(&self) -> u32 {
+        27
+    }
+    fn is_active(&self, ctx: &PromptContext) -> bool {
+        !ctx.provider_guidance.is_empty()
+    }
+    fn render(&self, ctx: &PromptContext) -> Option<String> {
+        if ctx.provider_guidance.is_empty() {
+            None
+        } else {
+            Some(format!("\n{}", ctx.provider_guidance))
+        }
+    }
+}
+
 /// Task-tracking guidance for the `todo` / `todo_update` tools.
 struct TodoGuidance;
 
@@ -303,6 +332,47 @@ impl PromptSection for DelegationGuidance {
     }
 }
 
+
+/// Guidance for creating and modifying files with `write_file` / `edit_file`.
+/// Active only when a file-editing tool is admitted this turn, so a read-only
+/// or tool-less agent is unaffected. Mirrors [`AskUserGuidance`] /
+/// [`DelegationGuidance`]: a behavioral nudge that names the dedicated file
+/// tools and steers the model away from editing source files through the
+/// shell. Leading `\n` separates it from the paragraphs above.
+struct FileEditingGuidance;
+
+const FILE_EDITING: &str = "\nYou can create and modify files directly. Use the `write_file` tool to create a \
+                           new file or overwrite an existing one in full, and the `edit_file` tool to make a \
+                           targeted change — replacing one unique block of text — inside an existing file. \
+                           Do NOT edit source files through the shell (sed, echo >, printf >, cat >>, tee, \
+                           perl -i, or similar): the dedicated tools are atomic, diff-reviewable, and never \
+                           leave a half-written file if a turn is interrupted. Prefer `edit_file` over \
+                           rewriting a whole file with `write_file` when only part of it changes; reserve \
+                           `write_file` for creating a file or replacing its entire contents.";
+
+impl PromptSection for FileEditingGuidance {
+    fn id(&self) -> &'static str {
+        "system.file_editing_guidance"
+    }
+    fn channel(&self) -> PromptChannel {
+        PromptChannel::System
+    }
+    fn kind(&self) -> InjectionKind {
+        InjectionKind::SystemPrompt
+    }
+    fn rank(&self) -> u32 {
+        56
+    }
+    fn is_active(&self, ctx: &PromptContext) -> bool {
+        ctx.tool_names
+            .iter()
+            .any(|name| name == "write_file" || name == "edit_file")
+    }
+    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+        Some(String::from(FILE_EDITING))
+    }
+}
+
 /// Build the registry with the default system-channel sections, in rank
 /// order. Called once from [`Agent::new`]; an embedding may add more sections
 /// (or reorder / disable these) afterwards via the registry handle.
@@ -317,11 +387,13 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
     registry.register(ConcisenessGuidance);
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
+    registry.register(ProviderGuidance);
     registry.register(TodoGuidance);
     registry.register(PersistenceGuidance);
     registry.register(PursuitObjective);
     registry.register(AskUserGuidance);
     registry.register(DelegationGuidance);
+    registry.register(FileEditingGuidance);
     registry
 }
 
@@ -462,12 +534,14 @@ impl Agent {
             .collect::<Vec<_>>()
             .join("\n");
         let model_guidance = neenee_core::resolve_model(&self.provider.model()).model_guidance;
+        let provider_guidance = self.provider.prompt_hints().system_guidance;
         PromptContext {
             identity_preamble: self.identity.preamble(),
             pursuit: self.get_pursuit(),
             tool_names,
             last_visible_user_text,
             model_guidance,
+            provider_guidance,
         }
     }
 

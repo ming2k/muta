@@ -8,7 +8,9 @@
 //! session, and `r` reconnects it. Data comes from the session-context
 //! snapshot's `mcp` pane (the same snapshot `/session` and `/tools` use).
 
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};

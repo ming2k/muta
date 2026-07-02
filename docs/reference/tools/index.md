@@ -40,12 +40,11 @@ own the three phases directly. See [pursuits](pursuits.md) and ADR-0031.
 | `search_history` | `Read` | `*` | [skills](skills.md) |
 | `use_skill` | `Read` | `*` | [skills](skills.md) |
 | `list_skills` | `Read` | `*` | [skills](skills.md) |
-| `init_config` | `Write` | `path` argument or `.` | [projects](projects.md) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |
 
-`permission_scope` defaults to `"*"`. Only `write_file`, `edit_file`, `bash`,
-and `init_config` override it; their scope string is what a cached `Always`
-rule matches against.
+`permission_scope` defaults to `"*"`. Only `write_file`, `edit_file`, and
+`bash` override it; their scope string is what a cached `Always` rule matches
+against.
 
 Parameters are exposed to the model as JSON Schema via
 `Tool::to_openai_function()` (`crates/neenee-core/src/capability.rs`), which

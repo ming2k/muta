@@ -7,7 +7,9 @@
 //! This replaces the Skills tab that previously lived inside the `/session`
 //! modal, giving skills their own dedicated surface.
 
-use neenee_tui::{Frame, {Line, Span}, Style};
+use neenee_tui::{
+    Frame, Style, {Line, Span},
+};
 
 use super::common::{placeholder, selectable_row};
 use crate::modal::Modal;

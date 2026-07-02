@@ -494,6 +494,8 @@ pub struct App {
     pub custom_models: Vec<String>,
     /// Base URL placeholder for the active template (the expected endpoint shape).
     pub custom_url_hint: String,
+    /// Template-specific user agent carried into newly-created channels.
+    pub custom_user_agent: Option<String>,
     /// Highlight index into the live suggestion list for the provider editor's
     /// Model **filter** field (type to filter, `↑/↓` to move, committed live).
     pub custom_suggest_index: usize,
@@ -1155,9 +1157,13 @@ impl App {
         self.custom_protocol_wire = template.protocol.to_string();
         self.custom_models = template.models.iter().map(|m| m.to_string()).collect();
         self.custom_url_hint = template.url_hint.to_string();
+        self.custom_user_agent = template.user_agent.map(str::to_string);
         self.custom_suggest_index = 0;
         self.custom_name.clear();
-        self.custom_base_url.clear();
+        // A relay-specific template (e.g. Antigravity) pre-fills its concrete
+        // endpoint so the user only types a name and token; the generic
+        // templates leave the field empty (their `url_hint` is a placeholder).
+        self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
         // Default the (optional) Model field to the first candidate so the
         // OpenAI-compatible template submits a usable model even if left untouched.
@@ -1189,6 +1195,7 @@ impl App {
         self.custom_protocol_wire = protocol;
         self.custom_models.clear();
         self.custom_url_hint.clear();
+        self.custom_user_agent = None;
         self.custom_suggest_index = 0;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;

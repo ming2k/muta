@@ -1,6 +1,8 @@
 //! Help / keybindings modal.
 
-use neenee_tui::{Frame, Modifier, Span, {Line, Style}};
+use neenee_tui::{
+    Frame, Modifier, Span, {Line, Style},
+};
 
 use crate::modal::Modal;
 use crate::render::Theme;

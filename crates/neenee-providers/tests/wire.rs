@@ -322,7 +322,7 @@ async fn anthropic_chat_assembles_text_thinking_and_tool_use() {
         .create_async()
         .await;
 
-    let provider = AnthropicMessagesProvider::with_user_agent(
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
         "test-key".to_string(),
         "minimax-m3".to_string(),
         &url,
@@ -369,7 +369,7 @@ async fn anthropic_stream_parses_tool_use_block_and_argument_fragments() {
         .create_async()
         .await;
 
-    let provider = AnthropicMessagesProvider::with_user_agent(
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
         "k".to_string(),
         "minimax-m3".to_string(),
         &url,
@@ -415,7 +415,7 @@ async fn anthropic_stream_surfaces_in_band_error_event() {
         .create_async()
         .await;
 
-    let provider = AnthropicMessagesProvider::with_user_agent(
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
         "k".to_string(),
         "minimax-m3".to_string(),
         &url,

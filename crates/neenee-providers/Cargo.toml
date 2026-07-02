@@ -7,14 +7,12 @@ license = "MIT"
 
 [dependencies]
 neenee-core = { path = "../neenee-core" }
+neenee-ai-sdk-core = { path = "../neenee-ai-sdk-core" }
+neenee-ai-sdk-openai = { path = "../neenee-ai-sdk-openai" }
+neenee-ai-sdk-anthropic = { path = "../neenee-ai-sdk-anthropic" }
+neenee-ai-sdk-google = { path = "../neenee-ai-sdk-google" }
 async-trait = { workspace = true }
 futures = { workspace = true }
-reqwest = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-uuid = { workspace = true }
-httpdate = { workspace = true }
 
 [dev-dependencies]
 # `wire` integration test exercises the full HTTP → SSE → parse path against a
@@ -22,6 +20,7 @@ httpdate = { workspace = true }
 # only call pure parser functions) cannot reach.
 mockito = "1"
 tokio = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
