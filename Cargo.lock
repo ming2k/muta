@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-agent"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-anthropic"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-core"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "futures",
  "httpdate",
@@ -1590,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-google"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1603,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-openai"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-code"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-core"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-providers"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1684,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-quant"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-quant-gui"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "iris",
  "neenee-core",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-server"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-store"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1760,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tools"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tui"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "bitflags",
  "crossterm",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tui-view"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "insta",
  "neenee-core",

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-03
+
 ### Added
 
 - **sub2api usage guide.** Added a how-to for configuring OpenAI, Anthropic,
@@ -1055,7 +1057,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/ming2k/neenee/releases/tag/v0.16.0
 [0.15.0]: https://github.com/ming2k/neenee/releases/tag/v0.15.0
 [0.14.3]: https://github.com/ming2k/neenee/releases/tag/v0.14.3
 [0.14.2]: https://github.com/ming2k/neenee/releases/tag/v0.14.2
