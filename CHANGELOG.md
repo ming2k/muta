@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **sub2api usage guide.** Added a how-to for configuring OpenAI, Anthropic,
+  and Gemini-style sub2api relays, including the exact endpoint paths neenee
+  expects.
+
+### Changed
+
+- **OpenAI sub2api provider template.** The template now seeds OpenAI text
+  models directly instead of opening on a generic model-id field, and user-facing
+  provider-editor copy uses "OpenAI" rather than "OpenAI-compatible".
+
+- **OpenAI GPT effort controls.** GPT reasoning models now expose per-model
+  effort controls in the TUI, and OpenAI chat-completions requests send
+  `reasoning_effort` when a model-specific effort is configured.
+
 ## [0.15.0] - 2026-07-03
 
 ### Added

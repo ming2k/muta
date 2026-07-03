@@ -183,12 +183,12 @@ pub struct UserChannelConfig {
     /// `User-Agent` header (OpenAI-compatible only).
     #[serde(default)]
     pub user_agent: Option<String>,
-    /// Reasoning `effort` for an Anthropic-protocol channel — one of
-    /// `"low"`/`"medium"`/`"high"`/`"xhigh"`/`"max"` — clamped at request time
-    /// to the resolved model's supported levels. Setting this (or `thinking`)
-    /// opts the model in to reasoning: thinking defaults on unless `thinking =
-    /// false`. Left unset, the model does not reason (ADR-0046). Ignored for
-    /// non-Anthropic transports.
+    /// Reasoning `effort` for an OpenAI or Anthropic channel — one of
+    /// `"none"`/`"minimal"`/`"low"`/`"medium"`/`"high"`/`"xhigh"`/`"max"` —
+    /// clamped at request time to the resolved model's supported levels.
+    /// On Anthropic, setting this (or `thinking`) opts the model in to
+    /// reasoning: thinking defaults on unless `thinking = false`. Left unset,
+    /// Anthropic does not reason (ADR-0046). Ignored for Gemini transports.
     #[serde(default)]
     pub effort: Option<String>,
     /// Whether extended thinking is on (`true`) or off (`false`) for this
@@ -930,7 +930,7 @@ mod tests {
 
         let mut cfg = Config {
             openai_api_key: Some("sk-openai".to_string()),
-            anthropic_base_url: Some("https://ai.hihusky.com/v1/messages".to_string()),
+            anthropic_base_url: Some("https://relay.example.com/v1/messages".to_string()),
             gemini_base_url: Some("https://gemini-relay.example.com/v1beta".to_string()),
             ..Default::default()
         };
@@ -961,7 +961,7 @@ mod tests {
         assert!(on_disk.contains("my-relay"), "provider definition dropped");
         // Non-secret routing info survives redaction.
         assert!(
-            on_disk.contains("https://ai.hihusky.com/v1/messages"),
+            on_disk.contains("https://relay.example.com/v1/messages"),
             "anthropic_base_url (endpoint, not a secret) was redacted"
         );
         assert!(

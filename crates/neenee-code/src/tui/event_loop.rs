@@ -929,12 +929,38 @@ pub(super) async fn run_app_loop(
                 // The permission sheet takes over the hint line as well as the
                 // input box, so suppress the hint bar while it is open.
                 if !chrome_hidden && hint_rect.height > 0 && app.active_modal != Modal::Permission {
+                    // Resolve the active model's effective reasoning effort for
+                    // the hint bar's `◆ {effort}` tag. Reads the same per-model
+                    // channel info the `/provider` picker uses
+                    // (`ProviderModelInfo { effort, thinking }`), then applies
+                    // the ADR-0046 per-protocol gating: Anthropic effort shows
+                    // only while thinking is opted in; OpenAI effort (a
+                    // standalone knob with no separate thinking field) shows
+                    // whenever the model exposes one; Gemini never. `None`
+                    // otherwise — non-reasoning models keep the bar quiet.
+                    let hint_reasoning = app
+                        .provider_picker
+                        .rows
+                        .iter()
+                        .find(|row| row.id == app.current_provider)
+                        .and_then(|row| {
+                            row.model_info.iter().find(|m| m.model == app.current_model)
+                        })
+                        .and_then(|m| {
+                            let show = match m.protocol.as_str() {
+                                "anthropic" => m.thinking == Some(true),
+                                "openai" => m.effort.is_some(),
+                                _ => false,
+                            };
+                            if show { m.effort.as_deref() } else { None }
+                        });
                     app.hint_context_rect = render::draw_hint_bar(
                         f,
                         hint_rect,
                         render::HintBarView {
                             current_model: &app.current_model,
                             messages: view_messages,
+                            reasoning_effort: hint_reasoning,
                             shell_active: app.focused_target.is_none()
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
@@ -1188,7 +1214,8 @@ pub(super) async fn run_app_loop(
                             .then_some(app.editor_effort.as_str());
                         let thinking = app
                             .editor_model_settings_only
-                            .then_some(app.editor_thinking);
+                            .then_some(app.editor_thinking)
+                            .filter(|_| app.editor_thinking_available);
                         Some(render::draw_model_editor(
                             f,
                             &title,
@@ -2129,7 +2156,7 @@ pub(super) async fn run_app_loop(
                         } else {
                             // Create mode: the model list comes from the template's
                             // seeded models, or the single typed Model field when
-                            // the template exposes one (OpenAI-compatible).
+                            // the template exposes one.
                             // ADR-0046: new channels start with thinking off;
                             // reasoning is opted in per model from stage 2.
                             let models: Vec<String> =
@@ -2204,13 +2231,11 @@ pub(super) async fn run_app_loop(
                         && !app.picker_on_add_model_row()
                     {
                         // Stage-2, on a model row. The per-model settings popup
-                        // opens for any Anthropic-protocol model — user-defined
-                        // OR built-in (ADR-0045: effort/thinking are model-level,
-                        // so a built-in Claude model is edited here too, not at
-                        // the provider level).
+                        // opens for any model that exposes effort and/or a
+                        // separate thinking switch.
                         let rows = app.provider_models_filtered();
                         if let Some(row) = rows.get(app.modal_index).or_else(|| rows.first())
-                            && row.protocol == "anthropic"
+                            && (row.effort.is_some() || row.thinking.is_some())
                         {
                             let is_builtin = !app.picker_provider_is_custom();
                             app.editor_target = Some(row.provider_id.clone());
@@ -2219,12 +2244,11 @@ pub(super) async fn run_app_loop(
                             app.editor_target_is_builtin = is_builtin;
                             app.editor_key.clear();
                             app.editor_effort =
-                                row.effort.clone().unwrap_or_else(|| "high".to_string());
-                            // ADR-0046: reasoning is opt-in. The model row
-                            // carries its live thinking state (off unless opted
-                            // in); default to off for an unknown row so the
-                            // editor reflects "no reasoning" until the user
-                            // turns it on here.
+                                row.effort.clone().unwrap_or_else(|| "medium".to_string());
+                            app.editor_thinking_available = row.thinking.is_some();
+                            // ADR-0046: reasoning is opt-in where a separate
+                            // thinking switch exists. OpenAI GPT effort has no
+                            // thinking switch, so this value is ignored there.
                             app.editor_thinking = row.thinking.unwrap_or(false);
                             app.editor_field = 1;
                             app.input = app.editor_effort.clone();
@@ -2252,6 +2276,7 @@ pub(super) async fn run_app_loop(
                                 app.editor_model_settings_only = false;
                                 app.editor_target_is_builtin = false;
                                 app.editor_effort = "high".to_string();
+                                app.editor_thinking_available = false;
                                 app.editor_thinking = true;
                                 app.input.clear();
                                 app.set_cursor(0);
@@ -2284,13 +2309,13 @@ pub(super) async fn run_app_loop(
                     // line while focused.
                     if app.editor_model_settings_only {
                         match app.editor_field {
-                            1 => {
+                            1 if app.editor_thinking_available => {
                                 app.editor_effort = app.input.clone();
                                 app.input.clear();
                                 app.set_cursor(0);
                                 app.editor_field = 2;
                             }
-                            2 => {
+                            2 if app.editor_thinking_available => {
                                 app.input = app.editor_effort.clone();
                                 app.set_cursor_end();
                                 app.editor_field = 1;
@@ -2304,25 +2329,40 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ModelEditorEffortCycle { delta } => {
-                    // Cycle the effort selector through the five wire levels,
-                    // wrapping at both ends. Only meaningful for the Anthropic
-                    // provider (the row isn't shown otherwise); mirrored into
-                    // app.input so the renderer shows the live value.
-                    const LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-                    let cur = LEVELS
+                    // Cycle the effort selector through the selected model's
+                    // supported wire levels, wrapping at both ends. Mirrored
+                    // into app.input so the renderer shows the live value.
+                    let model = neenee_core::resolve_model(&app.editor_model);
+                    let levels: Vec<&str> = model
+                        .effort_levels
+                        .iter()
+                        .map(|level| level.as_str())
+                        .collect();
+                    if levels.is_empty() {
+                        continue;
+                    }
+                    let cur = levels
                         .iter()
                         .position(|l| *l == app.editor_effort)
-                        .unwrap_or(2) as isize;
-                    let n = LEVELS.len() as isize;
+                        .unwrap_or_else(|| {
+                            levels
+                                .iter()
+                                .position(|l| *l == "medium")
+                                .or_else(|| levels.iter().position(|l| *l == "high"))
+                                .unwrap_or(0)
+                        }) as isize;
+                    let n = levels.len() as isize;
                     let next = ((cur + delta as isize).rem_euclid(n)) as usize;
-                    app.editor_effort = LEVELS[next].to_string();
+                    app.editor_effort = levels[next].to_string();
                     app.input = app.editor_effort.clone();
                     app.set_cursor_end();
                 }
                 input::InputAction::ModelEditorThinkingToggle => {
                     // Toggle extended thinking on/off (Space). Orthogonal to
                     // effort — the two knobs are independent on the wire.
-                    app.editor_thinking = !app.editor_thinking;
+                    if app.editor_thinking_available {
+                        app.editor_thinking = !app.editor_thinking;
+                    }
                 }
                 input::InputAction::SubmitModelEditor => {
                     if app.active_modal == Modal::ModelEditor
@@ -2354,14 +2394,18 @@ pub(super) async fn run_app_loop(
                                 let _ = app.tx.send(AgentRequest::EditModelReasoning {
                                     model,
                                     effort: Some(effort),
-                                    thinking: Some(app.editor_thinking),
+                                    thinking: app
+                                        .editor_thinking_available
+                                        .then_some(app.editor_thinking),
                                 });
                             } else {
                                 let _ = app.tx.send(AgentRequest::EditProviderModel {
                                     provider_id: id,
                                     model,
                                     effort: Some(effort),
-                                    thinking: Some(app.editor_thinking),
+                                    thinking: app
+                                        .editor_thinking_available
+                                        .then_some(app.editor_thinking),
                                 });
                             }
                             app.input.clear();
@@ -2369,6 +2413,7 @@ pub(super) async fn run_app_loop(
                             app.editor_target = None;
                             app.editor_model_settings_only = false;
                             app.editor_target_is_builtin = false;
+                            app.editor_thinking_available = false;
                             app.model_search = false;
                             app.model_modal_follow = true;
                             app.active_modal = Modal::Provider;

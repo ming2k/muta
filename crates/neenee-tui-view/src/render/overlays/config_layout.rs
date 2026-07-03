@@ -15,12 +15,11 @@ use neenee_tui::{
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
+use crate::render::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::render::components::scroll::ScrollBody;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::layout::Strategy;
-use crate::render::primitives::{
-    FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe, contrast_fg,
-};
+use crate::render::primitives::{FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe};
 
 /// One selectable layout strategy + its human description.
 struct LayoutOption {
@@ -96,17 +95,7 @@ pub fn draw_config_layout_modal(
     for (i, opt) in options().iter().enumerate() {
         let is_sel = i == modal_index;
         let is_active = opt.config_value == current_value;
-        let bg = if is_sel { theme.brand() } else { theme.panel() };
-        let fg = if is_sel {
-            contrast_fg(theme.brand())
-        } else {
-            theme.fg()
-        };
-        let dim = if is_sel {
-            contrast_fg(theme.brand())
-        } else {
-            theme.muted()
-        };
+        let s: ChoiceStyle = choice_style(ChoiceTone::Filled, is_sel, theme);
         let glyph = if is_sel { "▸" } else { " " };
         let mark = if is_active { "● " } else { "○ " };
 
@@ -127,15 +116,18 @@ pub fn draw_config_layout_modal(
             selected_line = Some(body.len());
         }
         body.push(Line::from(vec![
-            Span::styled(" ".repeat(GUTTER_W), Style::default().bg(bg)),
-            Span::styled(format!("{glyph} "), Style::default().bg(bg).fg(fg)),
+            Span::styled(" ".repeat(GUTTER_W), Style::default().bg(s.bg)),
+            Span::styled(format!("{glyph} "), Style::default().bg(s.bg).fg(s.fg)),
             Span::styled(
                 format!("{:<w$}", opt.label, w = label_w),
-                Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .bg(s.bg)
+                    .fg(s.fg)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(mark, Style::default().bg(bg).fg(dim)),
-            Span::styled(desc_truncated, Style::default().bg(bg).fg(dim)),
-            Span::styled(" ".repeat(pad), Style::default().bg(bg)),
+            Span::styled(mark, Style::default().bg(s.bg).fg(s.dim)),
+            Span::styled(desc_truncated, Style::default().bg(s.bg).fg(s.dim)),
+            Span::styled(" ".repeat(pad), Style::default().bg(s.bg)),
         ]));
     }
 

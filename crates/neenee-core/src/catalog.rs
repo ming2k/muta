@@ -25,10 +25,13 @@
 #[derive(Debug, Clone)]
 pub enum Transport {
     /// OpenAI-compatible chat-completions endpoint at `base_url`. The
-    /// `user_agent` is sent verbatim on every request.
+    /// `user_agent` is sent verbatim on every request. `effort`, when set,
+    /// becomes the OpenAI `reasoning_effort` field for models that expose that
+    /// throttle.
     OpenAiCompat {
         base_url: String,
         user_agent: String,
+        effort: Option<crate::Effort>,
     },
     /// Anthropic-compatible `/messages` endpoint at `base_url` (the full URL).
     /// Auth uses the `x-api-key` header plus `anthropic-version`. Models served
@@ -217,6 +220,7 @@ mod tests {
                 transport: Transport::OpenAiCompat {
                     base_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
+                    effort: None,
                 },
                 api_key: "k".to_string(),
                 model: "deepseek-v4-flash".to_string(),
@@ -246,6 +250,7 @@ mod tests {
             transport: Transport::OpenAiCompat {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
+                effort: None,
             },
             api_key: "   ".to_string(),
             model: "gpt-4o".to_string(),
@@ -297,6 +302,7 @@ mod tests {
                     transport: Transport::OpenAiCompat {
                         base_url: "https://opencode.ai/zen/go/v1/chat/completions".to_string(),
                         user_agent: "agent".to_string(),
+                        effort: None,
                     },
                     api_key: "k".to_string(),
                     model: "glm-5.2".to_string(),
@@ -361,6 +367,7 @@ mod tests {
                 transport: Transport::OpenAiCompat {
                     base_url: "https://api.z.ai/api/coding/paas/v4/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
+                    effort: None,
                 },
                 api_key: "k".to_string(),
                 model: "glm-5.2".to_string(),

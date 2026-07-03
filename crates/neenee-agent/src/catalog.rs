@@ -94,6 +94,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                 .user_agent
                 .clone()
                 .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+            effort: uc.effort.as_deref().and_then(Effort::parse),
         },
     };
     Channel {
@@ -587,13 +588,26 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 last_used_ms: None,
             }
         }
-        Transport::OpenAiCompat { .. } => ProviderModelInfo {
-            model: channel.model.clone(),
-            protocol: "openai".to_string(),
-            effort: None,
-            thinking: None,
-            last_used_ms: None,
-        },
+        Transport::OpenAiCompat { effort, .. } => {
+            let model = neenee_core::model::resolve(&channel.model);
+            let effective = if model.effort_levels.is_empty() {
+                None
+            } else {
+                let default = if model.family == "gpt" {
+                    Effort::Medium
+                } else {
+                    Effort::High
+                };
+                Some((*effort).unwrap_or(default).as_str().to_string())
+            };
+            ProviderModelInfo {
+                model: channel.model.clone(),
+                protocol: "openai".to_string(),
+                effort: effective,
+                thinking: None,
+                last_used_ms: None,
+            }
+        }
         Transport::GeminiNative { .. } => ProviderModelInfo {
             model: channel.model.clone(),
             protocol: "gemini".to_string(),
@@ -753,13 +767,13 @@ mod tests {
             std::env::remove_var("ANTHROPIC_BASE_URL");
         }
         let mut config = bare_config();
-        config.anthropic_base_url = Some("https://ai.hihusky.com/v1/messages".to_string());
+        config.anthropic_base_url = Some("https://relay.example.com/v1/messages".to_string());
         let entries = build_catalog(&config);
         let entry = entries.iter().find(|e| e.id == "anthropic").unwrap();
         let channel = entry.default_channel().expect("default channel");
         match &channel.transport {
             Transport::Anthropic { base_url, .. } => {
-                assert_eq!(base_url, "https://ai.hihusky.com/v1/messages");
+                assert_eq!(base_url, "https://relay.example.com/v1/messages");
             }
             other => panic!("expected Anthropic transport, got {other:?}"),
         }
@@ -771,13 +785,13 @@ mod tests {
         config
             .providers
             .push(neenee_store::config::UserProviderConfig {
-                id: "hihu".to_string(),
-                name: Some("hihusky claude".to_string()),
+                id: "example".to_string(),
+                name: Some("Example Claude".to_string()),
                 channels: vec![neenee_store::config::UserChannelConfig {
                     label: "claude-sonnet-4-6".to_string(),
                     transport: neenee_store::config::UserTransport::Anthropic,
                     model: Some("claude-sonnet-4-6".to_string()),
-                    base_url: Some("https://ai.hihusky.com/v1/messages".to_string()),
+                    base_url: Some("https://relay.example.com/v1/messages".to_string()),
                     effort: Some("high".to_string()),
                     thinking: Some(true),
                     ..Default::default()
@@ -786,7 +800,7 @@ mod tests {
             });
 
         let picker = build_picker_state(&config, &ProviderUsage::default());
-        let row = picker.rows.iter().find(|row| row.id == "hihu").unwrap();
+        let row = picker.rows.iter().find(|row| row.id == "example").unwrap();
         let info = row
             .model_info
             .iter()
@@ -1021,6 +1035,7 @@ mod tests {
             Transport::OpenAiCompat {
                 base_url,
                 user_agent,
+                ..
             } => (base_url.clone(), user_agent.clone()),
             other => panic!("kimi-code must be OpenAiCompat, got {other:?}"),
         };
@@ -1178,6 +1193,59 @@ mod tests {
         assert_eq!(relay.api_key, "inline-key");
         unsafe {
             std::env::remove_var("GEMINI_STUDIO_KEY");
+        }
+    }
+
+    #[test]
+    fn openai_reasoning_effort_surfaces_in_picker_and_transport() {
+        let mut config = bare_config();
+        config.providers = vec![UserProviderConfig {
+            id: "openai-relay".to_string(),
+            name: Some("OpenAI Relay".to_string()),
+            channels: vec![
+                UserChannelConfig {
+                    label: "default".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key: Some("k".to_string()),
+                    model: Some("gpt-5.5".to_string()),
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "xhigh".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key: Some("k".to_string()),
+                    model: Some("gpt-5.2".to_string()),
+                    effort: Some("xhigh".to_string()),
+                    ..Default::default()
+                },
+            ],
+            default_channel: 0,
+        }];
+
+        let picker = build_picker_state(&config, &ProviderUsage::default());
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.id == "openai-relay")
+            .expect("openai relay row");
+        let gpt55 = row
+            .model_info
+            .iter()
+            .find(|info| info.model == "gpt-5.5")
+            .expect("gpt-5.5 info");
+        assert_eq!(gpt55.protocol, "openai");
+        assert_eq!(gpt55.effort.as_deref(), Some("medium"));
+        assert_eq!(gpt55.thinking, None);
+
+        let entries = build_catalog(&config);
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == "openai-relay")
+            .expect("openai relay entry");
+        let gpt52 = entry.channel_for_model("gpt-5.2").expect("gpt-5.2");
+        match &gpt52.transport {
+            Transport::OpenAiCompat { effort, .. } => assert_eq!(*effort, Some(Effort::Xhigh)),
+            other => panic!("expected OpenAiCompat, got {other:?}"),
         }
     }
 

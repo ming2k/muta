@@ -423,12 +423,14 @@ impl RowGlyphs {
         // Selection is a text "ring", not a background fill: the selected row
         // borrows the brand tone (the same color every interactive affordance
         // uses) so it lifts off the panel without darkening its surroundings.
-        let select_fg = if is_selected {
-            theme.brand()
-        } else {
-            theme.muted()
-        };
-        let dim_style = Style::default().fg(select_fg);
+        // Colors come from the single Flat-tone token so this surface can never
+        // drift from the rest of the TUI's selection language.
+        let s = crate::render::components::options::choice_style(
+            crate::render::components::options::ChoiceTone::Flat,
+            is_selected,
+            theme,
+        );
+        let dim_style = Style::default().fg(s.dim);
         let star_style = if is_selected {
             Style::default().fg(theme.brand())
         } else if favorite {
@@ -439,12 +441,7 @@ impl RowGlyphs {
         // The name: bold always; brand-colored when selected; underlined when
         // it is the current provider/model (the "live" cue), so current and
         // selected are independently readable.
-        let mut name_style = if is_selected {
-            Style::default().fg(theme.brand())
-        } else {
-            Style::default().fg(theme.fg())
-        };
-        name_style = name_style.add_modifier(Modifier::BOLD);
+        let mut name_style = Style::default().fg(s.fg).add_modifier(Modifier::BOLD);
         if is_current {
             name_style = name_style.add_modifier(Modifier::UNDERLINED);
         }
@@ -479,11 +476,11 @@ pub fn draw_model_editor(
     // thinking focused. Determines caret row and which field's live text is in
     // `input`.
     focused_field: u8,
-    // `effort`: when `Some`, render an effort-selector row (Anthropic only)
-    // showing the current level; cycled with ←/→ by the caller. `None` hides.
+    // `effort`: when `Some`, render an effort-selector row showing the current
+    // level; cycled with ←/→ by the caller. `None` hides.
     effort: Option<&str>,
-    // `thinking`: when `Some`, render an extended-thinking on/off row
-    // (Anthropic only) showing on/off; toggled with Space by the caller.
+    // `thinking`: when `Some`, render an extended-thinking on/off row showing
+    // on/off; toggled with Space by the caller.
     // `None` hides. Orthogonal to effort.
     thinking: Option<bool>,
     theme: &Theme,
@@ -537,8 +534,8 @@ pub fn draw_model_editor(
         api_key_off = key_off;
     }
 
-    // Row 1 (optional): reasoning effort, Anthropic only. The value is cycled
-    // with ←/→ (not typed), so the live text is the current selection.
+    // Row 1 (optional): reasoning effort. The value is cycled with ←/→ (not
+    // typed), so the live text is the current selection.
     if let Some(effort) = effort {
         let value_style = Style::default()
             .fg(if focused_field == 1 {
@@ -561,8 +558,8 @@ pub fn draw_model_editor(
         ]));
     }
 
-    // Row 2 (optional): extended thinking on/off, Anthropic only. Toggled with
-    // Space (a non-text field, so no caret while focused). Orthogonal to effort.
+    // Row 2 (optional): extended thinking on/off. Toggled with Space (a
+    // non-text field, so no caret while focused). Orthogonal to effort.
     if let Some(on) = thinking {
         let value_style = Style::default()
             .fg(if focused_field == 2 {
@@ -656,15 +653,18 @@ fn suggestion_lines(suggestions: &[String], highlight: usize, theme: &Theme) -> 
         .skip(start)
         .take(MAX)
         .map(|(i, s)| {
+            let s_style = crate::render::components::options::choice_style(
+                crate::render::components::options::ChoiceTone::Flat,
+                i == highlight,
+                theme,
+            );
             let (marker, style) = if i == highlight {
                 (
                     " › ",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(s_style.fg).add_modifier(Modifier::BOLD),
                 )
             } else {
-                ("   ", Style::default().fg(theme.muted()))
+                ("   ", Style::default().fg(s_style.dim))
             };
             Line::from(Span::styled(format!("{marker}{s}"), style))
         })
@@ -765,7 +765,7 @@ pub fn draw_add_model_editor(
 }
 
 /// Draw the provider-template chooser: a short list of curated templates (Custom
-/// Anthropic relay / OpenAI-compatible / Gemini). Each row is a label + a muted
+/// Anthropic relay / OpenAI / Gemini). Each row is a label + a muted
 /// one-line description; `↑/↓` move the highlight and Enter opens the editor.
 /// `scroll` is read AND written back so the offset stays consistent with the
 /// clamped body height; the highlighted template is followed on-screen so
@@ -784,15 +784,18 @@ pub fn draw_provider_template_chooser(
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {
+        let s_style = crate::render::components::options::choice_style(
+            crate::render::components::options::ChoiceTone::Flat,
+            i == selected,
+            theme,
+        );
         let (marker, label_style) = if i == selected {
             (
                 " › ",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(s_style.fg).add_modifier(Modifier::BOLD),
             )
         } else {
-            ("   ", Style::default().fg(theme.fg()))
+            ("   ", Style::default().fg(s_style.fg))
         };
         body.push(Line::from(Span::styled(
             format!("{marker}{}", template.label),
@@ -800,7 +803,7 @@ pub fn draw_provider_template_chooser(
         )));
         body.push(Line::from(Span::styled(
             format!("     {}", template.description),
-            Style::default().fg(theme.muted()),
+            Style::default().fg(s_style.dim),
         )));
     }
 
@@ -863,8 +866,8 @@ pub struct CustomEditorView<'a> {
 }
 
 /// Draw the provider editor: a per-template form drawn from [`CustomEditorView::fields`]
-/// (Name / Base URL / Token, plus a type-to-filter Model field for the
-/// OpenAI-compatible template). Focusing the Model field renders a suggestion
+/// (Name / Base URL / Token, plus a type-to-filter Model field when a template
+/// opts in). Focusing the Model field renders a suggestion
 /// dropdown below the form; `↑/↓` move the highlight (committed live). The Token
 /// is masked unless focused. In edit mode the header reads `Edit · <name>`.
 pub fn draw_custom_provider_editor(

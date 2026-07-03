@@ -444,9 +444,9 @@ pub struct App {
     /// Provider id targeted by the unified key editor ([`Modal::ModelEditor`]).
     pub editor_target: Option<String>,
     /// Which editor field is focused. `0` = API key (text entry); `1` = effort
-    /// (←/→ cycling, Anthropic only); `2` = thinking (Space toggle, Anthropic
-    /// only). The effort/thinking rows are only shown for the Anthropic
-    /// provider, so `editor_field` is clamped to `0` otherwise.
+    /// (←/→ cycling); `2` = thinking (Space toggle, when available). The
+    /// effort/thinking rows are only shown for models that expose those controls,
+    /// so `editor_field` is clamped to `0` otherwise.
     pub editor_field: u8,
     /// API-key buffer for the editor (the input line is borrowed for the
     /// focused field).
@@ -455,8 +455,8 @@ pub struct App {
     /// from the stage-2 selection or the provider's default; not user-editable).
     pub editor_model: String,
     /// When true, [`Modal::ModelEditor`] edits the selected provider model's
-    /// channel settings only (currently Anthropic effort/thinking), not the
-    /// provider API key or active provider.
+    /// channel settings only (for example OpenAI effort or Anthropic
+    /// effort/thinking), not the provider API key or active provider.
     pub editor_model_settings_only: bool,
     /// When `editor_model_settings_only` is true, whether the edited model is
     /// **built-in** (served by a built-in provider like `anthropic`). A built-in
@@ -465,16 +465,17 @@ pub struct App {
     /// its channel via `EditProviderModel` (ADR-0045).
     pub editor_target_is_builtin: bool,
     /// Current reasoning-effort selection in the key editor, as a lowercase wire
-    /// string (`"low"`/`"medium"`/`"high"`/`"xhigh"`/`"max"`). Defaults to
-    /// `"high"` (the upstream wire default); cycled with ←/→. Only meaningful
-    /// when [`Self::editor_target`] is `"anthropic"`. Sent as `SwitchProvider`'s
-    /// `effort` on submit.
+    /// string. Defaults to `"high"`; cycled with ←/→ over the selected model's
+    /// supported levels.
     pub editor_effort: String,
+    /// Whether the selected model exposes a separate thinking on/off switch.
+    /// OpenAI GPT effort has no separate thinking field, so this is false
+    /// there; Anthropic adaptive channels set it true.
+    pub editor_thinking_available: bool,
     /// Current extended-thinking on/off selection in the key editor. Defaults
     /// to `true` (adaptive thinking on — the recommended mode for Claude).
-    /// Toggled with Space; orthogonal to effort. Only meaningful when
-    /// [`Self::editor_target`] is `"anthropic"`. Sent as `SwitchProvider`'s
-    /// `thinking` on submit.
+    /// Toggled with Space when [`Self::editor_thinking_available`] is true;
+    /// orthogonal to effort.
     pub editor_thinking: bool,
     /// Focused field of the provider editor ([`Modal::CustomProvider`]) as an
     /// index into [`Self::custom_fields`] — the per-template visible field set
@@ -1167,7 +1168,7 @@ impl App {
         self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
         // Default the (optional) Model field to the first candidate so the
-        // OpenAI-compatible template submits a usable model even if left untouched.
+        // A template with a Model field submits a usable model even if left untouched.
         self.custom_model = self
             .custom_model_candidates()
             .first()

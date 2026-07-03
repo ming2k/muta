@@ -9,7 +9,9 @@ use neenee_core::{PermissionRequest, UserQuestionRequest};
 use crate::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::modal::Modal;
 use crate::render::Theme;
-use crate::render::components::options::QuestionOptionRow;
+use crate::render::components::options::{
+    ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled,
+};
 use crate::render::primitives::{
     FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame, panel_block, render_body,
     render_modal_footer,
@@ -279,41 +281,6 @@ fn record_question_hits(
     }
 }
 
-fn push_wrapped_styled(
-    lines: &mut Vec<Line>,
-    first_prefix: &str,
-    continuation_prefix: &str,
-    text: &str,
-    style: Style,
-    body_width: usize,
-) {
-    let first_width = first_prefix.width();
-    let continuation_width = continuation_prefix.width();
-    let wrap_width = body_width
-        .saturating_sub(first_width.max(continuation_width))
-        .max(1);
-    let wrapped = wrap_text(text, wrap_width);
-    if wrapped.is_empty() {
-        lines.push(Line::from(vec![Span::styled(
-            first_prefix.to_string(),
-            Style::default(),
-        )]));
-        return;
-    }
-
-    for (idx, wrapped_line) in wrapped.into_iter().enumerate() {
-        let prefix = if idx == 0 {
-            first_prefix
-        } else {
-            continuation_prefix
-        };
-        lines.push(Line::from(vec![
-            Span::styled(prefix.to_string(), Style::default()),
-            Span::styled(wrapped_line.text, style),
-        ]));
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn render_question_option(
     lines: &mut Vec<Line<'static>>,
@@ -326,12 +293,17 @@ fn render_question_option(
     body_width: usize,
     theme: &Theme,
 ) {
-    QuestionOptionRow {
+    ChoiceOptionRow {
         label,
         description,
         selected: is_selected,
         highlighted: is_highlighted,
-        multi_select,
+        tone: ChoiceTone::Flat,
+        marker: if multi_select {
+            ChoiceMarker::Checkbox
+        } else {
+            ChoiceMarker::None
+        },
     }
     .push_lines(lines, body_width, theme);
 }

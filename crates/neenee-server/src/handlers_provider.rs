@@ -365,12 +365,16 @@ pub async fn edit_model(
         return;
     };
 
-    if matches!(
-        channel.transport,
-        neenee_store::config::UserTransport::Anthropic
-    ) {
-        channel.effort = valid_effort;
-        channel.thinking = thinking;
+    match channel.transport {
+        neenee_store::config::UserTransport::Anthropic => {
+            channel.effort = valid_effort;
+            channel.thinking = thinking;
+        }
+        neenee_store::config::UserTransport::OpenAiCompat => {
+            channel.effort = valid_effort;
+            channel.thinking = None;
+        }
+        neenee_store::config::UserTransport::GeminiNative => {}
     }
 
     if let Err(error) = config.save() {

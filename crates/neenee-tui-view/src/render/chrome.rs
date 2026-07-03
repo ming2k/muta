@@ -392,6 +392,14 @@ pub fn draw_completion_menu(
 pub struct HintBarView<'a> {
     pub current_model: &'a str,
     pub messages: &'a [TranscriptMessage],
+    /// Effective reasoning effort of the active model, shown as a `◆ {effort}`
+    /// tag right after the model name — only when reasoning is actually in use
+    /// for this model. The caller resolves the value and applies the
+    /// per-protocol gating (Anthropic: shown only when thinking is opted in;
+    /// OpenAI: shown whenever the model exposes an effort knob; Gemini:
+    /// never), so this is `None` for models that are not reasoning. Mirrors
+    /// the `◆ think on · {effort}` tag the `/provider` picker shows on a row.
+    pub reasoning_effort: Option<&'a str>,
     /// True while the prompt is a `!`-prefixed shell command and no transcript
     /// step is focused. Renders a `[ SHELL ]` pill at the start of the bar in
     /// the warning tone so the user can tell at a glance the next Enter runs
@@ -423,6 +431,7 @@ pub fn draw_hint_bar(
     let HintBarView {
         current_model,
         messages,
+        reasoning_effort,
         shell_active,
         unattended,
     } = view;
@@ -514,6 +523,37 @@ pub fn draw_hint_bar(
             .add_modifier(Modifier::BOLD)
             .bg(bg),
     ));
+
+    // Reasoning-effort tag: `◆ high`. Optional — only present when the active
+    // model is actually reasoning (caller-resolved and protocol-gated). Sits
+    // right after the model name so it reads as an attribute of the model —
+    // "Claude Opus 4.8  ◆ high  12k (1%)" — mirroring the `◆` glyph the
+    // `/provider` picker uses for reasoning models. The context meter stays
+    // the last segment of the cluster, so the click-target rect math below is
+    // unaffected.
+    if let Some(effort) = reasoning_effort {
+        // `◆ {effort}` — the diamond marks a reasoning model, mirroring the
+        // glyph the `/provider` picker uses.
+        let tag_spans = [
+            Span::styled("◆", Style::default().fg(theme.info()).bg(bg)),
+            Span::styled(" ", Style::default().bg(bg)),
+            Span::styled(
+                effort.to_string(),
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD)
+                    .bg(bg),
+            ),
+        ];
+        let tag_width: usize = tag_spans.iter().map(|s| s.content.width()).sum();
+        right_spans.push(Span::styled(
+            " ".repeat(HINT_BAR_SEGMENT_GAP),
+            Style::default().bg(bg),
+        ));
+        right_width += HINT_BAR_SEGMENT_GAP;
+        right_spans.extend(tag_spans);
+        right_width += tag_width;
+    }
 
     // Context-usage segment: `89.2k (8%)`. Always shown when the model
     // reports a context window; the percentage takes the threshold color so
@@ -669,6 +709,7 @@ mod tests {
                 HintBarView {
                     current_model: "mock-model",
                     messages: &messages,
+                    reasoning_effort: None,
                     shell_active: false,
                     unattended: false,
                 },
@@ -689,6 +730,7 @@ mod tests {
                 let view = HintBarView {
                     current_model: "",
                     messages: &Vec::<TranscriptMessage>::new(),
+                    reasoning_effort: None,
                     shell_active,
                     unattended: false,
                 };
@@ -719,5 +761,43 @@ mod tests {
         // `!`-prefixed input → SHELL pill.
         assert_eq!(pill_text(&mut terminal, true), "[ SHELL ]");
         let _ = theme;
+    }
+
+    #[test]
+    fn hint_bar_reasoning_tag_shows_effort_when_set() {
+        // Render the full hint row for three effort states and read back the
+        // whole line: the `◆ {effort}` tag must appear right after the model
+        // name when reasoning is in use and be absent entirely otherwise.
+        fn row_text(effort: Option<&str>) -> String {
+            let mut terminal = neenee_tui::TestTerminal::new(80, 1);
+            terminal.draw(|f| {
+                draw_hint_bar(
+                    f,
+                    Rect::new(0, 0, 80, 1),
+                    HintBarView {
+                        current_model: "mock",
+                        messages: &Vec::<TranscriptMessage>::new(),
+                        reasoning_effort: effort,
+                        shell_active: false,
+                        unattended: false,
+                    },
+                    &Theme::default(),
+                );
+            });
+            let buf = terminal.buffer();
+            (0..buf.area().width as usize)
+                .map(|x| buf.content[x].symbol().to_string())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        }
+
+        // No reasoning → no diamond glyph anywhere on the row.
+        assert!(!row_text(None).contains('◆'));
+        // Reasoning on → `◆ high` appears after the model name.
+        let on = row_text(Some("high"));
+        assert!(on.contains("◆ high"), "missing ◆ high tag in: {on:?}");
+        // A different effort level renders its own value, not a hardcoded one.
+        assert!(row_text(Some("max")).contains("◆ max"));
     }
 }

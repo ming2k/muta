@@ -9,3 +9,4 @@ with the relevant reference material.
 | [How to add a provider](add-a-provider.md) | Wrap `OpenAiCompatProvider` or build a standalone adapter, register dispatch sites |
 | [How to ask the user a question during a task](ask-the-user.md) | Use `ask_user` to resolve ambiguity or collect preferences mid-task |
 | [How to enable the live quant broker](enable-live-quant-broker.md) | Route `neenee-quant` orders through a broker gateway with local risk checks |
+| [How to use sub2api relays](use-sub2api.md) | Configure OpenAI, Anthropic, and Gemini-compatible sub2api relays |

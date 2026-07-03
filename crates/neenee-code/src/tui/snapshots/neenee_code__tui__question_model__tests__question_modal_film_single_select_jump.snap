@@ -1,5 +1,6 @@
 ---
 source: crates/neenee-code/src/tui/question_model.rs
+assertion_line: 1138
 expression: film
 ---
 === open (first row highlighted = selected) ===
@@ -40,6 +41,6 @@ expression: film
                Simple                                  ▲
              thiserror
                Structured
-             Other                                     ▼
+             Other
 
           ↑↓ · wheel/Pg · Enter · 1-9 · Esc

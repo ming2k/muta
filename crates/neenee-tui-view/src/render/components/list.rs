@@ -5,34 +5,36 @@ use neenee_tui::{Color, Frame, Rect};
 use crate::modal::Modal;
 
 use super::super::Theme;
-use super::super::primitives::{SCROLL_EDGE_MARGIN, contrast_fg};
+use super::super::primitives::SCROLL_EDGE_MARGIN;
 use super::footer::FooterHint;
 use super::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
+use super::options::{ChoiceTone, choice_style};
 use super::scroll::ScrollBody;
 
+/// Row palette for a Filled-tone selectable row. A thin alias over the
+/// canonical [`crate::render::components::options::ChoiceStyle`] so the legacy
+/// `row_style()` call sites keep working while routing through one color rule.
 pub(in crate::render) struct RowStyle {
     pub bg: Color,
     pub fg: Color,
     pub dim: Color,
 }
 
+impl From<super::options::ChoiceStyle> for RowStyle {
+    fn from(s: super::options::ChoiceStyle) -> Self {
+        Self {
+            bg: s.bg,
+            fg: s.fg,
+            dim: s.dim,
+        }
+    }
+}
+
+/// Resolve the palette for a centered modal list row (the Filled tone). Every
+/// columnar selectable surface — config, tools, mcp, sessions — goes through
+/// here so there is exactly one "what does selected look like" rule.
 pub(in crate::render) fn row_style(selected: bool, theme: &Theme) -> RowStyle {
-    let bg = if selected {
-        theme.brand()
-    } else {
-        theme.panel()
-    };
-    let fg = if selected {
-        contrast_fg(theme.brand())
-    } else {
-        theme.fg()
-    };
-    let dim = if selected {
-        contrast_fg(theme.brand())
-    } else {
-        theme.muted()
-    };
-    RowStyle { bg, fg, dim }
+    choice_style(ChoiceTone::Filled, selected, theme).into()
 }
 
 pub(in crate::render) struct SelectableListPage<'a> {

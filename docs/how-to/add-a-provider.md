@@ -83,6 +83,8 @@ Per-channel fields:
 | `api_key` | Inline key, used when `api_key_env` is unset or empty |
 | `model` | Wire model id; falls back to the entry `id` when omitted |
 | `user_agent` | OpenAI-compatible and native Gemini |
+| `effort` | Optional reasoning depth for OpenAI or Anthropic reasoning models; clamped to the model's supported levels |
+| `thinking` | Optional Anthropic thinking on/off switch; ignored by OpenAI and Gemini |
 
 An entry whose `id` matches a built-in replaces it entirely; a new `id` is
 appended. One entry may carry several `channels` (e.g. a model reachable

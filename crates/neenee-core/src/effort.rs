@@ -5,10 +5,11 @@
 //! capability**, not a transport detail: which effort levels a model honors
 //! (e.g. `xhigh` is Opus-4.7+/Fable only) is an intrinsic property of the
 //! model, so it belongs next to [`crate::model::Model`] (which carries the
-//! per-model `effort_levels` slice). Protocol layers (the Anthropic Messages
-//! provider) translate a chosen [`Effort`] into their wire field
-//! (`output_config.effort`); the chosen value can live on a channel as a user
-//! *override*, but the *capability set* lives here.
+//! per-model `effort_levels` slice). Protocol layers translate a chosen
+//! [`Effort`] into their wire field (`reasoning_effort` for OpenAI chat
+//! completions, `output_config.effort` for Anthropic Messages); the chosen value
+//! can live on a channel as a user *override*, but the *capability set* lives
+//! here.
 
 /// How much reasoning effort a model should spend before answering.
 ///
@@ -17,9 +18,15 @@
 /// level down to what the model supports rather than sending an unsupported
 /// value (which the upstream rejects with 400).
 ///
-/// Ordered ascending by depth: `Low < Medium < High < Xhigh < Max`.
+/// Ordered ascending by depth:
+/// `None < Minimal < Low < Medium < High < Xhigh < Max`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effort {
+    /// Disable reasoning when the provider supports an explicit off value.
+    None,
+    /// Minimal reasoning. Some providers expose this as a distinct tier below
+    /// `low`.
+    Minimal,
     /// Minimal reasoning; simple tasks may skip thinking entirely. Fastest and
     /// cheapest. Useful for sub-agents and trivial classification.
     Low,
@@ -40,7 +47,9 @@ pub enum Effort {
 
 impl Effort {
     /// All levels in ascending order of depth.
-    pub const ORDER: [Effort; 5] = [
+    pub const ORDER: [Effort; 7] = [
+        Effort::None,
+        Effort::Minimal,
         Effort::Low,
         Effort::Medium,
         Effort::High,
@@ -52,6 +61,8 @@ impl Effort {
     /// (`output_config.effort` for Anthropic).
     pub const fn as_str(self) -> &'static str {
         match self {
+            Effort::None => "none",
+            Effort::Minimal => "minimal",
             Effort::Low => "low",
             Effort::Medium => "medium",
             Effort::High => "high",
@@ -65,12 +76,15 @@ impl Effort {
         Self::ORDER.iter().position(|e| *e == self).unwrap_or(2)
     }
 
-    /// Parse a lowercase effort string (`"low"`/`"medium"`/`"high"`/
-    /// `"xhigh"`/`"max"`) into the typed [`Effort`]. Returns `None` for
+    /// Parse a lowercase effort string (`"none"`/`"minimal"`/`"low"`/
+    /// `"medium"`/`"high"`/`"xhigh"`/`"max"`) into the typed [`Effort`].
+    /// Returns `None` for
     /// anything else so an unrecognized config value is silently ignored
     /// rather than treated as an error — the caller keeps its default.
     pub fn parse(s: &str) -> Option<Effort> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Effort::None),
+            "minimal" => Some(Effort::Minimal),
             "low" => Some(Effort::Low),
             "medium" => Some(Effort::Medium),
             "high" => Some(Effort::High),
@@ -119,6 +133,18 @@ pub const EFFORT_CLAUDE_FULL: &[Effort] = &[
 /// here clamps down to `high`.
 pub const EFFORT_CLAUDE_NO_XHIGH: &[Effort] =
     &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
+
+/// OpenAI GPT reasoning-effort range exposed by chat-completions compatible
+/// relays. `xhigh` is available on the high-depth GPT reasoning tier; `max` is
+/// not an OpenAI chat-completions effort value.
+pub const EFFORT_OPENAI_GPT: &[Effort] = &[
+    Effort::None,
+    Effort::Minimal,
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+];
 
 #[cfg(test)]
 mod tests {

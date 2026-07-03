@@ -41,14 +41,14 @@ pub enum Modal {
     /// ModelName modal chain.
     ModelEditor,
     /// Provider-template chooser: a short list of curated templates (Custom
-    /// Anthropic relay / OpenAI-compatible / Gemini) shown when adding a provider.
+    /// Anthropic relay / OpenAI / Gemini) shown when adding a provider.
     /// Reached from the "＋ Add provider" row at the bottom of the picker's stage-1
     /// list. `↑/↓` move; `Enter` opens the [`Self::CustomProvider`] editor seeded
     /// from the chosen template; `Esc` returns to the picker. See
     /// `App::template_choice` and [`crate::providers::PROVIDER_TEMPLATES`].
     ProviderTemplate,
-    /// Provider editor: a per-template form (Name, Base URL, Token, and — for the
-    /// OpenAI-compatible template — Model) for defining a user provider without
+    /// Provider editor: a per-template form (Name, Base URL, Token, and — when
+    /// a template opts in — Model) for defining a user provider without
     /// editing config.toml by hand. The protocol and seeded models come from the
     /// template chosen in [`Self::ProviderTemplate`]; `Tab`/`BackTab` cycle the
     /// visible fields, and the focused field borrows the composer line (like

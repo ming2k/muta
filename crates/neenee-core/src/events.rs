@@ -100,8 +100,9 @@ pub enum AgentRequest {
         model: String,
     },
     /// Edit settings for one model/channel of a user-defined provider. This is
-    /// intentionally channel-scoped: Anthropic effort/thinking can vary by
-    /// model even when the provider endpoint/key are shared.
+    /// intentionally channel-scoped: OpenAI effort and Anthropic
+    /// effort/thinking can vary by model even when the provider endpoint/key are
+    /// shared.
     EditProviderModel {
         provider_id: String,
         model: String,
@@ -573,11 +574,11 @@ pub struct ProviderModelInfo {
     /// Wire protocol id of the channel serving this model (`"openai"` |
     /// `"anthropic"` | `"gemini"`).
     pub protocol: String,
-    /// Effective reasoning effort for Anthropic-protocol channels. `None` for
-    /// protocols that do not expose an effort knob.
+    /// Effective reasoning effort for channels whose model exposes an effort
+    /// knob. `None` for protocols/models that do not expose one.
     pub effort: Option<String>,
-    /// Effective extended-thinking state for Anthropic-protocol channels.
-    /// `None` for protocols that do not expose a thinking knob.
+    /// Effective extended-thinking state for channels that expose a separate
+    /// thinking on/off knob. `None` for protocols that do not expose one.
     pub thinking: Option<bool>,
     /// Unix epoch milliseconds of this model's last activation. `None` if the
     /// model has never been activated, which the stage-2 list sorts as

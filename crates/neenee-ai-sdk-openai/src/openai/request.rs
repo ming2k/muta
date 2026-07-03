@@ -12,7 +12,7 @@
 //!   keyless relay (empty key) sends no auth header at all, because some
 //!   relays reject a malformed bearer token even when they'd otherwise ignore
 //!   the key.
-//! - Body: `{model, messages, stream, tools?, stream_options?}`.
+//! - Body: `{model, messages, stream, reasoning_effort?, tools?, stream_options?}`.
 //!
 //! Two correctness transformations live here:
 //! 1. Images are stripped from non-vision models (the API rejects `image_url`
@@ -21,7 +21,7 @@
 //!    request is always wire-valid: every `tool` result references a known
 //!    preceding `tool_call`, and every assistant `tool_calls` has its results.
 
-use neenee_core::{Message, Role};
+use neenee_core::{Effort, Message, Role};
 use serde_json::{Value, json};
 
 /// The headers this wire format requires on every request, beyond the
@@ -42,6 +42,9 @@ pub struct BodyInput<'a> {
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     pub tool_specs: Option<&'a [Value]>,
+    /// Optional OpenAI reasoning-effort override. `None` omits the field and
+    /// keeps the model/provider default.
+    pub reasoning_effort: Option<Effort>,
 }
 
 /// Build the chat-completions request body.
@@ -53,6 +56,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         model: model_id,
         stream,
         tool_specs,
+        reasoning_effort,
     } = input;
 
     // If the model doesn't support vision, strip inline images so the API
@@ -166,6 +170,11 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         // ignore the unknown field harmlessly.
         body["stream_options"] = json!({ "include_usage": true });
     }
+    if let Some(effort) = reasoning_effort
+        && !model.effort_levels.is_empty()
+    {
+        body["reasoning_effort"] = json!(effort.clamp_to(model.effort_levels).as_str());
+    }
     if let Some(specs) = tool_specs {
         body["tools"] = specs;
     }
@@ -266,11 +275,27 @@ mod tests {
                 model: "test-model",
                 stream: true,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
 
         assert_eq!(body["messages"].as_array().unwrap().len(), 2);
         assert_eq!(body["messages"][1]["content"], "again");
+    }
+
+    #[test]
+    fn request_includes_reasoning_effort_when_configured() {
+        let body = super::body(
+            vec![Message::new(Role::User, "think")],
+            BodyInput {
+                model: "gpt-5.5",
+                stream: false,
+                tool_specs: None,
+                reasoning_effort: Some(Effort::Xhigh),
+            },
+        );
+
+        assert_eq!(body["reasoning_effort"], "xhigh");
     }
 
     #[test]
@@ -324,6 +349,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
 
@@ -365,6 +391,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -387,6 +414,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -419,6 +447,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -444,6 +473,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -473,6 +503,7 @@ mod tests {
                 model: "test-model",
                 stream: false,
                 tool_specs: None,
+                reasoning_effort: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();

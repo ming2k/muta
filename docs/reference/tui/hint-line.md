@@ -8,7 +8,13 @@ in the prompt.
 
 ## Appearance
 
-Normal chat (no labels on the left):
+Normal chat (no labels on the left), reasoning model:
+
+```text
+                       Claude Opus 4.8  ◆ high  89.2k (8%)
+```
+
+Non-reasoning model (effort tag absent):
 
 ```text
                             Kimi K2.7 Code   89.2k (8%)
@@ -44,6 +50,7 @@ it.
 | Unattended flag | `UNATTENDED` (warning tone + BOLD), only while write-tool prompts are bypassed |
 | Shell pill | `[ SHELL ]` (warning tone + raised bg), only while the prompt is `!`-prefixed |
 | Model name | `brand` + BOLD |
+| Reasoning effort | `◆ {effort}` in `info` + BOLD, only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
 | Context usage | `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red) |
 | Background | `surface` |
 

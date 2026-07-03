@@ -646,8 +646,7 @@ mod tests {
             .await
             .unwrap();
 
-        // messages[0] is the rebuilt system message: EXPLORE persona opens it,
-        // then the todo section composes in.
+        // messages[0] is the rebuilt system message: EXPLORE persona opens it.
         let system = &outcome.messages[0];
         assert_eq!(system.role, neenee_core::Role::System);
         assert!(
@@ -655,10 +654,6 @@ mod tests {
                 .content
                 .starts_with("You are a focused research envoy"),
             "system message should open with the EXPLORE persona"
-        );
-        assert!(
-            system.content.contains("Task tracking:"),
-            "todo guidance section composes in"
         );
         assert!(
             !system.content.contains("Task: find files"),

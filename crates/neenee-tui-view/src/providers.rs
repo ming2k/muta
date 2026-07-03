@@ -20,8 +20,7 @@ use crate::fuzzy;
 
 /// One editable field of the provider editor. The visible set is chosen by the
 /// active [`ProviderTemplate`] (create) or the edited provider's protocol (edit),
-/// rather than a fixed five-field form: Gemini hides Base URL (native endpoint),
-/// and only the OpenAI-compatible template exposes a free-text Model field.
+/// rather than a fixed five-field form.
 ///
 /// Reasoning (effort/thinking) is intentionally NOT a provider-editor field —
 /// ADR-0046 moved it to the per-model stage-2 `e` editor, so a provider is
@@ -47,14 +46,14 @@ pub struct ProviderTemplate {
     /// `"anthropic"` | `"gemini"`.
     pub protocol: &'static str,
     /// Models seeded as channels. Empty means the user enters one via the Model
-    /// field (the OpenAI-compatible template).
+    /// field (templates can opt in when they need one).
     pub models: &'static [&'static str],
     /// Whether the editor shows a Base URL field (false for native Gemini).
     pub needs_url: bool,
     /// Placeholder shown in the Base URL field — the full endpoint shape.
     pub url_hint: &'static str,
-    /// Whether the editor exposes a free-text Model field (OpenAI-compatible
-    /// relays serve an open model set; the others seed `models`).
+    /// Whether the editor exposes a free-text Model field. Most templates seed
+    /// `models`; open protocols can still add arbitrary model ids later.
     pub needs_model: bool,
     /// A concrete relay endpoint pre-filled into the Base URL field on open
     /// (create mode), so a relay-specific template works without the user
@@ -82,6 +81,21 @@ impl ProviderTemplate {
         fields
     }
 }
+
+/// Text/chat models commonly served by OpenAI sub2api relays.
+///
+/// Keep stable aliases first. Dated snapshots and image/audio/realtime models
+/// are intentionally omitted from the create template; users can still add a
+/// relay-specific id from the provider's model list.
+pub const OPENAI_SUB2API_MODELS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+    "gpt-5.2-chat-latest",
+    "gpt-5.2-pro",
+];
 
 /// The provider templates offered when adding a provider, in display order.
 pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
@@ -163,7 +177,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     },
     ProviderTemplate {
         label: "OpenCode Go",
-        description: "opencode.ai relay — OpenAI-compatible coding models",
+        description: "opencode.ai relay — OpenAI chat-completions coding models",
         protocol: "openai",
         models: &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"],
         needs_url: true,
@@ -187,27 +201,27 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "OpenAI (sub2api)",
         description: "OpenAI sub2api relay",
         protocol: "openai",
-        models: &[],
+        models: OPENAI_SUB2API_MODELS,
         needs_url: true,
         url_hint: "https://relay.example.com/v1/chat/completions",
-        needs_model: true,
+        needs_model: false,
         default_url: None,
         user_agent: None,
     },
-    // Antigravity — a sub2api-style Gemini-native 中转站
-    // (ai.hihusky.com/antigravity/v1beta). The relay forwards model ids
-    // verbatim to the Gemini REST surface, so the `gemini` protocol reaches
-    // it unchanged. The base URL is pre-filled (the relay host is fixed); the
-    // user only types a display name and token. The three effort-tiered /
-    // non-preview ids are seeded as channels — they resolve in the model
-    // registry, so the stage-2 list and add-model overlay see real metadata.
+    // Antigravity — a sub2api-style Gemini-native 中转站. The relay forwards
+    // model ids verbatim to the Gemini REST surface, so the `gemini` protocol
+    // reaches it unchanged. The base URL is editable and pre-filled with a
+    // documentation-safe example; users can replace it with their relay host.
+    // The three effort-tiered / non-preview ids are seeded as channels — they
+    // resolve in the model registry, so the stage-2 list and add-model overlay
+    // see real metadata.
     //
     // Model order is deliberate: `AddProvider` activates the FIRST seeded
-    // model as the default, and `gemini-3.1-pro-high` is currently rejected
-    // by the relay for every request shape (HTTP 400 INVALID_ARGUMENT — a
-    // relay-side defect, not a config issue; `-low` and `flash` work). So the
-    // two working models lead and `-high` sits last, still selectable from
-    // stage 2 the moment the relay accepts it.
+    // model as the default, and `gemini-3.1-pro-high` is known to be rejected
+    // by some relays for every request shape (HTTP 400 INVALID_ARGUMENT — a
+    // relay-side defect, not a config issue; `-low` and `flash` often work).
+    // So the generally compatible models lead and `-high` sits last, still
+    // selectable from stage 2 the moment the relay accepts it.
     ProviderTemplate {
         label: "Antigravity (sub2api)",
         description: "Antigravity sub2api relay",
@@ -218,9 +232,9 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
             "gemini-3.1-pro-high",
         ],
         needs_url: true,
-        url_hint: "https://ai.hihusky.com/antigravity/v1beta",
+        url_hint: "https://relay.example.com/antigravity/v1beta",
         needs_model: false,
-        default_url: Some("https://ai.hihusky.com/antigravity/v1beta"),
+        default_url: Some("https://relay.example.com/antigravity/v1beta"),
         user_agent: None,
     },
 ];
@@ -248,7 +262,7 @@ pub fn edit_fields(protocol: &str) -> Vec<CustomField> {
 
 /// Whether a protocol's model set is *closed*: the candidate list is the full,
 /// fixed set and the add-model overlay must NOT offer a free-text fallback.
-/// OpenAI-compatible and Anthropic relays serve an open, evolving model set, so
+/// OpenAI and Anthropic relays serve an open, evolving model set, so
 /// typing an unlisted id is legitimate; native Gemini is a closed family — its
 /// models are enumerated by Google and forwarded verbatim by relays, so an
 /// arbitrary id is almost certainly a typo or hallucination, not a real model.
@@ -259,7 +273,7 @@ pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
 /// The registry model ids that match a custom protocol's wire format, used as the
 /// candidate list when picking a model for a custom provider (the "list select"
 /// half of "list select + custom fallback"). An unknown protocol falls back to
-/// the OpenAI-compatible set, which is also the default.
+/// the OpenAI set, which is also the default.
 pub fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
     let format = match protocol_wire {
         "anthropic" => WireFormat::AnthropicCompat,
@@ -310,7 +324,8 @@ pub struct RankedModel {
     /// onto these characters.
     pub label: String,
     /// Channel protocol and model-specific controls surfaced by the picker
-    /// snapshot. Anthropic rows use these for effort/thinking editing.
+    /// snapshot. OpenAI rows can expose effort; Anthropic rows can expose
+    /// effort plus thinking.
     pub protocol: String,
     pub effort: Option<String>,
     pub thinking: Option<bool>,
@@ -614,7 +629,7 @@ mod tests {
         );
         assert_eq!(
             tmpl.default_url,
-            Some("https://ai.hihusky.com/antigravity/v1beta")
+            Some("https://relay.example.com/antigravity/v1beta")
         );
         assert!(tmpl.needs_url, "exposes a Base URL field (pre-filled)");
         assert!(
@@ -626,6 +641,31 @@ mod tests {
             tmpl.fields(),
             vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
         );
+    }
+
+    #[test]
+    fn openai_sub2api_template_seeds_openai_text_models() {
+        let tmpl = PROVIDER_TEMPLATES
+            .iter()
+            .find(|t| t.label == "OpenAI (sub2api)")
+            .expect("openai sub2api template offered in the chooser");
+        assert_eq!(tmpl.protocol, "openai");
+        assert_eq!(tmpl.models, OPENAI_SUB2API_MODELS);
+        assert!(tmpl.needs_url, "relay URL is user-supplied");
+        assert!(
+            !tmpl.needs_model,
+            "model list is seeded; add-model handles custom ids"
+        );
+        assert_eq!(
+            tmpl.fields(),
+            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+        );
+        for id in ["gpt-5.5", "gpt-5.2", "gpt-5.2-chat-latest"] {
+            assert!(
+                protocol_model_candidates("openai").contains(&id),
+                "OpenAI candidate set missing {id}"
+            );
+        }
     }
 
     #[test]
@@ -668,7 +708,7 @@ mod tests {
         );
         assert!(
             !protocol_model_set_closed("openai"),
-            "OpenAI-compatible relays keep an open model set"
+            "OpenAI relays keep an open model set"
         );
         assert!(
             !protocol_model_set_closed("anthropic"),

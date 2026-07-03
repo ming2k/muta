@@ -661,6 +661,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         editor_model_settings_only: false,
         editor_target_is_builtin: false,
         editor_effort: "high".to_string(),
+        editor_thinking_available: false,
         editor_thinking: true,
         custom_field: 0,
         custom_fields: Vec::new(),
@@ -724,13 +725,13 @@ fn completions_classifies_slash_input_as_slash_kind() {
     }
 }
 
-/// The OpenAI-compatible template (Name / Base URL / Token / Model) — the
-/// richest field set, used to exercise field cycling and the Model filter.
+/// The OpenAI sub2api template (Name / Base URL / Token) seeds OpenAI text
+/// models directly.
 fn openai_template() -> &'static crate::tui::providers::ProviderTemplate {
     crate::tui::PROVIDER_TEMPLATES
         .iter()
         .find(|t| t.label == "OpenAI (sub2api)")
-        .expect("openai-compatible template")
+        .expect("openai sub2api template")
 }
 
 /// The Anthropic relay template (Name / Base URL / Token), which seeds the Claude
@@ -777,9 +778,10 @@ fn custom_provider_editor_opens_empty_on_name_field() {
         app.input.is_empty(),
         "Name field borrows an empty input line"
     );
-    // The template seeds the protocol; the OpenAI template exposes a Model field.
+    // The template seeds the protocol and OpenAI model list.
     assert_eq!(app.custom_protocol_wire, "openai");
-    assert!(app.custom_fields.contains(&crate::tui::CustomField::Model));
+    assert!(app.custom_models.iter().any(|m| m == "gpt-5.5"));
+    assert!(!app.custom_fields.contains(&crate::tui::CustomField::Model));
 }
 
 #[test]
@@ -803,7 +805,7 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
     // empty base_url would otherwise fall back to localhost in the catalog.
     assert_eq!(
         app.custom_base_url,
-        "https://ai.hihusky.com/antigravity/v1beta"
+        "https://relay.example.com/antigravity/v1beta"
     );
     // The three effort-tiered / non-preview ids are seeded as channels, with
     // the working models first (AddProvider activates channels[0] by default).
@@ -826,7 +828,7 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(openai_template());
-    // Fields: Name(0) / Base URL(1) / Token(2) / Model(3).
+    // Fields: Name(0) / Base URL(1) / Token(2).
     let n = app.custom_fields.len() as u8;
     // Type a name, then advance: the name is stashed and the Base URL field
     // loads its (empty) buffer.
@@ -835,7 +837,7 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     assert_eq!(app.custom_field, 1);
     assert_eq!(app.custom_name, "My Relay");
     assert!(app.input.is_empty(), "Base URL buffer is empty");
-    // Wrap backward from Name (0) to the last field (Model).
+    // Wrap backward from Name (0) to the last field (Token).
     app.cycle_custom_field(false); // 1 -> 0
     assert_eq!(app.custom_field, 0);
     assert_eq!(app.input, "My Relay", "Name buffer reloads into the line");
@@ -846,7 +848,18 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 #[test]
 fn custom_provider_model_filter_commits_and_offers_custom_id() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(openai_template());
+    let free_model_template = crate::tui::providers::ProviderTemplate {
+        label: "OpenAI",
+        description: "OpenAI relay with a free model id",
+        protocol: "openai",
+        models: &[],
+        needs_url: true,
+        url_hint: "https://relay.example.com/v1/chat/completions",
+        needs_model: true,
+        default_url: None,
+        user_agent: None,
+    };
+    app.open_custom_provider_editor(&free_model_template);
     // The default model is the first candidate of the template's (OpenAI) protocol.
     assert!(
         app.custom_model_candidates()

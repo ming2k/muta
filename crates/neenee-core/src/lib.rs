@@ -43,7 +43,9 @@ pub use tool_output::{
 pub mod capability;
 pub mod catalog;
 pub mod effort;
-pub use effort::{EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, Effort};
+pub use effort::{
+    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
+};
 pub mod thinking;
 pub use thinking::{ThinkingMode, ThinkingSupport};
 pub mod dynamic;

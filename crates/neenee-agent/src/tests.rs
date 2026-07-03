@@ -268,8 +268,8 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
 
 /// Golden layout test for ADR-0039 stage 2: the registry-assembled system
 /// message must reproduce the legacy `parts.join("\n")` layout byte-for-byte
-/// for a representative state (identity + pursuit set, no ask_user tool, no
-/// skills). The always-on conciseness and persistence sections compose in
+/// for a representative state (identity + pursuit set, no skills). The
+/// always-on conciseness and persistence sections compose in
 /// unconditionally. Sections that need a gap carry their own leading `\n`,
 /// so a single-`\n` join yields a stable, readable layout.
 #[test]
@@ -284,20 +284,13 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     agent.ensure_system_prompt(&mut messages);
     let prompt = &messages[0].content;
 
-    // preamble \n\n conciseness \n todo \n\n persistence \n\n pursuit.
+    // preamble \n\n conciseness \n\n persistence \n\n pursuit.
     let expected = "You are neenee, an expert AI coding assistant.\n\
      \n\
      Be concise. Address only the task at hand; skip tangents, greetings, and recaps \
      of what you just did. Scale depth to change size — a one-line answer for a small \
      fix, a short bullet list for a multi-file change. Never paste whole files or \
      before/after blocks; cite file paths and symbol names instead.\n\
-     Task tracking: for work that spans multiple steps, use the `todo` tool to lay \
-     out the steps up front, then update each item's status with `todo_update` (or \
-     `todo` for a full restructure) as you progress — move a step to in_progress \
-     when you start it and completed/cancelled the moment it is done. Keep the \
-     list honest: it is the single source of truth shown to the user, so don't \
-     let it drift from reality. At most one item may be in_progress at a time. \
-     Skip the list entirely for single-step requests.\n\
      \n\
      See the task through to a real result in this turn. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \

@@ -28,7 +28,7 @@ const ANTHROPIC_MODEL_MAX_TOKENS: &[(&str, u32)] = &[
     ("qwen3.7-plus", 65536),
     ("qwen3.6-plus", 65536),
     ("qwen3.5-plus", 65536),
-    // Claude family served via the hihusky relay (and any Anthropic relay).
+    // Claude family served via Anthropic-compatible relays.
     // Claude 4.6+ Opus/Sonnet support a 128K synchronous output limit (1M
     // context); Haiku 4.5 supports 64K. Cap there so long agent turns are not
     // truncated by the provider's flat 8192 default.
@@ -250,6 +250,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
         Transport::OpenAiCompat {
             base_url,
             user_agent,
+            effort,
         } => {
             let provider = OpenAiCompatProvider::with_base_url_and_user_agent(
                 channel.api_key.clone(),
@@ -257,6 +258,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
                 base_url,
                 user_agent,
             )
+            .with_reasoning_effort(*effort)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -323,6 +325,7 @@ mod build_tests {
             transport: Transport::OpenAiCompat {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
+                effort: None,
             },
             api_key: "k".to_string(),
             model: "gpt-4o".to_string(),
@@ -380,7 +383,7 @@ mod build_tests {
         let opus = AnthropicMessagesProvider::with_base_url_and_user_agent(
             "k".to_string(),
             "claude-opus-4-8".to_string(),
-            "https://ai.hihusky.com/v1/messages",
+            "https://relay.example.com/v1/messages",
             "agent",
         )
         .with_max_tokens(anthropic_model_max_tokens("claude-opus-4-8").unwrap());

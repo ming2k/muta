@@ -181,8 +181,8 @@ pub const KNOWN_MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── Claude (Anthropic, via the hihusky relay / any Anthropic relay) ─────
-    // Served over the Anthropic Messages wire format. The relay forwards to
+    // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
+    // Served over the Anthropic Messages wire format. Relays forward to
     // Anthropic's own `/messages` surface, so these carry
     // `WireFormat::AnthropicCompat`.
     Model {
@@ -278,7 +278,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAiCompat,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -290,7 +290,7 @@ pub const KNOWN_MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAiCompat,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -302,7 +302,58 @@ pub const KNOWN_MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAiCompat,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    // OpenAI sub2api relays can expose additional text aliases not used by the
+    // official built-in template. Keep their metadata conservative when the
+    // exact serving contract is relay-defined.
+    Model {
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2-chat-latest",
+        name: "GPT-5.2 Chat Latest",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2-pro",
+        name: "GPT-5.2 Pro",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
     },
     // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
     // remains only behind the TTS/transcribe specialized models) but kept
@@ -398,11 +449,11 @@ pub const KNOWN_MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-    // ── sub2api / antigravity relay (ai.hihusky.com) ──────────────────────
-    // A Gemini-native 中转站 that advertises effort-tiered 3.1 Pro variants
-    // (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST surface
-    // (`/v1beta/models/{id}:generateContent`), so the metadata mirrors the
-    // Gemini family; the relay forwards the model id verbatim. The wire
+    // ── sub2api / antigravity relay models ────────────────────────────────
+    // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
+    // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
+    // surface (`/v1beta/models/{id}:generateContent`), so the metadata mirrors
+    // the Gemini family; the relay forwards the model id verbatim. The wire
     // responses include `thoughtSignature`/`thoughtsTokenCount`, so these
     // reason like the rest of the 3.x family.
     Model {
@@ -742,6 +793,17 @@ mod tests {
         // Sanity: Sonnet 4.6 does NOT carry xhigh — confirms 5 differs.
         let s46 = resolve("claude-sonnet-4-6");
         assert!(!s46.effort_levels.contains(&crate::effort::Effort::Xhigh));
+    }
+
+    #[test]
+    fn gpt_reasoning_models_expose_openai_effort_levels() {
+        let gpt = resolve("gpt-5.5");
+        assert_eq!(gpt.format, WireFormat::OpenAiCompat);
+        assert!(gpt.reasoning());
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::Medium));
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::High));
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::Xhigh));
+        assert!(!gpt.effort_levels.contains(&crate::effort::Effort::Max));
     }
 
     #[test]

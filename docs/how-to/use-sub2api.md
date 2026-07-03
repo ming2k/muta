@@ -1,0 +1,145 @@
+# How to use sub2api relays
+
+Use a sub2api relay when the service exposes an OpenAI, Anthropic, or Gemini
+compatible HTTP surface and gives you a token plus a relay URL. neenee's
+provider editor creates a named provider instance, stores the token, and seeds
+the model list from the selected template.
+
+For the provider schema and field meanings, see
+[How to add a provider](add-a-provider.md) and
+[Providers](../reference/providers.md).
+
+## Add an OpenAI sub2api relay
+
+1. Open the provider picker with `Ctrl+M`.
+2. Select `＋ Add provider`.
+3. Select `OpenAI (sub2api)`.
+4. Fill the fields:
+
+   | Field | Value |
+   |-------|-------|
+   | `Name` | Any display name, such as `Example OpenAI` |
+   | `Base URL` | The full chat endpoint, such as `https://relay.example.com/v1/chat/completions` |
+   | `Token` | The relay token |
+
+5. Press `Enter` to save and activate the provider.
+
+Do not enter only the root URL, such as `https://relay.example.com/v1`, for an
+OpenAI relay. The OpenAI provider posts directly to the configured `Base URL`.
+Use the full `/chat/completions` endpoint.
+
+The `OpenAI (sub2api)` template seeds common OpenAI text models, including
+`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2`,
+`gpt-5.2-chat-latest`, and `gpt-5.2-pro`. If your relay advertises another
+chat model, open the provider's model list and use `＋ Add model`.
+
+## Add an Anthropic sub2api relay
+
+1. Open the provider picker with `Ctrl+M`.
+2. Select `＋ Add provider`.
+3. Select `Anthropic (sub2api)`.
+4. Fill the fields:
+
+   | Field | Value |
+   |-------|-------|
+   | `Name` | Any display name, such as `Example Claude` |
+   | `Base URL` | The full Messages endpoint, such as `https://relay.example.com/v1/messages` |
+   | `Token` | The relay token |
+
+5. Press `Enter` to save and activate the provider.
+
+Anthropic relays use the `/messages` endpoint, not
+`/chat/completions`. The template seeds the Claude model family. Add a custom
+model from the provider's model list when the relay exposes a Claude alias that
+is not listed.
+
+## Add the Antigravity Gemini relay
+
+1. Open the provider picker with `Ctrl+M`.
+2. Select `＋ Add provider`.
+3. Select `Antigravity (sub2api)`.
+4. Fill `Name` and `Token`.
+5. Keep the pre-filled `Base URL` unless your relay uses a different host:
+   `https://relay.example.com/antigravity/v1beta`.
+6. Press `Enter` to save and activate the provider.
+
+Gemini-native relays use the versioned base URL. neenee appends
+`/models/{model}:generateContent` for each request.
+
+## Configure a relay in `config.toml`
+
+Edit the user config when you want a reproducible provider definition without
+using the TUI. Store tokens in the credentials file or an environment variable
+when possible.
+
+```toml
+default_provider = "example-openai"
+
+[[providers]]
+id = "example-openai"
+name = "Example OpenAI"
+
+[[providers.channels]]
+label = "gpt-5.5"
+transport = "OpenAiCompat"
+base_url = "https://relay.example.com/v1/chat/completions"
+api_key_env = "RELAY_API_KEY"
+model = "gpt-5.5"
+```
+
+For Anthropic:
+
+```toml
+default_provider = "example-claude"
+
+[[providers]]
+id = "example-claude"
+name = "Example Claude"
+
+[[providers.channels]]
+label = "claude-sonnet-5"
+transport = "Anthropic"
+base_url = "https://relay.example.com/v1/messages"
+api_key_env = "RELAY_API_KEY"
+model = "claude-sonnet-5"
+```
+
+For Gemini-native Antigravity:
+
+```toml
+default_provider = "antigravity"
+
+[[providers]]
+id = "antigravity"
+name = "Antigravity"
+
+[[providers.channels]]
+label = "gemini-3-flash"
+transport = "GeminiNative"
+base_url = "https://relay.example.com/antigravity/v1beta"
+api_key_env = "RELAY_API_KEY"
+model = "gemini-3-flash"
+```
+
+## Check a relay endpoint
+
+Query the model list when the relay supports OpenAI's `/models` route:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  https://relay.example.com/v1/models
+```
+
+Then test the exact chat endpoint configured in neenee:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  https://relay.example.com/v1/chat/completions \
+  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"Reply with OK only."}],"stream":false}'
+```
+
+Use the endpoint that returns JSON chat-completion data. A relay root that
+returns HTML is not a valid neenee `Base URL`.

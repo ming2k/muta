@@ -777,7 +777,7 @@ mod tests {
             // Provider-template chooser.
             let mut template_scroll = 0;
             draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
-            // Provider editor (OpenAI-compatible template) on the Model filter field.
+            // Provider editor on the Model filter field.
             use crate::providers::CustomField;
             let mut scroll = 0;
             draw_custom_provider_editor(
@@ -790,7 +790,7 @@ mod tests {
                     ],
                     field: 3,
                     editing: false,
-                    title: "Custom OpenAI-compatible",
+                    title: "Custom OpenAI",
                     name_buf: "My Relay",
                     base_url_buf: "https://relay/v1/chat/completions",
                     token_buf: "tok",

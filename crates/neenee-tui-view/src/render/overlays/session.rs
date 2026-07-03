@@ -8,9 +8,10 @@ use unicode_width::UnicodeWidthStr;
 use super::common::{one_line, relative_time_compact, truncate_ellipsis};
 use crate::modal::Modal;
 use crate::render::Theme;
+use crate::render::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, modal_area, modal_frame, modal_header,
-    render_body, render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
+    render_modal_footer,
 };
 
 /// Draw the sessions picker: each row shows the session overview plus its
@@ -39,21 +40,7 @@ pub fn draw_sessions_modal(
 
     for (i, session) in sessions.iter().enumerate() {
         let is_selected = i == selected;
-        let bg = if is_selected {
-            theme.brand()
-        } else {
-            theme.panel()
-        };
-        let fg = if is_selected {
-            contrast_fg(theme.brand())
-        } else {
-            theme.fg()
-        };
-        let muted = if is_selected {
-            contrast_fg(theme.brand())
-        } else {
-            theme.muted()
-        };
+        let s: ChoiceStyle = choice_style(ChoiceTone::Filled, is_selected, theme);
         let badge = if session.active { "● " } else { "  " };
         // Drop the message count (low signal) and use compact relative times
         // (no "ago" suffix) so the meta column stays narrow and predictable.
@@ -79,9 +66,9 @@ pub fn draw_sessions_modal(
         let left_w = left.width();
         let pad = body_width.saturating_sub(left_w + meta_w);
         let spans = vec![
-            Span::styled(left, Style::default().bg(bg).fg(fg)),
-            Span::styled(" ".repeat(pad), Style::default().bg(bg)),
-            Span::styled(meta, Style::default().bg(bg).fg(muted)),
+            Span::styled(left, Style::default().bg(s.bg).fg(s.fg)),
+            Span::styled(" ".repeat(pad), Style::default().bg(s.bg)),
+            Span::styled(meta, Style::default().bg(s.bg).fg(s.dim)),
         ];
         body.push(Line::from(spans));
     }

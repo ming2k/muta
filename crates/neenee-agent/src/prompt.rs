@@ -8,11 +8,10 @@
 //! the active system sections in rank order.
 //!
 //! The default system sections ([`IdentityPreamble`], [`ConcisenessGuidance`],
-//! [`ToneGuidance`], [`TodoGuidance`], [`PersistenceGuidance`],
-//! [`PursuitObjective`], [`AskUserGuidance`], [`DelegationGuidance`])
-//! compose the system message in rank order: sections that
-//! need a visual gap include a leading `\n` in their own `render`, so joining
-//! on a single `\n` preserves a stable layout.
+//! [`ToneGuidance`], [`PersistenceGuidance`], [`PursuitObjective`],
+//! [`DelegationGuidance`]) compose the system message in rank order: sections
+//! that need a visual gap include a leading `\n` in their own `render`, so
+//! joining on a single `\n` preserves a stable layout.
 //!
 //! [`Agent::inject_implicit_skills`] stays here for now (it is a user-channel
 //! injection); ADR-0039 stage 4 will fold it into a user-channel section.
@@ -170,39 +169,9 @@ impl PromptSection for ProviderGuidance {
     }
 }
 
-/// Task-tracking guidance for the `todo` / `todo_update` tools.
-struct TodoGuidance;
-
-const TODO: &str = "Task tracking: for work that spans multiple steps, use the `todo` tool to lay \
-                    out the steps up front, then update each item's status with `todo_update` (or \
-                    `todo` for a full restructure) as you progress — move a step to in_progress \
-                    when you start it and completed/cancelled the moment it is done. Keep the \
-                    list honest: it is the single source of truth shown to the user, so don't \
-                    let it drift from reality. At most one item may be in_progress at a time. \
-                    Skip the list entirely for single-step requests.";
-
-impl PromptSection for TodoGuidance {
-    fn id(&self) -> &'static str {
-        "system.todo_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
-    }
-    fn rank(&self) -> u32 {
-        30
-    }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
-        Some(String::from(TODO))
-    }
-}
-
 /// Task-completion ethos: see the work through to a real result in one turn
 /// instead of stopping at analysis or a partial fix. Always active. Mirrors
-/// codex's "Autonomy and Persistence" section, condensed. Leading `\n`
-/// separates it from the todo paragraph above.
+/// codex's "Autonomy and Persistence" section, condensed.
 struct PersistenceGuidance;
 
 const PERSISTENCE: &str = "\nSee the task through to a real result in this turn. Don't stop at \
@@ -263,51 +232,18 @@ impl PromptSection for PursuitObjective {
     }
 }
 
-/// Guidance for the `ask_user` tool, only when that tool is admitted this
-/// turn. Leading `\n` separates it from the paragraphs above.
-struct AskUserGuidance;
-
-const ASK_USER: &str = "\nUse the ask_user tool when you need clarification or a decision from \
-                        the user: vague requirements, ambiguous instructions, trade-offs between \
-                        approaches, or before risky/destructive actions. Provide 2-4 labeled \
-                        options per question; put the recommended option first and suffix its \
-                        label with '(Recommended)'. Do NOT use ask_user to ask 'Is this plan \
-                        okay?' or 'Should I proceed?' — just take the most reasonable action and \
-                        mention what you did.";
-
-impl PromptSection for AskUserGuidance {
-    fn id(&self) -> &'static str {
-        "system.ask_user_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
-    }
-    fn rank(&self) -> u32 {
-        50
-    }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
-        ctx.tool_names.iter().any(|name| name == "ask_user")
-    }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
-        Some(String::from(ASK_USER))
-    }
-}
-
-/// Guidance for delegating read-only exploration to the `envoy` tool. Active
-/// only when a dispatch tool is admitted this turn, so identity-less / tool-
-/// less test agents are unaffected. Leading `\n` separates it from the
-/// paragraphs above.
+/// Guidance for delegating read-only exploration. Active only when a
+/// dispatch tool is admitted this turn, so identity-less / tool-less test
+/// agents are unaffected. Generic tool-category policy: it names no specific
+/// tool — the model matches it to whatever dispatch/exploration tools are
+/// admitted. Leading `\n` separates it from the paragraphs above.
 struct DelegationGuidance;
 
-const DELEGATION: &str = "\nFor codebase exploration that is not a needle query for a specific file \
-                          or symbol, prefer the `envoy` tool over running search commands yourself \
-                          — it returns a concise answer without flooding your context with raw file \
-                          contents, and multiple envoys can run in parallel. Skip the envoy for \
-                          needle queries (a known file path, a specific class/function name): read \
-                          or grep directly.";
+const DELEGATION: &str = "\nFor open-ended exploration or gathering broad context, delegate to a \
+                          read-only sub-agent rather than running the searches yourself — it keeps \
+                          your own context lean and lets several investigations run in parallel. \
+                          For needle queries (a known path or a specific symbol) go direct: read \
+                          or search the target yourself.";
 
 impl PromptSection for DelegationGuidance {
     fn id(&self) -> &'static str {
@@ -332,22 +268,21 @@ impl PromptSection for DelegationGuidance {
     }
 }
 
-/// Guidance for creating and modifying files with `write_file` / `edit_file`.
-/// Active only when a file-editing tool is admitted this turn, so a read-only
-/// or tool-less agent is unaffected. Mirrors [`AskUserGuidance`] /
-/// [`DelegationGuidance`]: a behavioral nudge that names the dedicated file
-/// tools and steers the model away from editing source files through the
-/// shell. Leading `\n` separates it from the paragraphs above.
+/// Generic tool-category guidance: prefer a dedicated mutation tool over
+/// driving the same change through the shell. Active only when a file-
+/// editing tool is admitted this turn (a mechanical guard on tool names —
+/// the rendered text names no specific tool, so adding a new file-editing
+/// tool only needs the guard updated, not the prose). Leading `\n`
+/// separates it from the paragraphs above.
 struct FileEditingGuidance;
 
-const FILE_EDITING: &str = "\nYou can create and modify files directly. Use the `write_file` tool to create a \
-                           new file or overwrite an existing one in full, and the `edit_file` tool to make a \
-                           targeted change — replacing one unique block of text — inside an existing file. \
-                           Do NOT edit source files through the shell (sed, echo >, printf >, cat >>, tee, \
-                           perl -i, or similar): the dedicated tools are atomic, diff-reviewable, and never \
-                           leave a half-written file if a turn is interrupted. Prefer `edit_file` over \
-                           rewriting a whole file with `write_file` when only part of it changes; reserve \
-                           `write_file` for creating a file or replacing its entire contents.";
+const FILE_EDITING: &str = "\nWhen a dedicated tool exists for an operation, prefer it over \
+                            driving the same operation through the shell. This applies in \
+                            particular to creating or modifying files: use the file-editing \
+                            tools, not shell redirection (sed, echo >, tee, and the like). The \
+                            dedicated tools are atomic, diff-reviewable, and never leave a \
+                            half-written file behind if a turn is interrupted; a shell pipeline \
+                            is none of those.";
 
 impl PromptSection for FileEditingGuidance {
     fn id(&self) -> &'static str {
@@ -387,10 +322,8 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);
-    registry.register(TodoGuidance);
     registry.register(PersistenceGuidance);
     registry.register(PursuitObjective);
-    registry.register(AskUserGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry

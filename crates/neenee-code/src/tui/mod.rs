@@ -967,6 +967,7 @@ pub async fn run_tui(
         editor_model_settings_only: false,
         editor_target_is_builtin: false,
         editor_effort: "high".to_string(),
+        editor_thinking_available: false,
         editor_thinking: true,
         custom_field: 0,
         custom_fields: Vec::new(),

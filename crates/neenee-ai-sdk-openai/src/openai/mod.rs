@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Message, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_core::{Effort, Message, Provider, ProviderPromptHints, ProviderStreamEvent};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -30,11 +30,11 @@ pub mod response;
 /// OpenAI-compatible chat-completions provider.
 ///
 /// Embeds the shared [`Endpoint`] (connection config) and [`TurnState`] (tool
-/// schemas + last usage). Holds no wire-format-unique fields: OpenAI's transport
-/// is the simplest of the three (bearer auth, a single endpoint URL).
+/// schemas + last usage) plus the optional OpenAI `reasoning_effort` override.
 pub struct OpenAiCompatProvider {
     pub endpoint: Endpoint,
     pub turn: TurnState,
+    pub reasoning_effort: Option<Effort>,
 }
 
 impl OpenAiCompatProvider {
@@ -66,6 +66,7 @@ impl OpenAiCompatProvider {
                 id: "openai".to_string(),
             },
             turn: TurnState::new(),
+            reasoning_effort: None,
         }
     }
 
@@ -73,6 +74,13 @@ impl OpenAiCompatProvider {
     /// id). Returns `self` for chaining.
     pub fn with_id(mut self, id: String) -> Self {
         self.endpoint.set_id(id);
+        self
+    }
+
+    /// Set the OpenAI `reasoning_effort` override for models that expose it.
+    /// `None` keeps the provider default.
+    pub fn with_reasoning_effort(mut self, effort: Option<Effort>) -> Self {
+        self.reasoning_effort = effort;
         self
     }
 
@@ -133,6 +141,7 @@ impl Provider for OpenAiCompatProvider {
                     model: &self.endpoint.model,
                     stream: false,
                     tool_specs,
+                    reasoning_effort: self.reasoning_effort,
                 },
             )
         });
@@ -182,6 +191,7 @@ impl Provider for OpenAiCompatProvider {
                     model: &self.endpoint.model,
                     stream: true,
                     tool_specs,
+                    reasoning_effort: self.reasoning_effort,
                 },
             )
         });
@@ -213,6 +223,7 @@ impl Provider for OpenAiCompatProvider {
                     model: &self.endpoint.model,
                     stream: true,
                     tool_specs,
+                    reasoning_effort: self.reasoning_effort,
                 },
             )
         });
@@ -350,6 +361,7 @@ mod tests {
                     model: "test-model",
                     stream: false,
                     tool_specs,
+                    reasoning_effort: None,
                 },
             )
         });
@@ -368,6 +380,7 @@ mod tests {
                     model: "test-model",
                     stream: false,
                     tool_specs,
+                    reasoning_effort: None,
                 },
             )
         });

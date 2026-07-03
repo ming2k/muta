@@ -114,6 +114,7 @@ default_channel = 0
   model = "acme-7b"
   base_url = "https://relay.example.com/v1"
   api_key_env = "ACME_API_KEY"  # env var name; wins over api_key
+  effort = "high"               # optional for OpenAI/Anthropic reasoning models
 ```
 
 | `favorites` | Default | Meaning |
@@ -122,11 +123,18 @@ default_channel = 0
 
 ## Per-model reasoning settings
 
-Extended thinking is **opt-in** (ADR-0046). A model does not reason unless you
-have configured it to. The two reasoning knobs — `effort` (the reasoning-depth
-throttle) and `thinking` (the on/off switch) — are **per model**, not per
-provider: an Opus round can run at `max` effort while a Haiku round runs `low`.
-They live in the `[model_reasoning."<model-id>"]` table, keyed by model id.
+Reasoning controls are **per model**, not per provider. `effort` is the
+reasoning-depth throttle. `thinking` is an Anthropic-only on/off switch.
+
+OpenAI GPT reasoning models use the channel-level `effort` field on
+`OpenAiCompat` channels. Valid values are clamped to the model's supported
+levels; GPT models can expose `none`, `minimal`, `low`, `medium`, `high`, and
+`xhigh`.
+
+Anthropic extended thinking is **opt-in** (ADR-0046). A model does not reason
+unless you have configured it to. The two Anthropic knobs live in the
+`[model_reasoning."<model-id>"]` table, keyed by model id, or on a
+user-defined Anthropic channel.
 
 **Opt-in rule:** a model's *presence* in this table opts it in to thinking.
 Thinking defaults **on** (the recommended Claude mode) unless the entry
@@ -147,12 +155,13 @@ effort   = "low"
 thinking = false
 ```
 
-This table applies wherever the named model is served — the built-in
-`anthropic` provider and Anthropic-format relays alike. In the TUI, drilling
-into a provider and pressing `e` on an Anthropic model opens the per-model
-settings popup that edits this table (built-in models) or the channel
-(user-defined models). For a user-defined Anthropic relay, setting the
-channel's `effort` or `thinking` has the same opt-in effect.
+This table applies wherever the named Anthropic-format model is served — the
+built-in `anthropic` provider and Anthropic-format relays alike. In the TUI,
+drilling into a provider and pressing `e` on a model with reasoning controls
+opens the per-model settings popup. OpenAI models show the Effort row.
+Anthropic models show Effort plus the Thinking switch. For a user-defined
+Anthropic relay, setting the channel's `effort` or `thinking` has the same
+opt-in effect.
 
 The legacy flat fields `anthropic_effort` / `anthropic_thinking` are
 **deprecated** and no longer read — they only still load so an existing
