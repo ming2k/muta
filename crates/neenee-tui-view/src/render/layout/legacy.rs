@@ -40,12 +40,9 @@ impl TranscriptLayout for Legacy {
             let next_is_tool_step = next.is_some_and(|n| n.is_tool_step() || n.is_envoy_task());
             let collapsed_tool_into_tool_step =
                 msg.is_tool_step() && msg.tool_step_expanded() == Some(false) && next_is_tool_step;
-            let next_is_step =
-                next.is_some_and(|n| n.is_thinking() || n.is_tool_step() || n.is_envoy_task());
-
             if collapsed_tool_into_tool_step {
                 // Flush stack: no separating row.
-            } else if msg.role != neenee_core::Role::User || next_is_step {
+            } else if msg.role == neenee_core::Role::User || next.is_some() {
                 stream.message_gap();
             }
         }

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use neenee_tui::{
-    Frame, Paragraph, {Line, Span}, {Modifier, Style},
+    Color, Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -24,16 +24,15 @@ use crate::render::primitives::{
 ///
 /// - **stage 1** (`picker_provider == None`): a ranked *provider* list
 ///   (favorites → last-used → name). Each row shows the provider, its key-ready
-///   glyph, and its active model — plus a `· N ›` count badge for multi-model
-///   providers. Enter drills into a multi-model provider (→ stage 2) or
-///   activates a single-model one; `*` favorites and `e` edits the row's key.
+///   glyph, active model, and a drill-in chevron. Enter drills into a
+///   multi-model provider (→ stage 2) or activates a single-model one; `*`
+///   favorites and `e` edits the row's key.
 /// - **stage 2** (`picker_provider == Some(row_idx)`): the model sub-list for
 ///   the snapshot row at `row_idx`. Enter activates the highlighted model; for a
-///   custom provider, `d` removes a model and a trailing "＋ Add model" row adds
-///   one. Esc returns to stage 1.
+///   custom provider, `d` removes a model. Esc returns to stage 1.
 ///
-/// Within either stage, `/` enters search (the header becomes a `› <query>`
-/// field with the real caret and rows highlight the matched characters).
+/// Within either stage, `/` enters search: the header stays title-only, a
+/// dedicated search row appears beneath it, and rows highlight matched chars.
 /// `providers` / `models` are the pre-computed stage rows (only the active
 /// stage's is non-empty); `modal_index` selects into the active stage. `scroll`
 /// is read and written back so the offset stays consistent with the clamped
@@ -61,51 +60,19 @@ pub fn draw_models_modal(
     let area = modal_area(frame, Modal::Provider).expect("model picker modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    // Stage 2's title is the provider name with a "‹ back" affordance; stage 1
-    // is simply "Providers".
+    // Breadcrumb-style title makes the two-stage picker explicit while keeping
+    // the header dry: no row counts, no transient key help, no search input.
     let title_text: String = match picker_provider_name {
-        Some(name) => format!("{name} ‹ back"),
+        Some(name) => format!("Providers / {name}"),
         None => "Providers".to_string(),
     };
 
     let header_rect = f.header;
-    if let Some(h) = header_rect {
-        let title = Span::styled(
-            title_text.clone(),
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD),
-        );
-        let header_line = if search {
-            // Search sub-layer: the title doubles as the filter field.
-            Line::from(vec![
-                title,
-                Span::raw("  "),
-                Span::styled("› ", Style::default().fg(theme.muted())),
-                Span::styled(
-                    if query.is_empty() {
-                        "type to fuzzy-filter"
-                    } else {
-                        query
-                    },
-                    Style::default()
-                        .fg(if query.is_empty() {
-                            theme.muted()
-                        } else {
-                            theme.fg()
-                        })
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])
-        } else {
-            // Browse mode: plain title plus a hint to reach search.
-            Line::from(vec![
-                title,
-                Span::raw("  "),
-                Span::styled("· / to search", Style::default().fg(theme.muted())),
-            ])
-        };
-        frame.render_widget(Paragraph::new(header_line), h);
+    modal_header(frame, header_rect, &title_text, theme);
+
+    let (search_rect, body_rect) = split_search_body(f.body, search);
+    if let Some(search_rect) = search_rect {
+        draw_picker_search_row(frame, search_rect, query, theme);
     }
 
     // Stage-2 model rows map 1:1 to `modal_index`; stage-1 inserts non-selectable
@@ -116,10 +83,9 @@ pub fn draw_models_modal(
                 models,
                 current_provider,
                 current_model,
-                stage2_custom,
                 modal_index,
                 theme,
-                f.body.width as usize,
+                body_rect.width as usize,
             ),
             modal_index,
         )
@@ -130,7 +96,7 @@ pub fn draw_models_modal(
             key_status,
             modal_index,
             theme,
-            f.body.width as usize,
+            body_rect.width as usize,
         )
     };
     let follow = if follow_selection {
@@ -140,7 +106,7 @@ pub fn draw_models_modal(
     };
     render_body(
         frame,
-        f.body,
+        body_rect,
         body,
         scroll,
         follow,
@@ -182,7 +148,7 @@ pub fn draw_models_modal(
                 FooterHint::secondary("type", "filter"),
                 FooterHint::navigation("↑↓", "navigate"),
                 FooterHint::primary("Enter", "activate"),
-                FooterHint::always("Esc", "back"),
+                FooterHint::always("Esc", "clear search"),
             ],
             (true, false) => &stage2_custom_browse,
             // Stage 1 (provider list): Enter opens/activates, Esc closes.
@@ -190,7 +156,7 @@ pub fn draw_models_modal(
                 FooterHint::secondary("type", "filter"),
                 FooterHint::navigation("↑↓", "navigate"),
                 FooterHint::primary("Enter", "select"),
-                FooterHint::always("Esc", "back"),
+                FooterHint::always("Esc", "clear search"),
             ],
             (false, false) => &[
                 FooterHint::navigation("↑↓", "navigate"),
@@ -206,23 +172,68 @@ pub fn draw_models_modal(
     }
 
     // The real terminal caret only exists in search mode — browse mode has no
-    // editable field. Place it in the header filter field after `<title>  › `.
-    if search && let Some(h) = header_rect {
-        let prefix = format!("{title_text}  › ").width() as u16;
-        let cursor_x = h.x + prefix + caret_column(query, cursor_position);
-        let cursor_y = h.y;
+    // editable field. Place it in the dedicated search row, not in the header.
+    if search && let Some(sr) = search_rect {
+        let prefix = " Search  › ".width() as u16;
+        let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
+        let cursor_y = sr.y;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
     area
 }
 
-/// Build the **stage-1** provider list body. Rows are grouped under dim
-/// `Built-in` / `Custom` section headers (non-selectable). Each row is
-/// `★ › <provider…>  <model · N ›>`, the provider name padded to a shared
-/// column so the model column lines up. The `›` marks the cursor; the current
-/// provider's name is underlined. Returns the body lines and the *visual*
-/// line index of the selected selectable row (`modal_index`), since the headers
-/// offset the 1:1 mapping the scroll-follow relies on.
+fn split_search_body(body: Rect, search: bool) -> (Option<Rect>, Rect) {
+    if !search || body.height == 0 {
+        return (None, body);
+    }
+
+    let search_rect = Rect {
+        x: body.x,
+        y: body.y,
+        width: body.width,
+        height: 1,
+    };
+    let consumed = if body.height > 1 { 2 } else { 1 };
+    let list_rect = Rect {
+        x: body.x,
+        y: body.y.saturating_add(consumed),
+        width: body.width,
+        height: body.height.saturating_sub(consumed),
+    };
+    (Some(search_rect), list_rect)
+}
+
+fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Theme) {
+    let value_style = Style::default()
+        .fg(if query.is_empty() {
+            theme.muted()
+        } else {
+            theme.fg()
+        })
+        .add_modifier(Modifier::BOLD);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" Search", Style::default().fg(theme.muted())),
+            Span::styled("  › ", Style::default().fg(theme.muted())),
+            Span::styled(
+                if query.is_empty() {
+                    "type to fuzzy-filter"
+                } else {
+                    query
+                },
+                value_style,
+            ),
+        ])),
+        rect,
+    );
+}
+
+/// Build the **stage-1** provider list body. Each row is
+/// `● ★ <provider…>  <model · N ›>`: a leading current-state dot, a favorite
+/// star, the provider name padded to a shared column, and an aligned model
+/// suffix. The cursor fills the whole row with the brand tone (no `›` arrow);
+/// the live provider is marked by a green `●`. Returns the body lines and the
+/// *visual* line index of the selected selectable row (`modal_index`).
 fn provider_list_body(
     providers: &[RankedProvider],
     current_provider: &str,
@@ -231,8 +242,8 @@ fn provider_list_body(
     theme: &Theme,
     body_width: usize,
 ) -> (Vec<Line<'static>>, usize) {
-    // Fixed prefix: star(2) + marker(2) = 4 columns. The name occupies a
-    // shared column (longest name, capped) so every suffix starts at the same x.
+    // Fixed prefix: dot(1) + gap(1) + star(1) + gap(1) = 4 columns. The name
+    // occupies a shared column (longest name, capped) so every suffix lines up.
     const PREFIX_COLS: usize = 4;
     let avail = body_width.saturating_sub(PREFIX_COLS).max(1);
     let longest_name = providers.iter().map(|p| p.name.width()).max().unwrap_or(0);
@@ -250,15 +261,12 @@ fn provider_list_body(
         }
 
         let is_current = rp.id == current_provider;
-        let is_selected = sel == modal_index;
-        let g = RowGlyphs::new(theme, is_selected, rp.favorite, is_current);
+        let g = PickerRowStyle::new(theme, sel == modal_index, rp.favorite, is_current);
 
-        // Suffix: the active model's display name, plus a `· N ›` count badge
-        // that hints the row drills into the model list. Provider rows are
-        // configured instances now, so every row drills into stage 2 where
-        // models can be activated, added, removed, or edited.
+        // Suffix: the active model's display name plus a drill-in chevron.
+        // Counts stay out of the provider list; stage 2 shows the actual models.
         let model_name = crate::providers::model_display_name(&rp.model);
-        let suffix = format!("{model_name} · {} ›", rp.models.len());
+        let suffix = format!("{model_name} ›");
 
         // Pad / truncate the name to the shared column so suffixes align.
         let name = truncate_ellipsis(&rp.label, name_col);
@@ -266,8 +274,10 @@ fn provider_list_body(
 
         let matched = match_set(rp.m.as_ref());
         let mut spans: Vec<Span> = Vec::new();
-        spans.push(Span::styled(format!(" {}", g.star), g.star_style));
-        spans.push(Span::styled(g.marker.to_string(), g.dim_style));
+        // Prefix: dot + gap + star + gap, each pre-painted with the row
+        // background so the cursor fill is unbroken edge to edge.
+        spans.push(Span::styled(format!("{} ", g.dot), g.dot_style));
+        spans.push(Span::styled(format!("{} ", g.star), g.star_style));
         for (char_idx, c) in name.chars().enumerate() {
             let style = if matched.contains(&char_idx) {
                 g.matched_style
@@ -291,7 +301,8 @@ fn provider_list_body(
     let add_selected = modal_index == providers.len();
     let add_style = if add_selected {
         Style::default()
-            .fg(theme.brand())
+            .bg(theme.brand())
+            .fg(theme.brand().contrast_fg())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.brand())
@@ -300,30 +311,31 @@ fn provider_list_body(
     (body, selected_visual)
 }
 
-/// Build the **stage-2** model list body for the drilled-into provider. Each row
-/// is `› <model display>`, the model name bold; the current model is
-/// underlined. In search mode the fuzzy-matched characters are highlighted.
+/// Build the **stage-2** model list body for the drilled-into provider. Each
+/// row is `● <model display>`, the model name bold; the cursor fills the whole
+/// row (no `›` arrow), and the live model is marked by a green `●`. In search
+/// mode the fuzzy-matched characters are highlighted. An optional reasoning
+/// tag (`◆ think on`) follows the label.
 fn model_list_body(
     models: &[RankedModel],
     current_provider: &str,
     current_model: &str,
-    stage2_custom: bool,
     modal_index: usize,
     theme: &Theme,
     body_width: usize,
 ) -> Vec<Line<'static>> {
-    if models.is_empty() && !stage2_custom {
+    if models.is_empty() {
         return empty_body(theme);
     }
     let mut body: Vec<Line> = Vec::new();
     for (row, rm) in models.iter().enumerate() {
         let is_current = rm.provider_id == current_provider && rm.model == current_model;
-        let is_selected = row == modal_index;
         // Favorite is provider-level; stage 2 lists one provider's models, so the
         // per-row star is suppressed here to keep the model list uncluttered.
-        let g = RowGlyphs::new(theme, is_selected, false, is_current);
+        let g = PickerRowStyle::new(theme, row == modal_index, false, is_current);
 
-        // Prefix: marker(2) + indent(2) = 4 columns.
+        // Prefix: dot(1) + gap(2) + indent(1) = 4 columns (matches stage 1's
+        // 4-col prefix so the two stages align vertically).
         const PREFIX_COLS: usize = 4;
 
         // The reasoning tag. ADR-0046: reasoning is opt-in, so a model only
@@ -336,11 +348,6 @@ fn model_list_body(
             (Some(true), None) => " ◆ think on".to_string(),
             _ => String::new(),
         };
-        let tag_style = if is_selected {
-            Style::default().fg(theme.brand())
-        } else {
-            Style::default().fg(theme.info())
-        };
         let label_budget = body_width
             .saturating_sub(PREFIX_COLS)
             .saturating_sub(tag.width())
@@ -349,7 +356,7 @@ fn model_list_body(
 
         let matched = match_set(rm.m.as_ref());
         let mut spans: Vec<Span> = Vec::new();
-        spans.push(Span::styled(format!("  {}", g.marker), g.dim_style));
+        spans.push(Span::styled(format!("{}   ", g.dot), g.dot_style));
         for (char_idx, c) in label.chars().enumerate() {
             let style = if matched.contains(&char_idx) {
                 g.matched_style
@@ -359,22 +366,16 @@ fn model_list_body(
             spans.push(Span::styled(c.to_string(), style));
         }
         if !tag.is_empty() {
-            spans.push(Span::styled(tag, tag_style));
+            // The reasoning tag dims onto the row; on a brand-filled cursor row
+            // it lifts to the contrast foreground so it stays legible.
+            let tag_fg = if row == modal_index {
+                g.fill_fg
+            } else {
+                theme.info()
+            };
+            spans.push(Span::styled(tag, Style::default().bg(g.bg).fg(tag_fg)));
         }
         body.push(Line::from(spans));
-    }
-    // Custom providers gain a trailing synthetic "＋ Add model" row (index ==
-    // model count) so the user can append models after creating the provider.
-    if stage2_custom {
-        let add_selected = modal_index == models.len();
-        let add_style = if add_selected {
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.brand())
-        };
-        body.push(Line::from(Span::styled(" ＋ Add model", add_style)));
     }
     body
 }
@@ -396,68 +397,83 @@ fn match_set(m: Option<&crate::fuzzy::FuzzyMatch>) -> std::collections::HashSet<
         .unwrap_or_default()
 }
 
-/// The shared per-row glyphs and styles for a picker line, computed once from
-/// the row's selected / favorite / current state so both stage bodies render
-/// consistently.
+/// The resolved styling for one picker row, computed once from the row's
+/// selected / current state so both stage bodies paint consistently.
 ///
-/// There is no selection *background* and no current-model *glyph dot*. State
-/// is conveyed purely through text styling, so the rows stay flat and quiet:
-/// - **Selected** (cursor): a leading `›` marker plus brand-colored bold text.
-/// - **Current** (the live provider/model): the name is underlined. This reads
-///   as "the one that's running" without reserving a fixed glyph column.
-/// - **Favorite**: a `★` star in the warning tone.
+/// State is conveyed across **two independent visual axes**, never collapsed
+/// into a single glyph:
 ///
-/// When a row is both selected and current, both cues apply (marker + brand
-/// color + underline).
-struct RowGlyphs {
-    star: &'static str,
-    marker: &'static str,
+/// - **Cursor** (where `↑/↓` is): the whole row is filled with the brand tone
+///   (`ChoiceTone::Filled`) — a background fill, the strongest possible
+///   "the cursor is here" signal, and the same language every centered modal
+///   list (config/tools/sessions/…) already speaks. There is **no `›` arrow**:
+///   the arrow was a Flat-era crutch that spent a fixed column to mimic what a
+///   background fill says unambiguously.
+/// - **Current** (the live provider/model): a leading `●` status glyph in the
+///   `ok` tone. This is a *semantic state icon* (a filled radio dot), not a
+///   text decoration — it survives regardless of cursor position and reads as
+///   "this is the one running right now", exactly like a git branch's `*`.
+///   Replaces the old `UNDERLINED` name cue, which was too weak against bold
+///   text on a dark panel.
+///
+/// Fuzzy-match highlighting rides on top of both. On a brand-filled cursor
+/// row `theme.brand()` would vanish into the background, so matched characters
+/// switch to `contrast_fg(brand)` there (white/black by panel luminance) while
+/// keeping `BOLD`; on unselected rows they stay brand-colored bold as before.
+struct PickerRowStyle {
+    /// The row background (brand when selected, panel otherwise). Every span in
+    /// the row must paint this so the cursor fill is unbroken edge to edge.
+    bg: Color,
+    /// Style for the `●`/` ` current-state glyph (independent of cursor).
+    dot_style: Style,
+    /// Style for the `★`/` ` favorite-state glyph (independent of cursor).
     star_style: Style,
-    dim_style: Style,
+    /// Style for the row's name characters that are NOT fuzzy-matched.
     name_style: Style,
+    /// Style for the row's name characters that ARE fuzzy-matched. Adjusted for
+    /// the row's background so matched chars stay readable on a brand fill.
     matched_style: Style,
+    /// Style for the dim suffix (active model, chevron, etc.).
+    dim_style: Style,
+    /// Foreground of a brand-filled row, used to recolor trailing detail (e.g.
+    /// the reasoning tag) so it stays legible on the fill.
+    fill_fg: Color,
+    /// The current-state glyph: `●` when this is the live row, else a blank.
+    dot: &'static str,
+    /// The favorite-state glyph: `★` when favorited, else a blank.
+    star: &'static str,
 }
 
-impl RowGlyphs {
+impl PickerRowStyle {
     fn new(theme: &Theme, is_selected: bool, favorite: bool, is_current: bool) -> Self {
-        // Selection is a text "ring", not a background fill: the selected row
-        // borrows the brand tone (the same color every interactive affordance
-        // uses) so it lifts off the panel without darkening its surroundings.
-        // Colors come from the single Flat-tone token so this surface can never
-        // drift from the rest of the TUI's selection language.
+        // The cursor is a brand background fill — the TUI's canonical
+        // "selected row" treatment, shared with every centered modal list.
         let s = crate::render::components::options::choice_style(
-            crate::render::components::options::ChoiceTone::Flat,
+            crate::render::components::options::ChoiceTone::Filled,
             is_selected,
             theme,
         );
-        let dim_style = Style::default().fg(s.dim);
-        let star_style = if is_selected {
-            Style::default().fg(theme.brand())
-        } else if favorite {
-            Style::default().fg(theme.warn())
-        } else {
-            Style::default().fg(theme.muted())
-        };
-        // The name: bold always; brand-colored when selected; underlined when
-        // it is the current provider/model (the "live" cue), so current and
-        // selected are independently readable.
-        let mut name_style = Style::default().fg(s.fg).add_modifier(Modifier::BOLD);
-        if is_current {
-            name_style = name_style.add_modifier(Modifier::UNDERLINED);
-        }
-        let mut matched_style = Style::default()
-            .fg(theme.brand())
-            .add_modifier(Modifier::BOLD);
-        if is_selected || is_current {
-            matched_style = matched_style.add_modifier(Modifier::UNDERLINED);
-        }
+        // On a brand-filled row the brand text color is invisible, so matched
+        // characters lift to the contrast foreground (white/black) + bold; on
+        // an unselected row they stay brand bold against the panel.
+        let matched_fg = if is_selected { s.fg } else { theme.brand() };
+        let bold = Modifier::BOLD;
         Self {
-            star: if favorite { "★ " } else { "  " },
-            marker: if is_selected { "› " } else { "  " },
-            star_style,
-            dim_style,
-            name_style,
-            matched_style,
+            bg: s.bg,
+            // The current-state glyph borrows the `ok` tone — green reads as
+            // "active/healthy" and is orthogonal to the brand cursor fill.
+            dot_style: Style::default().bg(s.bg).fg(theme.ok()).add_modifier(bold),
+            star_style: Style::default().bg(s.bg).fg(if favorite {
+                theme.warn()
+            } else {
+                theme.muted()
+            }),
+            name_style: Style::default().bg(s.bg).fg(s.fg).add_modifier(bold),
+            matched_style: Style::default().bg(s.bg).fg(matched_fg).add_modifier(bold),
+            dim_style: Style::default().bg(s.bg).fg(s.dim),
+            fill_fg: s.fg,
+            dot: if is_current { "●" } else { " " },
+            star: if favorite { "★" } else { " " },
         }
     }
 }
@@ -634,11 +650,16 @@ pub fn draw_model_editor(
 /// matches, the highlighted one marked `›` in the brand tone, windowed around the
 /// highlight so a long list stays navigable. An empty list shows a `(no match)`
 /// hint (Enter then uses the typed text).
-fn suggestion_lines(suggestions: &[String], highlight: usize, theme: &Theme) -> Vec<Line<'static>> {
+fn suggestion_lines(
+    suggestions: &[String],
+    highlight: usize,
+    empty_hint: &str,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     const MAX: usize = 6;
     if suggestions.is_empty() {
         return vec![Line::from(Span::styled(
-            "    (no match)".to_string(),
+            format!("    {empty_hint}"),
             Style::default().fg(theme.muted()),
         ))];
     }
@@ -671,99 +692,6 @@ fn suggestion_lines(suggestions: &[String], highlight: usize, theme: &Theme) -> 
         .collect()
 }
 
-/// Draw the add-model overlay for a custom provider: a Model **filter** field
-/// (type to filter) plus the matching suggestion list. `↑/↓` move the highlight;
-/// Enter adds the highlighted model (or the typed id when nothing matches).
-#[allow(clippy::too_many_arguments)]
-pub fn draw_add_model_editor(
-    frame: &mut Frame,
-    provider_name: &str,
-    suggestions: &[String],
-    suggest_index: usize,
-    input: &str,
-    cursor_position: usize,
-    theme: &Theme,
-    scroll: &mut usize,
-) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::AddModel).expect("add-model modal has fixed geometry");
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    modal_header(
-        frame,
-        f.header,
-        &format!("＋ Add model · {provider_name}"),
-        theme,
-    );
-
-    const LABEL_W: usize = 8;
-    let label_span = Span::styled(
-        format!(" {:<LABEL_W$}", "Model"),
-        Style::default()
-            .fg(theme.brand())
-            .add_modifier(Modifier::BOLD),
-    );
-    let value_span = if input.is_empty() {
-        Span::styled(
-            "type to filter…".to_string(),
-            Style::default().fg(theme.muted()),
-        )
-    } else {
-        Span::styled(
-            input.to_string(),
-            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-        )
-    };
-    let mut body = vec![Line::from(vec![label_span, value_span]), Line::from("")];
-    body.extend(suggestion_lines(suggestions, suggest_index, theme));
-
-    let body_rect = f.body;
-    // Keep the highlighted suggestion on-screen while navigating with ↑/↓: the
-    // suggestion block starts at body row 2 (filter row + blank), so the
-    // highlight's visual row is `2 + suggest_index`. `render_body` follows that
-    // row, clamping/advancing the scroll offset to keep it visible.
-    let follow = if suggestions.is_empty() {
-        None
-    } else {
-        Some(2 + suggest_index)
-    };
-    render_body(
-        frame,
-        body_rect,
-        body,
-        scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
-        theme,
-    );
-
-    if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
-                FooterHint::secondary("type", "filter"),
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::primary("Enter", "add"),
-                FooterHint::always("Esc", "cancel"),
-            ],
-            theme,
-        );
-    }
-
-    // Caret on the filter field (row 0). `render_body` advanced `scroll` so the
-    // followed suggestion stays visible; the caret row must track that offset
-    // so it lands on the rendered filter row rather than a scrolled-past line.
-    // When the filter row itself is scrolled out of view (scroll > 0), hide
-    // the caret: the user is reviewing suggestions, not editing the filter.
-    if *scroll == 0 {
-        let prefix = format!(" {:<LABEL_W$}", "Model");
-        let cursor_x = body_rect.x + prefix.width() as u16 + caret_column(input, cursor_position);
-        frame.set_cursor_position((cursor_x, body_rect.y));
-    }
-    area
-}
-
 /// Draw the provider-template chooser: a short list of curated templates (Custom
 /// Anthropic relay / OpenAI / Gemini). Each row is a label + a muted
 /// one-line description; `↑/↓` move the highlight and Enter opens the editor.
@@ -780,7 +708,23 @@ pub fn draw_provider_template_chooser(
         .expect("provider template chooser modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, "＋ Add provider", theme);
+    if let Some(h) = f.header {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "＋ Add provider",
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" · {} templates · Esc back", PROVIDER_TEMPLATES.len()),
+                    Style::default().fg(theme.muted()),
+                ),
+            ])),
+            h,
+        );
+    }
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {
@@ -797,10 +741,19 @@ pub fn draw_provider_template_chooser(
         } else {
             ("   ", Style::default().fg(s_style.fg))
         };
-        body.push(Line::from(Span::styled(
-            format!("{marker}{}", template.label),
-            label_style,
-        )));
+        let model_count = template.models.len();
+        let model_meta = if model_count == 1 {
+            "1 model".to_string()
+        } else {
+            format!("{model_count} models")
+        };
+        body.push(Line::from(vec![
+            Span::styled(format!("{marker}{}", template.label), label_style),
+            Span::styled(
+                format!(" · {} · {model_meta}", template.protocol),
+                Style::default().fg(s_style.dim),
+            ),
+        ]));
         body.push(Line::from(Span::styled(
             format!("     {}", template.description),
             Style::default().fg(s_style.dim),
@@ -828,9 +781,9 @@ pub fn draw_provider_template_chooser(
             frame,
             fo,
             &[
-                FooterHint::navigation("↑↓", "choose"),
+                FooterHint::navigation("↑↓", "navigate"),
                 FooterHint::primary("Enter", "select"),
-                FooterHint::always("Esc", "cancel"),
+                FooterHint::always("Esc", "back"),
             ],
             theme,
         );
@@ -898,7 +851,7 @@ pub fn draw_custom_provider_editor(
 
     const LABEL_W: usize = 9;
     let body_width = f.body.width as usize;
-    let label_cell_w = 1 + LABEL_W; // leading space + padded label span
+    let label_cell_w = 3 + LABEL_W; // focus marker + padded label span
     let field_w = body_width.saturating_sub(label_cell_w);
     // Every focused field borrows the composer `input`, so the focused field's
     // viewport offset is the same regardless of which one is focused.
@@ -915,7 +868,8 @@ pub fn draw_custom_provider_editor(
         } else {
             Style::default().fg(theme.muted())
         };
-        Span::styled(format!(" {label:<LABEL_W$}"), style)
+        let marker = if focused { " › " } else { "   " };
+        Span::styled(format!("{marker}{label:<LABEL_W$}"), style)
     };
     let value_style = |focused: bool| {
         if focused {
@@ -990,7 +944,12 @@ pub fn draw_custom_provider_editor(
             " Model matches".to_string(),
             Style::default().fg(theme.muted()),
         )));
-        body.extend(suggestion_lines(suggestions, suggest_index, theme));
+        body.extend(suggestion_lines(
+            suggestions,
+            suggest_index,
+            "(type a custom model id)",
+            theme,
+        ));
     }
 
     let body_rect = f.body;
@@ -1014,12 +973,16 @@ pub fn draw_custom_provider_editor(
         theme,
     );
     if let Some(fo) = f.footer {
-        let hints: Vec<FooterHint> = vec![
-            FooterHint::secondary("Tab", "field"),
-            FooterHint::navigation("↑↓", "choose"),
-            FooterHint::primary("Enter", "save"),
-            FooterHint::always("Esc", "cancel"),
-        ];
+        let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
+        hints.push(FooterHint::secondary("Tab", "field"));
+        if model_focused {
+            hints.push(FooterHint::secondary("type", "filter"));
+            hints.push(FooterHint::navigation("↑↓", "choose"));
+        } else {
+            hints.push(FooterHint::navigation("↑↓", "scroll"));
+        }
+        hints.push(FooterHint::primary("Enter", "save"));
+        hints.push(FooterHint::always("Esc", "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
 
@@ -1035,7 +998,7 @@ pub fn draw_custom_provider_editor(
     let visible = body_rect.height as usize;
     let in_view = (*scroll <= row) && (row < *scroll + visible);
     if in_view {
-        let prefix_w = 1 + LABEL_W as u16; // leading space + padded label
+        let prefix_w = 3 + LABEL_W as u16; // focus marker + padded label
         let caret_col = caret_column(input, cursor_position);
         let max_x = body_rect.x + body_rect.width.saturating_sub(1);
         let mut cursor_x = (body_rect.x + prefix_w + caret_col).saturating_sub(focus_off as u16);

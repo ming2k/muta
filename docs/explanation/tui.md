@@ -43,8 +43,72 @@ Each call removes one limitation of the line-oriented terminal:
 - `DISAMBIGUATE_ESCAPE_CODES` requests the Kitty enhanced-keyboard
   protocol so modifier-bearing keys that collide with legacy control
   bytes (notably `Ctrl+M`, which is otherwise indistinguishable from
-  Enter) are reported distinctly. crossterm only emits the request when
-  the terminal advertises support, so this is a no-op elsewhere.
+  Enter, and `Ctrl+H`, which is otherwise indistinguishable from
+  Backspace) are reported distinctly. crossterm only emits the request
+  when the terminal advertises support, so this is a no-op elsewhere.
+  Multiplexers like tmux that don't forward Kitty flags strip this
+  disambiguation; `Ctrl+H` then reverts to the Backspace byte, so `?`
+  and `F1` are the portable help shortcuts.
+
+### Key collisions under tmux / screen
+
+The Kitty protocol negotiation happens between neenee and the *outer*
+terminal. tmux sits in the middle with its own VT parser and, on most
+shipping versions, does **not** forward Kitty flags to the inner program.
+When that happens, several modifier-bearing keys collapse onto the legacy
+control byte they share in ASCII:
+
+| Outer keys (what you press) | Byte tmux forwards | What neenee sees |
+|-----------------------------|--------------------|------------------|
+| `Ctrl+H`, `Ctrl+Backspace`  | `0x08`             | `Ctrl+H`         |
+| `Ctrl+M`                    | `0x0d`             | `Enter`          |
+| `Ctrl+I`                    | `0x09`             | `Tab`            |
+
+Because neenee cannot tell the original keys apart from a single byte, the
+binding chosen for that byte wins for *all* of them. Concretely, under tmux
+without Kitty forwarding:
+
+- `Ctrl+H` and `Ctrl+Backspace` both open the help modal (`Ctrl+Backspace`
+  no longer deletes a word — use `Alt+Backspace` instead, which still
+  works).
+- `Ctrl+M` behaves as `Enter`, so `/provider` is the reliable model-switch
+  trigger.
+
+This is a terminal-layer limitation, not a neenee bug, so the reliable
+fixes are on the tmux side. Two options, in order of preference:
+
+1. **tmux ≥ 3.5 with Kitty-key forwarding** (best — fully disambiguates the
+   keys). Add to `~/.tmux.conf`:
+
+   ```tmux
+   set -s extended-keys on
+   set -as terminal-features 'foot:kitkeys'
+   # or, for any terminal that advertises support:
+   # set -as terminal-features '*:kitkeys'
+   ```
+
+   `kitkeys` is the tmux feature flag added by [tmux PR #4912][tmux-kitty]
+   (2026) that negotiates and forwards the Kitty protocol. Older tmux
+   builds don't recognize it and silently ignore the line.
+
+2. **Any tmux with `extended-keys` only** (partial — distinguishes
+   modified keys like `Ctrl+Backspace` from `Ctrl+H` via the older
+   modified-key protocol, enough to restore word-delete):
+
+   ```tmux
+   set -s extended-keys on
+   set -as terminal-features 'foot:extkeys'
+   ```
+
+Either way, reload with `tmux source ~/.tmux.conf` (or restart the server:
+`tmux kill-server`) and re-attach from foot. Verify with `cat -v`: under
+option 1, `Ctrl+H` should print `^H` while `Ctrl+Backspace` prints a
+distinct CSI sequence rather than `^H`.
+
+If you can't change tmux, the in-app workaround is to prefer `?` and `F1`
+for help (no byte collision) and `Alt+Backspace` for word-delete.
+
+[tmux-kitty]: https://github.com/tmux/tmux/pull/4912
 
 A signal guard catches `SIGTERM`, `SIGINT`, `SIGHUP`, and `SIGQUIT`, then
 restores the terminal. Without it, an

@@ -129,6 +129,9 @@ envoy that hits ambiguity returns it in its written answer instead. See
 
 ## See also
 
+- [Unattended operation](unattended.md) — the autonomous counterpart to this
+  surface: where `unattended` suppresses the broker's permission prompt and why
+  the question surface is governed separately rather than by the same flag.
 - [How to ask the user a question](../../how-to/ask-the-user.md)
 - [Built-in tools](../../reference/tools/index.md)
 - [Tool rounds](rounds-and-turns.md)

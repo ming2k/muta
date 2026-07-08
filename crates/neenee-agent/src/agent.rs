@@ -921,6 +921,14 @@ impl Agent {
         *g = g.saturating_add(1);
     }
 
+    /// Restore the turn counter to a persisted value on resume (ADR-0048
+    /// Phase 2). The counter is session-scoped; without this a resumed
+    /// session's todo stale-detector comparisons reset to 0 and go stale
+    /// immediately.
+    pub fn restore_turn_count(&self, count: u64) {
+        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
+    }
+
     pub fn get_unattended(&self) -> bool {
         self.permissions.unattended()
     }
@@ -988,6 +996,13 @@ impl Agent {
 
     pub fn pursuit_iterations(&self) -> u32 {
         self.pursuit_state.iterations()
+    }
+
+    /// Restore the stop-gate runtime view (armed + iterations) from persisted
+    /// state on resume (ADR-0048 Phase 2). Does not reset the iteration
+    /// counter — an armed pursuit mid-iteration resumes with its count intact.
+    pub fn restore_pursuit_runtime(&self, armed: bool, iterations: u32) {
+        self.pursuit_state.restore_runtime(armed, iterations);
     }
 
     pub(crate) fn pursuit_continuation(&self, response: &Message) -> Option<String> {
@@ -1281,6 +1296,32 @@ impl Agent {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         !guard.contains(name)
+    }
+
+    /// Restore the disabled-tool mask from a persisted set on resume
+    /// (ADR-0048 Phase 2). Replaces the in-memory mask wholesale so a user
+    /// toggle survives restart. Only known tool names are retained so a stale
+    /// toggle (e.g. a tool removed from config) cannot poison the dispatch
+    /// table.
+    pub fn restore_disabled_tools(&self, tools: std::collections::HashSet<String>) {
+        let mut guard = self
+            .disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.clear();
+        for name in tools {
+            if self.toolset.variants_of(&name).is_some() {
+                guard.insert(name);
+            }
+        }
+    }
+
+    /// Snapshot the disabled-tool mask for persistence (ADR-0048 Phase 2).
+    pub fn disabled_tools_snapshot(&self) -> std::collections::HashSet<String> {
+        self.disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// All installed tools that the model may see this turn: every tool whose
@@ -1704,6 +1745,8 @@ impl Agent {
                 children: None,
                 envoy_meta: None,
                 origin: None,
+                timestamp: Some(neenee_core::todos::unix_now()),
+                sent_at_ms: None,
             };
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));

@@ -237,6 +237,13 @@ The headless entry point automatically rejects write permissions.
 Interactive clients use the event-driven entry point and reply to emitted
 requests.
 
+The `unattended` toggle suppresses this broker entirely: when on, a
+side-effecting tool never parks a request and the once/always/reject modal
+never appears. It is the live, blanket form of the relaxation the `always`
+allowlist grants per rule. For the design intent behind running without human
+intervention — and where the flag is forced on — see
+[Unattended operation](unattended.md).
+
 ## Durable session
 
 The CLI persists one active session as an atomic JSON snapshot and keeps

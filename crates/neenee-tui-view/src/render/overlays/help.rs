@@ -60,7 +60,7 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
         row("esc", "clear the focus"),
         Line::from(""),
         Line::from(section("Views & tools")),
-        row("ctrl+h", "this help"),
+        row("? / f1 / ctrl+h", "this help"),
         row("/tools", "manage tools"),
         row("/skills", "browse skills"),
         row("/permissions", "manage permissions"),

@@ -8,7 +8,7 @@
 
 use neenee_agent::Agent;
 use neenee_agent::orchestration::RoundInput;
-use neenee_core::{AgentResponse, Message};
+use neenee_core::AgentResponse;
 use neenee_store::{config::Config, session::SessionStore};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -25,7 +25,6 @@ pub async fn chat(
     active_view_side: &AtomicBool,
     side: &Arc<AsyncRwLock<Option<SideSession>>>,
     agent: &Arc<Agent>,
-    history: &Arc<tokio::sync::Mutex<Vec<Message>>>,
     session: &Arc<SessionStore>,
     ctt_clone: &Arc<AsyncRwLock<Option<CancellationToken>>>,
     generation_clone: &Arc<AtomicU64>,
@@ -33,12 +32,12 @@ pub async fn chat(
     config: &Config,
     text: String,
     images: Vec<neenee_core::ImagePart>,
+    sent_at_ms: Option<u64>,
 ) {
     start_active_turn(
         active_view_side,
         side,
         agent,
-        history,
         session,
         ctt_clone,
         generation_clone,
@@ -48,6 +47,7 @@ pub async fn chat(
             prompt: text,
             hidden: false,
             display_prompt: None,
+            sent_at_ms,
             images,
         },
     )

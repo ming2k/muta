@@ -18,7 +18,7 @@ use neenee_agent::catalog;
 use neenee_agent::orchestration::send_harness_state;
 use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{Agent, EnvoyRegistry};
-use neenee_core::{AgentRequest, AgentResponse, Message, Provider, Tool};
+use neenee_core::{AgentRequest, AgentResponse, Provider, Tool};
 use neenee_store::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
@@ -58,8 +58,6 @@ pub struct Harness {
     pub agent: Arc<Agent>,
     /// The primary session store.
     pub session: Arc<SessionStore>,
-    /// Primary turn history mirror.
-    pub history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     /// Live config; mutated by provider/favorite/default switches and saved.
     pub config: Config,
     /// Per-model usage telemetry; mutated by activations and switches.
@@ -129,7 +127,6 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
         req_tx: req_tx_for_commands,
         agent,
         session,
-        history,
         mut config,
         mut provider_usage,
         provider_holder: provider_for_task,
@@ -245,6 +242,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     &mut config,
                     &agent,
                     &provider_for_task,
+                    &session,
                     &resp_tx,
                     &mut provider_usage,
                     provider_type,
@@ -266,6 +264,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     &mut config,
                     &agent,
                     &provider_for_task,
+                    &session,
                     &resp_tx,
                     &mut provider_usage,
                     name,
@@ -295,16 +294,6 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     protocol,
                     base_url,
                     api_key,
-                )
-                .await;
-            }
-            AgentRequest::AddProviderModel { provider_id, model } => {
-                crate::handlers_provider::add_model(
-                    &mut config,
-                    &resp_tx,
-                    &provider_usage,
-                    provider_id,
-                    model,
                 )
                 .await;
             }
@@ -458,13 +447,13 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     &agent,
                     &resp_tx,
                     &session,
-                    &history,
                     &ctt_clone,
                     &generation_clone,
                     &side,
                     &active_view_side,
                     &base_tools_for_side,
                     &provider_for_task,
+                    &mut provider_usage,
                     skills_registry.clone(),
                     &skills_registry_for_commands,
                     &commands_for_task,
@@ -477,12 +466,15 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                 )
                 .await;
             }
-            AgentRequest::Chat { text, images } => {
+            AgentRequest::Chat {
+                text,
+                images,
+                sent_at_ms,
+            } => {
                 crate::handlers_chat::chat(
                     &active_view_side,
                     &side,
                     &agent,
-                    &history,
                     &session,
                     &ctt_clone,
                     &generation_clone,
@@ -490,6 +482,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     &config,
                     text,
                     images,
+                    sent_at_ms,
                 )
                 .await;
             }

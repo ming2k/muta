@@ -31,7 +31,7 @@ pub(crate) use neenee_tui_view::completion::CompletionKind;
 pub(crate) use neenee_tui_view::modal::{ActivityTab, Modal, Recess};
 pub(crate) use neenee_tui_view::providers::{
     CustomField, PROVIDER_TEMPLATES, model_display_name, protocol_model_candidates,
-    protocol_model_set_closed, provider_template_label_for, providers_filtered_from,
+    provider_template_label_for, providers_filtered_from,
 };
 
 use crossterm::{
@@ -351,6 +351,15 @@ pub async fn run_tui(
                                 }
                             }
                             if !routes_to_side {
+                                // The turn counter was bumped optimistically at
+                                // send time (and again on the "running"
+                                // HarnessState). Since nothing committed to the
+                                // transcript, roll the counter back so the
+                                // re-send reuses the same turn number instead of
+                                // skipping ahead. Matches the harness, which only
+                                // `bump_turn`s a number that actually ran.
+                                let mut rc = round_count_clone.lock().await;
+                                *rc = rc.saturating_sub(1);
                                 *unsent_input_signal_clone.lock().await =
                                     Some(event_loop::UnsentInput { prompt, images });
                                 ir_clone.store(false, Ordering::SeqCst);
@@ -449,6 +458,7 @@ pub async fn run_tui(
                             // belong to different rounds (`TurnStarted` has
                             // already bumped this counter for the round).
                             let turn = *current_turn_clone.lock().await;
+                            let sent_at_ms = event_loop::now_epoch_ms();
                             let mut msgs = buf.write().await;
                             // A tool step starts collapsed: there's no result to show
                             // yet. The lifecycle-aware default (see `step_interaction`)
@@ -456,7 +466,8 @@ pub async fn run_tui(
                             // Failed/Denied force-expand to surface the error.
                             let message = TranscriptMessage::tool_step(id, name, arguments)
                                 .with_attribution(provider, model)
-                                .with_turn(turn);
+                                .with_turn(turn)
+                                .with_sent_at_ms(sent_at_ms);
                             msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
@@ -986,9 +997,6 @@ pub async fn run_tui(
         template_scroll: 0,
         model_search: false,
         picker_provider: None,
-        add_model_provider: None,
-        add_model_choice: 0,
-        add_model_scroll: 0,
         model_scroll: 0,
         model_modal_follow: true,
         key_status: HashMap::new(),

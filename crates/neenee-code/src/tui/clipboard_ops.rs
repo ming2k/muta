@@ -66,11 +66,9 @@ pub(super) fn spawn_clipboard_paste(tx: &mpsc::UnboundedSender<ClipboardRead>) {
 pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
     match app.active_modal {
         Modal::None => apply_composer_paste(app, read),
-        Modal::HistorySearch
-        | Modal::Provider
-        | Modal::ModelEditor
-        | Modal::CustomProvider
-        | Modal::AddModel => apply_modal_field_paste(app, read),
+        Modal::HistorySearch | Modal::Provider | Modal::ModelEditor | Modal::CustomProvider => {
+            apply_modal_field_paste(app, read)
+        }
         Modal::Question => apply_question_other_paste(app, read),
         _ => {}
     }

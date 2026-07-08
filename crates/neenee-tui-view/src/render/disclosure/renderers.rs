@@ -2025,6 +2025,8 @@ pub fn draw_reasoning_trace(
                 content,
                 code_ranges,
                 bold_ranges,
+                math_ranges,
+                link_ranges,
             } = block
             {
                 if emitted_any_block {
@@ -2063,9 +2065,13 @@ pub fn draw_reasoning_trace(
                         line_selection(sel_range, &block_wl),
                         code_ranges,
                         bold_ranges,
+                        math_ranges,
+                        link_ranges,
                         Style::default().fg(ctx.theme.muted()),
                         ctx.theme.code_text(),
                         ctx.theme.code_surface(),
+                        ctx.theme.info(),
+                        ctx.theme.info(),
                         ctx.theme.selected(),
                     );
                     let used = TRANSCRIPT_BODY_LEADING_INDENT as usize + wl.text.width();

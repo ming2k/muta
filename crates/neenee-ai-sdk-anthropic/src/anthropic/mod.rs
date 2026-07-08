@@ -156,8 +156,12 @@ impl Provider for AnthropicMessagesProvider {
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
+        // No protocol hint: thinking signatures are carried as opaque
+        // `provider_meta` and replayed only into the wire `thinking` block's
+        // `signature` field — they never enter any content channel the model
+        // can read, so there is nothing for a prompt note to guard against.
         ProviderPromptHints {
-            system_guidance: "Anthropic Messages protocol note: use native tool calls when you need a tool. Thinking signatures are provider replay metadata; never quote, summarize, or invent them.",
+            system_guidance: "",
         }
     }
 

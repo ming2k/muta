@@ -11,6 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{self, Event};
 use neenee_tui::Terminal;
@@ -25,7 +26,7 @@ use crate::tui::clipboard;
 use crate::tui::clipboard_ops;
 use crate::tui::completion::CompletionKind;
 use crate::tui::composer_attachments;
-use crate::tui::document::{TranscriptMessage, UserMessageOrigin};
+use crate::tui::document::{NoticeSeverity, TranscriptMessage, UserMessageOrigin};
 use crate::tui::input::{self};
 use crate::tui::interaction::{self, ClickTarget};
 use crate::tui::layout::{InteractiveTarget, InteractiveTargetKind, LayoutMap};
@@ -45,6 +46,13 @@ use tokio::sync::{Mutex, broadcast};
 /// Each field is the single source of truth for one piece of live harness
 /// state; the listener writes, the loop reads (after acquiring the per-field
 /// mutex for one frame'snapshot).
+pub(super) fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_default()
+}
+
 pub(super) struct UiRuntime {
     pub current_provider: Arc<Mutex<String>>,
     pub current_model: Arc<Mutex<String>>,
@@ -683,6 +691,8 @@ pub(super) async fn run_app_loop(
                 .pending_dispatch
                 .pop_front()
                 .expect("checked non-empty above");
+            let sent_at_ms = now_epoch_ms();
+            let round = runtime.round_count.lock().await.saturating_add(1);
             let mut messages = runtime.messages.write().await;
             let flipped = messages
                 .iter_mut()
@@ -692,6 +702,8 @@ pub(super) async fn run_app_loop(
                 })
                 .map(|m| {
                     m.delivery = crate::tui::document::DeliveryStatus::Delivered;
+                    m.sent_at_ms = Some(sent_at_ms);
+                    m.turn = Some(round);
                 })
                 .is_some();
             drop(messages);
@@ -709,6 +721,7 @@ pub(super) async fn run_app_loop(
             let _ = app.tx.send(AgentRequest::Chat {
                 text: expanded_text,
                 images: dispatch.images,
+                sent_at_ms: Some(sent_at_ms),
             });
         }
 
@@ -1277,29 +1290,6 @@ pub(super) async fn run_app_loop(
                             &mut app.custom_scroll,
                         ))
                     }
-                    Modal::AddModel => {
-                        let provider_name = app
-                            .add_model_provider
-                            .as_deref()
-                            .and_then(|id| app.provider_picker.rows.iter().find(|r| r.id == id))
-                            .map(|r| r.name.clone())
-                            .unwrap_or_else(|| "provider".to_string());
-                        let suggestions: Vec<String> = app
-                            .add_model_suggestions()
-                            .iter()
-                            .map(|v| crate::tui::model_display_name(v))
-                            .collect();
-                        Some(render::draw_add_model_editor(
-                            f,
-                            &provider_name,
-                            &suggestions,
-                            app.add_model_choice,
-                            &app.input,
-                            app.cursor_position,
-                            &app.theme,
-                            &mut app.add_model_scroll,
-                        ))
-                    }
                     Modal::Help => {
                         Some(render::draw_help_modal(f, &mut app.help_scroll, &app.theme))
                     }
@@ -1702,17 +1692,20 @@ pub(super) async fn run_app_loop(
                                 composer_attachments::expand_paste_chips(&text, &text_pastes);
                             runtime.is_responding.store(true, Ordering::SeqCst);
                             *runtime.activity_status.lock().await = "queued".to_string();
-                            runtime
-                                .messages
-                                .write()
-                                .await
-                                .push(TranscriptMessage::new(Role::User, text.clone()));
+                            let sent_at_ms = now_epoch_ms();
+                            let round = runtime.round_count.lock().await.saturating_add(1);
+                            runtime.messages.write().await.push(
+                                TranscriptMessage::new(Role::User, text.clone())
+                                    .with_sent_at_ms(sent_at_ms)
+                                    .with_turn(round),
+                            );
                             app.record_input_history(text.clone());
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
                             let _ = app.tx.send(AgentRequest::Chat {
                                 text: expanded,
                                 images,
+                                sent_at_ms: Some(sent_at_ms),
                             });
                         }
                     } else if let Some((start, end)) = app.selection.active_normalized_range() {
@@ -1862,16 +1855,6 @@ pub(super) async fn run_app_loop(
                         // Stage-1 "＋ Add provider" row: open the template chooser
                         // instead of activating a provider.
                         app.open_provider_template_chooser();
-                    } else if app.active_modal == Modal::Provider && app.picker_on_add_model_row() {
-                        // Stage-2 "＋ Add model" row (custom provider only): open the
-                        // add-model overlay for the drilled-into provider.
-                        if let Some(id) = app
-                            .picker_provider
-                            .and_then(|idx| app.provider_picker.rows.get(idx))
-                            .map(|r| r.id.clone())
-                        {
-                            app.open_add_model_overlay(id);
-                        }
                     } else if app.active_modal == Modal::Provider {
                         // Resolve the activation target. Stage 1: a multi-model
                         // provider drills to stage 2; a single-model one activates
@@ -2042,45 +2025,10 @@ pub(super) async fn run_app_loop(
                         app.modal_index = 0;
                     }
                 }
-                input::InputAction::MoveAddModel { forward } => {
-                    if app.active_modal == Modal::AddModel {
-                        app.move_add_model(forward);
-                    }
-                }
-                input::InputAction::SubmitAddModel => {
-                    if app.active_modal == Modal::AddModel {
-                        let model = app.add_model_selected();
-                        if let (Some(provider_id), false) =
-                            (app.add_model_provider.clone(), model.is_empty())
-                        {
-                            let _ = app
-                                .tx
-                                .send(AgentRequest::AddProviderModel { provider_id, model });
-                        }
-                        // Return to the stage-2 model list; the fresh snapshot
-                        // will include the new model next frame.
-                        app.add_model_provider = None;
-                        app.input.clear();
-                        app.set_cursor(0);
-                        app.active_modal = Modal::Provider;
-                    }
-                }
-                input::InputAction::CancelAddModel => {
-                    if app.active_modal == Modal::AddModel {
-                        app.add_model_provider = None;
-                        app.input.clear();
-                        app.set_cursor(0);
-                        app.active_modal = Modal::Provider;
-                    }
-                }
                 input::InputAction::ProviderPickerRemoveModel => {
                     // Stage-2 `d`: remove the highlighted model from a custom
-                    // provider. Built-in providers and the synthetic "＋ Add model"
-                    // row are ignored.
-                    if app.active_modal == Modal::Provider
-                        && app.picker_provider_is_custom()
-                        && !app.picker_on_add_model_row()
-                    {
+                    // provider. Built-in providers are ignored.
+                    if app.active_modal == Modal::Provider && app.picker_provider_is_custom() {
                         let rows = app.provider_models_filtered();
                         if let Some(row) = rows.get(app.modal_index) {
                             let _ = app.tx.send(AgentRequest::RemoveProviderModel {
@@ -2226,10 +2174,7 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::OpenModelEditor => {
-                    if app.active_modal == Modal::Provider
-                        && app.picker_provider.is_some()
-                        && !app.picker_on_add_model_row()
-                    {
+                    if app.active_modal == Modal::Provider && app.picker_provider.is_some() {
                         // Stage-2, on a model row. The per-model settings popup
                         // opens for any model that exposes effort and/or a
                         // separate thinking switch.
@@ -2906,8 +2851,6 @@ pub(super) async fn run_app_loop(
                         app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
                     } else if app.active_modal == Modal::CustomProvider {
                         app.custom_scroll = app.custom_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::AddModel {
-                        app.add_model_scroll = app.add_model_scroll.saturating_sub(1);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_sub(1);
                     } else {
@@ -2941,8 +2884,6 @@ pub(super) async fn run_app_loop(
                         app.token_report_scroll = app.token_report_scroll.saturating_add(1);
                     } else if app.active_modal == Modal::CustomProvider {
                         app.custom_scroll = app.custom_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::AddModel {
-                        app.add_model_scroll = app.add_model_scroll.saturating_add(1);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_add(1);
                     } else {
@@ -3255,12 +3196,10 @@ pub(super) async fn run_app_loop(
                 input::InputAction::InsertChar(c) => {
                     // Already handled by process_event mutating app.input
                     let _ = c;
-                    // The custom-provider / add-model filter fields re-rank their
-                    // suggestion list as the query changes.
+                    // The custom-provider filter field re-ranks its suggestion
+                    // list as the query changes.
                     if app.active_modal == Modal::CustomProvider {
                         app.on_custom_filter_changed();
-                    } else if app.active_modal == Modal::AddModel {
-                        app.on_add_model_filter_changed();
                     }
                     app.suggestion_index = None;
                     // The user is editing again, so live completions are
@@ -3279,8 +3218,6 @@ pub(super) async fn run_app_loop(
                 input::InputAction::Backspace => {
                     if app.active_modal == Modal::CustomProvider {
                         app.on_custom_filter_changed();
-                    } else if app.active_modal == Modal::AddModel {
-                        app.on_add_model_filter_changed();
                     }
                     app.suggestion_index = None;
                     app.completion_dismissed = false;
@@ -3515,7 +3452,6 @@ pub(super) async fn run_app_loop(
                     | Modal::ModelEditor
                     | Modal::ProviderTemplate
                     | Modal::CustomProvider
-                    | Modal::AddModel
                     | Modal::InputInjection
                     | Modal::Tools
                     | Modal::Mcp
@@ -3586,7 +3522,6 @@ pub(super) async fn run_app_loop(
                     | Modal::ModelEditor
                     | Modal::ProviderTemplate
                     | Modal::CustomProvider
-                    | Modal::AddModel
                     | Modal::InputInjection
                     | Modal::Tools
                     | Modal::Mcp
@@ -3942,6 +3877,21 @@ pub(super) async fn run_app_loop(
                                     },
                                 );
                                 app.focused_target = None;
+                            }
+                            ClickTarget::Link { url, .. } => {
+                                app.selection = SelectionState::None;
+                                app.focused_target = None;
+                                app.drag.cancel();
+                                if let Err(err) = webbrowser::open(&url) {
+                                    runtime
+                                        .messages
+                                        .write()
+                                        .await
+                                        .push(TranscriptMessage::notice(
+                                            NoticeSeverity::Warning,
+                                            format!("Failed to open link {url}: {err}"),
+                                        ));
+                                }
                             }
                             ClickTarget::Content { cursor } => {
                                 // A plain click does NOT select — it only arms a

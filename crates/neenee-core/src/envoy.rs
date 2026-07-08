@@ -137,12 +137,15 @@ pub struct EnvoyProfile {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether the spawned envoy runs its admitted write/execute tools
-    /// unattended, bypassing the permission broker. Full-duplex (ADR-0029): the
-    /// built-in profiles keep this `true` to preserve the legacy autonomous
-    /// contract (the broker's `PermissionRequest` would otherwise surface up
-    /// to the parent, which historically had no path to answer it). Now that
-    /// the up-direction (forwarding) and down-direction (registry → handle →
+    /// Whether the spawned envoy runs **unattended**: without human
+    /// intervention — no permission confirmations, no questions, the envoy
+    /// proceeds on its own authority. Concretely this bypasses the permission
+    /// broker, but the intent is broader autonomy, not just prompt-skipping.
+    /// Full-duplex (ADR-0029): the built-in profiles keep this `true` to
+    /// preserve the legacy autonomous contract (the broker's
+    /// `PermissionRequest` would otherwise surface up to the parent, which
+    /// historically had no path to answer it). Now that the up-direction
+    /// (forwarding) and down-direction (registry → handle →
     /// `reply_permission`) are wired, a future interactive profile can set
     /// this `false` so an envoy's tool calls prompt the user through the
     /// same modal a top-level call uses, and the reply routes back down.

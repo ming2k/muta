@@ -166,7 +166,7 @@ the loop now runs until the model emits a final assistant message with no
 tool call, with the deterministic read-loop guard
 ([ADR-0034](../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md)),
 on-demand session review
-([ADR-0016](../adr/0016-session-review-over-turn-counting.md)), and
+([ADR-0016](../adr/0016-session-review-over-round-counting.md)), and
 context compaction as backstops.
 
 ### Tool dispatch

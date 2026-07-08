@@ -483,7 +483,6 @@ pub fn emit_pursuit_updated(
 #[derive(Clone)]
 pub struct RoundContext {
     pub agent: Arc<Agent>,
-    pub history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     pub token: CancellationToken,
     pub session: Arc<SessionStore>,
@@ -500,6 +499,8 @@ pub struct RoundInput {
     pub prompt: String,
     pub hidden: bool,
     pub display_prompt: Option<String>,
+    /// Exact TUI send time for user-authored messages, in Unix-epoch milliseconds.
+    pub sent_at_ms: Option<u64>,
     /// Inline images pasted into the prompt, attached to the user message.
     pub images: Vec<ImagePart>,
 }
@@ -507,7 +508,6 @@ pub struct RoundInput {
 #[derive(Clone)]
 pub struct InteractiveRoundContext {
     pub agent: Arc<Agent>,
-    pub history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     pub token_slot: Arc<AsyncRwLock<Option<CancellationToken>>>,
     pub generation_counter: Arc<AtomicU64>,
@@ -540,7 +540,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         let result = execute_round(
             RoundContext {
                 agent: context.agent.clone(),
-                history: context.history,
                 tx: context.tx.clone(),
                 token: token.clone(),
                 session: context.session,
@@ -584,7 +583,6 @@ pub async fn execute_round(
 ) -> Result<bool, HarnessError> {
     let RoundContext {
         agent,
-        history,
         tx,
         token,
         session,
@@ -624,13 +622,15 @@ pub async fn execute_round(
     }
 
     let admitted_session_id = session.id().await;
-    // Build turn_history from the committed session history + the new
-    // user message.  The user message is *not* pushed into the committed
-    // `history` yet — if this turn fails (non-retryable provider error,
-    // e.g. an image sent to a non-vision model), the history stays clean
-    // and the next turn won't carry the poison.  On success the whole
-    // `turn_history` (with the assistant reply and any tool results)
-    // replaces `history` atomically (see the success path below).
+    // Build `turn_history` — the round's working scratch — from the session's
+    // authoritative `model_window` plus the new user message (ADR-0048). The
+    // session is the single source of truth for message truth; this clone is
+    // the only transient copy, and it is committed back to the session before
+    // the turn ends, so the wire body (a projection of this scratch, which is
+    // itself a projection of the session) can never diverge from the durable
+    // state. The user message is pushed here *before* the durable commit so a
+    // mid-turn crash is recoverable (ADR-0035); on an unrecoverable Phase-1
+    // failure the unsend path below pops it back out and reverts the session.
     // Snapshot the user's prompt and images before they are moved into the
     // user message. If the turn is interrupted in Phase 1 (request sent but no
     // response bytes received), we unsend the message: pop it back out of the
@@ -639,8 +639,7 @@ pub async fn execute_round(
     let unsent_images = input.images.clone();
 
     let mut turn_history = {
-        let history = history.lock().await;
-        let mut th = history.clone();
+        let mut th = session.model_window().await;
         th.push(if input.hidden {
             Message::injected(
                 Role::User,
@@ -651,6 +650,10 @@ pub async fn execute_round(
             let message = Message::new(Role::User, input.prompt);
             let message = match input.display_prompt {
                 Some(display) => message.with_display_content(display),
+                None => message,
+            };
+            let message = match input.sent_at_ms {
+                Some(sent_at_ms) => message.with_sent_at_ms(sent_at_ms),
                 None => message,
             };
             if input.images.is_empty() {
@@ -886,7 +889,6 @@ pub async fn execute_round(
         &session_id,
         RoundEvent::Activity("saving response".to_string()),
     ));
-    *history.lock().await = turn_history.clone();
     session.replace_messages(turn_history).await?;
     let outcome = result?;
 
@@ -966,6 +968,37 @@ pub async fn execute_round(
         {
             tracing::warn!(error = %err, "could not persist todos");
         }
+    }
+
+    // Mirror session-scoped runtime state to the durable session (ADR-0048
+    // Phase 2): the disabled-tool mask, the turn counter, and the pursuit
+    // stop-gate runtime view. Each is compared against the durable value and
+    // skipped on a match to avoid a no-op event-log entry (mirroring the todos
+    // diff above).
+    let agent_disabled = agent.disabled_tools_snapshot();
+    if agent_disabled != session.disabled_tools().await
+        && let Err(err) = session.set_disabled_tools(agent_disabled).await
+    {
+        tracing::warn!(error = %err, "could not persist disabled tools");
+    }
+    let agent_turn = agent.turn_count();
+    if agent_turn != session.turn_counter().await
+        && let Err(err) = session.set_turn_counter(agent_turn).await
+    {
+        tracing::warn!(error = %err, "could not persist turn counter");
+    }
+    let desired_runtime = if agent.is_pursuit_armed() || agent.pursuit_iterations() > 0 {
+        Some(neenee_store::session::PursuitRuntime {
+            armed: agent.is_pursuit_armed(),
+            iterations: agent.pursuit_iterations(),
+        })
+    } else {
+        None
+    };
+    if desired_runtime != session.pursuit_runtime().await
+        && let Err(err) = session.set_pursuit_runtime(desired_runtime).await
+    {
+        tracing::warn!(error = %err, "could not persist pursuit runtime");
     }
 
     Ok(completed)
@@ -1233,7 +1266,6 @@ pub fn send_compaction(
 #[derive(Clone)]
 pub struct PursuitContext {
     pub agent: Arc<Agent>,
-    pub history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     pub token_slot: Arc<AsyncRwLock<Option<CancellationToken>>>,
     pub generation_counter: Arc<AtomicU64>,
@@ -1300,7 +1332,6 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
         let outcome = execute_round(
             RoundContext {
                 agent: context.agent.clone(),
-                history: context.history.clone(),
                 tx: context.tx.clone(),
                 token: token.clone(),
                 session: context.session.clone(),
@@ -1314,6 +1345,7 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
                 prompt,
                 hidden: true,
                 display_prompt: None,
+                sent_at_ms: None,
                 images: Vec::new(),
             },
         )
@@ -1426,6 +1458,7 @@ pub async fn run_repeat_tick(
         let _ = tx.send(AgentRequest::Chat {
             text: job.prompt.clone(),
             images: Vec::new(),
+            sent_at_ms: None,
         });
         dispatched += 1;
     }

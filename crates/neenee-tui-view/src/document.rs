@@ -138,6 +138,33 @@ pub enum TableAlignment {
 /// are clamped to `content.len()`. An empty vector means "no inline code".
 pub type CodeRange = (usize, usize);
 
+/// A byte range `[start, end)` within a prose block's `content` that should be
+/// rendered as inline math. The source delimiters stay in `content` for exact
+/// copy/selection; renderers may elide them visually.
+pub type MathRange = (usize, usize);
+
+type ParsedLink = ((usize, usize), (usize, usize), String);
+
+/// A byte range for a recognized hyperlink inside prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRange {
+    /// Full source range, including markdown / TeX link delimiters when present.
+    pub range: (usize, usize),
+    /// The visible label range inside `range`. For bare URLs this equals `range`.
+    pub label_range: (usize, usize),
+    /// Normalized URL target. First-pass support intentionally records only
+    /// browser-safe `http://` and `https://` targets.
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InlineScan {
+    pub code_ranges: Vec<CodeRange>,
+    pub bold_ranges: Vec<CodeRange>,
+    pub math_ranges: Vec<MathRange>,
+    pub link_ranges: Vec<LinkRange>,
+}
+
 /// A single semantic block within a message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -148,7 +175,13 @@ pub enum Block {
         code_ranges: Vec<CodeRange>,
         /// Byte ranges of strong/bold text runs within `content`.
         bold_ranges: Vec<CodeRange>,
+        /// Byte ranges of inline math runs within `content`.
+        math_ranges: Vec<MathRange>,
+        /// Hyperlink ranges within `content`.
+        link_ranges: Vec<LinkRange>,
     },
+    /// Display math block (`$$…$$` or `\[…\]`).
+    Math { content: String },
     /// Inline or fenced code.
     Code {
         language: Option<String>,
@@ -162,6 +195,10 @@ pub enum Block {
         code_ranges: Vec<CodeRange>,
         /// Byte ranges of strong/bold text runs within `content`.
         bold_ranges: Vec<CodeRange>,
+        /// Byte ranges of inline math runs within `content`.
+        math_ranges: Vec<MathRange>,
+        /// Hyperlink ranges within `content`.
+        link_ranges: Vec<LinkRange>,
     },
     /// A list item, preserving its marker and nesting level.
     ListItem {
@@ -170,6 +207,10 @@ pub enum Block {
         code_ranges: Vec<CodeRange>,
         /// Byte ranges of strong/bold text runs within `content`.
         bold_ranges: Vec<CodeRange>,
+        /// Byte ranges of inline math runs within `content`.
+        math_ranges: Vec<MathRange>,
+        /// Hyperlink ranges within `content`.
+        link_ranges: Vec<LinkRange>,
         ordered: Option<u64>,
         depth: usize,
         checked: Option<bool>,
@@ -181,6 +222,10 @@ pub enum Block {
         code_ranges: Vec<CodeRange>,
         /// Byte ranges of strong/bold text runs within `content`.
         bold_ranges: Vec<CodeRange>,
+        /// Byte ranges of inline math runs within `content`.
+        math_ranges: Vec<MathRange>,
+        /// Hyperlink ranges within `content`.
+        link_ranges: Vec<LinkRange>,
     },
     /// A GFM-style table, kept as a semantic unit so columns stay aligned and
     /// copy yields the rendered grid rather than re-wrapped prose.
@@ -202,6 +247,7 @@ impl Block {
     pub fn raw_text(&self) -> &str {
         match self {
             Block::Text { content, .. } => content,
+            Block::Math { content } => content,
             Block::Code { content, .. } => content,
             Block::Heading { content, .. } => content,
             Block::ListItem { content, .. } => content,
@@ -343,14 +389,18 @@ pub struct TranscriptMessage {
     /// Model id that produced this message, companion to [`TranscriptMessage::provider`].
     pub model: Option<String>,
     /// The tool-round this assistant-side message belongs to (1-indexed,
-    /// stamped from the harness's `TurnStarted` counter). Only tool steps
-    /// carry it in practice. The renderer uses it to insert a round-boundary
-    /// separator between adjacent collapsed tool steps that belong to
-    /// different rounds, so two tool-only rounds never read as one batch.
-    /// `None` (the default, and for restored sessions that predate the stamp)
-    /// means "round unknown" — the renderer then preserves the legacy
-    /// same-round flush stack.
+    /// stamped from the harness's `TurnStarted` counter). User messages may
+    /// also carry the visible chat-round number stamped at send time. The
+    /// renderer uses assistant-side stamps to insert round-boundary separators
+    /// between adjacent collapsed tool steps that belong to different rounds,
+    /// so two tool-only rounds never read as one batch. `None` (the default,
+    /// and for restored sessions that predate the stamp) means "round unknown"
+    /// — the renderer then preserves the legacy same-round flush stack.
     pub turn: Option<u64>,
+    /// Wall-clock send time for transcript headers, in Unix epoch milliseconds.
+    /// Restored messages use the persisted millisecond value when available and
+    /// fall back to the durable core-message timestamp for legacy sessions.
+    pub sent_at_ms: Option<u64>,
 }
 
 impl TranscriptMessage {
@@ -377,6 +427,7 @@ impl TranscriptMessage {
             provider: None,
             model: None,
             turn: None,
+            sent_at_ms: None,
         }
     }
 
@@ -410,6 +461,12 @@ impl TranscriptMessage {
     /// Stamp the tool round this message belongs to (see [`TranscriptMessage::turn`]).
     pub fn with_turn(mut self, round: u64) -> Self {
         self.turn = Some(round);
+        self
+    }
+
+    /// Stamp the visible send time for a user-authored message.
+    pub fn with_sent_at_ms(mut self, sent_at_ms: u64) -> Self {
+        self.sent_at_ms = Some(sent_at_ms);
         self
     }
 
@@ -452,6 +509,7 @@ impl TranscriptMessage {
             provider: None,
             model: None,
             turn: None,
+            sent_at_ms: None,
         };
         message.refresh_tool_step();
         message
@@ -934,6 +992,7 @@ impl TranscriptMessage {
             provider: None,
             model: None,
             turn: None,
+            sent_at_ms: None,
         };
         message.raw = content;
         message.blocks = parse_blocks(&message.raw);
@@ -966,6 +1025,7 @@ impl TranscriptMessage {
             provider: None,
             model: None,
             turn: None,
+            sent_at_ms: None,
         }
     }
 
@@ -1113,6 +1173,8 @@ impl TranscriptMessage {
                 content: display_args,
                 code_ranges: Vec::new(),
                 bold_ranges: Vec::new(),
+                math_ranges: Vec::new(),
+                link_ranges: Vec::new(),
             }];
             if let Some(out) = output {
                 self.raw.push_str("\n\n");
@@ -1121,6 +1183,8 @@ impl TranscriptMessage {
                     content: out.clone(),
                     code_ranges: Vec::new(),
                     bold_ranges: Vec::new(),
+                    math_ranges: Vec::new(),
+                    link_ranges: Vec::new(),
                 });
             }
             self.blocks = blocks;
@@ -1243,6 +1307,8 @@ fn parse_blocks_plain(text: &str) -> Vec<Block> {
         content: text.to_string(),
         code_ranges: Vec::new(),
         bold_ranges: Vec::new(),
+        math_ranges: Vec::new(),
+        link_ranges: Vec::new(),
     }]
 }
 
@@ -1275,15 +1341,17 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                 }
                 content.push_str(line);
             }
-            let (code_ranges, bold_ranges) = scan_inline(&content);
+            let inline = scan_inline(&content);
             let trimmed_len = content.trim_end().len();
             let content = content[..trimmed_len].to_string();
             push_block(
                 blocks,
                 Block::Text {
                     content,
-                    code_ranges: clamp_ranges(&code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&bold_ranges, trimmed_len),
+                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
+                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
+                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
+                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
                 },
             );
             para.clear();
@@ -1316,6 +1384,54 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             continue;
         }
 
+        // --- Display math block -----------------------------------------------
+        if trimmed == "$$" || trimmed.starts_with("$$") || trimmed == "\\[" {
+            flush_para(&mut para, &mut para_hard, &mut blocks);
+            let closing = if trimmed.starts_with("$$") {
+                "$$"
+            } else {
+                "\\]"
+            };
+            let mut content = String::new();
+            if let Some(rest) = trimmed.strip_prefix("$$") {
+                if let Some(end) = rest.find("$$") {
+                    content.push_str(rest[..end].trim());
+                    i += 1;
+                    push_block(&mut blocks, Block::Math { content });
+                    continue;
+                }
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    content.push_str(rest);
+                }
+            }
+            i += 1;
+            while i < lines.len() {
+                let candidate = lines[i].trim();
+                if candidate == closing {
+                    i += 1;
+                    break;
+                }
+                if closing == "$$"
+                    && let Some(end) = candidate.find("$$")
+                {
+                    if !content.is_empty() {
+                        content.push('\n');
+                    }
+                    content.push_str(candidate[..end].trim_end());
+                    i += 1;
+                    break;
+                }
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(lines[i].trim_end());
+                i += 1;
+            }
+            push_block(&mut blocks, Block::Math { content });
+            continue;
+        }
+
         // --- Horizontal rule --------------------------------------------------
         if is_rule(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
@@ -1327,15 +1443,17 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // --- Heading ----------------------------------------------------------
         if let Some((level, content_line)) = parse_heading(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
-            let (code_ranges, bold_ranges) = scan_inline(content_line);
+            let inline = scan_inline(content_line);
             let trimmed_len = content_line.trim_end().len();
             push_block(
                 &mut blocks,
                 Block::Heading {
                     level,
                     content: content_line[..trimmed_len].to_string(),
-                    code_ranges: clamp_ranges(&code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&bold_ranges, trimmed_len),
+                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
+                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
+                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
+                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
                 },
             );
             i += 1;
@@ -1369,14 +1487,16 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                 }
                 content.push_str(l);
             }
-            let (code_ranges, bold_ranges) = scan_inline(&content);
+            let inline = scan_inline(&content);
             let trimmed_len = content.trim_end().len();
             push_block(
                 &mut blocks,
                 Block::Quote {
                     content: content[..trimmed_len].to_string(),
-                    code_ranges: clamp_ranges(&code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&bold_ranges, trimmed_len),
+                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
+                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
+                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
+                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
                 },
             );
             continue;
@@ -1390,14 +1510,16 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             while i < lines.len() {
                 let t = lines[i].trim_start();
                 if let Some((m, c, ch)) = parse_list_item(t) {
-                    let (code_ranges, bold_ranges) = scan_inline(c);
+                    let inline = scan_inline(c);
                     let trimmed_len = c.trim_end().len();
                     push_block(
                         &mut blocks,
                         Block::ListItem {
                             content: c[..trimmed_len].to_string(),
-                            code_ranges: clamp_ranges(&code_ranges, trimmed_len),
-                            bold_ranges: clamp_ranges(&bold_ranges, trimmed_len),
+                            code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
+                            bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
+                            math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
+                            link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
                             ordered: m,
                             depth: 0,
                             checked: ch,
@@ -1647,30 +1769,79 @@ fn split_table_row(line: &str) -> Vec<String> {
     line.split('|').map(|c| c.trim().to_string()).collect()
 }
 
-/// Scan a prose string for inline `` `code` `` and `**bold**` runs, returning
-/// `(code_ranges, bold_ranges)` as byte offsets `[start, end)` into `content`.
-/// Delimiters are *kept* in `content` (the caller owns the string), so the
-/// ranges cover the full marker-inclusive span — matching the contract that
-/// copy/selection see plain text and rendering paints over the quoted region.
-pub fn scan_inline(content: &str) -> (Vec<CodeRange>, Vec<CodeRange>) {
+/// Scan a prose string for inline code, bold, math, and links. Delimiters are
+/// kept in `content`; renderers decide which marker bytes are visually elided.
+pub fn scan_inline(content: &str) -> InlineScan {
     let bytes = content.as_bytes();
-    let mut code_ranges = Vec::new();
-    let mut bold_ranges = Vec::new();
+    let mut out = InlineScan::default();
     let mut i = 0usize;
 
     while i < bytes.len() {
-        // Inline code: a run of backticks, closed by the same number.
+        // Inline code: a run of backticks, closed by the same number. Nothing
+        // inside code is scanned for math/links.
         if bytes[i] == b'`' {
             let tick_count = bytes[i..].iter().take_while(|&&b| b == b'`').count();
             let close_start = i + tick_count;
-            // Find a matching-length closing fence.
             if let Some(rel) = find_backtick_run(&content[close_start..], tick_count) {
                 let end = close_start + rel + tick_count;
-                code_ranges.push((i, end));
+                out.code_ranges.push((i, end));
                 i = end;
                 continue;
             }
         }
+
+        if let Some((range, label_range, url)) = parse_markdown_link(content, i) {
+            out.link_ranges.push(LinkRange {
+                range,
+                label_range,
+                url,
+            });
+            i = range.1;
+            continue;
+        }
+        if let Some((range, label_range, url)) = parse_tex_link(content, i) {
+            out.link_ranges.push(LinkRange {
+                range,
+                label_range,
+                url,
+            });
+            i = range.1;
+            continue;
+        }
+        if let Some((start, end, url)) = parse_bare_url(content, i) {
+            out.link_ranges.push(LinkRange {
+                range: (start, end),
+                label_range: (start, end),
+                url,
+            });
+            i = end;
+            continue;
+        }
+
+        // Inline math: `$…$` or `\(…\)`. Keep this after links so URLs with `$`
+        // query fragments are not split before link detection gets a chance.
+        if bytes[i] == b'$'
+            && !starts_with_at(content, i, "$$")
+            && let Some(rel) = content[i + 1..].find('$')
+        {
+            let end = i + 1 + rel + 1;
+            if end > i + 2 {
+                out.math_ranges.push((i, end));
+                i = end;
+                continue;
+            }
+        }
+        if starts_with_at(content, i, "\\(")
+            && let Some(rel) = content[i + 2..].find("\\)")
+        {
+            let end = i + 2 + rel + 2;
+            if end > i + 4 {
+                out.math_ranges.push((i, end));
+                i = end;
+                continue;
+            }
+        }
+
         // Bold: `**…**`.
         if bytes[i] == b'*'
             && i + 1 < bytes.len()
@@ -1678,13 +1849,86 @@ pub fn scan_inline(content: &str) -> (Vec<CodeRange>, Vec<CodeRange>) {
             && let Some(rel) = content[i + 2..].find("**")
         {
             let end = i + 2 + rel + 2;
-            bold_ranges.push((i, end));
+            out.bold_ranges.push((i, end));
             i = end;
             continue;
         }
         i += 1;
     }
-    (code_ranges, bold_ranges)
+    out
+}
+
+fn starts_with_at(s: &str, i: usize, needle: &str) -> bool {
+    s.as_bytes().get(i..i + needle.len()) == Some(needle.as_bytes())
+}
+
+fn parse_markdown_link(content: &str, i: usize) -> Option<ParsedLink> {
+    if content.as_bytes().get(i) != Some(&b'[') {
+        return None;
+    }
+    let label_end = i + 1 + content[i + 1..].find(']')?;
+    let url_start = label_end + 1;
+    if content.as_bytes().get(url_start) != Some(&b'(') {
+        return None;
+    }
+    let url_end = url_start + 1 + content[url_start + 1..].find(')')?;
+    let raw_url = content[url_start + 1..url_end].trim();
+    let url = normalize_http_url(raw_url)?;
+    Some(((i, url_end + 1), (i + 1, label_end), url))
+}
+
+fn parse_tex_link(content: &str, i: usize) -> Option<ParsedLink> {
+    if starts_with_at(content, i, "\\url{") {
+        let url_start = i + "\\url{".len();
+        let url_end = url_start + content[url_start..].find('}')?;
+        let url = normalize_http_url(content[url_start..url_end].trim())?;
+        return Some(((i, url_end + 1), (url_start, url_end), url));
+    }
+    if starts_with_at(content, i, "\\href{") {
+        let url_start = i + "\\href{".len();
+        let url_end = url_start + content[url_start..].find('}')?;
+        let after_url = url_end + 1;
+        if content.as_bytes().get(after_url) != Some(&b'{') {
+            return None;
+        }
+        let label_start = after_url + 1;
+        let label_end = label_start + content[label_start..].find('}')?;
+        let url = normalize_http_url(content[url_start..url_end].trim())?;
+        return Some(((i, label_end + 1), (label_start, label_end), url));
+    }
+    None
+}
+
+fn parse_bare_url(content: &str, i: usize) -> Option<(usize, usize, String)> {
+    if !(starts_with_at(content, i, "https://") || starts_with_at(content, i, "http://")) {
+        return None;
+    }
+    let mut end = i;
+    for (offset, ch) in content[i..].char_indices() {
+        if ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'') {
+            break;
+        }
+        end = i + offset + ch.len_utf8();
+    }
+    while end > i
+        && matches!(
+            content.as_bytes()[end - 1],
+            b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']'
+        )
+    {
+        end -= 1;
+    }
+    let url = normalize_http_url(&content[i..end])?;
+    Some((i, end, url))
+}
+
+fn normalize_http_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.starts_with("https://") || raw.starts_with("http://") {
+        Some(raw.to_string())
+    } else {
+        None
+    }
 }
 
 /// Find the byte offset of a run of exactly `n` backticks within `s`.
@@ -1820,6 +2064,21 @@ fn clamp_ranges(ranges: &[CodeRange], len: usize) -> Vec<CodeRange> {
         .collect()
 }
 
+fn clamp_link_ranges(ranges: &[LinkRange], len: usize) -> Vec<LinkRange> {
+    ranges
+        .iter()
+        .filter_map(|link| {
+            let range = (link.range.0.min(len), link.range.1.min(len));
+            let label_range = (link.label_range.0.min(len), link.label_range.1.min(len));
+            (range.0 < range.1 && label_range.0 < label_range.1).then(|| LinkRange {
+                range,
+                label_range,
+                url: link.url.clone(),
+            })
+        })
+        .collect()
+}
+
 fn push_block(blocks: &mut Vec<Block>, block: Block) {
     if block.is_empty() && !matches!(block, Block::Rule | Block::Break) {
         return;
@@ -1919,6 +2178,36 @@ mod tests {
             i += 1;
         }
         ranges
+    }
+
+    #[test]
+    fn parses_inline_math_and_http_links_outside_code() {
+        let text = "Use $x^2$ and [Rust](https://www.rust-lang.org), not `https://ignored.test`.";
+        let blocks = parse_blocks(text);
+        let Block::Text {
+            math_ranges,
+            link_ranges,
+            code_ranges,
+            ..
+        } = &blocks[0]
+        else {
+            panic!("expected text block");
+        };
+        assert_eq!(*math_ranges, vec![(4, 9)]);
+        assert_eq!(code_ranges.len(), 1);
+        assert_eq!(link_ranges.len(), 1);
+        assert_eq!(link_ranges[0].label_range, (15, 19));
+        assert_eq!(link_ranges[0].url, "https://www.rust-lang.org");
+    }
+
+    #[test]
+    fn parses_display_math_blocks() {
+        let blocks = parse_blocks("Before\n\n$$\n\\int_0^\\infty e^{-x} dx = 1\n$$\n\nAfter");
+        assert!(matches!(&blocks[0], Block::Text { content, .. } if content == "Before"));
+        assert!(
+            matches!(&blocks[2], Block::Math { content } if content.contains("\\int_0^\\infty"))
+        );
+        assert!(matches!(&blocks[4], Block::Text { content, .. } if content == "After"));
     }
 
     #[test]

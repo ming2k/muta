@@ -105,6 +105,8 @@ pub struct LayoutMap {
     /// to that cell (row-major index: `row * ncols + col`, header is row 0)
     /// rather than to the whole grid line.
     table_cell_hits: Vec<TableCellHit>,
+    /// Hit boxes for visible hyperlink labels.
+    link_hits: Vec<LinkHit>,
     /// The visible transcript content rect for the frame: the horizontal band
     /// (inside the `TRANSCRIPT_H_INSET` gutters) spanning only the rows where
     /// transcript content was actually drawn. A click that doesn't resolve to
@@ -171,6 +173,15 @@ pub struct TableCellHit {
     pub segment: TableCellSegment,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkHit {
+    pub message_idx: usize,
+    pub block_idx: usize,
+    pub range: (usize, usize),
+    pub url: String,
+    pub rect: Rect,
+}
+
 impl LayoutMap {
     pub fn new() -> Self {
         Self::default()
@@ -214,6 +225,19 @@ impl LayoutMap {
     /// Resolve a screen point to the table cell it lies inside, if any.
     pub fn table_cell_at(&self, x: u16, y: u16) -> Option<&TableCellHit> {
         self.table_cell_hits.iter().find(|h| {
+            h.rect.x <= x
+                && x < h.rect.x + h.rect.width
+                && h.rect.y <= y
+                && y < h.rect.y + h.rect.height
+        })
+    }
+
+    pub fn push_link_hit(&mut self, hit: LinkHit) {
+        self.link_hits.push(hit);
+    }
+
+    pub fn link_at(&self, x: u16, y: u16) -> Option<&LinkHit> {
+        self.link_hits.iter().find(|h| {
             h.rect.x <= x
                 && x < h.rect.x + h.rect.width
                 && h.rect.y <= y

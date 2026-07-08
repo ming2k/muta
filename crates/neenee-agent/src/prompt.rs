@@ -7,9 +7,9 @@
 //! context from live agent state each round and asks the registry to compose
 //! the active system sections in rank order.
 //!
-//! The default system sections ([`IdentityPreamble`], [`ConcisenessGuidance`],
-//! [`ToneGuidance`], [`PersistenceGuidance`], [`PursuitObjective`],
-//! [`DelegationGuidance`]) compose the system message in rank order: sections
+//! The default system sections ([`IdentityPreamble`], [`ToneGuidance`],
+//! [`PersistenceGuidance`], [`PursuitObjective`], [`DelegationGuidance`])
+//! compose the system message in rank order: sections
 //! that need a visual gap include a leading `\n` in their own `render`, so
 //! joining on a single `\n` preserves a stable layout.
 //!
@@ -75,37 +75,6 @@ impl PromptSection for ToneGuidance {
     }
     fn render(&self, _ctx: &PromptContext) -> Option<String> {
         None
-    }
-}
-
-/// Output-length guidance. Always active: applies to every turn of the
-/// principal and every envoy. Fuses opencode's "minimize tokens, no
-/// preamble/postamble" with codex's "scale depth to change size, never paste
-/// whole files / before-after blocks" into one tight paragraph. Leading `\n`
-/// separates it from the identity preamble.
-struct ConcisenessGuidance;
-
-const CONCISENESS: &str = "\nBe concise. Address only the task at hand; skip tangents, greetings, \
-                           and recaps of what you just did. Scale depth to change size — a \
-                           one-line answer for a small fix, a short bullet list for a multi-file \
-                           change. Never paste whole files or before/after blocks; cite file \
-                           paths and symbol names instead.";
-
-impl PromptSection for ConcisenessGuidance {
-    fn id(&self) -> &'static str {
-        "system.conciseness"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
-    }
-    fn rank(&self) -> u32 {
-        15
-    }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
-        Some(String::from(CONCISENESS))
     }
 }
 
@@ -318,7 +287,6 @@ impl PromptSection for FileEditingGuidance {
 pub(crate) fn default_prompt_registry() -> PromptRegistry {
     let mut registry = PromptRegistry::new();
     registry.register(IdentityPreamble);
-    registry.register(ConcisenessGuidance);
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);

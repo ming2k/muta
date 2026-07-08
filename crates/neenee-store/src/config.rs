@@ -660,6 +660,66 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_inner(self, false)
+    }
+
+    /// Persist config while leaving the on-disk `default_provider` /
+    /// `default_model` selection untouched. Used by session-scoped mutations
+    /// (the `/provider` switch, per-session edits) that carry an *effective*
+    /// `Config` already overlaid with a session's provider pin: writing that
+    /// pin to `config.toml` would leak one session's choice into every other
+    /// concurrent session and the next fresh session.
+    ///
+    /// The lock + disk read makes this cross-process safe: another `neenee`
+    /// writing its own selection concurrently is not clobbered, and this
+    /// process's latest non-selection fields (favorites, providers, keys, …)
+    /// still land on disk. If the on-disk selection no longer names a provider
+    /// that exists after this write (e.g. a provider was deleted), it falls
+    /// back to the first remaining provider.
+    pub fn save_preserving_provider_selection(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_inner(self, true)
+    }
+
+    fn save_inner(
+        &self,
+        preserve_provider_selection: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Serialise against other `neenee` instances so concurrent config
+        // writes do not lost-update each other (ADR-0018 pattern). The lock is
+        // held on the companion `.lock` file (not the data file, which is
+        // rewritten via temp + rename and swaps inodes) for the whole RMW.
+        let config_path = Self::config_file_path();
+        let _lock = fsutil::FileLock::acquire(&config_path)
+            .map_err(|e| format!("could not lock config file: {e}"))?;
+
+        // The effective selection to write back. When preserving, re-read the
+        // on-disk value under the lock so another process's write survives.
+        let (default_provider, default_model) = if preserve_provider_selection {
+            let on_disk: Config = fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|content| toml::from_str(&content).ok())
+                .unwrap_or_default();
+            let provider = if on_disk.default_provider.is_empty()
+                || !self
+                    .providers
+                    .iter()
+                    .any(|p| p.id == on_disk.default_provider)
+            {
+                // On-disk default is gone (or never set): fall back to this
+                // writer's first remaining provider so the selection is still
+                // usable, rather than dangling.
+                self.providers
+                    .first()
+                    .map(|p| p.id.clone())
+                    .unwrap_or_default()
+            } else {
+                on_disk.default_provider
+            };
+            (provider, on_disk.default_model)
+        } else {
+            (self.default_provider.clone(), self.default_model.clone())
+        };
+
         // ── secrets → credentials.toml (0600) ──────────────────────────────
         // Collect every resolved key into the secrets file so it is the single
         // home for credentials. Empty/whitespace keys are skipped — a keyless
@@ -700,8 +760,12 @@ impl Config {
                 channel.api_key = None;
             }
         }
+        // Restore the on-disk selection (or the computed fallback) so a
+        // session-scoped write does not stamp its own provider pin globally.
+        redacted.default_provider = default_provider;
+        redacted.default_model = default_model;
         let bytes = toml::to_string_pretty(&redacted)?.into_bytes();
-        fsutil::atomic_write_bytes(&Self::config_file_path(), &bytes)?;
+        fsutil::atomic_write_bytes(&config_path, &bytes)?;
         Ok(())
     }
 

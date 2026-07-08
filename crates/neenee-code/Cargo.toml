@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 chrono = { workspace = true }
 unicode-segmentation.workspace = true
+webbrowser = { version = "1.2", features = ["hardened"] }
 
 [dev-dependencies]
 insta = "1.48"

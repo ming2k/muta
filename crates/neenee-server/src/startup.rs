@@ -58,7 +58,7 @@ define_builtin_commands! {
     Clear       = "/clear"        : "Clear the conversation history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
     Config      = "/config"       : "Open user configuration",
-    Unattended  = "/unattended"   : "Toggle bypassing write-tool permission prompts (on/off)",
+    Unattended  = "/unattended"   : "Toggle unattended mode — agent runs without human intervention (on/off)",
     Review      = "/review"       : "Run an on-demand session-review diagnostic of the current turn",
     Search      = "/search"       : "Semantic search over the project's session history",
     Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
@@ -135,7 +135,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --unattended            bypass write-tool permission prompts for this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --unattended            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
                 cmd
             );
             std::process::exit(2);

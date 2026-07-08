@@ -620,16 +620,14 @@ fn take_last_provider_meta_drains_thinking_signature() {
 }
 
 #[test]
-fn prompt_hints_describe_thinking_signature_replay() {
+fn prompt_hints_emit_no_system_guidance() {
     let provider = AnthropicMessagesProvider::new(
         "k".to_string(),
         "claude-sonnet-4-6".to_string(),
         "https://x",
     );
-    assert!(
-        provider
-            .prompt_hints()
-            .system_guidance
-            .contains("Thinking signatures")
-    );
+    // No protocol note: thinking signatures travel as opaque provider_meta
+    // and replay into the wire thinking block only — never into content the
+    // model can read, so there is nothing for a prompt note to guard.
+    assert!(provider.prompt_hints().system_guidance.is_empty());
 }

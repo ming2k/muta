@@ -1,6 +1,7 @@
 //! Conversation message types shared across the harness, providers, and UI.
 
 use crate::hooks::HookEventKind;
+use crate::todos::unix_now;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +187,22 @@ pub struct Message {
     /// as `origin: None` without migration (ADR-0017 / ADR-0022).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<InjectionOrigin>,
+    /// Wall-clock time this message was produced, in Unix-epoch seconds.
+    /// Stamped at construction so it survives event-log compaction — which
+    /// rewrites the `.jsonl` to a single seed event and thereby drops every
+    /// `EventEnvelope::timestamp` — giving each message a durable timestamp
+    /// that travels with it through the snapshot, the archive, and
+    /// context-projection. Kept off the provider wire (`to_wire` zeroes it).
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]` lets legacy
+    /// snapshots load unchanged as `timestamp: None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+    /// Exact wall-clock send time for user-authored transcript messages, in
+    /// Unix-epoch milliseconds. This is storage/UI metadata only: it preserves
+    /// the TUI's displayed send time across resume without changing provider
+    /// requests, which continue to use [`Message::to_wire`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at_ms: Option<u64>,
 }
 
 /// Sidecar metadata for an envoy run. Lives next to
@@ -253,6 +270,8 @@ impl Message {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: Some(unix_now()),
+            sent_at_ms: None,
         }
     }
 
@@ -294,6 +313,11 @@ impl Message {
         self
     }
 
+    pub fn with_sent_at_ms(mut self, sent_at_ms: u64) -> Self {
+        self.sent_at_ms = Some(sent_at_ms);
+        self
+    }
+
     /// Stamp the provider/solution id and model that produced this message,
     /// so the transcript stays traceable when a session spans multiple models.
     pub fn with_attribution(
@@ -323,6 +347,8 @@ impl Message {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: Some(unix_now()),
+            sent_at_ms: None,
         }
     }
 
@@ -384,6 +410,8 @@ impl Message {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: None,
+            sent_at_ms: None,
         }
     }
 }
@@ -419,6 +447,7 @@ mod tests {
         let m: Message = serde_json::from_str(json).unwrap();
         assert_eq!(m.content, "hi");
         assert!(m.children.is_none());
+        assert!(m.sent_at_ms.is_none());
     }
 
     #[test]
@@ -457,6 +486,8 @@ mod tests {
                 children: None,
                 envoy_meta: None,
                 origin: None,
+                timestamp: None,
+                sent_at_ms: None,
             },
             inner_child,
         ];
@@ -509,7 +540,8 @@ mod tests {
             .with_children(vec![Message::new(Role::Assistant, "envoy internal turn")])
             .with_envoy_meta(EnvoyMeta::default())
             .with_attribution("kimi", "kimi-code")
-            .with_origin(InjectionOrigin::new(InjectionKind::EnvoySteer));
+            .with_origin(InjectionOrigin::new(InjectionKind::EnvoySteer))
+            .with_sent_at_ms(1_700_000_000_123);
 
         let w = m.to_wire();
         assert_eq!(w.role, Role::Tool);
@@ -522,6 +554,7 @@ mod tests {
             "attribution stripped"
         );
         assert!(w.origin.is_none(), "origin stripped");
+        assert!(w.sent_at_ms.is_none(), "UI timestamp stripped");
         assert!(!w.hidden, "hidden reset to false");
         assert!(
             w.content_blob.is_none() && w.display_content.is_none(),

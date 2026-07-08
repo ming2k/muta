@@ -14,7 +14,7 @@ use neenee_agent::orchestration::{
 };
 use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{Agent, AgentIdentity};
-use neenee_core::{AgentResponse, Message, ParentStatus, Provider, Tool};
+use neenee_core::{AgentResponse, ParentStatus, Provider, Tool};
 use neenee_store::config::Config;
 use neenee_store::session::SessionStore;
 use std::sync::RwLock;
@@ -28,25 +28,25 @@ use tokio_util::sync::CancellationToken;
 use crate::agent_setup::active_context_window;
 
 /// A live `/btw` side conversation (ADR-0017). Peers the primary session's
-/// loose per-turn state with its own [`Agent`], [`SessionStore`], history
-/// mutex, and cancellation slot, so a side turn runs concurrently with the
-/// primary turn without disturbing the primary's token/generation. The side
-/// store is pinned to a self-contained file written by
-/// [`SessionStore::fork_to_side`]; only that file is mutated by side turns.
+/// loose per-turn state with its own [`Agent`], [`SessionStore`], and
+/// cancellation slot, so a side turn runs concurrently with the primary turn
+/// without disturbing the primary's token/generation. The side store is the
+/// single source of truth for the side's message list (ADR-0048); it is pinned
+/// to a self-contained file written by [`SessionStore::fork_to_side`], and
+/// only that file is mutated by side turns.
 pub struct SideSession {
     pub id: String,
     pub agent: Arc<Agent>,
     pub store: Arc<SessionStore>,
-    pub history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     pub token_slot: Arc<AsyncRwLock<Option<CancellationToken>>>,
     pub generation: Arc<AtomicU64>,
 }
 
 impl SideSession {
     /// Fork the primary into a self-contained side file and construct a fresh
-    /// [`Agent`] + store + history bound to it. The primary's active pointer,
-    /// history, and in-flight turn are left untouched. Returns [`None`] when
-    /// the fork or side-store open fails; the caller surfaces the error.
+    /// [`Agent`] + store bound to it. The primary's active pointer and
+    /// in-flight turn are left untouched. Returns [`None`] when the fork or
+    /// side-store open fails; the caller surfaces the error.
     pub async fn build(
         primary: &SessionStore,
         base_tools: &[Arc<dyn Tool>],
@@ -57,7 +57,6 @@ impl SideSession {
     ) -> Result<Self, String> {
         let (side_id, _parent_id) = primary.fork_to_side().await?;
         let store = Arc::new(primary.open_side(&side_id).await?);
-        let history = Arc::new(tokio::sync::Mutex::new(store.model_window().await));
 
         // Fresh side agent. The provider is shared through the same
         // `ProxyProvider` holder as the primary, which clones the inner
@@ -75,17 +74,17 @@ impl SideSession {
         ));
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
-        // A side conversation is a quick aside; unattended its write tools so
-        // it never raises a permission modal whose reply could not be routed
-        // back to the side `Agent` through the shared permission channel. This
-        // mirrors the envoy policy (`envoy_tool.rs` sets `unattended`).
+        // A side conversation is a quick aside; run it unattended — without
+        // human intervention — so it never raises a permission modal whose
+        // reply could not be routed back to the side `Agent` through the
+        // shared permission channel. This mirrors the envoy policy
+        // (`envoy_tool.rs` sets `unattended`).
         agent.set_unattended(true);
 
         Ok(Self {
             id: side_id,
             agent,
             store,
-            history,
             token_slot: Arc::new(AsyncRwLock::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
         })
@@ -140,7 +139,6 @@ pub async fn start_active_turn(
     active_view_side: &AtomicBool,
     side: &Arc<AsyncRwLock<Option<SideSession>>>,
     principal: &Arc<Agent>,
-    primary_history: &Arc<tokio::sync::Mutex<Vec<Message>>>,
     primary_session: &Arc<SessionStore>,
     primary_token_slot: &Arc<AsyncRwLock<Option<CancellationToken>>>,
     primary_generation: &Arc<AtomicU64>,
@@ -157,13 +155,12 @@ pub async fn start_active_turn(
     // Resolve which live session this turn belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
     // at the end of this statement, before the turn starts.
-    let (agent, history, session, token_slot, generation, session_id) =
+    let (agent, session, token_slot, generation, session_id) =
         if active_view_side.load(Ordering::SeqCst) {
             let guard = side.read().await;
             if let Some(s) = guard.as_ref() {
                 (
                     s.agent.clone(),
-                    s.history.clone(),
                     s.store.clone(),
                     s.token_slot.clone(),
                     s.generation.clone(),
@@ -172,7 +169,6 @@ pub async fn start_active_turn(
             } else {
                 (
                     principal.clone(),
-                    primary_history.clone(),
                     primary_session.clone(),
                     primary_token_slot.clone(),
                     primary_generation.clone(),
@@ -182,7 +178,6 @@ pub async fn start_active_turn(
         } else {
             (
                 principal.clone(),
-                primary_history.clone(),
                 primary_session.clone(),
                 primary_token_slot.clone(),
                 primary_generation.clone(),
@@ -193,7 +188,6 @@ pub async fn start_active_turn(
     start_interactive_round(
         InteractiveRoundContext {
             agent,
-            history,
             tx: tx.clone(),
             token_slot,
             generation_counter: generation,

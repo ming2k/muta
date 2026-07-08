@@ -56,12 +56,6 @@ pub enum Modal {
     /// activates; `Esc` returns to the picker. See `App::custom_field` and
     /// friends.
     CustomProvider,
-    /// Add-model overlay for a custom provider: pick a model from the provider's
-    /// protocol candidates (cycled with `←/→`) or the synthetic "Custom…" slot
-    /// (free-text id in the borrowed input line). `Enter` sends
-    /// `AgentRequest::AddProviderModel`; `Esc` returns to the stage-2 model list.
-    /// Reached from the "＋ Add model" row in a custom provider's stage-2 list.
-    AddModel,
     Help,
     Sessions,
     /// Tools manager modal: a centered, dismissable, selectable list of every
@@ -218,11 +212,7 @@ impl Modal {
     pub fn owns_caret(self) -> bool {
         matches!(
             self,
-            Modal::Provider
-                | Modal::ModelEditor
-                | Modal::AddModel
-                | Modal::CustomProvider
-                | Modal::HistorySearch
+            Modal::Provider | Modal::ModelEditor | Modal::CustomProvider | Modal::HistorySearch
         )
     }
 }

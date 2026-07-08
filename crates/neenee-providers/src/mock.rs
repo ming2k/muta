@@ -26,6 +26,8 @@ impl Provider for MockProvider {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: Some(neenee_core::todos::unix_now()),
+            sent_at_ms: None,
         })
     }
 

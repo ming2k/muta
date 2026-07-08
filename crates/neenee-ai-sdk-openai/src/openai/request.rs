@@ -51,6 +51,14 @@ pub struct BodyInput<'a> {
 ///
 /// Strips images for non-vision models and reconciles tool calls/results so
 /// the request is always wire-valid (see the module docs).
+///
+/// Projection contract (ADR-0048): the `messages` passed here are a clone of
+/// the round's working scratch, itself cloned from the session's authoritative
+/// `model_window` at turn start. This builder reads only wire-relevant fields
+/// via [`message_obj`] — `role`, `content`, `tool_calls`, `tool_call_id`,
+/// `images` — so durable sidecars (`children`, `envoy_meta`, `origin`) never
+/// reach the wire. Serialization is therefore a pure projection of the
+/// session: no field on the wire exists that the session did not produce.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     let BodyInput {
         model: model_id,
@@ -321,6 +329,8 @@ mod tests {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: None,
+            sent_at_ms: None,
         };
         let good_result = Message {
             role: Role::Tool,

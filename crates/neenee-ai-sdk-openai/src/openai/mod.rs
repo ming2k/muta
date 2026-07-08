@@ -119,8 +119,13 @@ impl Provider for OpenAiCompatProvider {
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
+        // No protocol hint: the OpenAI wire surface uses native tool calls by
+        // construction, and the `ToolCallEchoFilter` deterministically strips
+        // any text-mirrored call regardless of prompting. An in-prompt note
+        // would only restate facts the model already has and the harness
+        // already enforces.
         ProviderPromptHints {
-            system_guidance: "OpenAI-compatible protocol note: use native tool calls when you need a tool; do not also write JSON tool-call mirrors in assistant prose.",
+            system_guidance: "",
         }
     }
 
@@ -390,13 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn prompt_hints_describe_openai_tool_projection() {
+    fn prompt_hints_emit_no_system_guidance() {
         let provider = OpenAiCompatProvider::new("test-key".to_string(), "test-model".to_string());
-        assert!(
-            provider
-                .prompt_hints()
-                .system_guidance
-                .contains("native tool calls")
-        );
+        // No protocol note: native tool calls are the wire default and the
+        // ToolCallEchoFilter strips text-mirrored calls regardless.
+        assert!(provider.prompt_hints().system_guidance.is_empty());
     }
 }

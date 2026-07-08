@@ -9,6 +9,7 @@ use neenee_tui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::document::LinkRange;
 use crate::selection::SelectionState;
 
 /// Produce a run of spaces that fills the rest of a full-width line so a
@@ -165,6 +166,31 @@ pub(super) fn bold_delim_local_ranges(
     out
 }
 
+pub(super) fn link_delim_local_ranges(
+    text: &str,
+    line_start_byte: usize,
+    link_ranges: &[LinkRange],
+) -> Vec<(usize, usize)> {
+    let line_end_byte = line_start_byte + text.len();
+    let mut out = Vec::new();
+    for link in link_ranges {
+        let (rs, re) = link.range;
+        let (ls, le) = link.label_range;
+        if re <= line_start_byte || rs >= line_end_byte {
+            continue;
+        }
+        let pieces = [(rs, ls), (le, re)];
+        for (lo, hi) in pieces {
+            let clipped_lo = lo.max(line_start_byte);
+            let clipped_hi = hi.min(line_end_byte);
+            if clipped_lo < clipped_hi {
+                out.push((clipped_lo - line_start_byte, clipped_hi - line_start_byte));
+            }
+        }
+    }
+    out
+}
+
 /// Display width of `text` with the given zero-width (`hidden`) ranges
 /// excluded. Hidden ranges are ASCII markup delimiters, so their byte length
 /// equals their display width and a simple subtraction is exact.
@@ -187,8 +213,9 @@ pub(super) fn markup_visible_width(
     line_start_byte: usize,
     code_ranges: &[(usize, usize)],
     bold_ranges: &[(usize, usize)],
+    math_ranges: &[(usize, usize)],
 ) -> usize {
-    let hidden = markup_hidden_ranges(text, line_start_byte, code_ranges, bold_ranges);
+    let hidden = markup_hidden_ranges(text, line_start_byte, code_ranges, bold_ranges, math_ranges);
     visible_width(text, &hidden)
 }
 
@@ -203,6 +230,7 @@ pub(super) fn markup_hidden_ranges(
     line_start_byte: usize,
     code_ranges: &[(usize, usize)],
     bold_ranges: &[(usize, usize)],
+    math_ranges: &[(usize, usize)],
 ) -> Vec<(usize, usize)> {
     let mut hidden = bold_delim_local_ranges(text, line_start_byte, bold_ranges);
     let bytes = text.as_bytes();
@@ -220,6 +248,25 @@ pub(super) fn markup_hidden_ranges(
         }
         if hi > 0 && bytes.get(hi - 1) == Some(&b'`') && hi - 1 > lo {
             hidden.push((hi - 1, hi));
+        }
+    }
+    for &(cs, ce) in math_ranges {
+        if ce <= line_start_byte || cs >= line_end_byte {
+            continue;
+        }
+        let lo = cs.saturating_sub(line_start_byte);
+        let hi = (ce - line_start_byte).min(text.len());
+        if bytes.get(lo) == Some(&b'$') && hi > lo {
+            hidden.push((lo, lo + 1));
+        }
+        if hi > 0 && bytes.get(hi - 1) == Some(&b'$') && hi - 1 > lo {
+            hidden.push((hi - 1, hi));
+        }
+        if bytes.get(lo..lo + 2) == Some(b"\\(") {
+            hidden.push((lo, lo + 2));
+        }
+        if hi >= 2 && bytes.get(hi - 2..hi) == Some(b"\\)") && hi - 2 > lo {
+            hidden.push((hi - 2, hi));
         }
     }
     hidden
@@ -251,9 +298,13 @@ pub(super) fn line_spans_rich(
     selected: Option<(usize, usize)>,
     code_ranges: &[(usize, usize)],
     bold_ranges: &[(usize, usize)],
+    math_ranges: &[(usize, usize)],
+    link_ranges: &[LinkRange],
     base: Style,
     code_fg: Color,
     code_bg: Color,
+    math_fg: Color,
+    link_fg: Color,
     selected_bg: Color,
 ) -> Line<'static> {
     let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
@@ -281,9 +332,39 @@ pub(super) fn line_spans_rich(
     // inner `[content_lo, content_hi)` carries `BOLD` and the surrounding
     // `**` delimiters are visually elided (zero-width).
     let bold_regions = bold_local_regions(text, line_start_byte, bold_ranges);
+    let mut local_math: Vec<(usize, usize)> = Vec::new();
+    for &(cs, ce) in math_ranges {
+        if ce <= line_start_byte || cs >= line_end_byte {
+            continue;
+        }
+        let lo = cs.saturating_sub(line_start_byte);
+        let hi = (ce - line_start_byte).min(text.len());
+        if lo < hi {
+            local_math.push((lo, hi));
+        }
+    }
+    let mut local_links: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for link in link_ranges {
+        let (rs, re) = link.range;
+        let (ls, le) = link.label_range;
+        if re <= line_start_byte || rs >= line_end_byte {
+            continue;
+        }
+        let lo = rs.saturating_sub(line_start_byte);
+        let hi = (re - line_start_byte).min(text.len());
+        let label_lo = ls.max(line_start_byte).saturating_sub(line_start_byte);
+        let label_hi = le.min(line_end_byte).saturating_sub(line_start_byte);
+        if lo < hi {
+            local_links.push((lo, label_lo, label_hi, hi));
+        }
+    }
 
-    // Fast path: no inline code or bold on this line → defer to the plain builder
-    if local_code.is_empty() && bold_regions.is_empty() {
+    // Fast path: no rich inline markup on this line → defer to the plain builder.
+    if local_code.is_empty()
+        && bold_regions.is_empty()
+        && local_math.is_empty()
+        && local_links.is_empty()
+    {
         return line_spans(prefix, prefix_style, text, selected, base, selected_bg);
     }
 
@@ -323,6 +404,27 @@ pub(super) fn line_spans_rich(
         points.push(content_hi);
         points.push(hi);
     }
+    for &(lo, hi) in &local_math {
+        points.push(lo);
+        points.push(hi);
+        let bytes = text.as_bytes();
+        if bytes.get(lo) == Some(&b'$') {
+            points.push(lo + 1);
+        } else if bytes.get(lo..lo + 2) == Some(b"\\(") {
+            points.push(lo + 2);
+        }
+        if hi > 0 && bytes.get(hi - 1) == Some(&b'$') {
+            points.push(hi - 1);
+        } else if hi >= 2 && bytes.get(hi - 2..hi) == Some(b"\\)") {
+            points.push(hi - 2);
+        }
+    }
+    for &(lo, label_lo, label_hi, hi) in &local_links {
+        points.push(lo);
+        points.push(label_lo);
+        points.push(label_hi);
+        points.push(hi);
+    }
     points.sort_unstable();
     points.dedup();
 
@@ -355,6 +457,40 @@ pub(super) fn line_spans_rich(
                 (p >= lo && p < content_lo) || (p >= content_hi && p < hi)
             })
     };
+    let math_state = |p: usize| -> Option<bool> {
+        local_math.iter().find_map(|&(lo, hi)| {
+            if p < lo || p >= hi {
+                return None;
+            }
+            let bytes = text.as_bytes();
+            let content_lo = if bytes.get(lo) == Some(&b'$') {
+                lo + 1
+            } else if bytes.get(lo..lo + 2) == Some(b"\\(") {
+                lo + 2
+            } else {
+                lo
+            };
+            let content_hi = if hi > 0 && bytes.get(hi - 1) == Some(&b'$') {
+                hi - 1
+            } else if hi >= 2 && bytes.get(hi - 2..hi) == Some(b"\\)") {
+                hi - 2
+            } else {
+                hi
+            };
+            Some(p >= content_lo && p < content_hi)
+        })
+    };
+    let link_state = |p: usize| -> Option<bool> {
+        local_links
+            .iter()
+            .find_map(|&(lo, label_lo, label_hi, hi)| {
+                if p >= lo && p < hi {
+                    Some(p >= label_lo && p < label_hi)
+                } else {
+                    None
+                }
+            })
+    };
 
     let mut i = 0;
     while i + 1 < points.len() {
@@ -366,19 +502,26 @@ pub(super) fn line_spans_rich(
         }
         let sel = is_sel(seg_lo);
         let bold = is_bold(seg_lo);
+        let math = math_state(seg_lo);
+        let link = link_state(seg_lo);
         match region(seg_lo) {
             None => {
-                if bold_delim(seg_lo) {
-                    // Bold delimiter `**`: visually elided (zero-width).
-                    // The bytes remain in `text` so copy still yields the
-                    // original `**…**` via the block's raw `content`; they
-                    // just occupy no screen columns (recorded in
-                    // `BlockRegion::hidden_ranges` for hit-testing).
+                if bold_delim(seg_lo) || matches!(math, Some(false)) || matches!(link, Some(false))
+                {
+                    // Formatting/link/math delimiters are visually elided
+                    // (zero-width). The bytes remain in `text` so copy still
+                    // yields the original markdown/TeX source.
                     continue;
                 } else {
                     let mut style = if sel { base.bg(selected_bg) } else { base };
                     if bold {
                         style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if math == Some(true) {
+                        style = style.fg(math_fg).add_modifier(Modifier::ITALIC);
+                    }
+                    if link == Some(true) {
+                        style = style.fg(link_fg).add_modifier(Modifier::UNDERLINED);
                     }
                     spans.push(Span::styled(text[seg_lo..seg_hi].to_string(), style));
                 }
@@ -391,6 +534,12 @@ pub(super) fn line_spans_rich(
                 };
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
+                }
+                if math == Some(true) {
+                    style = style.fg(math_fg).add_modifier(Modifier::ITALIC);
+                }
+                if link == Some(true) {
+                    style = style.fg(link_fg).add_modifier(Modifier::UNDERLINED);
                 }
                 spans.push(Span::styled(text[seg_lo..seg_hi].to_string(), style));
             }
@@ -731,14 +880,17 @@ mod tests {
     fn markup_visible_width_excludes_delimiters() {
         use super::{markup_hidden_ranges, markup_visible_width};
         // `code` → backticks elided, only "code" (4) counts.
-        assert_eq!(markup_visible_width("`code`", 0, &[(0, 6)], &[]), 4);
+        assert_eq!(markup_visible_width("`code`", 0, &[(0, 6)], &[], &[]), 4);
         // **bold** → `**` elided, only "bold" (4) counts.
-        assert_eq!(markup_visible_width("**bold**", 0, &[], &[(0, 8)]), 4);
+        assert_eq!(markup_visible_width("**bold**", 0, &[], &[(0, 8)], &[]), 4);
         // `a` is 1 visible col, `**b**` is 1 visible col → 2 total. Raw is 8.
-        assert_eq!(markup_visible_width("`a`**b**", 0, &[(0, 3)], &[(3, 8)]), 2);
+        assert_eq!(
+            markup_visible_width("`a`**b**", 0, &[(0, 3)], &[(3, 8)], &[]),
+            2
+        );
         // Hidden ranges are local byte offsets into the window.
         assert_eq!(
-            markup_hidden_ranges("`ab`", 0, &[(0, 4)], &[]),
+            markup_hidden_ranges("`ab`", 0, &[(0, 4)], &[], &[]),
             vec![(0, 1), (3, 4)]
         );
     }
@@ -754,7 +906,7 @@ mod tests {
         assert_eq!(lines[0].text, "**bold**");
         assert_eq!(lines[0].start_byte, 0);
         assert_eq!(
-            markup_visible_width(&lines[0].text, 0, &[], &[(0, 8)]),
+            markup_visible_width(&lines[0].text, 0, &[], &[(0, 8)], &[]),
             4,
             "rendered width must respect the 4-col budget"
         );
@@ -772,9 +924,13 @@ mod tests {
             None,
             &[],
             &[],
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
         // prefix (empty) + one content span
@@ -795,9 +951,13 @@ mod tests {
             None,
             &[code_range],
             &[],
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
 
@@ -834,9 +994,13 @@ mod tests {
             Some((0, text.len())),
             &[(2, 5)],
             &[],
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
         let content: Vec<_> = line.spans.iter().skip(1).collect();
@@ -858,9 +1022,13 @@ mod tests {
             None,
             &[(0, 6)],
             &[],
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
         assert_eq!(line.spans.len(), 2); // fast path
@@ -880,9 +1048,13 @@ mod tests {
             None,
             &[],
             &[bold_range],
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
 
@@ -915,9 +1087,13 @@ mod tests {
             Some((0, text.len())),
             &[],
             &[(2, 7)], // "**b**"
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
         let content: Vec<_> = line.spans.iter().skip(1).collect();
@@ -945,9 +1121,13 @@ mod tests {
             None,
             &[(4, 9)],   // "`foo`"
             &[(14, 21)], // "**bar**"
+            &[],
+            &[],
             Style::default().fg(Color::White),
             Color::Green,
             Color::Black,
+            Color::Magenta,
+            Color::Blue,
             Color::Red,
         );
         // Both backtick and `**` delimiters are zero-width: "use foo and bar now".

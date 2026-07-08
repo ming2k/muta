@@ -142,25 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // claiming it "never blocks startup".
     neenee_agent::dynamic::spawn_refresh(neenee_agent::modelsdev::ModelsDevCatalog);
 
-    let initial_provider: Arc<dyn Provider> =
-        catalog::build_provider_for(&config, catalog::default_provider_id(&config));
-
-    let provider_holder = Arc::new(RwLock::new(initial_provider));
-    let provider_for_task = provider_holder.clone();
-
-    let agent_provider = Arc::new(ProxyProvider::new(provider_holder));
-
-    // Shared skills registry for the skill tools. The registry starts EMPTY so
-    // discovering skills (scanning local dirs, cloning/fetching remote repos)
-    // never blocks the first frame; the background refresh loop re-scans all
-    // sources immediately on spawn and then every hour. The `Arc` is shared
-    // across the skill tools, the envoy profile, and the TUI, so once the
-    // background load lands they all observe the populated state.
-    let skills_registry = Arc::new(SkillRegistry::empty_with_config(&config.skills));
-    neenee_agent::dynamic::spawn_refresh(neenee_agent::dynamic::SkillCatalog::new(
-        (*skills_registry).clone(),
-    ));
-
     // CLI: `neenee` -> fresh session; `neenee resume [id]` -> resume a session;
     // `neenee doctor` -> verify stored session integrity. (`showcase` already
     // returned above.) The project root was resolved above, before the stores
@@ -214,6 +195,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(debug_assertions)]
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };
+
+    // C6: overlay the session's provider/model pin onto the effective config
+    // before building the initial provider. A session that previously ran
+    // `/provider` reopens on its own provider instead of the global default,
+    // so one session's choice never bleeds into another. Done after the session
+    // is loaded (and, for resume, after `resume` swapped in its data).
+    if let Some(selection) = session.provider_selection().await {
+        config.default_provider = selection.provider;
+        if let Some(model) = selection.model {
+            config.default_model = Some(model);
+        }
+    }
+
+    let initial_provider: Arc<dyn Provider> =
+        catalog::build_provider_for(&config, catalog::default_provider_id(&config));
+
+    let provider_holder = Arc::new(RwLock::new(initial_provider));
+    let provider_for_task = provider_holder.clone();
+
+    let agent_provider = Arc::new(ProxyProvider::new(provider_holder));
+
+    // Shared skills registry for the skill tools. The registry starts EMPTY so
+    // discovering skills (scanning local dirs, cloning/fetching remote repos)
+    // never blocks the first frame; the background refresh loop re-scans all
+    // sources immediately on spawn and then every hour. The `Arc` is shared
+    // across the skill tools, the envoy profile, and the TUI, so once the
+    // background load lands they all observe the populated state.
+    let skills_registry = Arc::new(SkillRegistry::empty_with_config(&config.skills));
+    neenee_agent::dynamic::spawn_refresh(neenee_agent::dynamic::SkillCatalog::new(
+        (*skills_registry).clone(),
+    ));
 
     // Built-in tools self-register via `inventory` (each tool carries a
     // `register_tool!` submission at its definition site) and are collected
@@ -300,7 +312,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = resp_tx.send(turn(
             &session.id().await,
             RoundEvent::Text(
-                "Unattended ON: write tools will execute without permission prompts.".to_string(),
+                "Unattended ON: the agent will run without human intervention (no confirmations, no questions).".to_string(),
             ),
         ));
     }
@@ -314,9 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_history_handle = tokio::task::spawn_blocking(Config::load_history);
     let provider_usage_handle = tokio::task::spawn_blocking(provider_usage::ProviderUsage::load);
 
-    let active_messages = session.model_window().await;
     let restored_messages = session.full_transcript().await;
-    let history = Arc::new(tokio::sync::Mutex::new(active_messages));
 
     // Mid-turn context projection: when pruning is enabled, install a gate that
     // clears old tool results between tool rounds once pressure crosses the
@@ -379,6 +389,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agent.set_todos(persisted_todos);
     }
 
+    // Restore session-scoped runtime state from the durable session
+    // (ADR-0048 Phase 2). Without these the resumed agent silently drops a
+    // user's tool-disable toggles, resets the turn counter (corrupting todo
+    // staleness), and disarms an in-flight pursuit.
+    agent.restore_disabled_tools(session.disabled_tools().await);
+    agent.restore_turn_count(session.turn_counter().await);
+    if let Some(runtime) = session.pursuit_runtime().await {
+        agent.restore_pursuit_runtime(runtime.armed, runtime.iterations);
+    }
+
     // Load history — awaited here after running concurrently with the agent
     // setup above. `unwrap` is safe: `spawn_blocking` only panics if the
     // closure panics, and neither read does.
@@ -430,7 +450,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         req_tx: req_tx_for_commands,
         agent,
         session: session.clone(),
-        history,
         config,
         provider_usage,
         provider_holder: provider_for_task,

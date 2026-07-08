@@ -99,10 +99,7 @@ fn edits_input_field(
     custom_text_field: bool,
 ) -> bool {
     match modal {
-        super::Modal::None
-        | super::Modal::ModelEditor
-        | super::Modal::AddModel
-        | super::Modal::InputInjection => true,
+        super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
         super::Modal::Provider => model_searching,
         super::Modal::HistorySearch => history_searching,
         // The provider editor edits the composer line on every visible field
@@ -188,14 +185,6 @@ pub enum InputAction {
     /// Delete the entire highlighted custom provider from the stage-1 list
     /// (`Shift+D`). Built-in providers are ignored by the handler.
     DeleteProvider,
-    /// Move the add-model overlay's suggestion highlight with `↑` / `↓`.
-    MoveAddModel {
-        forward: bool,
-    },
-    /// Submit the add-model overlay → `AgentRequest::AddProviderModel`.
-    SubmitAddModel,
-    /// Cancel the add-model overlay and return to the stage-2 model list.
-    CancelAddModel,
     /// Interrupt current operation.
     Interrupt,
     /// Open models modal.
@@ -942,10 +931,6 @@ pub fn process_event(
                         // Esc cancels the custom-provider editor and returns to the
                         // provider picker it was opened from.
                         InputAction::CancelCustomProvider
-                    } else if context.active_modal == super::Modal::AddModel {
-                        // Esc cancels the add-model overlay back to the stage-2
-                        // model list it was opened from.
-                        InputAction::CancelAddModel
                     } else if context.active_modal == super::Modal::InputInjection {
                         InputAction::InputCancel
                     } else if context.active_modal == super::Modal::HistorySearch
@@ -1020,6 +1005,26 @@ pub fn process_event(
                         InputAction::None
                     }
                 }
+                // F1 opens help on every terminal. Unlike Ctrl+H, F1 is a
+                // dedicated function key with no legacy control-byte
+                // collision, so it works under multiplexers (tmux/screen)
+                // that strip the Kitty keyboard protocol — see the Ctrl+H
+                // note below for why that one is less portable.
+                KeyCode::F(1) => {
+                    if context.active_modal == super::Modal::None {
+                        InputAction::OpenHelp
+                    } else {
+                        InputAction::None
+                    }
+                }
+                // Ctrl+H opens help only when the Kitty enhanced-keyboard
+                // protocol is active (enabled in `run_tui`). In a raw
+                // terminal Ctrl+H is byte-identical to Backspace (0x08), so
+                // without Kitty disambiguation it lands in the `Backspace`
+                // arm and never reaches here. Multiplexers like tmux that
+                // don't forward Kitty flags further collapse Ctrl+Backspace
+                // and Ctrl+H onto the same 0x08 byte, so both keys open
+                // help there. Use F1 or `?` for a portable shortcut.
                 KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if context.active_modal == super::Modal::None {
                         InputAction::OpenHelp
@@ -1051,7 +1056,6 @@ pub fn process_event(
                     super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                     super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
                     super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
-                    super::Modal::AddModel => InputAction::SubmitAddModel,
                     super::Modal::HistorySearch => InputAction::HistoryInsert,
                     super::Modal::Sessions => InputAction::OpenSelectedSession,
                     super::Modal::Permission => InputAction::PermissionSubmit,
@@ -1392,6 +1396,14 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Char(c) => {
+                    // `?` opens help from the top level when the input box is
+                    // empty — mirrors the conventional help key without ever
+                    // swallowing a `?` the user is typing. Like Ctrl+H it is
+                    // a fallback for terminals/multiplexers that lose the
+                    // Kitty protocol (see the Ctrl+H note above).
+                    if context.active_modal == super::Modal::None && c == '?' && input.is_empty() {
+                        return InputAction::OpenHelp;
+                    }
                     // Sibling envoy navigation works in both zones (it is a
                     // envoy view feature, not a typing-navigation thing)
                     // but only when no text is being composed.
@@ -1752,7 +1764,6 @@ pub fn process_event(
                     super::Modal::CustomProvider => {
                         InputAction::MoveCustomSuggestion { forward: false }
                     }
-                    super::Modal::AddModel => InputAction::MoveAddModel { forward: false },
                     super::Modal::ModelEditor | super::Modal::InputInjection => InputAction::None,
                     super::Modal::Help => InputAction::ScrollUp,
                     super::Modal::TokenReport => InputAction::ModalUp,
@@ -1808,7 +1819,6 @@ pub fn process_event(
                     super::Modal::CustomProvider => {
                         InputAction::MoveCustomSuggestion { forward: true }
                     }
-                    super::Modal::AddModel => InputAction::MoveAddModel { forward: true },
                     super::Modal::ModelEditor | super::Modal::InputInjection => InputAction::None,
                     super::Modal::Help => InputAction::ScrollDown,
                     super::Modal::TokenReport => InputAction::ModalDown,
@@ -3858,6 +3868,63 @@ mod tests {
         );
         assert_eq!(input, "foo bar ");
         assert_eq!(cursor, 8);
+    }
+
+    #[test]
+    fn f1_opens_help() {
+        // F1 is a portable help shortcut with no legacy control-byte
+        // collision, so it works under multiplexers (tmux) that strip the
+        // Kitty keyboard protocol — unlike Ctrl+H, which collapses to the
+        // Backspace byte (0x08) there.
+        let mut input = String::new();
+        let mut cursor = 0;
+        let action = run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::F(1),
+            KeyModifiers::NONE,
+            crate::tui::Modal::None,
+            false,
+        );
+        assert_eq!(action, InputAction::OpenHelp);
+    }
+
+    #[test]
+    fn question_mark_opens_help_when_input_empty() {
+        // `?` is the conventional help key. It opens help only from the top
+        // level with an empty input box, so typing a literal `?` is never
+        // swallowed.
+        let mut input = String::new();
+        let mut cursor = 0;
+        let action = run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+            crate::tui::Modal::None,
+            false,
+        );
+        assert_eq!(action, InputAction::OpenHelp);
+        assert!(input.is_empty(), "no char inserted when opening help");
+    }
+
+    #[test]
+    fn question_mark_inserts_when_input_nonempty() {
+        // With text already in the box, `?` is a normal character — the help
+        // shortcut only fires on an empty prompt.
+        let mut input = "what".to_string();
+        let mut cursor = 4;
+        let action = run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Char('?'),
+            KeyModifiers::NONE,
+            crate::tui::Modal::None,
+            false,
+        );
+        assert_eq!(action, InputAction::InsertChar('?'));
+        assert_eq!(input, "what?");
+        assert_eq!(cursor, 5);
     }
 
     #[test]

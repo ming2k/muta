@@ -12,16 +12,15 @@ use neenee_core::{
 };
 use neenee_store::{config::Config, session::SessionStore};
 
-/// Resume a session by id (or the active one when `id` is `None`), refreshing
-/// the in-memory `history` to match. Returns the resumed id plus the transcript
-/// for any caller that wants to display it.
+/// Resume a session by id (or the active one when `id` is `None`). The session
+/// store is the single source of truth (ADR-0048), so resuming only needs to
+/// repoint the store; there is no parallel history mirror to refresh. Returns
+/// the resumed id plus the transcript for any caller that wants to display it.
 pub async fn resume_session(
     session: &SessionStore,
-    history: &tokio::sync::Mutex<Vec<Message>>,
     id: Option<&str>,
 ) -> Result<(String, Vec<Message>), String> {
     let id = session.resume(id).await?;
-    *history.lock().await = session.model_window().await;
     Ok((id, session.full_transcript().await))
 }
 

@@ -51,6 +51,12 @@ pub enum ClickTarget {
         /// this logical cell.
         cell_segments: Vec<TableCellSegment>,
     },
+    /// Click landed on a rendered hyperlink label.
+    Link {
+        message_idx: usize,
+        block_idx: usize,
+        url: String,
+    },
     /// Click landed on regular content — prose, code, heading, quote, list,
     /// etc. — with a resolved semantic cursor.
     Content { cursor: SemanticCursor },
@@ -106,6 +112,14 @@ pub fn classify_click(layout_map: &LayoutMap, x: u16, y: u16) -> ClickTarget {
             };
         }
 
+        if let Some(hit) = layout_map.link_at(x, y) {
+            return ClickTarget::Link {
+                message_idx: hit.message_idx,
+                block_idx: hit.block_idx,
+                url: hit.url.clone(),
+            };
+        }
+
         return ClickTarget::Content { cursor };
     }
 
@@ -124,7 +138,7 @@ pub fn classify_click(layout_map: &LayoutMap, x: u16, y: u16) -> ClickTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::layout::{BlockRegion, LayoutMap, TableCellHit, TableCellSegment};
+    use crate::tui::layout::{BlockRegion, LayoutMap, LinkHit, TableCellHit, TableCellSegment};
     use neenee_tui::Rect;
 
     fn push_region(map: &mut LayoutMap, text: &str, msg_idx: usize, block_idx: usize, y: u16) {
@@ -268,6 +282,27 @@ mod tests {
             classify_click(&map, 2, 0),
             ClickTarget::TableCell { .. }
         ));
+    }
+
+    #[test]
+    fn link_beats_generic_content() {
+        let mut map = LayoutMap::new();
+        push_region(&mut map, "Rust", 0, 0, 0);
+        map.push_link_hit(LinkHit {
+            message_idx: 0,
+            block_idx: 0,
+            range: (0, 4),
+            url: "https://www.rust-lang.org".into(),
+            rect: Rect::new(0, 0, 4, 1),
+        });
+        assert_eq!(
+            classify_click(&map, 2, 0),
+            ClickTarget::Link {
+                message_idx: 0,
+                block_idx: 0,
+                url: "https://www.rust-lang.org".into(),
+            }
+        );
     }
 
     #[test]

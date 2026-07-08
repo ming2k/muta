@@ -72,6 +72,8 @@ impl Provider for PermissionTestProvider {
                 children: None,
                 envoy_meta: None,
                 origin: None,
+                timestamp: None,
+                sent_at_ms: None,
             })
         } else {
             Ok(Message::new(Role::Assistant, "done"))
@@ -284,13 +286,8 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     agent.ensure_system_prompt(&mut messages);
     let prompt = &messages[0].content;
 
-    // preamble \n\n conciseness \n\n persistence \n\n pursuit.
+    // preamble \n\n persistence \n\n pursuit.
     let expected = "You are neenee, an expert AI coding assistant.\n\
-     \n\
-     Be concise. Address only the task at hand; skip tangents, greetings, and recaps \
-     of what you just did. Scale depth to change size — a one-line answer for a small \
-     fix, a short bullet list for a multi-file change. Never paste whole files or \
-     before/after blocks; cite file paths and symbol names instead.\n\
      \n\
      See the task through to a real result in this turn. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \

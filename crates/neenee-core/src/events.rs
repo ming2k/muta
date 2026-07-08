@@ -10,6 +10,8 @@ pub enum AgentRequest {
     Chat {
         text: String,
         images: Vec<ImagePart>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sent_at_ms: Option<u64>,
     },
     SlashCommand(String),
     Interrupt,
@@ -84,13 +86,6 @@ pub enum AgentRequest {
         protocol: String,
         base_url: String,
         api_key: String,
-    },
-    /// Append a model to an existing user-defined provider (a new channel sharing
-    /// the provider's transport/endpoint/key), persist, and push a fresh picker
-    /// snapshot. Built-in providers reject this (curated model lists).
-    AddProviderModel {
-        provider_id: String,
-        model: String,
     },
     /// Remove a model (channel) from a user-defined provider, persist, and push a
     /// fresh picker snapshot. The last remaining model is kept (a provider must
@@ -443,8 +438,10 @@ pub enum RoundEvent {
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
     TodosUpdated(crate::todos::TodoList),
-    /// The unattended toggle changed. Emitted by `/unattended` so the TUI
-    /// can refresh its badge without waiting for the next harness snapshot.
+    /// The unattended toggle changed. `unattended` = the agent runs without
+    /// human intervention (no confirmations, no questions). Emitted by
+    /// `/unattended` so the TUI can refresh its badge without waiting for the
+    /// next harness snapshot.
     UnattendedChanged(bool),
     /// Mirrors [`AgentEvent::SessionReview`]. The TUI renders a non-modal
     /// alert with `alert` (or clears it when `alert` is empty).

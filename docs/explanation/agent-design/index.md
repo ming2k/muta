@@ -67,11 +67,16 @@ model of one agent round.
 9. [User questions](user-questions.md) — the `ask_user` tool that blocks a round
    to resolve ambiguity. The reference for the oneshot-channel blocking
    pattern the permission broker also uses.
-10. [Skills](skills.md) — on-demand domain expertise: the two-channel model
+10. [Unattended operation](unattended.md) — the design intent of running
+   without human intervention. Separates the *enforced* floor (the broker
+   gate the flag controls) from the broader *expressed* posture
+   (no confirmations, no questions), and the contexts where the flag is
+   forced on. The autonomous counterpart to user questions, read as a pair.
+11. [Skills](skills.md) — on-demand domain expertise: the two-channel model
    (catalog in the system prompt, body on demand), the source/priority
    cascade, and explicit versus implicit invocation. The reference for the
    extension surface that adds instructions rather than tools.
-11. [Lifecycle hooks](hooks.md) — user-configured actions that fire on the
+12. [Lifecycle hooks](hooks.md) — user-configured actions that fire on the
    agent's lifecycle events (tool call, round end, session start, compaction).
    One event axis with capability implied by the event; the reference for
    the extension surface that adds practice (format, CI gates, context
@@ -80,14 +85,14 @@ model of one agent round.
 The harness's [context projection](harness.md#context-projection) section has two
 deep-dive references, read as a pair:
 
-12. [Context pruning](context-pruning.md) — the cheap, implicit first layer:
+13. [Context pruning](context-pruning.md) — the cheap, implicit first layer:
     clearing stale tool-result bodies while preserving the `tool_call_id`
     chain, gated at ~65% of the window, surfaced only as a `debug` trace.
-13. [Context compaction](context-compaction.md) — the heavier second layer:
+14. [Context compaction](context-compaction.md) — the heavier second layer:
     summarizing older complete turns into a durable checkpoint at ~85%, with
     a model-written anchored summary, deterministic fallback, and the visible
     `Compacted` notice.
-14. [Token accounting](token-accounting.md) — how the token count that drives
+15. [Token accounting](token-accounting.md) — how the token count that drives
     pruning and compaction is *measured*: the two-source priority chain
     (upstream `usage` first, char-class estimator fallback), the ledger that
     attributes every token as reported vs. estimated, and the report modal that
@@ -110,7 +115,7 @@ user message
             └─ fallback? [Tool rounds] parse tool call from text
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
-            ├─ [Harness] permission broker (Write tools only)
+            ├─ [Harness] permission broker (Write tools only) — unattended? → skip
             ├─ [Envoys] if call is `envoy`: spawn isolated child,
             │              stream SubTaskEvent back through the same pipeline
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio

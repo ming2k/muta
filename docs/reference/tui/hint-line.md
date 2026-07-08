@@ -47,7 +47,7 @@ it.
 | Attribute | Value |
 |-----------|-------|
 | Location | 1 row below the input box |
-| Unattended flag | `UNATTENDED` (warning tone + BOLD), only while write-tool prompts are bypassed |
+| Unattended flag | `UNATTENDED` (warning tone + BOLD), only while the agent runs without human intervention |
 | Shell pill | `[ SHELL ]` (warning tone + raised bg), only while the prompt is `!`-prefixed |
 | Model name | `brand` + BOLD |
 | Reasoning effort | `◆ {effort}` in `info` + BOLD, only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
@@ -57,11 +57,12 @@ it.
 ## Unattended mode
 
 When unattended mode is active (`--unattended` / `/unattended on`), the
-hint bar shows a flat `UNATTENDED` label in the warning tone at its left
-edge. Plain text rather than a bracketed pill: it reads as a persistent
-state flag (always-on while the session is elevated) rather than a
-momentary input mode, so it carries its meaning without any chrome. The
-composer's `›` prompt glyph keeps its usual brand color — the elevated
+agent runs without human intervention — no confirmations, no questions.
+The hint bar shows a flat `UNATTENDED` label in the warning tone at its
+left edge. Plain text rather than a bracketed pill: it reads as a
+persistent state flag (always-on while the session is elevated) rather
+than a momentary input mode, so it carries its meaning without any chrome.
+The composer's `›` prompt glyph keeps its usual brand color — the elevated
 state lives entirely on the hint line.
 
 ## Transcript focus

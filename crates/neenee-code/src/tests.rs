@@ -204,7 +204,6 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let directory =
         std::env::temp_dir().join(format!("neenee-retry-test-{}", uuid::Uuid::new_v4()));
     let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
-    let history = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let agent = Arc::new(Agent::new(
         Arc::new(RetryOnceProvider(AtomicUsize::new(0))),
         Vec::new(),
@@ -216,11 +215,10 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let completed = execute_round(
         RoundContext {
             agent,
-            history: history.clone(),
             tx,
             token: CancellationToken::new(),
             session_id: session.id().await,
-            session,
+            session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
                 preserve_turns: 6,
@@ -236,6 +234,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             prompt: "work".to_string(),
             hidden: false,
             display_prompt: None,
+            sent_at_ms: None,
             images: Vec::new(),
         },
     )
@@ -244,8 +243,8 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
 
     assert!(!completed);
     assert!(
-        history
-            .lock()
+        session
+            .model_window()
             .await
             .iter()
             .any(|message| message.content == "done")
@@ -307,7 +306,6 @@ async fn turn_does_not_retry_after_tool_activity() {
     let error = execute_round(
         RoundContext {
             agent,
-            history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             tx,
             token: CancellationToken::new(),
             session_id: session.id().await,
@@ -327,6 +325,7 @@ async fn turn_does_not_retry_after_tool_activity() {
             prompt: "work".to_string(),
             hidden: false,
             display_prompt: None,
+            sent_at_ms: None,
             images: Vec::new(),
         },
     )
@@ -370,7 +369,6 @@ async fn turn_exhaustion_message_explains_retry_budget() {
     let error = execute_round(
         RoundContext {
             agent,
-            history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             tx,
             token: CancellationToken::new(),
             session_id: session.id().await,
@@ -390,6 +388,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             prompt: "work".to_string(),
             hidden: false,
             display_prompt: None,
+            sent_at_ms: None,
             images: Vec::new(),
         },
     )

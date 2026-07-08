@@ -102,7 +102,7 @@ protocol, not policy. neenee adds guards on top (a repeated-call limit, a
 periodic session-review diagnostic), but the loop's existence and termination
 condition come from the contract. See
 [ADR-0009](../adr/0009-uncapped-agentic-loop.md) for why the turn count was
-left uncapped to match this, and [ADR-0016](../adr/0016-session-review-over-turn-counting.md)
+left uncapped to match this, and [ADR-0016](../adr/0016-session-review-over-round-counting.md)
 for the diagnostic that watches uncapped turns.
 
 Two protocol constraints shape the harness:

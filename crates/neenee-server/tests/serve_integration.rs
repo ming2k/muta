@@ -119,6 +119,7 @@ async fn serde_shapes() {
     let req = AgentRequest::Chat {
         text: "hi".into(),
         images: vec![],
+        sent_at_ms: None,
     };
     println!("Request::Chat: {}", serde_json::to_string(&req).unwrap());
 

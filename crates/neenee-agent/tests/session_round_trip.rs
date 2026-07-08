@@ -52,10 +52,10 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
     let (tx, _rx) = mpsc::unbounded_channel();
 
     let prompt = "hello, mock";
+    let sent_at_ms = 1_700_000_000_123;
     let completed = execute_round(
         RoundContext {
             agent: agent.clone(),
-            history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             tx,
             token: CancellationToken::new(),
             session: session.clone(),
@@ -75,6 +75,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             prompt: prompt.to_string(),
             hidden: false,
             display_prompt: None,
+            sent_at_ms: Some(sent_at_ms),
             images: Vec::new(),
         },
     )
@@ -94,6 +95,14 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             .iter()
             .any(|message| message.role == Role::User && message.content == prompt),
         "live session should contain the user prompt"
+    );
+    assert_eq!(
+        live_messages
+            .iter()
+            .find(|message| message.role == Role::User && message.content == prompt)
+            .and_then(|message| message.sent_at_ms),
+        Some(sent_at_ms),
+        "live session should retain the exact UI send timestamp"
     );
     assert!(
         live_messages
@@ -126,6 +135,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
     for (reopened_message, live_message) in reopened_messages.iter().zip(live_messages.iter()) {
         assert_eq!(reopened_message.role, live_message.role);
         assert_eq!(reopened_message.content, live_message.content);
+        assert_eq!(reopened_message.sent_at_ms, live_message.sent_at_ms);
     }
 
     let _ = std::fs::remove_dir_all(directory);

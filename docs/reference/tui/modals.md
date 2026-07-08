@@ -67,7 +67,7 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 | [History search](#history-search-modal) | `Ctrl+R` | 70 × 72 | `draw_history_modal` |
 | [Question](#question-modal) | `ask_user` tool | 78 × 70 | `draw_question_modal` |
 | [Permission sheet](#permission-sheet) | Automatic | (inline, not centered) | `draw_permission_sheet` |
-| [Help](#help-modal) | `Ctrl+H` / `/help` | 58 × 70 | `draw_help_modal` |
+| [Help](#help-modal) | `Ctrl+H` / `?` / `F1` / `/help` | 58 × 70 | `draw_help_modal` |
 | [Activity](#activity-modal) | Click activity bar | 72 × 70 | `draw_activity_modal` |
 | [Toasts](#toasts) | Transient | top-right, 3 rows | `draw_armed_toast`, `draw_copy_toast` |
 
@@ -347,7 +347,20 @@ its severity cue, and `theme.raised()` for the footer band.
 
 ## Help modal
 
-Keybindings cheat sheet (`Ctrl+H`). The narrowest centered modal: 58 × 70.
+Keybindings cheat sheet. The narrowest centered modal: 58 × 70.
+
+Opens via `Ctrl+H`, `?` (top level, empty input), `F1`, or `/help`. `Ctrl+H`
+is the legacy shortcut but is **terminal-dependent**: it is byte-identical
+to Backspace (`0x08`), so it only opens help when the Kitty enhanced-keyboard
+protocol (`DISAMBIGUATE_ESCAPE_CODES`) is active. Multiplexers that don't
+forward Kitty flags — notably tmux, which strips the protocol on most
+shipping versions — collapse `Ctrl+H` and `Ctrl+Backspace` onto the same
+byte, so both keys open help there rather than `Ctrl+Backspace` deleting a
+word (use `Alt+Backspace` to delete a word inside tmux). `?` and `F1` have
+no such collision and work everywhere; prefer them inside tmux/screen. For
+the full key-collision table and tmux configuration that restores the
+distinction, see [Terminal UI § Key collisions under tmux /
+screen](../../explanation/tui.md#key-collisions-under-tmux--screen).
 
 ```text
 ╭──────────────────────────────────────╮

@@ -16,7 +16,7 @@ Project and user-defined commands are covered under
 | `/compact` | Compact older complete turns now |
 | `/clear` | Clear the conversation history |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
-| `/unattended [on\|off]` | Toggle bypassing write-tool permission prompts |
+| `/unattended [on\|off]` | Toggle unattended mode (agent runs without human intervention) |
 | `/review` | Run an on-demand session-review diagnostic of the current round |
 | `/search <query>` | Semantic search over the project's session history |
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
@@ -110,11 +110,15 @@ backend.
 | Form | Effect |
 |------|--------|
 | `/unattended` | Toggle unattended on/off |
-| `/unattended on` | Enable bypassing write-tool permission prompts |
-| `/unattended off` | Disable bypassing write-tool permission prompts |
+| `/unattended on` | Run without human intervention (no confirmations, no questions) |
+| `/unattended off` | Restore interactive prompts |
 
-When on, the harness stops prompting for confirmation before write tools
-(`bash`, `write_file`, `edit_file`, …) run. Affects the live process only.
+When on, the agent acts without human intervention: no permission
+confirmations before write/execute tools (`bash`, `write_file`,
+`edit_file`, …) and no questions to the user — it proceeds on its own
+authority. Affects the live process only. For the design intent and which
+surface the flag actually enforces, see
+[Unattended operation](../explanation/agent-design/unattended.md).
 
 ### `/btw`
 
@@ -132,7 +136,7 @@ On-demand only — triggers a bounded read-only `REVIEW` envoy that
 diagnoses the current round and reports verdicts. `/review` takes no
 arguments; the periodic-cadence design was superseded (see
 [ADR-0018](../adr/0018-per-project-multi-instance-concurrency.md)
-revising [ADR-0016](../adr/0016-session-review-over-turn-counting.md)).
+revising [ADR-0016](../adr/0016-session-review-over-round-counting.md)).
 
 ### `/search`
 

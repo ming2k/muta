@@ -33,7 +33,9 @@ use neenee_core::{
     NoticeSource, NoticeSurface, Provider, Pursuit, RoundEvent, Tool, estimate_bytes,
     estimate_tokens,
 };
-use neenee_store::{RepeatStore, config::Config, embedding, session::SessionStore};
+use neenee_store::{
+    RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+};
 use neenee_tools::commands::{CustomCommand, expand_command};
 use neenee_tools::project::init_neenee_config;
 
@@ -61,13 +63,13 @@ pub async fn dispatch(
     agent: &Arc<Agent>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     session: &Arc<SessionStore>,
-    history: &Arc<tokio::sync::Mutex<Vec<Message>>>,
     ctt_clone: &Arc<AsyncRwLock<Option<CancellationToken>>>,
     generation_clone: &Arc<AtomicU64>,
     side: &Arc<AsyncRwLock<Option<SideSession>>>,
     active_view_side: &AtomicBool,
     base_tools_for_side: &Arc<Vec<Arc<dyn Tool>>>,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    provider_usage: &mut ProviderUsage,
     skills_registry: Arc<SkillRegistry>,
     skills_registry_for_commands: &Arc<SkillRegistry>,
     commands_for_task: &HashMap<String, CustomCommand>,
@@ -139,7 +141,7 @@ pub async fn dispatch(
             let _ = resp_tx.send(turn(
                 &session.id().await,
                 RoundEvent::Text(format!(
-                    "Unattended {}: write tools {} run without permission prompts.",
+                    "Unattended {}: the agent {} run without human intervention (no confirmations, no questions).",
                     if enabled { "ON" } else { "OFF" },
                     if enabled { "will" } else { "won't" },
                 )),
@@ -270,7 +272,7 @@ pub async fn dispatch(
             if let Some(token) = ctt_clone.write().await.take() {
                 token.cancel();
             }
-            match resume_session(session, history, parts.get(1).copied()).await {
+            match resume_session(session, parts.get(1).copied()).await {
                 Ok((id, transcript)) => {
                     let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                     let _ = resp_tx.send(turn(
@@ -291,7 +293,7 @@ pub async fn dispatch(
                     .parent_id()
                     .await
                     .unwrap_or_else(|| "none".to_string());
-                let message_count = history.lock().await.len();
+                let message_count = session.model_window().await.len();
                 let archived_count = session.archived_transcript_count().await;
                 let checkpoint = session.checkpoint().await;
                 let last_projection = session.last_projection().await;
@@ -381,9 +383,19 @@ pub async fn dispatch(
                 }
                 match session.open(id).await {
                     Ok(()) => {
-                        *history.lock().await = session.model_window().await;
                         let transcript = session.full_transcript().await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
+                        // C6: the live provider tracks the opened session's own
+                        // provider pin (or the global default if it has none).
+                        crate::handlers_provider::reapply_session_selection(
+                            config,
+                            agent,
+                            provider_for_task,
+                            session,
+                            resp_tx,
+                            provider_usage,
+                        )
+                        .await;
                         let _ = resp_tx.send(turn(
                             &session.id().await,
                             RoundEvent::Text(format!("Opened session {}.", id)),
@@ -402,9 +414,20 @@ pub async fn dispatch(
                 if let Some(token) = ctt_clone.write().await.take() {
                     token.cancel();
                 }
-                match resume_session(session, history, parts.get(2).copied()).await {
+                match resume_session(session, parts.get(2).copied()).await {
                     Ok((id, transcript)) => {
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
+                        // C6: the live provider tracks the resumed session's own
+                        // provider pin (or the global default if it has none).
+                        crate::handlers_provider::reapply_session_selection(
+                            config,
+                            agent,
+                            provider_for_task,
+                            session,
+                            resp_tx,
+                            provider_usage,
+                        )
+                        .await;
                         let _ = resp_tx.send(turn(
                             &session.id().await,
                             RoundEvent::Text(format!("Resumed session {}.", short_session_id(&id))),
@@ -423,10 +446,20 @@ pub async fn dispatch(
                 if let Some(token) = ctt_clone.write().await.take() {
                     token.cancel();
                 }
-                history.lock().await.clear();
                 agent.clear_todos();
                 match session.reset().await {
                     Ok(id) => {
+                        // C6: a fresh session has no provider pin, so the live
+                        // provider falls back to the global default.
+                        crate::handlers_provider::reapply_session_selection(
+                            config,
+                            agent,
+                            provider_for_task,
+                            session,
+                            resp_tx,
+                            provider_usage,
+                        )
+                        .await;
                         let _ = resp_tx.send(turn(
                             &session.id().await,
                             RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
@@ -509,7 +542,6 @@ pub async fn dispatch(
                     active_view_side,
                     side,
                     agent,
-                    history,
                     session,
                     ctt_clone,
                     generation_clone,
@@ -519,6 +551,7 @@ pub async fn dispatch(
                         prompt: prompt.to_string(),
                         hidden: false,
                         display_prompt: None,
+                        sent_at_ms: None,
                         images: Vec::new(),
                     },
                 )
@@ -526,7 +559,7 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Compact) => {
-            let mut current = history.lock().await.clone();
+            let mut current = session.model_window().await;
             let settings =
                 ContextProjectionSettings::from_config(config, active_context_window(agent));
             let _ = resp_tx.send(turn(
@@ -544,7 +577,6 @@ pub async fn dispatch(
             .await
             {
                 Ok(Some(checkpoint)) => {
-                    *history.lock().await = current;
                     send_compaction(resp_tx, &session.id().await, &checkpoint);
                 }
                 Ok(None) => {
@@ -619,8 +651,15 @@ pub async fn dispatch(
                         StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
                         _ => neenee_core::SessionSource::Startup,
                     };
-                    let mut history = history.lock().await;
-                    agent.fire_session_start(source, &mut history).await;
+                    let mut messages = session.model_window().await;
+                    agent.fire_session_start(source, &mut messages).await;
+                    // Persist the hook-injected setup context through the
+                    // single write path so the session stays the source of
+                    // truth (ADR-0048). A full replace is correct here: this
+                    // is a rare startup path, not the per-round hot loop.
+                    if let Err(err) = session.replace_messages(messages).await {
+                        let _ = resp_tx.send(AgentResponse::Error(err));
+                    }
                 }
                 let armed = agent.is_pursuit_armed();
                 let iterations = agent.pursuit_iterations();
@@ -684,11 +723,9 @@ pub async fn dispatch(
                         Ok(Some(pursuit)) => {
                             agent.set_pursuit(pursuit.clone());
                             {
-                                let mut messages = history.lock().await;
+                                let mut messages = session.model_window().await;
                                 agent.inject_objective_updated(&mut messages);
-                                let updated = messages.clone();
-                                drop(messages);
-                                let _ = session.replace_messages(updated).await;
+                                let _ = session.replace_messages(messages).await;
                             }
                             emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
                             let _ = resp_tx.send(turn(
@@ -757,7 +794,6 @@ pub async fn dispatch(
                 start_pursuit(
                     PursuitContext {
                         agent: agent.clone(),
-                        history: history.clone(),
                         tx: resp_tx.clone(),
                         token_slot: ctt_clone.clone(),
                         generation_counter: generation_clone.clone(),
@@ -885,6 +921,7 @@ pub async fn dispatch(
                     let _ = req_tx_for_commands.send(AgentRequest::Chat {
                         text: prompt,
                         images: Vec::new(),
+                        sent_at_ms: None,
                     });
                 }
                 Err(error) => {
@@ -976,7 +1013,6 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Clear) => {
-            history.lock().await.clear();
             let _ = session.replace_messages(Vec::new()).await;
             agent.clear_todos();
             let _ = session.set_todos(neenee_core::TodoList::default()).await;
@@ -991,7 +1027,7 @@ pub async fn dispatch(
             ));
         }
         Some(BuiltinCmd::Export) => {
-            let messages = history.lock().await.clone();
+            let messages = session.model_window().await;
             let session_id = session.id().await;
             let provider_id = agent.provider.provider_id();
             let model_name = agent.provider.model();
@@ -1086,7 +1122,7 @@ pub async fn dispatch(
                     // as a single summary line — the on-disk JSON is the source
                     // of truth for details.
                     let messages = {
-                        let mut snapshot = history.lock().await.clone();
+                        let mut snapshot = session.model_window().await;
                         // Append the probe BEFORE prepare so it participates in
                         // implicit-skill injection and lands as the final wire
                         // user message the provider would receive.
@@ -1245,7 +1281,6 @@ pub async fn dispatch(
                 active_view_side,
                 side,
                 agent,
-                history,
                 session,
                 ctt_clone,
                 generation_clone,
@@ -1255,6 +1290,7 @@ pub async fn dispatch(
                     prompt: expand_command(command, arguments),
                     hidden: false,
                     display_prompt: Some(cmd),
+                    sent_at_ms: None,
                     images: Vec::new(),
                 },
             )

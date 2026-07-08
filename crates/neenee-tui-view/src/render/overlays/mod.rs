@@ -44,8 +44,8 @@ pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
-    CustomEditorView, draw_add_model_editor, draw_custom_provider_editor, draw_model_editor,
-    draw_models_modal, draw_provider_template_chooser,
+    CustomEditorView, draw_custom_provider_editor, draw_model_editor, draw_models_modal,
+    draw_provider_template_chooser,
 };
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;

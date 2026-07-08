@@ -8,7 +8,11 @@
 use neenee_agent::Agent;
 use neenee_agent::catalog;
 use neenee_core::{AgentResponse, Provider};
-use neenee_store::{config::Config, provider_usage::ProviderUsage};
+use neenee_store::{
+    config::Config,
+    provider_usage::ProviderUsage,
+    session::{ProviderSelection, SessionStore},
+};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -36,11 +40,18 @@ fn is_multi_model_provider(config: &Config, id: &str) -> bool {
 /// rebuild the provider through the catalog so resolution stays shared with
 /// startup, swap it into the shared holder, re-seed mid-turn relief, and push
 /// the picker + key snapshots.
+///
+/// C6: the provider + model selection is session-scoped. The key/url (which
+/// define *how to reach* a provider) are written to the global config under a
+/// cross-process lock, but the *selection* (which provider/model is active for
+/// this session) is pinned to this session's store instead of `config.toml`,
+/// so one session switching provider never changes what any other session sees.
 #[allow(clippy::too_many_arguments)]
 pub async fn switch(
     config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ProviderUsage,
     provider_type: String,
@@ -71,17 +82,20 @@ pub async fn switch(
     // switch — it is opted in per model via `[model_reasoning]`
     // (`EditModelReasoning`) / a channel's reasoning fields
     // (`EditProviderModel`). Switching just selects the provider + model.
-    // Persist the chosen model and default-provider pointer before
-    // building so the catalog reads them back. The key/url writes
-    // above already landed in `config`.
+    //
+    // C6: set the selection on the *effective* config so `activate` resolves
+    // the right channel, then persist the keys/url to the global config while
+    // preserving the on-disk selection — the session-scoped pin (written below)
+    // is the durable record of this session's choice.
     config.default_provider = provider_type.clone();
     // Multi-model providers (opencode-go, anthropic, google, deepseek, and any
     // user-defined provider with several channels) carry the active model in the
     // shared `default_model` field — every channel shares one API key and each
     // model's transport is derived from its catalog channel. Single-model
     // built-ins keep their per-provider model slot as before.
-    if is_multi_model_provider(config, &provider_type) {
+    let pinned_model: Option<String> = if is_multi_model_provider(config, &provider_type) {
         config.default_model = Some(model.clone());
+        Some(model.clone())
     } else {
         config.default_model = None;
         match provider_type.as_str() {
@@ -89,8 +103,25 @@ pub async fn switch(
             "zai-code" => config.zai_model = Some(model.clone()),
             _ => {}
         }
+        // Keep the per-session pin's model explicit so reopen lands on the
+        // exact model even for single-model providers.
+        Some(model.clone())
+    };
+    if let Err(error) = config.save_preserving_provider_selection() {
+        tracing::warn!(?error, "could not persist provider keys/url");
     }
-    let _ = config.save();
+    // Pin the provider + model to this session so reopen restores it and no
+    // other session is affected. Best-effort: a failed pin does not block the
+    // live switch.
+    if let Err(error) = session
+        .set_provider_selection(Some(ProviderSelection {
+            provider: provider_type.clone(),
+            model: pinned_model,
+        }))
+        .await
+    {
+        tracing::warn!(?error, "could not persist session provider selection");
+    }
     activate(
         config,
         agent,
@@ -112,6 +143,7 @@ pub async fn add(
     config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ProviderUsage,
     name: String,
@@ -175,7 +207,18 @@ pub async fn add(
     // Record the first seeded model as the active model so the picker and status
     // surfaces land on it.
     config.default_model = Some(active_model.clone());
-    let _ = config.save();
+    let _ = config.save_preserving_provider_selection();
+    // C6: pin the newly-added provider to this session — adding a provider is
+    // also a live switch, so it is session-scoped like `/provider`.
+    if let Err(error) = session
+        .set_provider_selection(Some(ProviderSelection {
+            provider: id.clone(),
+            model: Some(active_model.clone()),
+        }))
+        .await
+    {
+        tracing::warn!(?error, "could not persist session provider selection");
+    }
     activate(
         config,
         agent,
@@ -233,7 +276,7 @@ pub async fn edit(
         // is per-model, via `EditProviderModel`. Editing provider metadata
         // leaves each channel's reasoning knobs untouched.
     }
-    let _ = config.save();
+    let _ = config.save_preserving_provider_selection();
     // Only rebuild the live provider when editing the active one (so a new
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted config + the picker snapshot without switching.
@@ -256,45 +299,6 @@ pub async fn edit(
             provider_usage,
         )));
     }
-}
-
-/// `AgentRequest::AddProviderModel` — append a model to a user-defined provider
-/// as a new channel that shares the provider's transport/endpoint/key (only the
-/// wire model id differs), persist, and push a fresh picker snapshot. No-op for
-/// built-in providers (curated model lists) or a model the provider already
-/// serves.
-pub async fn add_model(
-    config: &mut Config,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &ProviderUsage,
-    provider_id: String,
-    model: String,
-) {
-    let model = model.trim().to_string();
-    if model.is_empty() {
-        return;
-    }
-    if let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_id) {
-        let already = provider
-            .channels
-            .iter()
-            .any(|c| c.model.as_deref() == Some(model.as_str()));
-        // Clone the first channel as a template so transport/base_url/key carry
-        // over; only the model id (and label) change.
-        if !already && let Some(template) = provider.channels.first().cloned() {
-            let mut channel = template;
-            channel.label = model.clone();
-            channel.model = Some(model.clone());
-            provider.channels.push(channel);
-        }
-    }
-    if let Err(error) = config.save() {
-        tracing::warn!(?error, "could not persist added provider model");
-    }
-    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
-        config,
-        provider_usage,
-    )));
 }
 
 /// `AgentRequest::RemoveProviderModel` — drop a model (channel) from a
@@ -324,7 +328,7 @@ pub async fn remove_model(
     if config.default_model.as_deref() == Some(model.as_str()) {
         config.default_model = None;
     }
-    if let Err(error) = config.save() {
+    if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist removed provider model");
     }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
@@ -377,7 +381,7 @@ pub async fn edit_model(
         neenee_store::config::UserTransport::GeminiNative => {}
     }
 
-    if let Err(error) = config.save() {
+    if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist provider model settings");
     }
 
@@ -431,7 +435,7 @@ pub async fn edit_model_reasoning(
     settings.effort = valid_effort;
     settings.thinking = thinking;
 
-    if let Err(error) = config.save() {
+    if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist per-model reasoning settings");
     }
 
@@ -493,7 +497,7 @@ pub async fn delete(
         config.default_provider = catalog::default_provider_id(&Config::default()).to_string();
         config.default_model = None;
     }
-    if let Err(error) = config.save() {
+    if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist deleted provider");
     }
 
@@ -519,6 +523,53 @@ pub async fn delete(
             provider_usage,
         )));
     }
+}
+
+/// Re-apply the active session's provider/model pin to the live provider
+/// holder (C6). Called after a session swap (`/session open`, `/session
+/// resume`, `/session new`) so the live provider tracks the now-active
+/// session's own pin, or falls back to the global default when the new session
+/// has no pin (`None`). Builds a transient `Config` clone with the overlay so
+/// the caller's immutable `&Config` is not mutated; activation writes only the
+/// live holder, telemetry, and TUI snapshots — never `config.toml`.
+pub async fn reapply_session_selection(
+    config: &Config,
+    agent: &Agent,
+    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    session: &SessionStore,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ProviderUsage,
+) {
+    // Overlay the session pin onto a throwaway clone so catalog resolution
+    // picks the session's provider/model, not the global default.
+    let mut effective = config.clone();
+    let selection = session.provider_selection().await;
+    let (provider_id, model_id): (String, Option<String>) = match &selection {
+        Some(sel) => {
+            effective.default_provider = sel.provider.clone();
+            if let Some(model) = &sel.model {
+                effective.default_model = Some(model.clone());
+            }
+            (sel.provider.clone(), sel.model.clone())
+        }
+        None => (
+            catalog::default_provider_id(config).to_string(),
+            config.default_model.clone(),
+        ),
+    };
+    let model = model_id.filter(|m| !m.is_empty()).unwrap_or_else(|| {
+        catalog::resolved_model_name_with_usage(&effective, &provider_id, provider_usage)
+    });
+    activate(
+        &effective,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        provider_id,
+        model,
+    )
+    .await;
 }
 
 /// Derive a stable provider id from a user-supplied display name: lowercase,
@@ -626,7 +677,7 @@ pub async fn toggle_favorite(
     } else {
         config.favorites.push(id.clone());
     }
-    if let Err(error) = config.save() {
+    if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist favorites");
     }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(

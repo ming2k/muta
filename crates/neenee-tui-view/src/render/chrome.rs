@@ -408,11 +408,12 @@ pub struct HintBarView<'a> {
     /// is no compose/browse mode to advertise, the focused-step highlight
     /// indicates navigation.
     pub shell_active: bool,
-    /// True while write-tool permission prompts are bypassed this session
-    /// (`--unattended` / `/unattended on`). Renders a flat `UNATTENDED` label
-    /// in the warning tone at the left edge of the bar so the elevated,
-    /// no-prompt state is unmissable without occupying a raised pill — plain
-    /// text that carries its meaning without any chrome.
+    /// True while the agent runs unattended this session — no human
+    /// intervention, no confirmations, no questions (`--unattended` /
+    /// `/unattended on`). Renders a flat `UNATTENDED` label in the warning
+    /// tone at the left edge of the bar so the elevated state is unmissable
+    /// without occupying a raised pill — plain text that carries its meaning
+    /// without any chrome.
     pub unattended: bool,
 }
 

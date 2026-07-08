@@ -48,8 +48,10 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     project_root: Mutex<Option<std::path::PathBuf>>,
-    /// When true, write tools execute without a permission prompt. Bypasses
-    /// the allowlist entirely (the prompt block is skipped wholesale).
+    /// When true, the agent runs **unattended** — without human intervention:
+    /// no permission confirmations, no questions. Operationally this skips the
+    /// permission prompt entirely (and bypasses the allowlist wholesale), but
+    /// the flag's meaning is "no human in the loop," not just "skip prompts."
     unattended: Mutex<bool>,
 }
 

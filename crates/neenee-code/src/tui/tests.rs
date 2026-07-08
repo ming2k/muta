@@ -36,6 +36,34 @@ fn restored_history_uses_command_display_content() {
 }
 
 #[test]
+fn restored_user_message_uses_exact_or_legacy_timestamp() {
+    let exact = Message::new(Role::User, "hi").with_sent_at_ms(1_700_000_000_123);
+    let restored = transcript_message_from_core(exact).unwrap();
+    assert_eq!(restored.sent_at_ms, Some(1_700_000_000_123));
+
+    let mut legacy = Message::new(Role::User, "hi");
+    legacy.sent_at_ms = None;
+    legacy.timestamp = Some(1_700_000_001);
+    let restored = transcript_message_from_core(legacy).unwrap();
+    assert_eq!(restored.sent_at_ms, Some(1_700_000_001_000));
+}
+
+#[test]
+fn restored_assistant_tool_step_uses_message_timestamp_for_round_header() {
+    let mut assistant = Message::new(Role::Assistant, "");
+    assistant.timestamp = Some(1_700_000_002);
+    assistant.tool_calls = Some(vec![ToolCall {
+        id: "call".to_string(),
+        name: "read_text".to_string(),
+        arguments: r#"{"path":"README.md"}"#.to_string(),
+    }]);
+
+    let restored = transcript_messages_from_core(vec![assistant], &config::TuiConfig::default());
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].sent_at_ms, Some(1_700_000_002_000));
+}
+
+#[test]
 fn restored_user_message_origin_inferred_from_shape() {
     use crate::tui::document::UserMessageOrigin;
     // A genuine chat prompt: no display_content, no leading `!`.
@@ -106,6 +134,8 @@ fn restored_reasoning_is_not_shown_as_running() {
         children: None,
         envoy_meta: None,
         origin: None,
+        timestamp: None,
+        sent_at_ms: None,
     };
 
     let restored = transcript_messages_from_core(vec![message], &config::TuiConfig::default());
@@ -200,6 +230,8 @@ fn restored_native_tool_calls_are_visible() {
         children: None,
         envoy_meta: None,
         origin: None,
+        timestamp: None,
+        sent_at_ms: None,
     };
 
     let restored = transcript_message_from_core(message).unwrap();
@@ -236,6 +268,8 @@ fn restored_tool_results_merge_into_steps_in_fifo_order() {
             children: None,
             envoy_meta: None,
             origin: None,
+            timestamp: None,
+            sent_at_ms: None,
         },
         Message::tool_result(
             &ToolCall {
@@ -680,9 +714,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         template_scroll: 0,
         model_search: false,
         picker_provider: None,
-        add_model_provider: None,
-        add_model_choice: 0,
-        add_model_scroll: 0,
         model_scroll: 0,
         model_modal_follow: true,
         key_status: HashMap::new(),
@@ -1557,7 +1588,6 @@ fn caret_owner_modal_for_caret_modals() {
     for modal in [
         Modal::Provider,
         Modal::ModelEditor,
-        Modal::AddModel,
         Modal::CustomProvider,
         Modal::HistorySearch,
     ] {
@@ -1705,7 +1735,6 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
     let owns = [
         Modal::Provider,
         Modal::ModelEditor,
-        Modal::AddModel,
         Modal::CustomProvider,
         Modal::HistorySearch,
     ];

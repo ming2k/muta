@@ -15,6 +15,7 @@ pub mod overlays;
 mod primitives;
 mod text_layout;
 mod theme;
+mod time;
 /// Per-tool presentation registry: each tool's icon, collapsed summary,
 /// optional preview, and expanded-body classification. `document.rs` and
 /// `step/renderers.rs` dispatch through its `*_for` entry points instead of
@@ -45,13 +46,12 @@ use markdown_table::{build_table_render, shrink_column_widths};
 pub(super) use message_body::draw_message_body;
 pub(super) use notice::draw_notice;
 pub use overlays::{
-    ActivityModalView, CustomEditorView, draw_activity_modal, draw_add_model_editor,
-    draw_armed_toast, draw_config_layout_modal, draw_config_modal, draw_config_nudge_modal,
-    draw_copy_toast, draw_custom_provider_editor, draw_help_modal, draw_history_modal,
-    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
-    draw_permission_sheet, draw_permissions_manager, draw_provider_template_chooser,
-    draw_question_modal, draw_sessions_modal, draw_skills_modal, draw_token_report_modal,
-    draw_tools_modal,
+    ActivityModalView, CustomEditorView, draw_activity_modal, draw_armed_toast,
+    draw_config_layout_modal, draw_config_modal, draw_config_nudge_modal, draw_copy_toast,
+    draw_custom_provider_editor, draw_help_modal, draw_history_modal, draw_input_injection,
+    draw_mcp_modal, draw_model_editor, draw_models_modal, draw_permission_sheet,
+    draw_permissions_manager, draw_provider_template_chooser, draw_question_modal,
+    draw_sessions_modal, draw_skills_modal, draw_token_report_modal, draw_tools_modal,
 };
 pub use primitives::recess_backdrop;
 use primitives::viewport_rect;
@@ -1875,10 +1875,10 @@ mod tests {
     #[test]
     fn queued_user_message_renders_badge_and_dimmer_bg() {
         let theme = Theme::default();
-        let queued_bg = theme.user_surface_queued();
+        let _queued_bg = theme.user_surface_queued();
         let delivered_bg = theme.user_surface();
         let width = 40u16;
-        let mut terminal = neenee_tui::TestTerminal::new(width, 12);
+        let mut terminal = neenee_tui::TestTerminal::new(width, 20);
 
         let messages = vec![
             TranscriptMessage::new(neenee_core::Role::User, "first queued").queued(),
@@ -1933,11 +1933,11 @@ mod tests {
             }
         }
 
-        // Each queued user message renders one "⏸ Queued" badge row. Count
-        // rows whose inner-padding cells carry the queued bg AND whose
-        // first-content cell starts with the pause glyph.
+        // Each queued user message renders one "⏸ Queued" badge row OUTSIDE
+        // the panel (on plain `surface`, above the panel's top transition).
+        // The badge is the paused glyph at the text column, on a surface row.
         let badge_count = (0..buffer.area().height)
-            .filter(|&y| buffer[(2, y)].bg == queued_bg && buffer[(4, y)].symbol() == "⏸")
+            .filter(|&y| buffer[(4, y)].symbol() == "⏸")
             .count();
         assert_eq!(
             badge_count, 2,

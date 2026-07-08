@@ -7,7 +7,7 @@ use neenee_tui::{
     Span, {Color, Style},
 };
 
-use crate::document::{CodeRange, TableAlignment, scan_inline};
+use crate::document::{CodeRange, InlineScan, MathRange, TableAlignment, scan_inline};
 
 use super::text_layout::{
     WrappedLine, markup_hidden_ranges, markup_visible_width, wrap_text_markup,
@@ -78,6 +78,9 @@ pub(super) struct TableRowInfo {
     /// Per-cell original bold ranges (absolute, relative to the original
     /// cell text). Same for every wrapped line of the same cell.
     pub col_bold_ranges: Vec<Vec<CodeRange>>,
+    /// Per-cell original inline-math ranges (absolute, relative to the original
+    /// cell text). Same for every wrapped line of the same cell.
+    pub col_math_ranges: Vec<Vec<MathRange>>,
 }
 
 /// Build the visual lines of a GFM-style table grid that fits within
@@ -106,17 +109,12 @@ pub(super) fn build_table_render(
     // `0..ncols` so a ragged row yields empty styles for its missing cells
     // rather than producing a short vec that `format_data_line` would
     // out-of-bounds index (`cell_styles[i]`).
-    let header_cell_styles: Vec<(Vec<CodeRange>, Vec<CodeRange>)> =
-        headers.iter().map(|h| scan_inline(h)).collect();
-    let row_cell_styles: Vec<Vec<(Vec<CodeRange>, Vec<CodeRange>)>> = rows
+    let header_cell_styles: Vec<InlineScan> = headers.iter().map(|h| scan_inline(h)).collect();
+    let row_cell_styles: Vec<Vec<InlineScan>> = rows
         .iter()
         .map(|row| {
             (0..ncols)
-                .map(|i| {
-                    row.get(i)
-                        .map(|cell| scan_inline(cell))
-                        .unwrap_or_else(|| (Vec::new(), Vec::new()))
-                })
+                .map(|i| row.get(i).map(|cell| scan_inline(cell)).unwrap_or_default())
                 .collect()
         })
         .collect();
@@ -130,12 +128,24 @@ pub(super) fn build_table_render(
     // over-wide cells); short rows simply contribute fewer candidates, which is
     // correct for a column-wise maximum.
     let mut widths = vec![0usize; ncols];
-    for (i, (h, (code, bold))) in headers.iter().zip(&header_cell_styles).enumerate() {
-        widths[i] = widths[i].max(markup_visible_width(h, 0, code, bold));
+    for (i, (h, inline)) in headers.iter().zip(&header_cell_styles).enumerate() {
+        widths[i] = widths[i].max(markup_visible_width(
+            h,
+            0,
+            &inline.code_ranges,
+            &inline.bold_ranges,
+            &inline.math_ranges,
+        ));
     }
     for (row, styles) in rows.iter().zip(&row_cell_styles) {
-        for (i, (cell, (code, bold))) in row.iter().zip(styles).enumerate().take(ncols) {
-            widths[i] = widths[i].max(markup_visible_width(cell, 0, code, bold));
+        for (i, (cell, inline)) in row.iter().zip(styles).enumerate().take(ncols) {
+            widths[i] = widths[i].max(markup_visible_width(
+                cell,
+                0,
+                &inline.code_ranges,
+                &inline.bold_ranges,
+                &inline.math_ranges,
+            ));
         }
     }
 
@@ -152,33 +162,35 @@ pub(super) fn build_table_render(
     // offsets via WrappedLine. Markup delimiters are zero-width, so wrap on the
     // visible width — otherwise they'd consume column budget and could split a
     // `` `…` `` / `**…**` pair across lines.
-    let wrap_cell =
-        |cell: &str, w: usize, code: &[CodeRange], bold: &[CodeRange]| -> Vec<WrappedLine> {
-            if cell.is_empty() {
-                return vec![WrappedLine {
-                    text: String::new(),
-                    start_byte: 0,
-                    end_byte: 0,
-                }];
-            }
-            let hidden = markup_hidden_ranges(cell, 0, code, bold);
-            let wrapped = wrap_text_markup(cell, w.max(1), &hidden);
-            if wrapped.is_empty() {
-                vec![WrappedLine {
-                    text: String::new(),
-                    start_byte: 0,
-                    end_byte: 0,
-                }]
-            } else {
-                wrapped
-            }
-        };
+    let wrap_cell = |cell: &str, w: usize, inline: &InlineScan| -> Vec<WrappedLine> {
+        if cell.is_empty() {
+            return vec![WrappedLine {
+                text: String::new(),
+                start_byte: 0,
+                end_byte: 0,
+            }];
+        }
+        let hidden = markup_hidden_ranges(
+            cell,
+            0,
+            &inline.code_ranges,
+            &inline.bold_ranges,
+            &inline.math_ranges,
+        );
+        let wrapped = wrap_text_markup(cell, w.max(1), &hidden);
+        if wrapped.is_empty() {
+            vec![WrappedLine {
+                text: String::new(),
+                start_byte: 0,
+                end_byte: 0,
+            }]
+        } else {
+            wrapped
+        }
+    };
 
     let wrapped_headers: Vec<Vec<WrappedLine>> = (0..ncols)
-        .map(|i| {
-            let (code, bold) = &header_cell_styles[i];
-            wrap_cell(&headers[i], widths[i], code, bold)
-        })
+        .map(|i| wrap_cell(&headers[i], widths[i], &header_cell_styles[i]))
         .collect();
     let wrapped_rows: Vec<Vec<Vec<WrappedLine>>> = rows
         .iter()
@@ -187,8 +199,7 @@ pub(super) fn build_table_render(
             (0..ncols)
                 .map(|i| {
                     let cell = row.get(i).map(String::as_str).unwrap_or("");
-                    let (code, bold) = &row_cell_styles[r][i];
-                    wrap_cell(cell, widths[i], code, bold)
+                    wrap_cell(cell, widths[i], &row_cell_styles[r][i])
                 })
                 .collect()
         })
@@ -205,7 +216,7 @@ pub(super) fn build_table_render(
     // Build one data line from a row of wrapped cells, returning the line
     // text together with per-cell geometry and style metadata.
     let format_data_line = |cells: &[Vec<WrappedLine>],
-                            cell_styles: &[(Vec<CodeRange>, Vec<CodeRange>)],
+                            cell_styles: &[InlineScan],
                             line_idx: usize|
      -> (String, TableRowInfo) {
         let mut line = String::from("│ ");
@@ -214,18 +225,25 @@ pub(super) fn build_table_render(
         let mut col_offsets = Vec::with_capacity(ncols);
         let mut col_code_ranges = Vec::with_capacity(ncols);
         let mut col_bold_ranges = Vec::with_capacity(ncols);
+        let mut col_math_ranges = Vec::with_capacity(ncols);
         for i in 0..ncols {
             let wl = cells[i].get(line_idx);
             let cell_line = wl.map(|w| w.text.as_str()).unwrap_or("");
             let cell_start_byte = wl.map(|w| w.start_byte).unwrap_or(0);
             let align = aligns.get(i).copied().unwrap_or(TableAlignment::None);
-            let (code, bold) = &cell_styles[i];
+            let inline = &cell_styles[i];
 
             // Visible width this wrapped line occupies once markup
             // delimiters are elided — drives the padding so the rendered
             // content fills exactly `widths[i]` display columns and the
             // row's `│` separators line up with the border grid.
-            let cell_visible_w = markup_visible_width(cell_line, cell_start_byte, code, bold);
+            let cell_visible_w = markup_visible_width(
+                cell_line,
+                cell_start_byte,
+                &inline.code_ranges,
+                &inline.bold_ranges,
+                &inline.math_ranges,
+            );
 
             // `pad_cell_text` returns the padded string along with the byte
             // range of the actual content within it, derived from the same
@@ -246,8 +264,9 @@ pub(super) fn build_table_render(
             ));
             col_offsets.push(cell_start_byte);
 
-            col_code_ranges.push(code.clone());
-            col_bold_ranges.push(bold.clone());
+            col_code_ranges.push(inline.code_ranges.clone());
+            col_bold_ranges.push(inline.bold_ranges.clone());
+            col_math_ranges.push(inline.math_ranges.clone());
 
             if i + 1 < ncols {
                 line.push_str(" │ ");
@@ -263,6 +282,7 @@ pub(super) fn build_table_render(
                 col_offsets,
                 col_code_ranges,
                 col_bold_ranges,
+                col_math_ranges,
             },
         )
     };

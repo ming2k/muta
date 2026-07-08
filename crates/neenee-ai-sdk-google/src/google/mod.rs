@@ -120,8 +120,12 @@ impl Provider for GoogleProvider {
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
+        // No protocol hint: Gemini's wire surface uses native function calls by
+        // construction, and tool-result replay as `functionResponse` parts is
+        // the provider's own convention that the model already follows. An
+        // in-prompt note would only restate facts the harness already enforces.
         ProviderPromptHints {
-            system_guidance: "Gemini protocol note: use native function calls when you need a tool; tool results are replayed as functionResponse parts.",
+            system_guidance: "",
         }
     }
 
@@ -382,12 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn prompt_hints_describe_tool_result_projection() {
+    fn prompt_hints_emit_no_system_guidance() {
         let p = GoogleProvider::new("k".to_string(), "gemini-2.5-flash".to_string());
-        assert!(
-            p.prompt_hints()
-                .system_guidance
-                .contains("functionResponse")
-        );
+        // No protocol note: native function calls are the wire default and the
+        // model already follows its own functionResponse replay convention.
+        assert!(p.prompt_hints().system_guidance.is_empty());
     }
 }

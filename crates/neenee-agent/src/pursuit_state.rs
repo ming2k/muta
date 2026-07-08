@@ -91,6 +91,15 @@ impl PursuitState {
         *lock(&self.iterations)
     }
 
+    /// Restore the stop-gate runtime view from persisted state on resume
+    /// (ADR-0048 Phase 2). Unlike `arm`, this does NOT reset the iteration
+    /// counter — an armed pursuit mid-iteration resumes with its count intact
+    /// instead of starting over.
+    pub fn restore_runtime(&self, armed: bool, iterations: u32) {
+        *lock(&self.armed) = armed;
+        *lock(&self.iterations) = iterations;
+    }
+
     /// Increment the iteration counter (called by the turn loops each time
     /// the stop-gate forces another round).
     pub fn bump_iterations(&self) {

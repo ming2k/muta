@@ -709,11 +709,15 @@ mod tests {
                 content: "First".to_string(),
                 code_ranges: Vec::new(),
                 bold_ranges: Vec::new(),
+                math_ranges: Vec::new(),
+                link_ranges: Vec::new(),
             },
             Block::Text {
                 content: "Second".to_string(),
                 code_ranges: Vec::new(),
                 bold_ranges: Vec::new(),
+                math_ranges: Vec::new(),
+                link_ranges: Vec::new(),
             },
         ];
         let messages = vec![msg];

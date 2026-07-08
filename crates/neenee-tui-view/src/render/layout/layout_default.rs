@@ -32,6 +32,7 @@
 use neenee_tui::{Line, Modifier, Paragraph, Rect, Span, Style};
 
 use crate::document::TranscriptMessage;
+use crate::render::time::sent_time_label;
 
 use super::{Stream, TranscriptLayout};
 
@@ -55,10 +56,7 @@ impl TranscriptLayout for Default {
                 && let Some(group_round) = group_round
                 && is_group_start(stream, mi)
             {
-                // Measure the group: how many consecutive same-round
-                // assistant-side messages follow.
                 let group_end = group_end(stream, mi);
-                let calls = count_tool_calls(stream, mi, group_end);
 
                 // One blank row above the header. The preceding message (a
                 // different round / user / notice) already emits its own
@@ -72,7 +70,7 @@ impl TranscriptLayout for Default {
                     stream.message_gap();
                 }
 
-                draw_round_header(stream, group_round, msg, calls);
+                draw_round_header(stream, group_round, msg);
 
                 // Blank row below the header separating it from the round's
                 // first step.
@@ -105,12 +103,9 @@ impl TranscriptLayout for Default {
             let next_is_tool_step = next.is_some_and(|n| n.is_tool_step() || n.is_envoy_task());
             let collapsed_tool_into_tool_step =
                 msg.is_tool_step() && msg.tool_step_expanded() == Some(false) && next_is_tool_step;
-            let next_is_step =
-                next.is_some_and(|n| n.is_thinking() || n.is_tool_step() || n.is_envoy_task());
-
             if collapsed_tool_into_tool_step {
                 // Flush stack.
-            } else if msg.role != neenee_core::Role::User || next_is_step {
+            } else if msg.role == neenee_core::Role::User || next.is_some() {
                 stream.message_gap();
             }
 
@@ -157,23 +152,10 @@ fn group_end(stream: &Stream<'_, '_>, start: usize) -> usize {
     end
 }
 
-/// Count the tool-call steps (tool steps + envoy tasks) in `[start, end)`.
-fn count_tool_calls(stream: &Stream<'_, '_>, start: usize, end: usize) -> usize {
-    stream.messages[start..end]
-        .iter()
-        .filter(|m| m.is_tool_step() || m.is_envoy_task())
-        .count()
-}
-
-/// Paint the round header row: `◆ round N · model · K calls`, info-tone bold
+/// Paint the round header row: `◆ round N · model · HH:MM`, info-tone bold
 /// anchor with muted metadata, no background band. One blank row sits above it
 /// (added in the caller).
-fn draw_round_header(
-    stream: &mut Stream<'_, '_>,
-    round: u64,
-    msg: &TranscriptMessage,
-    calls: usize,
-) {
+fn draw_round_header(stream: &mut Stream<'_, '_>, round: u64, msg: &TranscriptMessage) {
     // Always account for one content line even when scrolled out of view, so
     // scroll height stays faithful to what a user scrolling back would see.
     stream.content_lines += 1;
@@ -189,7 +171,7 @@ fn draw_round_header(
     let band = stream.band;
 
     // Two-tone label, no background band: `◆ round N` is the info-tone
-    // anchor, the rest (model, call count) reads as muted metadata on the
+    // anchor, the rest (model, send time) reads as muted metadata on the
     // same line.
     let accent = Style::default()
         .fg(theme.info())
@@ -208,8 +190,12 @@ fn draw_round_header(
     if let Some(name) = &model_name {
         spans.push(Span::styled(format!(" · {}", name), meta));
     }
-    let calls_seg = format!(" · {} {}", calls, if calls == 1 { "call" } else { "calls" });
-    spans.push(Span::styled(calls_seg, meta));
+    if let Some(sent_at_ms) = msg.sent_at_ms {
+        spans.push(Span::styled(
+            format!(" · {}", sent_time_label(sent_at_ms)),
+            meta,
+        ));
+    }
 
     let line = Line::from(spans);
     let rect = Rect::new(band.x, stream.current_y, band.width, 1);

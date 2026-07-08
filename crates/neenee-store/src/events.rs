@@ -75,6 +75,31 @@ pub enum SessionEvent {
     /// stored on every change. Set by the `/pursue` slash command and the
     /// harness completion path; read on resume to restore the active pursuit.
     PursuitSet { pursuit: Option<Pursuit> },
+    /// The session-scoped stop-gate runtime view changed (ADR-0048 Phase 2).
+    /// `runtime = None` clears it. Snapshot semantics. Mirrors the armed flag
+    /// + iteration counter on `Agent::pursuit_state` so resume restores them.
+    PursuitRuntimeSet {
+        runtime: Option<crate::session::PursuitRuntime>,
+    },
+    /// The session-level disabled-tool mask changed (ADR-0048 Phase 2).
+    /// Snapshot semantics: the full set is stored on every change. Mirrors
+    /// `Agent::disabled_tools` so a user toggle survives restart.
+    DisabledToolsSet {
+        tools: std::collections::HashSet<String>,
+    },
+    /// The harness turn counter advanced (ADR-0048 Phase 2). Snapshot
+    /// semantics. Mirrors `Agent::turn_counter` so a resumed session's todo
+    /// stale-detector comparisons stay valid.
+    TurnCounterSet { counter: u64 },
+    /// The session-scoped provider + model pin changed (C6). `selection = None`
+    /// means "follow the global default". Snapshot semantics. Set by the
+    /// `/provider` switch handler so the session reopens on its own provider
+    /// instead of the global default; read on resume to restore it. The global
+    /// `config.toml` selection is left untouched, so one session switching
+    /// provider/model never affects another.
+    ProviderSelectionSet {
+        selection: Option<crate::session::ProviderSelection>,
+    },
 }
 
 /// Wrapper around a [`SessionEvent`] that adds metadata for ordering and

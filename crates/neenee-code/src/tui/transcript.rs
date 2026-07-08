@@ -21,6 +21,11 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
     }
     let provider = message.provider.clone();
     let model = message.model.clone();
+    let sent_at_ms = message.sent_at_ms.or_else(|| {
+        message
+            .timestamp
+            .map(|seconds| seconds.saturating_mul(1000))
+    });
     // Whether the harness carried a curated `display_content` for this user
     // message — slash commands set this to the literal `/cmd` (their `content`
     // is the harness-expanded form), so its presence is the signal that the
@@ -45,6 +50,9 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
         let mut msg = TranscriptMessage::new(message.role, content);
         msg.provider = provider;
         msg.model = model;
+        if msg.role == Role::User {
+            msg.sent_at_ms = sent_at_ms;
+        }
         // Infer the turn origin for restored user messages so a resumed
         // session's Activity modal still skips slash/shell turns. Slash
         // commands carry a `display_content` that is the literal `/cmd`
@@ -99,6 +107,11 @@ pub(super) fn transcript_messages_from_core(
         // models still shows which model produced each turn.
         let provider = message.provider.clone();
         let model = message.model.clone();
+        let message_sent_at_ms = message.sent_at_ms.or_else(|| {
+            message
+                .timestamp
+                .map(|seconds| seconds.saturating_mul(1000))
+        });
         if message.role == Role::Assistant {
             restored_round = restored_round.saturating_add(1);
             if let Some(reasoning) = message.reasoning_content.take() {
@@ -126,6 +139,7 @@ pub(super) fn transcript_messages_from_core(
                     step.provider = provider.clone();
                     step.model = model.clone();
                     step.turn = Some(restored_round);
+                    step.sent_at_ms = message_sent_at_ms;
                     pending_steps
                         .entry(call.name)
                         .or_default()

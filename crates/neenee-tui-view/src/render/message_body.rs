@@ -6,8 +6,8 @@
 use neenee_tui::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
-use crate::document::{Block, DeliveryStatus, TranscriptMessage};
-use crate::layout::{BlockRegion, LayoutMap, TableCellHit, TableCellSegment};
+use crate::document::{Block, DeliveryStatus, LinkRange, TranscriptMessage};
+use crate::layout::{BlockRegion, LayoutMap, LinkHit, TableCellHit, TableCellSegment};
 use crate::selection::{
     CellDragInfo, SelectionState, floor_grapheme_boundary, inclusive_grapheme_end,
 };
@@ -20,12 +20,59 @@ use super::design::{
 use super::markdown_table::{TableRowInfo, build_table_render, push_table_segment};
 use super::text_layout::{
     WrappedLine, block_selection_range, bold_delim_local_ranges, code_gutter_line, line_selection,
-    line_spans_rich, markup_hidden_ranges, padded_tail, visible_width, wrap_text,
+    line_spans_rich, link_delim_local_ranges, markup_hidden_ranges, padded_tail, visible_width,
+    wrap_text,
 };
+use super::time::sent_time_label;
 use super::{TRANSCRIPT_BODY_LEADING_INDENT, Theme};
 
 fn display_width_u16(s: &str) -> u16 {
     s.width() as u16
+}
+
+/// Turn / time label drawn *outside* a sent user-message panel (on the row
+/// above it, on plain `surface`), so the panel itself holds only the typed
+/// text. The "Sent" word is dropped: `turn N · HH:MM` is enough provenance,
+/// and queued messages keep their `⏸ Queued` pending marker.
+///
+/// `msg.turn` is the conversation *turn* counter stamped at send time (one
+/// bump per user↔assistant exchange), NOT the tool-round counter shown in the
+/// Activity modal — hence "turn", not "round".
+fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
+    // The anchor is the first token of the header (the turn provenance), drawn
+    // in info-tone bold. Empty when there is no anchor (legacy message or a
+    // queued message, which renders its own pending marker instead).
+    if is_queued {
+        return String::new();
+    }
+    if let Some(turn) = msg.turn {
+        format!("turn {}", turn)
+    } else {
+        String::new()
+    }
+}
+
+fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
+    // The trailing metadata after the anchor, drawn muted (grey, no bold). For
+    // a sent message that is the send time (and the " · " separator is folded
+    // in here when an anchor precedes it). Queued messages render no meta —
+    // the anchor path emits their `⏸ Queued` marker instead.
+    if is_queued {
+        return String::new();
+    }
+    if let Some(sent_at_ms) = msg.sent_at_ms {
+        if msg.turn.is_some() {
+            format!(" · {}", sent_time_label(sent_at_ms))
+        } else {
+            sent_time_label(sent_at_ms)
+        }
+    } else if msg.turn.is_none() {
+        // No turn stamp and no send time (e.g. a legacy session): fall back
+        // to a neutral marker so the header row is never blank.
+        "Sent".to_string()
+    } else {
+        String::new()
+    }
 }
 
 fn table_line_hidden_ranges(line_text: &str, info: &TableRowInfo) -> Vec<(usize, usize)> {
@@ -46,10 +93,21 @@ fn table_line_hidden_ranges(line_text: &str, info: &TableRowInfo) -> Vec<(usize,
             .get(ci)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let math_ranges = info
+            .col_math_ranges
+            .get(ci)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         hidden.extend(
-            markup_hidden_ranges(&line_text[clo..chi], offset, code_ranges, bold_ranges)
-                .into_iter()
-                .map(|(lo, hi)| (clo + lo, clo + hi)),
+            markup_hidden_ranges(
+                &line_text[clo..chi],
+                offset,
+                code_ranges,
+                bold_ranges,
+                math_ranges,
+            )
+            .into_iter()
+            .map(|(lo, hi)| (clo + lo, clo + hi)),
         );
     }
     hidden
@@ -70,6 +128,44 @@ fn visible_width_window(
         })
         .collect();
     visible_width(&text[start..end], &local_hidden)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_link_hits_for_line(
+    layout_map: &mut LayoutMap,
+    links: &[LinkRange],
+    message_idx: usize,
+    block_idx: usize,
+    line_start_byte: usize,
+    line_text: &str,
+    prefix_cols: u16,
+    line_rect: Rect,
+    hidden_ranges: &[(usize, usize)],
+) {
+    let line_end_byte = line_start_byte + line_text.len();
+    for link in links {
+        let label_start = link.label_range.0.max(line_start_byte);
+        let label_end = link.label_range.1.min(line_end_byte);
+        if label_start >= label_end {
+            continue;
+        }
+        let local_start = label_start - line_start_byte;
+        let local_end = label_end - line_start_byte;
+        let x_offset = visible_width_window(line_text, 0, local_start, hidden_ranges);
+        let width = visible_width_window(line_text, local_start, local_end, hidden_ranges).max(1);
+        layout_map.push_link_hit(LinkHit {
+            message_idx,
+            block_idx,
+            range: link.range,
+            url: link.url.clone(),
+            rect: Rect::new(
+                line_rect.x + prefix_cols + x_offset as u16,
+                line_rect.y,
+                width as u16,
+                1,
+            ),
+        });
+    }
 }
 
 fn cell_drag_selected_span(
@@ -152,6 +248,8 @@ pub fn draw_message_body(
                 content,
                 code_ranges,
                 bold_ranges,
+                math_ranges,
+                link_ranges,
             } => {
                 let is_user = msg.role == neenee_core::Role::User;
                 let is_queued = is_user && msg.delivery == DeliveryStatus::Queued;
@@ -197,6 +295,72 @@ pub fn draw_message_body(
                 let user_content_w = full_width.saturating_sub(2 * USER_MESSAGE_OUTER_GUTTER_COLS);
 
                 if is_user {
+                    // Header: the send-metadata label (turn no. + time, or a
+                    // pending marker for queued messages) sits OUTSIDE the
+                    // user-message panel, on plain `surface`, directly above
+                    // it. The panel's half-block top transition provides the
+                    // visual separator, so no extra blank row is needed.
+                    if bi == 0 {
+                        *content_lines += 1;
+                        if *skip_rows > 0 {
+                            *skip_rows = skip_rows.saturating_sub(1);
+                        } else if *current_y < area.y + area.height {
+                            // Two-tone label, no background band (matches the
+                            // round header row in `layout_default`): the turn
+                            // anchor is info-tone bold, the time reads as
+                            // muted metadata. Queued messages keep their own
+                            // `⏸ Queued` pending marker (warn tone, italic).
+                            let anchor = if is_queued {
+                                "⏸ Queued".to_string()
+                            } else {
+                                sent_header_anchor(msg, is_queued)
+                            };
+                            let meta = if is_queued {
+                                String::new()
+                            } else {
+                                sent_header_meta(msg, is_queued)
+                            };
+                            let used = USER_MESSAGE_TEXT_GAP_COLS + anchor.width() + meta.width();
+                            let anchor_style = if is_queued {
+                                Style::default()
+                                    .fg(theme.warn())
+                                    .add_modifier(Modifier::ITALIC)
+                            } else {
+                                Style::default()
+                                    .fg(theme.info())
+                                    .add_modifier(Modifier::BOLD)
+                            };
+                            // Time (and the " · " separator) reads as muted
+                            // metadata, matching every other timestamp in the
+                            // transcript — grey, no bold.
+                            let meta_style = Style::default().fg(theme.muted());
+                            let mut spans = vec![
+                                Span::styled(
+                                    user_gutter.clone(),
+                                    Style::default().bg(theme.surface()),
+                                ),
+                                Span::styled(
+                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS),
+                                    Style::default().bg(theme.surface()),
+                                ),
+                                Span::styled(anchor, anchor_style),
+                                Span::styled(meta, meta_style),
+                                Span::styled(
+                                    padded_tail(user_content_w, used),
+                                    Style::default().bg(theme.surface()),
+                                ),
+                                Span::styled(
+                                    user_gutter.clone(),
+                                    Style::default().bg(theme.surface()),
+                                ),
+                            ];
+                            spans.shrink_to_fit();
+                            let line = Line::from(spans);
+                            let rect = Rect::new(area.x, *current_y, area.width, 1);
+                            frame.render_widget(Paragraph::new(line), rect);
+                            *current_y += 1;
+                        }
+                    }
                     for _ in 0..USER_MESSAGE_TRANSITION_ROWS {
                         *content_lines += 1;
                         if *skip_rows > 0 {
@@ -223,56 +387,6 @@ pub fn draw_message_body(
                             *current_y += 1;
                         }
                     }
-                    // Queued badge: render a single-row "⏸ Queued" label inside
-                    // the panel before the first text line, so the user can tell
-                    // at a glance the message is staged in the send queue. Only
-                    // the first text block carries the badge — multi-block
-                    // markdown user messages are rare and the dimmer bg still
-                    // conveys the state on the remaining blocks.
-                    if is_queued && bi == 0 {
-                        *content_lines += 1;
-                        if *skip_rows > 0 {
-                            *skip_rows = skip_rows.saturating_sub(1);
-                        } else if *current_y < area.y + area.height {
-                            let badge = "⏸ Queued";
-                            let badge_w = badge.width();
-                            // Reserve a 2-col gap after the badge so it does
-                            // not run into any wrapped text on the same row
-                            // (the badge row has no text — text starts on the
-                            // next row — but the cushion reads cleaner).
-                            let used = USER_MESSAGE_TEXT_GAP_COLS + badge_w;
-                            let mut spans = vec![
-                                Span::styled(
-                                    user_gutter.clone(),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                                Span::styled(
-                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS),
-                                    Style::default().bg(user_bg),
-                                ),
-                                Span::styled(
-                                    badge.to_string(),
-                                    Style::default()
-                                        .bg(user_bg)
-                                        .fg(theme.warn())
-                                        .add_modifier(Modifier::ITALIC),
-                                ),
-                                Span::styled(
-                                    padded_tail(user_content_w, used),
-                                    Style::default().bg(user_bg),
-                                ),
-                                Span::styled(
-                                    user_gutter.clone(),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                            ];
-                            spans.shrink_to_fit();
-                            let line = Line::from(spans);
-                            let rect = Rect::new(area.x, *current_y, area.width, 1);
-                            frame.render_widget(Paragraph::new(line), rect);
-                            *current_y += 1;
-                        }
-                    }
                 }
 
                 for wl in &lines {
@@ -289,7 +403,11 @@ pub fn draw_message_body(
                         // band. Selection is character-level, not line-level,
                         // so the user can highlight arbitrary substrings.
                         let bg = user_bg;
-                        let text_style = Style::default().bg(bg).fg(theme.muted());
+                        let text_style = Style::default().bg(bg).fg(if is_queued {
+                            theme.muted()
+                        } else {
+                            theme.user_text()
+                        });
                         let sel_style = Style::default().bg(theme.selected()).fg(theme.fg());
                         let sel = line_selection(sel_range, wl);
 
@@ -336,9 +454,13 @@ pub fn draw_message_body(
                             line_selection(sel_range, wl),
                             code_ranges,
                             bold_ranges,
+                            math_ranges,
+                            link_ranges,
                             base,
                             theme.code_text(),
                             theme.code_surface(),
+                            theme.info(),
+                            theme.info(),
                             theme.selected(),
                         )
                     };
@@ -356,8 +478,33 @@ pub fn draw_message_body(
                         let hidden_ranges = if is_user {
                             Vec::new()
                         } else {
-                            bold_delim_local_ranges(&wl.text, wl.start_byte, bold_ranges)
+                            let mut hidden =
+                                bold_delim_local_ranges(&wl.text, wl.start_byte, bold_ranges);
+                            hidden.extend(markup_hidden_ranges(
+                                &wl.text,
+                                wl.start_byte,
+                                code_ranges,
+                                &[],
+                                math_ranges,
+                            ));
+                            hidden.extend(link_delim_local_ranges(
+                                &wl.text,
+                                wl.start_byte,
+                                link_ranges,
+                            ));
+                            hidden
                         };
+                        push_link_hits_for_line(
+                            layout_map,
+                            link_ranges,
+                            mi,
+                            bi,
+                            wl.start_byte,
+                            &wl.text,
+                            prefix_cols,
+                            line_rect,
+                            &hidden_ranges,
+                        );
                         layout_map.push(BlockRegion {
                             message_idx: mi,
                             block_idx: bi,
@@ -523,6 +670,11 @@ pub fn draw_message_body(
                                 .get(i)
                                 .map(Vec::as_slice)
                                 .unwrap_or(&[]);
+                            let math_ranges = info
+                                .col_math_ranges
+                                .get(i)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[]);
 
                             // Border / inter-cell separator before this cell
                             if lo > pos {
@@ -570,9 +722,13 @@ pub fn draw_message_body(
                                     cell_sel,
                                     code_ranges,
                                     bold_ranges,
+                                    math_ranges,
+                                    &[],
                                     base,
                                     theme.code_text(),
                                     theme.code_surface(),
+                                    theme.info(),
+                                    theme.info(),
                                     sel_bg,
                                 );
                                 // Skip the empty-prefix span (position 0).
@@ -686,6 +842,95 @@ pub fn draw_message_body(
                     }
 
                     line_start_byte = end_byte + 1; // +1 for '\n'
+                    *current_y += 1;
+                }
+            }
+            Block::Math { content } => {
+                let math_bg = theme.code_surface();
+                let h_inset: u16 = 2;
+                let band_x = area.x + h_inset;
+                let band_w = area.width.saturating_sub(2 * h_inset).max(1);
+                let full_width = band_w as usize;
+                let left_indent = CODE_BAND_LEFT_INDENT;
+                let marker = "∑";
+                let marker_gap = 2usize;
+                let indent = left_indent + marker.width() + marker_gap;
+                let wrap_width = full_width.saturating_sub(indent + 1).max(1);
+                let lines = wrap_text(content, wrap_width);
+                let lines = if lines.is_empty() {
+                    vec![WrappedLine {
+                        text: String::new(),
+                        start_byte: 0,
+                        end_byte: 0,
+                    }]
+                } else {
+                    lines
+                };
+                *content_lines += lines.len();
+                for wl in &lines {
+                    if *skip_rows > 0 {
+                        *skip_rows = skip_rows.saturating_sub(1);
+                        continue;
+                    }
+                    if *current_y >= area.y + area.height {
+                        break;
+                    }
+                    let selected = line_selection(sel_range, wl);
+                    let mut spans = vec![
+                        Span::styled(" ".repeat(left_indent), Style::default().bg(math_bg)),
+                        Span::styled(
+                            marker.to_string(),
+                            Style::default()
+                                .fg(theme.info())
+                                .bg(math_bg)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" ".repeat(marker_gap), Style::default().bg(math_bg)),
+                    ];
+                    match selected {
+                        None => spans.push(Span::styled(
+                            wl.text.clone(),
+                            Style::default()
+                                .fg(theme.info())
+                                .bg(math_bg)
+                                .add_modifier(Modifier::ITALIC),
+                        )),
+                        Some((lo, hi)) => {
+                            let base = Style::default()
+                                .fg(theme.info())
+                                .bg(math_bg)
+                                .add_modifier(Modifier::ITALIC);
+                            if lo > 0 {
+                                spans.push(Span::styled(wl.text[..lo].to_string(), base));
+                            }
+                            spans.push(Span::styled(
+                                wl.text[lo..hi].to_string(),
+                                base.bg(theme.selected()),
+                            ));
+                            if hi < wl.text.len() {
+                                spans.push(Span::styled(wl.text[hi..].to_string(), base));
+                            }
+                        }
+                    }
+                    let used = indent + wl.text.width();
+                    spans.push(Span::styled(
+                        padded_tail(full_width, used),
+                        Style::default().bg(math_bg),
+                    ));
+                    let line_rect = Rect::new(band_x, *current_y, band_w, 1);
+                    frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+                    if record_layout {
+                        layout_map.push(BlockRegion {
+                            message_idx: mi,
+                            block_idx: bi,
+                            start_byte: wl.start_byte,
+                            end_byte: wl.end_byte,
+                            text: wl.text.clone(),
+                            prefix_cols: indent as u16,
+                            rect: line_rect,
+                            hidden_ranges: Vec::new(),
+                        });
+                    }
                     *current_y += 1;
                 }
             }
@@ -826,6 +1071,8 @@ pub fn draw_message_body(
                 content,
                 code_ranges,
                 bold_ranges,
+                math_ranges,
+                link_ranges,
             } => {
                 let prefix = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
                 let prefix_cols = TRANSCRIPT_BODY_LEADING_INDENT;
@@ -868,9 +1115,13 @@ pub fn draw_message_body(
                         line_selection(sel_range, wl),
                         code_ranges,
                         bold_ranges,
+                        math_ranges,
+                        link_ranges,
                         style,
                         theme.code_text(),
                         theme.code_surface(),
+                        theme.info(),
+                        theme.info(),
                         theme.selected(),
                     );
                     // For H1 headings the terminal UNDERLINED modifier fills
@@ -878,8 +1129,20 @@ pub fn draw_message_body(
                     // the actual text extent to prevent the underline from
                     // bleeding into trailing whitespace.
                     let full_rect = Rect::new(area.x, *current_y, area.width, 1);
-                    let hidden_for_line =
+                    let mut hidden_for_line =
                         bold_delim_local_ranges(&wl.text, wl.start_byte, bold_ranges);
+                    hidden_for_line.extend(markup_hidden_ranges(
+                        &wl.text,
+                        wl.start_byte,
+                        code_ranges,
+                        &[],
+                        math_ranges,
+                    ));
+                    hidden_for_line.extend(link_delim_local_ranges(
+                        &wl.text,
+                        wl.start_byte,
+                        link_ranges,
+                    ));
                     let text_cols = prefix_cols + visible_width(&wl.text, &hidden_for_line) as u16;
                     let render_rect = if *level == 1 {
                         Rect::new(area.x, *current_y, text_cols.min(area.width), 1)
@@ -891,6 +1154,17 @@ pub fn draw_message_body(
                     if record_layout {
                         // Layout map always uses full width for hit-testing
                         // and selection across the entire line.
+                        push_link_hits_for_line(
+                            layout_map,
+                            link_ranges,
+                            mi,
+                            bi,
+                            wl.start_byte,
+                            &wl.text,
+                            prefix_cols,
+                            full_rect,
+                            &hidden_for_line,
+                        );
                         layout_map.push(BlockRegion {
                             message_idx: mi,
                             block_idx: bi,
@@ -910,6 +1184,8 @@ pub fn draw_message_body(
                 content,
                 code_ranges,
                 bold_ranges,
+                math_ranges,
+                link_ranges,
             } => {
                 // 5-col `▎` prefix; the area is already inset so no right gutter.
                 let lines = wrap_text(content, area.width.saturating_sub(5) as usize);
@@ -932,17 +1208,44 @@ pub fn draw_message_body(
                         line_selection(sel_range, wl),
                         code_ranges,
                         bold_ranges,
+                        math_ranges,
+                        link_ranges,
                         base,
                         theme.code_text(),
                         theme.code_surface(),
+                        theme.info(),
+                        theme.info(),
                         theme.selected(),
                     );
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                     frame.render_widget(Paragraph::new(line), line_rect);
 
                     if record_layout {
-                        let hidden_for_line =
+                        let mut hidden_for_line =
                             bold_delim_local_ranges(&wl.text, wl.start_byte, bold_ranges);
+                        hidden_for_line.extend(markup_hidden_ranges(
+                            &wl.text,
+                            wl.start_byte,
+                            code_ranges,
+                            &[],
+                            math_ranges,
+                        ));
+                        hidden_for_line.extend(link_delim_local_ranges(
+                            &wl.text,
+                            wl.start_byte,
+                            link_ranges,
+                        ));
+                        push_link_hits_for_line(
+                            layout_map,
+                            link_ranges,
+                            mi,
+                            bi,
+                            wl.start_byte,
+                            &wl.text,
+                            5,
+                            line_rect,
+                            &hidden_for_line,
+                        );
                         layout_map.push(BlockRegion {
                             message_idx: mi,
                             block_idx: bi,
@@ -985,6 +1288,8 @@ pub fn draw_message_body(
                 content,
                 code_ranges,
                 bold_ranges,
+                math_ranges,
+                link_ranges,
                 ordered,
                 depth,
                 checked,
@@ -1023,17 +1328,44 @@ pub fn draw_message_body(
                         line_selection(sel_range, wl),
                         code_ranges,
                         bold_ranges,
+                        math_ranges,
+                        link_ranges,
                         base,
                         theme.code_text(),
                         theme.code_surface(),
+                        theme.info(),
+                        theme.info(),
                         theme.selected(),
                     );
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                     frame.render_widget(Paragraph::new(line), line_rect);
 
                     if record_layout {
-                        let hidden_for_line =
+                        let mut hidden_for_line =
                             bold_delim_local_ranges(&wl.text, wl.start_byte, bold_ranges);
+                        hidden_for_line.extend(markup_hidden_ranges(
+                            &wl.text,
+                            wl.start_byte,
+                            code_ranges,
+                            &[],
+                            math_ranges,
+                        ));
+                        hidden_for_line.extend(link_delim_local_ranges(
+                            &wl.text,
+                            wl.start_byte,
+                            link_ranges,
+                        ));
+                        push_link_hits_for_line(
+                            layout_map,
+                            link_ranges,
+                            mi,
+                            bi,
+                            wl.start_byte,
+                            &wl.text,
+                            prefix_cols,
+                            line_rect,
+                            &hidden_for_line,
+                        );
                         layout_map.push(BlockRegion {
                             message_idx: mi,
                             block_idx: bi,

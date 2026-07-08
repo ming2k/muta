@@ -504,8 +504,6 @@ pub struct App {
     /// Scroll offset for the custom-provider editor body. Rendered body sets
     /// the upper bound automatically.
     pub custom_scroll: usize,
-    /// Scroll offset for the add-model overlay body.
-    pub add_model_scroll: usize,
     /// When `Some(id)`, the provider editor is **editing** the existing user
     /// provider `id` (meta only: Name/Base URL/Token; models stay managed in the
     /// stage-2 list). `None` is create mode.
@@ -538,14 +536,6 @@ pub struct App {
     /// to `None` whenever the picker opens or closes. See
     /// [`Self::providers_filtered`] and [`Self::provider_models_filtered`].
     pub picker_provider: Option<usize>,
-    /// Provider id targeted by the **add-model** overlay ([`Modal::AddModel`]),
-    /// opened from a custom provider's stage-2 list. `None` when the overlay is
-    /// closed.
-    pub add_model_provider: Option<String>,
-    /// Index into the add-model overlay's candidate list. The last index is the
-    /// synthetic "Custom…" slot (free-text id in the borrowed input line).
-    /// Cycled with `←/→`.
-    pub add_model_choice: usize,
     /// Body scroll offset of the model picker. Reset to 0 each time the modal
     /// opens (and when toggling browse/search); clamped and auto-followed to the
     /// selection by the renderer each frame. Mirrors [`Self::history_scroll`].
@@ -1391,7 +1381,7 @@ impl App {
     }
 
     /// Whether the drilled-into provider (stage 2) is user-defined, so the model
-    /// list offers add/remove. `false` in stage 1 or for built-in providers.
+    /// list offers remove. `false` in stage 1 or for built-in providers.
     pub fn picker_provider_is_custom(&self) -> bool {
         self.picker_provider
             .and_then(|idx| self.provider_picker.rows.get(idx))
@@ -1399,41 +1389,12 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// The protocol wire string ("anthropic" / "gemini" / "openai") for the
-    /// provider the add-model overlay targets, derived from its active model.
-    /// `None` when the overlay is closed or the provider is gone.
-    fn add_model_wire(&self) -> Option<&'static str> {
-        let id = self.add_model_provider.as_deref()?;
-        let row = self.provider_picker.rows.iter().find(|r| r.id == id)?;
-        let format = neenee_core::resolve_model(&row.model).format;
-        Some(match format {
-            neenee_core::WireFormat::AnthropicCompat => "anthropic",
-            neenee_core::WireFormat::Gemini => "gemini",
-            neenee_core::WireFormat::OpenAiCompat => "openai",
-        })
-    }
-
-    /// The model candidate list for the add-model overlay: the registry models
-    /// matching the targeted custom provider's wire format (derived from its
-    /// active model). Empty when the overlay is closed or the provider is gone.
-    pub fn add_model_candidates(&self) -> Vec<&'static str> {
-        self.add_model_wire()
-            .map(crate::tui::protocol_model_candidates)
-            .unwrap_or_default()
-    }
-
     /// Number of selectable rows in the picker's current stage — stage-2 model
     /// rows when drilled into a provider, else stage-1 provider rows. Used to
     /// clamp the ↑/↓ selection cursor.
     pub fn picker_row_count(&self) -> usize {
         if self.picker_provider.is_some() {
-            // Custom providers gain a trailing synthetic "＋ Add model" row.
-            let models = self.provider_models_filtered().len();
-            if self.picker_provider_is_custom() {
-                models + 1
-            } else {
-                models
-            }
+            self.provider_models_filtered().len()
         } else {
             // Stage 1 has a trailing synthetic "＋ Add provider" row after the
             // provider rows, so it is always selectable even with no matches.
@@ -1446,82 +1407,6 @@ impl App {
     /// stage 1.
     pub fn picker_on_add_row(&self) -> bool {
         self.picker_provider.is_none() && self.modal_index == self.providers_filtered().len()
-    }
-
-    /// Whether `modal_index` is on the stage-2 "＋ Add model" row — the synthetic
-    /// trailing row present only for a drilled-into custom provider.
-    pub fn picker_on_add_model_row(&self) -> bool {
-        self.picker_provider.is_some()
-            && self.picker_provider_is_custom()
-            && self.modal_index == self.provider_models_filtered().len()
-    }
-
-    /// Open the add-model overlay for custom provider `id`. The borrowed input
-    /// line is a filter; `↑/↓` move the highlight over the matching candidates.
-    pub fn open_add_model_overlay(&mut self, id: String) {
-        self.add_model_provider = Some(id);
-        self.add_model_choice = 0;
-        self.input.clear();
-        self.set_cursor(0);
-        self.active_modal = Modal::AddModel;
-    }
-
-    /// The add-model overlay's suggestions matching the live filter: the
-    /// provider's protocol candidates that fuzzy-match, plus the raw typed text
-    /// as a custom id when it is not already a candidate. The free-text
-    /// fallback is suppressed for closed model sets (native Gemini): the
-    /// candidate list is the complete, fixed family, so an unmatched query is a
-    /// typo rather than a real model and must not be creatable from the overlay.
-    pub fn add_model_suggestions(&self) -> Vec<String> {
-        let q = self.input.trim();
-        let mut out: Vec<String> = self
-            .add_model_candidates()
-            .into_iter()
-            .filter(|id| {
-                q.is_empty()
-                    || id.contains(q)
-                    || crate::tui::fuzzy::fuzzy_match(&crate::tui::model_display_name(id), q)
-                        .is_some()
-            })
-            .map(|s| s.to_string())
-            .collect();
-        // Only open protocols (OpenAI/Anthropic relays) accept an arbitrary id;
-        // a closed set (Gemini) restricts choice to its enumerated candidates.
-        let closed = self
-            .add_model_wire()
-            .is_some_and(crate::tui::protocol_model_set_closed);
-        if !closed && !q.is_empty() && !out.iter().any(|m| m == q) {
-            out.push(q.to_string());
-        }
-        out
-    }
-
-    /// Move the add-model highlight over the filtered suggestions.
-    pub fn move_add_model(&mut self, forward: bool) {
-        let len = self.add_model_suggestions().len();
-        if len == 0 {
-            return;
-        }
-        self.add_model_choice = if forward {
-            (self.add_model_choice + 1) % len
-        } else {
-            (self.add_model_choice + len - 1) % len
-        };
-    }
-
-    /// Reset the add-model highlight after the filter query changes.
-    pub fn on_add_model_filter_changed(&mut self) {
-        self.add_model_choice = 0;
-    }
-
-    /// The model id the add-model overlay would submit: the highlighted
-    /// suggestion. Empty when there are no matches.
-    pub fn add_model_selected(&self) -> String {
-        let suggestions = self.add_model_suggestions();
-        suggestions
-            .get(self.add_model_choice)
-            .cloned()
-            .unwrap_or_default()
     }
 
     /// Number of selectable rows in the Tools modal — the tool list, the

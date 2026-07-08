@@ -30,8 +30,23 @@ pub use neenee_core::{estimate_bytes, estimate_tokens};
 /// `pursuit`. C4 (ADR-0034): added `Message::origin` (`Option<InjectionOrigin>`)
 /// for structured injection provenance. All three are structural no-ops for
 /// legacy snapshots, which load with the new fields at their `#[serde(default)]`
-/// values (`None` / `false`).
-const CURRENT_SCHEMA_VERSION: u32 = 5;
+/// values (`None` / `false`). C6 (per-session provider/model): added
+/// `provider_selection`. A session that has run `/provider` pins its own
+/// provider + model here so the live selection does not leak into the global
+/// `config.toml` or affect other concurrent sessions.
+const CURRENT_SCHEMA_VERSION: u32 = 6;
+
+/// A session-scoped provider + model pin (C6). When present it overrides the
+/// global `config.default_provider` / `config.default_model` for this session
+/// only, so one session switching `/provider` does not change what any other
+/// session — or the next fresh session — sees. `None` means "follow the global
+/// default"; the session still tracks the provider selection it was started
+/// with until the user switches.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderSelection {
+    pub provider: String,
+    pub model: Option<String>,
+}
 
 /// Sentinel value for `PursuitCheckpoint::max_iterations` indicating an uncapped
 /// run. `/pursue` runs until the model emits the completion marker, the user
@@ -48,6 +63,23 @@ pub struct PursuitCheckpoint {
     pub iteration: usize,
     pub max_iterations: usize,
     pub status: String,
+}
+
+/// The session-scoped runtime view of a pursuit, persisted separately from the
+/// `Pursuit` core type (ADR-0048 Phase 2). The `Pursuit` (objective +
+/// `is_complete`) is the durable objective record; this carries the stop-gate
+/// runtime state (`armed` + `iterations`) that previously lived only in
+/// `Agent::pursuit_state` and was silently lost on resume — leaving an
+/// armed pursuit disarmed mid-iteration.
+///
+/// `#[serde(default)]` on the field keeps legacy snapshots loadable as `None`
+/// (no runtime view), matching the ADR-0017/0022 backward-compat contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PursuitRuntime {
+    /// Whether the stop-gate was armed when the session was last persisted.
+    pub armed: bool,
+    /// Stop-gate iteration counter at the last persist.
+    pub iterations: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -137,6 +169,31 @@ struct SessionData {
     /// is rejected as corruption rather than silently skipping events.
     #[serde(default)]
     applied_seq: Option<u64>,
+    /// Session-scoped provider + model pin (C6). `None` for a session that has
+    /// never run `/provider`; the harness then seeds it from the global default
+    /// on first switch. Persisted so resume restores the session's own provider
+    /// instead of whatever global default is current at reopen time.
+    #[serde(default)]
+    provider_selection: Option<ProviderSelection>,
+    /// Session-level disabled-tool mask (ADR-0048 Phase 2). Names here are
+    /// hidden from the model and rejected at dispatch. Mirrored from
+    /// `Agent::disabled_tools` so a user toggle survives restart instead of
+    /// silently resetting. `#[serde(default)]` so legacy snapshots load with
+    /// an empty set (all tools enabled) and no migration.
+    #[serde(default)]
+    disabled_tools: std::collections::HashSet<String>,
+    /// Harness turn counter, the session-scoped monotonic watermark (ADR-0048
+    /// Phase 2). Bumped at the start of every round; read by the todo
+    /// stale-detector via `updated_at_turn`. Persisted so a resumed session's
+    /// staleness comparisons stay valid instead of the counter resetting to 0.
+    /// `#[serde(default)]` so legacy snapshots load as 0.
+    #[serde(default)]
+    turn_counter: u64,
+    /// Session-scoped stop-gate runtime view (ADR-0048 Phase 2). `None` for a
+    /// session with no armed pursuit. Restored on resume so an armed pursuit
+    /// mid-iteration does not silently disarm.
+    #[serde(default)]
+    pursuit_runtime: Option<PursuitRuntime>,
 }
 
 impl Default for SessionData {
@@ -159,6 +216,10 @@ impl Default for SessionData {
             title_manual: false,
             pursuit: None,
             applied_seq: None,
+            provider_selection: None,
+            disabled_tools: std::collections::HashSet::new(),
+            turn_counter: 0,
+            pursuit_runtime: None,
         }
     }
 }
@@ -195,6 +256,10 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     // no payload transformation is needed, only the version bump. The first
     // persist after this upgrade folds the full state and records the
     // watermark, so subsequent loads take the fast path.
+    // C6 (per-session provider/model): `provider_selection` was added with
+    // `#[serde(default)]`, so a legacy snapshot loads with
+    // `provider_selection = None` (follow the global default); no payload
+    // transformation is needed, only the version bump.
     data.schema_version = CURRENT_SCHEMA_VERSION;
     data
 }
@@ -378,6 +443,18 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::PursuitSet { pursuit } => {
                 data.pursuit = pursuit.clone();
             }
+            SessionEvent::PursuitRuntimeSet { runtime } => {
+                data.pursuit_runtime = runtime.clone();
+            }
+            SessionEvent::DisabledToolsSet { tools } => {
+                data.disabled_tools = tools.clone();
+            }
+            SessionEvent::TurnCounterSet { counter } => {
+                data.turn_counter = *counter;
+            }
+            SessionEvent::ProviderSelectionSet { selection } => {
+                data.provider_selection = selection.clone();
+            }
             SessionEvent::Reset { id } => {
                 let project_root = data.project_root.clone();
                 let schema_version = data.schema_version;
@@ -476,6 +553,42 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             timestamp: data.updated_at,
             event: SessionEvent::PursuitSet {
                 pursuit: Some(pursuit.clone()),
+            },
+        });
+    }
+    if let Some(selection) = &data.provider_selection {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::ProviderSelectionSet {
+                selection: Some(selection.clone()),
+            },
+        });
+    }
+    if !data.disabled_tools.is_empty() {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::DisabledToolsSet {
+                tools: data.disabled_tools.clone(),
+            },
+        });
+    }
+    if data.turn_counter > 0 {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::TurnCounterSet {
+                counter: data.turn_counter,
+            },
+        });
+    }
+    if let Some(runtime) = &data.pursuit_runtime {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::PursuitRuntimeSet {
+                runtime: Some(runtime.clone()),
             },
         });
     }
@@ -615,6 +728,10 @@ impl SessionStore {
         self.state.lock().await.data.id.clone()
     }
 
+    /// The authoritative model-visible message window (ADR-0048). This is the
+    /// single source of truth for message truth: the turn clones from here, the
+    /// provider serializes a projection of this, and every write flows back
+    /// through `replace_messages` / `mutate_messages` / `append_turn`.
     pub async fn model_window(&self) -> Vec<Message> {
         self.state.lock().await.data.model_window.clone()
     }
@@ -722,6 +839,111 @@ impl SessionStore {
             .await
     }
 
+    /// The session-scoped stop-gate runtime view (ADR-0048 Phase 2). `None`
+    /// when no pursuit is armed. Restored on resume so an armed pursuit
+    /// mid-iteration does not silently disarm.
+    pub async fn pursuit_runtime(&self) -> Option<PursuitRuntime> {
+        self.state.lock().await.data.pursuit_runtime.clone()
+    }
+
+    /// Replace the stop-gate runtime view (or clear it with `None`). Mirrors
+    /// `Agent::pursuit_state`'s armed flag + iteration counter so resume
+    /// restores them. The single write path for the pursuit runtime view.
+    pub async fn set_pursuit_runtime(&self, runtime: Option<PursuitRuntime>) -> Result<(), String> {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            state.data.pursuit_runtime = runtime.clone();
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            state
+                .event_log
+                .append(SessionEvent::PursuitRuntimeSet { runtime })?;
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
+    /// The session-level disabled-tool mask (ADR-0048 Phase 2). Empty means
+    /// all tools enabled. Restored on resume so a user toggle survives restart.
+    pub async fn disabled_tools(&self) -> std::collections::HashSet<String> {
+        self.state.lock().await.data.disabled_tools.clone()
+    }
+
+    /// Replace the disabled-tool mask. Mirrors `Agent::disabled_tools` so a
+    /// user toggle survives restart. The single write path for the mask.
+    pub async fn set_disabled_tools(
+        &self,
+        tools: std::collections::HashSet<String>,
+    ) -> Result<(), String> {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            state.data.disabled_tools = tools.clone();
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            state
+                .event_log
+                .append(SessionEvent::DisabledToolsSet { tools })?;
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
+    /// The harness turn counter, the session-scoped monotonic watermark
+    /// (ADR-0048 Phase 2). `0` for a fresh session. Restored on resume so the
+    /// todo stale-detector's `updated_at_turn` comparisons stay valid.
+    pub async fn turn_counter(&self) -> u64 {
+        self.state.lock().await.data.turn_counter
+    }
+
+    /// Replace the turn counter. Mirrors `Agent::turn_counter` so resume
+    /// restores it. The single write path for the counter.
+    pub async fn set_turn_counter(&self, counter: u64) -> Result<(), String> {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            state.data.turn_counter = counter;
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            state
+                .event_log
+                .append(SessionEvent::TurnCounterSet { counter })?;
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
+    /// The session-scoped provider + model pin (C6). `None` means "follow the
+    /// global default"; the harness seeds this on first `/provider` switch.
+    pub async fn provider_selection(&self) -> Option<ProviderSelection> {
+        self.state.lock().await.data.provider_selection.clone()
+    }
+
+    /// Replace the session-scoped provider + model pin (C6). Persists both the
+    /// snapshot and the event log so resume restores the session's own provider
+    /// instead of the global default. This is the single write path for the
+    /// per-session provider override; the `/provider` switch handler calls it
+    /// instead of mutating `config.toml`'s selection, so one session switching
+    /// provider/model never affects another.
+    pub async fn set_provider_selection(
+        &self,
+        selection: Option<ProviderSelection>,
+    ) -> Result<(), String> {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            state.data.provider_selection = selection.clone();
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            state
+                .event_log
+                .append(SessionEvent::ProviderSelectionSet { selection })?;
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
     /// Flip `is_complete = true` on the current pursuit, if any. Returns the
     /// updated pursuit, or `None` if no pursuit was set. Called by the harness
     /// completion path after the model emits `[NEENEE_PURSUIT_COMPLETE]` and by
@@ -765,6 +987,36 @@ impl SessionStore {
         let (path, data) = {
             let mut state = self.state.lock().await;
             state.data.model_window = messages;
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            state.event_log.append(SessionEvent::MessagesReplaced {
+                messages: state.data.model_window.clone(),
+            })?;
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
+    /// Apply `f` to the live message window under the session lock, append a
+    /// `MessagesReplaced` event, and persist — atomically (ADR-0048).
+    ///
+    /// This is the single mutation primitive that lets the session *be* the
+    /// source of truth for the message list, instead of a clone-out /
+    /// mutate-locally / swap-back trio that can diverge if another caller
+    /// (a fork, a compaction, an `append_turn`) mutates the window between the
+    /// clone and the swap. `f` runs in place under the lock, so the append and
+    /// persist always reflect exactly what `f` produced.
+    ///
+    /// `f` receives the full `model_window`; it may push, pop, edit, or
+    /// replace freely. The resulting window becomes the durable snapshot.
+    pub async fn mutate_messages<F>(&self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut Vec<Message>),
+    {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            f(&mut state.data.model_window);
             state.data.updated_at = unix_timestamp();
             ensure_event_log_started(&state.event_log, &state.data)?;
             state.event_log.append(SessionEvent::MessagesReplaced {
@@ -2530,6 +2782,92 @@ mod tests {
             .await
             .unwrap();
         assert!(reloaded.todos().await.is_empty());
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn provider_selection_round_trips_through_disk() {
+        // C6: a session's provider/model pin must survive persist + reload so a
+        // reopened session lands on its own provider instead of the global
+        // default, independent of every other session.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-provider-sel-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        assert!(store.provider_selection().await.is_none());
+
+        store
+            .set_provider_selection(Some(ProviderSelection {
+                provider: "anthropic".to_string(),
+                model: Some("claude-sonnet-4-6".to_string()),
+            }))
+            .await
+            .unwrap();
+
+        let loaded = SessionStore::for_path(path.clone());
+        let sel = loaded.provider_selection().await;
+        let sel = sel.expect("provider selection round-trips through disk");
+        assert_eq!(sel.provider, "anthropic");
+        assert_eq!(sel.model.as_deref(), Some("claude-sonnet-4-6"));
+
+        // Clearing (None) also persists.
+        loaded.set_provider_selection(None).await.unwrap();
+        let cleared = SessionStore::for_path(path.clone());
+        assert!(cleared.provider_selection().await.is_none());
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn session_runtime_state_round_trips_through_disk() {
+        // ADR-0048 Phase 2: the session-scoped runtime state — disabled-tool
+        // mask, turn counter, and pursuit stop-gate runtime view — must
+        // survive persist + reload so a resumed session restores the agent's
+        // exact state instead of silently dropping a toggle, resetting the
+        // counter, or disarming an in-flight pursuit.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-runtime-state-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        assert!(store.disabled_tools().await.is_empty());
+        assert_eq!(store.turn_counter().await, 0);
+        assert!(store.pursuit_runtime().await.is_none());
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("bash".to_string());
+        disabled.insert("edit_file".to_string());
+        store.set_disabled_tools(disabled.clone()).await.unwrap();
+        store.set_turn_counter(42).await.unwrap();
+        store
+            .set_pursuit_runtime(Some(PursuitRuntime {
+                armed: true,
+                iterations: 3,
+            }))
+            .await
+            .unwrap();
+
+        let loaded = SessionStore::for_path(path.clone());
+        assert_eq!(loaded.disabled_tools().await, disabled);
+        assert_eq!(loaded.turn_counter().await, 42);
+        let runtime = loaded
+            .pursuit_runtime()
+            .await
+            .expect("pursuit runtime round-trips through disk");
+        assert!(runtime.armed);
+        assert_eq!(runtime.iterations, 3);
+
+        // Clearing each (None / 0 / empty) persists.
+        loaded
+            .set_disabled_tools(std::collections::HashSet::new())
+            .await
+            .unwrap();
+        loaded.set_turn_counter(0).await.unwrap();
+        loaded.set_pursuit_runtime(None).await.unwrap();
+        let cleared = SessionStore::for_path(path.clone());
+        assert!(cleared.disabled_tools().await.is_empty());
+        assert_eq!(cleared.turn_counter().await, 0);
+        assert!(cleared.pursuit_runtime().await.is_none());
 
         let _ = fs::remove_dir_all(directory);
     }

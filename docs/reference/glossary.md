@@ -64,7 +64,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **envoy** | An isolated child agent spawned by the `envoy` tool to investigate a sub-question; shares only the provider with the parent, runs with a fresh history and profile-filtered tools. [Envoys](../explanation/agent-design/envoys.md) |
 | **profile** | A declarative bundle (name, system-prompt fragment, and a `ToolPolicy`) that scopes an envoy's behavior; bound by reference by dispatch tools. [Envoys](../explanation/agent-design/envoys.md) |
 | **`EXPLORE` profile** | Research role: `Read` ceiling, no write grant; pure read tools. [Envoys](../explanation/agent-design/envoys.md) |
-| **`REVIEW` profile** | Read-only transcript auditor role used by the session-review diagnostic. [ADR-0016](../adr/0016-session-review-over-turn-counting.md) |
+| **`REVIEW` profile** | Read-only transcript auditor role used by the session-review diagnostic. [ADR-0016](../adr/0016-session-review-over-round-counting.md) |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | An envoy is not fire-and-forget: requests travel up to the parent, replies travel down to the exact child. [ADR-0029](../adr/0029-full-duplex-subagent-communication.md) |
 
@@ -83,7 +83,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **`WriteScope`** | A runtime, per-agent filesystem-write boundary (`None` / `Scoped` / `Unrestricted`); a hard boundary, not a prompt. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
 | **write-scope gate** | The gating-stack step (after lookup, before the broker) that blocks write tools whose target is outside the agent's `WriteScope`. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **permission broker** | The interactive authorization surface: Write/Execute tools pass through it before execution; offers once/always/reject. [Harness architecture](../explanation/agent-design/harness.md) |
-| **unattended** | When on, the harness stops prompting for confirmation before write tools. Affects the live process only. [Slash commands](commands.md) |
+| **unattended** | When on, the agent runs without human intervention: no permission confirmations, no questions — it decides and acts on its own authority. Affects the live process only. [Slash commands](commands.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 
 ## Skills
