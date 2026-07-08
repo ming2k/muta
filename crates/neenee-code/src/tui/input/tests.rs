@@ -90,6 +90,55 @@ fn enter_executes_an_exact_slash_command() {
 }
 
 #[test]
+fn text_modal_commands_resolve_and_consume_composer() {
+    // Slash commands that open an interactive modal are intercepted locally:
+    // they resolve to a data-less `Open*` action (not `SendSlash`) and consume
+    // the composer text. The event loop snapshots the composer before dispatch
+    // and relies on `is_text_modal_command` to recover that text for input
+    // history + transcript recording — so these must stay in sync with the
+    // intercepted set in `process_event`.
+    for (cmd, expected) in [
+        ("/provider", InputAction::OpenProvider),
+        ("/permissions", InputAction::OpenPermissions),
+        ("/tools", InputAction::OpenTools),
+        ("/mcp", InputAction::OpenMcp),
+        ("/skills", InputAction::OpenSkills),
+        ("/config", InputAction::OpenConfig),
+    ] {
+        let mut input = cmd.to_string();
+        let action = enter(&mut input, true);
+        assert_eq!(action, expected, "modal command {cmd}");
+        assert!(
+            input.is_empty(),
+            "composer must be consumed for {cmd}, got {input:?}"
+        );
+        assert!(
+            action.is_text_modal_command(),
+            "{cmd} must be flagged as a text modal command so its \
+             invocation is recorded in history + transcript"
+        );
+    }
+}
+
+#[test]
+fn keybinding_modals_are_not_text_commands() {
+    // Ctrl+R / Ctrl+P / F1 open modals via keybindings, not by typing a slash
+    // command, so they must NOT be flagged: they consume no composer text and
+    // therefore have nothing to record in input history.
+    assert!(!InputAction::OpenHistory.is_text_modal_command());
+    assert!(!InputAction::OpenCommands.is_text_modal_command());
+    assert!(!InputAction::OpenHelp.is_text_modal_command());
+    // `/exit` resolves to Quit — it is not a replayable input, so it is
+    // deliberately excluded from the recorded set.
+    assert!(!InputAction::Quit.is_text_modal_command());
+    // Notification-style slash commands carry their text on the action, so the
+    // event loop records it from the action itself rather than via this hint.
+    assert!(
+        !InputAction::SendSlash("/pursue".to_string()).is_text_modal_command()
+    );
+}
+
+#[test]
 fn enter_completes_a_slash_prefix() {
     let mut input = "/go".to_string();
     assert_eq!(

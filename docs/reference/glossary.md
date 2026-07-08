@@ -83,7 +83,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **`WriteScope`** | A runtime, per-agent filesystem-write boundary (`None` / `Scoped` / `Unrestricted`); a hard boundary, not a prompt. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
 | **write-scope gate** | The gating-stack step (after lookup, before the broker) that blocks write tools whose target is outside the agent's `WriteScope`. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **permission broker** | The interactive authorization surface: Write/Execute tools pass through it before execution; offers once/always/reject. [Harness architecture](../explanation/agent-design/harness.md) |
-| **unattended** | When on, the agent runs without human intervention: no permission confirmations, no questions — it decides and acts on its own authority. Affects the live process only. [Slash commands](commands.md) |
+| **unattended** | When on, the agent runs without human intervention: tool permissions auto-approve, the question tool is reclaimed, and interactive stdin is closed — it decides and acts on its own authority. Affects the live process only. [Slash commands](commands.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 
 ## Skills
@@ -138,8 +138,8 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | Term | Definition |
 |------|------------|
 | **lifecycle hook** | A user-configured shell command that runs automatically at a specific point in the agent's lifecycle. [Lifecycle hooks](../explanation/agent-design/hooks.md) |
-| **lifecycle event** | The events hooks fire on: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Turn`, `PreCompact`, `PostCompact`. [Lifecycle hooks](../explanation/agent-design/hooks.md) |
-| **implicit capability** | What a hook may do is implied by its event, not a knob: `PreToolUse`/`Stop` may deny; `PostToolUse`/`UserPromptSubmit`/`PreCompact` may inject context; the rest only observe. [Lifecycle hooks](../explanation/agent-design/hooks.md) |
+| **lifecycle event** | The events hooks fire on: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Turn`, `RoundStart`, `PermissionRequest`, `UserQuestion`, `PreCompact`, `PostCompact`. [Lifecycle hooks](../explanation/agent-design/hooks.md) |
+| **implicit capability** | What a hook may do is implied by its event, not a knob: `PreToolUse`/`Stop` may deny; `PostToolUse`/`UserPromptSubmit`/`PreCompact`/`Turn`/`RoundStart` may inject context; `PermissionRequest`/`UserQuestion` are observe-only (fire-and-forget notifications). [Lifecycle hooks](../explanation/agent-design/hooks.md) |
 | **matcher** | A tool-name filter on the tool events: a `|`-separated exact-name list, or a regex; omitted/`*` matches all. [Lifecycle hooks](../explanation/agent-design/hooks.md) |
 
 ## Prompts

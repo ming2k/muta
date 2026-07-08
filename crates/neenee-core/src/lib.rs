@@ -85,7 +85,9 @@ pub use events::{
     SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
     UserQuestionReply, UserQuestionRequest,
 };
-pub use hooks::{Hook, HookContext, HookEvent, HookEventKind, HookOutcome, SessionSource};
+pub use hooks::{
+    Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
+};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
 pub use pressure::{

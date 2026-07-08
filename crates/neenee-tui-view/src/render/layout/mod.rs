@@ -20,10 +20,10 @@
 //! body itself always flows through `dispatch`.
 //!
 //! # Strategies
-//! - [`compact::Compact`] — the original flush-stack behavior, preserved
-//!   verbatim. The default.
-//! - [`turn_band::TurnBand`] — option C: each tool round is grouped under a
-//!   labelled header (`◆ round N · model · K calls`).
+//! - [`layout_default::Default`] — each tool round is grouped under a labelled
+//!   header (`◆ round N · model · K calls`). The default.
+//! - [`legacy::Legacy`] — the original flush-stack behavior, preserved
+//!   verbatim.
 //!
 //! New strategies are added by implementing the trait and wiring a match arm
 //! in [`Strategy::build`].

@@ -20,21 +20,22 @@ stops to wait on a human. There are two distinct surfaces a round can stop on:
 |---------|----------------------|-------------|
 | **Permission broker** | A `Write`/`Execute` tool fires; the broker parks a oneshot and emits `PermissionRequest` | The user, via the once/always/reject modal |
 | **User question** | The model calls `ask_user`; the harness parks a oneshot and emits `UserQuestionRequest` | The user, via the question modal |
+| **Interactive stdin** | The model emits a command the interactive classifier matches; the harness parks a oneshot and emits `InputRequest` | The user, via the inline input panel |
 
-Today `unattended` **enforces** the first and **expresses** the second. The
-[broker gate](#the-broker-gate) is the single load-bearing check the flag
-controls; the question surface is governed separately (by the system prompt's
-"act, don't ask" stance and by envoy admission), and the flag's name carries the
-broader contract so the two stay aligned as the harness evolves. The honest way
-to read the glossary's "no confirmations, no questions" is as the **target
-posture** an unattended session is meant to hold, with the broker as the
-guaranteed floor.
+`unattended` **enforces the whole posture**, not just one gate. With the flag on
+every one of these surfaces is reclaimed: the broker auto-approves every
+side-effecting tool, `ask_user` is dropped from the advertised toolset (and a
+stale call short-circuits with a refusal rather than parking), and an
+interactive command's stdin is closed instead of prompting the operator. The
+flag is now a guaranteed floor for the "no confirmations, no questions" target
+posture, not merely an expression of it.
 
-This split is deliberate. Permission is a *safety* control the harness must be
-able to suppress unconditionally; a question is a *model-driven* choice to defer
-to the user. Conflating them — e.g. gating `ask_user` on the same flag — would
-let a flipped bit silently change the model's conversational behaviour rather
-than just the harness's authorization posture.
+This convergence is deliberate. A round that can stop on any of the three
+surfaces is not truly walk-away-able; suppressing only the broker left two
+deadlock paths that a model-driven `ask_user` or an interactive command could
+still trip. Reclaiming all three when the flag is on makes the autonomy
+contract honest: with `unattended` on, nothing the model does will pause for a
+human.
 
 ## The broker gate
 
@@ -62,6 +63,29 @@ Two things follow from where this check sits:
   still lets a tool through without prompting; with unattended on, the rule set
   is simply irrelevant. Unattended is the broader dial; `/permissions` is the
   narrow, per-tool one.
+
+## Reclaiming ask_user and interactive stdin
+
+The broker gate covers side-effecting tools, but two more surfaces can also stop
+a round on a human. Under unattended both are reclaimed so the "no questions"
+half of the posture is enforced, not just expressed:
+
+```text
+ask_user
+  └─ unattended? → schema dropped from the advertised toolset; a stale call
+                   (name carried over from an earlier turn) short-circuits with
+                   a refusal instead of parking a oneshot.
+
+interactive command (bash stdin)
+  └─ unattended? → stdin closed instead of emitting InputRequest; the command
+                   fails fast with a non-interactive remedy.
+```
+
+The system prompt is also told the session is unattended — that no human is
+reachable, that the question tool is gone, and that the model must decide and
+act on its own authority. This pairs the mechanical reclaim (the harness cannot
+deadlock) with the behavioral one (the model is steered away from deferring).
+See [User questions](user-questions.md) for the interactive counterpart.
 
 The flag is **live and process-local**. It is not persisted to the session, not
 carried across `/resume`, and not part of any envoy profile that reloads from

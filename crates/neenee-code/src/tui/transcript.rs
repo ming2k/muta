@@ -31,6 +31,10 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
     // is the harness-expanded form), so its presence is the signal that the
     // turn was a slash command rather than a genuine chat prompt.
     let had_display_content = message.display_content.is_some();
+    // Capture non-driving provenance before `content` is moved (ADR-0050): a
+    // durable `CommandEcho` origin unambiguously marks the message as a
+    // non-driving command regardless of text shape.
+    let is_echo = message.is_command_echo();
     let content = if let Some(display_content) = message.display_content {
         display_content
     } else if message.content.is_empty() {
@@ -54,21 +58,31 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
             msg.sent_at_ms = sent_at_ms;
         }
         // Infer the turn origin for restored user messages so a resumed
-        // session's Activity modal still skips slash/shell turns. Slash
-        // commands carry a `display_content` that is the literal `/cmd`
-        // (the `content` is the harness-expanded form); shell passthroughs
-        // persist as the `!command` the user typed. A genuine chat prompt
-        // is the default, and only a real prompt surfaces a leading `/` or
-        // `!` *not* followed by a word char would still be misclassified —
-        // but in practice both are followed by a command word, so the
-        // heuristic is exact for the shapes the harness produces.
+        // session's Activity modal still skips slash/shell turns. The durable
+        // `origin` field is consulted first (ADR-0050): a `CommandEcho`
+        // provenance unambiguously marks the message as a non-driving command,
+        // regardless of its text shape. When `origin` is `None` (legacy
+        // sessions predating the field, or genuine chat prompts) the shape
+        // heuristic below applies: slash commands carry a `display_content`
+        // that is the literal `/cmd` (the `content` is the harness-expanded
+        // form); shell passthroughs persist as the `!command` the user typed.
+        // Only a real prompt surfaces a leading `/` or `!` *not* followed by a
+        // word char would still be misclassified — but in practice both are
+        // followed by a command word, so the heuristic is exact for the shapes
+        // the harness produces.
         if message.role == Role::User {
-            if had_display_content
-                && msg
-                    .raw
-                    .strip_prefix('/')
-                    .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_alphanumeric()))
-            {
+            // Slash origin: a durable `CommandEcho` provenance (ADR-0050, which
+            // unambiguously marks the message as a non-driving command
+            // regardless of text shape) OR the legacy shape signal of a
+            // `display_content` whose text is the literal `/cmd`. Both fold to
+            // Slash; the echo check runs first so a durable echo without
+            // `display_content` is still classified correctly.
+            let is_slash = is_echo
+                || (had_display_content
+                    && msg.raw.strip_prefix('/').is_some_and(|rest| {
+                        rest.chars().next().is_some_and(|c| c.is_alphanumeric())
+                    }));
+            if is_slash {
                 msg.origin = UserMessageOrigin::Slash;
             } else if msg
                 .raw

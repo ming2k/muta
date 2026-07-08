@@ -1,5 +1,6 @@
 pub(super) mod footer;
 pub(super) mod list;
+pub(super) mod meta_strip;
 pub(super) mod modal;
 pub(super) mod notice;
 pub(super) mod options;

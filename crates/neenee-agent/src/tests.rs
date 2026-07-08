@@ -1467,6 +1467,80 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
     );
 }
 
+#[tokio::test]
+async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
+    // The model still names ask_user (carried from an older tool list), but
+    // under unattended the harness must not park on it. The call short-
+    // circuits with a refusal, no user-question event fires, and the round
+    // completes without a human.
+    let ask_args = serde_json::json!({
+        "questions": [{
+            "header": "style",
+            "question": "Which error handling style?",
+            "options": [
+                { "label": "anyhow (Recommended)", "description": "Simple" },
+                { "label": "thiserror", "description": "Structured" }
+            ],
+            "multi_select": false
+        }]
+    });
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            tool_round(&[("c1", "ask_user", &ask_args.to_string())]),
+            text_round("decided on my own"),
+        ])),
+        vec![Arc::new(neenee_tools::AskUserTool)],
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    agent.set_unattended(true);
+
+    let mut messages = vec![Message::new(Role::User, "choose")];
+    let mut events = Vec::new();
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |event| {
+            events.push(event);
+        })
+        .await;
+
+    assert_eq!(outcome.unwrap().message.content, "decided on my own");
+    let lines = transcript(&events);
+    // No question was ever surfaced to a human.
+    assert!(
+        !lines.iter().any(|line| line.starts_with("user-question")),
+        "ask_user should not surface a question under unattended"
+    );
+    // The stale call was answered with the unattended refusal.
+    assert!(
+        lines.iter().any(|line| {
+            line.starts_with("tool-result ask_user") && line.contains("unavailable")
+        })
+    );
+}
+
+#[tokio::test]
+async fn unattended_hides_ask_user_from_the_advertised_toolset() {
+    // Under unattended, ask_user's schema must be dropped so the model cannot
+    // name it in the first place. `prepare_tools` is fed the visible set, so
+    // asserting it is absent from that set is the model-facing truth.
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![text_round("ok")])),
+        vec![Arc::new(neenee_tools::AskUserTool)],
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    let visible_before = agent.visible_tools();
+    let names_before: Vec<&str> = visible_before.iter().map(|t| t.name()).collect();
+    assert!(names_before.contains(&"ask_user"));
+    agent.set_unattended(true);
+    let visible_after = agent.visible_tools();
+    let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
+    assert!(
+        !names_after.contains(&"ask_user"),
+        "ask_user should be reclaimed under unattended, got {names_after:?}"
+    );
+}
+
 // ---- Persistent permissions (cross-session) -------------------------------
 //
 // Verifies the per-project `Always` allowlist round-trips through disk:
@@ -1956,4 +2030,40 @@ async fn debug_trace_aggregates_a_full_stream_into_one_file() {
     assert_eq!(captured[1]["Ok"]["TextDelta"], "lo");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ADR-0050: non-driving command echoes are durable + visible on resume/export
+/// but must be **projected out before the provider wire**. `prepare_turn_messages`
+/// is the single pre-wire funnel; this proves echoes are dropped while genuine
+/// user prompts and assistant messages survive.
+#[test]
+fn prepare_turn_messages_projects_out_command_echoes() {
+    let agent = agent();
+    let mut messages: Vec<Message> = vec![
+        Message::new(Role::User, "first real prompt"),
+        Message::command_echo("/pursue ship it"),
+        Message::new(Role::Assistant, "working on it"),
+        Message::command_echo("!ls -la"),
+        Message::new(Role::User, "second real prompt"),
+    ];
+    agent.prepare_turn_messages_debug(&mut messages);
+
+    // The funnel also prepends a system prompt and removes empty assistant
+    // tails; the ADR-0050 concern is specifically the echo projection. Assert
+    // no echo leaked through and the driving content survived in order.
+    assert!(
+        messages.iter().all(|m| !m.is_command_echo()),
+        "no command echo must leak through prepare_turn_messages: {messages:?}"
+    );
+    let contents: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role != Role::System)
+        .map(|m| m.content.as_str())
+        .collect();
+    assert_eq!(
+        contents,
+        vec!["first real prompt", "working on it", "second real prompt"],
+        "driving prompts + assistant replies must survive in order, \
+         echoes dropped: {contents:?}"
+    );
 }

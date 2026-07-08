@@ -82,7 +82,7 @@ other. Paths below are relative to each crate's `src/`.
 | `render/design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
 | `render/theme.rs` | `Theme` (all color tokens) |
 | `render/primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |
-| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, and question option rows |
+| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, question option rows, and one-line metadata strips (`MetaStrip`) |
 | `render/text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
 | `render/message_body.rs` | `draw_message_body` (markdown text, user panels, code blocks) |
 | `render/disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |

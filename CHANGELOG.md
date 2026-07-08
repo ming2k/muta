@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MetaStrip` render component.** The two-tone one-line metadata header —
+  an info-tone bold anchor joined to muted ` · ` details — is now a single
+  reusable component (`MetaStrip`/`MetaChip`/`MetaTone` in
+  `render/components/meta_strip.rs`). The assistant round header
+  (`◆ round N · model · HH:MM`) and the sent user-message header
+  (`turn N · HH:MM` / `⏸ Queued`) both compose it instead of each
+  hand-building a `Vec<Span>`. Future headers (token cost, tool-call count)
+  are a `.detail()` call, not a new builder. No behaviour change; output is
+  byte-identical apart from the new turn gutter below. (ADR-0049.)
+
+- **Turn gutter rail.** Sent user-message headers now lead with a `▌`
+  (left-half block) glyph in the accent tone, giving the user turn — the
+  larger, user-perceived scope — a deliberate visual anchor the in-round
+  band does not have. The glyph occupies the first column of the existing
+  text gap, so `turn N` / `⏸ Queued` stay aligned with the message body. No
+  column widths change. (ADR-0049.)
+
+- **`RoundStart` lifecycle hook.** The hook event axis is now symmetric: in
+  addition to the round-end `Turn` hook (ADR-0030), a `RoundStart` hook fires
+  at the start of each tool round — after tools are prepared but before the
+  next model completion. It honours `Inject` (folding context to the top of the
+  model's attention for the upcoming round) and discards `Deny`, the same
+  constraint as `Turn`. Configure it with `event = "RoundStart"` in a `[[hooks]]`
+  table. Use it for periodic context re-injection, e.g. to re-anchor the
+  principal's role after a run of read-only delegations.
+
+- **Interrupt-event hooks (`PermissionRequest`, `UserQuestion`).** Hooks can
+  now fire when the agent is about to **block** waiting for you — either on a
+  permission approval prompt (`PermissionRequest`, honours a tool-name matcher)
+  or on an `ask_user` question (`UserQuestion`). Both are **observe-only /
+  fire-and-forget**: their outcomes are ignored, so a notification hook can
+  never grant/deny or alter the transcript. The canonical use is a desktop /
+  terminal-bell notification so a long-running task that goes unattended still
+  grabs your attention. A drop-in `notify.sh` example is provided in
+  `assets/hooks/`.
+
+- **Scoped tool disabling (`ScopeTools` outcome).** A `PreToolUse`,
+  `RoundStart`, or `Turn` hook may return `ScopeTools` to temporarily hide tools
+  from the model and have them re-enabled automatically at a restore point
+  (`round_end` or `turn_end`). This lets a policy hook scope the toolset to a
+  scenario (e.g. drop `bash` for a read-only sub-task) without manual `/tools`
+  toggling. Scoped disables are **never persisted**: they live in memory only
+  and never collide with the session-level `/tools` mask. Nested disables
+  compose by reference count.
+
+### Fixed
+
+- **Principal "role bleed" after read-only delegations.** An envoy's read-only /
+  toolset-scoped persona framing flows back into the principal's transcript via
+  the envoy summary; after a run of read-only delegations the recent context
+  could co-activate "delegation ↔ read-only" strongly enough that the model
+  over-generalized it into "I (principal) have no write tools" — even though the
+  principal's toolset is unchanged (spawning an envoy never touches
+  `resolved_tools`). A deterministic role-reanchoring note is now appended to
+  every envoy tool-result text at the single choke point where the summary enters
+  the transcript, reaffirming that the read-only scope applies to the envoy only
+  and that the principal retains its full toolset (write/edit tools + shell). The
+  note is structural and unconditional — it does not depend on a `[hooks]` entry
+  being configured — and varies by the envoy's `failed` flag.
+
+- **Inconsistent recording of interactive slash commands.** Commands that open
+  a modal (`/provider`, `/permissions`, `/tools`, `/mcp`, `/skills`, `/config`)
+  were intercepted locally in the input layer and never reached the `SendSlash`
+  path, so — unlike notification-style slash commands (`/pursue`, …) — their
+  invocation was dropped from both the transcript and the Ctrl+R input history.
+  A text modal command now records its invocation identically to `SendSlash`:
+  it pushes a `Role::User` message tagged `UserMessageOrigin::Slash` into the
+  transcript and enters input history, so both command families behave the same
+  regardless of whether their UI is modal or inline. A modal *outcome* (e.g. a
+  provider switch) still lands as a follow-up notice, so a `/provider` switch
+  reads as a natural pair (`> /provider` then `↳ Provider switched to …`).
+  Keybinding-driven modals (Ctrl+R, F1, …) and `/exit` are deliberately
+  excluded (no typed text / not replayable).
+
+- **Slash/shell invocations now survive a restart.** Previously slash commands
+  and `!cmd` shell passthroughs reached the live TUI transcript but were never
+  written to the durable transcript, so they **vanished on resume** — a resumed
+  session had no record you ever ran `/pursue`, opened the provider picker, or
+  shell-passthrough'd `!ls`. They are now persisted as a new "non-driving"
+  message category: a visible `Role::User` echo stamped with the `CommandEcho`
+  injection provenance. Such echoes survive resume and `/export` (for audit
+  faithfulness) but are **projected out before the provider wire** in
+  `prepare_turn_messages`, so the model never sees them — they are not driving
+  prompts. This adds a genuinely new "durable-but-not-model-visible" bucket
+  (the `hidden` flag was the wrong axis: it hides from the UI but still sends
+  to the model). Resume reconstructs the echoes with the correct
+  `UserMessageOrigin` by consulting the stored origin first, and compaction no
+  longer counts them as turn boundaries. (ADR-0050.)
+
 ## [0.16.0] - 2026-07-03
 
 ### Added

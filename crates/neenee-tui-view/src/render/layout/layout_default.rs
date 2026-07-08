@@ -24,14 +24,18 @@
 //! ```
 //!
 //! rendered in an info-tone bold for the `◆ round N` anchor and muted for the
-//! rest, using foreground color only — no background band. This keeps the
+//! rest, using foreground color only — no background band. The header is
+//! composed from the shared `MetaStrip` component
+//! (`render/components/meta_strip.rs`), so this two-tone "anchor · detail"
+//! treatment is the same one the sent user-message header uses. This keeps the
 //! layout cheap (no per-cell background fill across the group's body, which
 //! would require repaint coordination with every drawer) while giving each
 //! round a clear, labelled anchor.
 
-use neenee_tui::{Line, Modifier, Paragraph, Rect, Span, Style};
+use neenee_tui::Rect;
 
 use crate::document::TranscriptMessage;
+use crate::render::components::meta_strip::{MetaStrip, MetaTone};
 use crate::render::time::sent_time_label;
 
 use super::{Stream, TranscriptLayout};
@@ -167,38 +171,29 @@ fn draw_round_header(stream: &mut Stream<'_, '_>, round: u64, msg: &TranscriptMe
         return;
     }
 
-    let theme = stream.theme;
     let band = stream.band;
 
     // Two-tone label, no background band: `◆ round N` is the info-tone
     // anchor, the rest (model, send time) reads as muted metadata on the
-    // same line.
-    let accent = Style::default()
-        .fg(theme.info())
-        .add_modifier(Modifier::BOLD);
-    let meta = Style::default().fg(theme.muted());
+    // same line. The strip component keeps this treatment shared with sent
+    // user-message headers.
+    let mut strip = MetaStrip::new()
+        .lead("◆ ", MetaTone::Accent)
+        .anchor(format!("round {}", round));
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(8);
-    spans.push(Span::styled("◆ ", accent));
-    spans.push(Span::styled(format!("round {}", round), accent));
-
-    let model_name = msg
+    if let Some(name) = msg
         .model
         .as_deref()
         .filter(|m| !m.is_empty())
-        .map(crate::providers::model_display_name);
-    if let Some(name) = &model_name {
-        spans.push(Span::styled(format!(" · {}", name), meta));
+        .map(crate::providers::model_display_name)
+    {
+        strip = strip.detail(name);
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
-        spans.push(Span::styled(
-            format!(" · {}", sent_time_label(sent_at_ms)),
-            meta,
-        ));
+        strip = strip.detail(sent_time_label(sent_at_ms));
     }
 
-    let line = Line::from(spans);
     let rect = Rect::new(band.x, stream.current_y, band.width, 1);
-    stream.frame.render_widget(Paragraph::new(line), rect);
+    strip.render(stream.frame, rect, stream.theme);
     stream.current_y += 1;
 }

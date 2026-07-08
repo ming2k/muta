@@ -61,7 +61,7 @@ pub enum InjectionKind {
     /// A user-configured hook returned `HookOutcome::Inject`. Carries the
     /// lifecycle event so "which hook axis injected this" is recoverable.
     /// Sites: `HookRegistry::{session_start, run_post_tool_use,
-    /// run_post_tool_use_failure, check_stop, run_turn}`.
+    /// run_post_tool_use_failure, check_stop, run_turn, run_round_start}`.
     Hook(HookEventKind),
     /// Pursuit stop-gate re-applied the continuation prompt to keep the model
     /// on-task mid-turn. Site: `PursuitState::inject_continuation` and the
@@ -101,6 +101,16 @@ pub enum InjectionKind {
     /// envoy tasking, `/review` re-runs). Site: `execute_round`
     /// `input.hidden` branch.
     HiddenTurnInput,
+    /// A non-driving command echo: the literal text of a user invocation that
+    /// is recorded in the durable transcript for resume/export/audit
+    /// faithfulness but is **never sent to the model**. Covers slash commands
+    /// (`/pursue …`) and `!command` shell passthroughs, both of which the
+    /// harness handles directly without an LLM roundtrip. Distinct from
+    /// `HiddenTurnInput` (which *is* a driving hidden prompt): a `CommandEcho`
+    /// carries no instruction for the model. Projected out before the wire by
+    /// `prepare_turn_messages`. Site: `handlers_slash::dispatch` and
+    /// `shell::run_shell_command`. (ADR-0050.)
+    CommandEcho,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +299,28 @@ impl Message {
         let mut message = Self::hidden(role, content);
         message.origin = Some(origin);
         message
+    }
+
+    /// Construct a **non-driving** command echo: a visible (`hidden = false`)
+    /// user message stamped with the `CommandEcho` provenance. Recorded in the
+    /// durable transcript for resume/export/audit faithfulness but projected
+    /// out before the provider wire (see `prepare_turn_messages`, ADR-0050).
+    /// Unlike [`Message::injected`] it is *visible* — the echo must show on
+    /// resume — and unlike a driving prompt it never reaches the model.
+    pub fn command_echo(text: impl Into<String>) -> Self {
+        let mut message = Self::new(Role::User, text);
+        message.origin = Some(InjectionOrigin::new(InjectionKind::CommandEcho));
+        message
+    }
+
+    /// Whether this message is a non-driving command echo — recorded durably
+    /// for resume/export but excluded from the provider wire and from
+    /// compaction turn-counting. The single predicate consulted at both the
+    /// wire funnel and `select_compaction`; keep them in sync (ADR-0050).
+    pub fn is_command_echo(&self) -> bool {
+        self.origin
+            .as_ref()
+            .is_some_and(|o| o.kind == InjectionKind::CommandEcho)
     }
 
     /// Stamp / overwrite the injection origin on this message. Builder-style
@@ -632,6 +664,7 @@ mod tests {
             InjectionKind::Hook(HookEventKind::PostToolUse),
             InjectionKind::Hook(HookEventKind::Stop),
             InjectionKind::Hook(HookEventKind::Turn),
+            InjectionKind::Hook(HookEventKind::RoundStart),
             InjectionKind::PursuitContinuation,
             InjectionKind::PursuitObjectiveUpdated,
             InjectionKind::InterAgent,
@@ -641,6 +674,7 @@ mod tests {
             InjectionKind::CompactionCheckpoint,
             InjectionKind::HiddenTurnInput,
             InjectionKind::LoopReviewNudge,
+            InjectionKind::CommandEcho,
         ];
         let mut forms = Vec::new();
         for kind in cases {
@@ -675,6 +709,35 @@ mod tests {
         assert_eq!(
             m.origin.as_ref().unwrap().kind,
             InjectionKind::LoopReviewNudge
+        );
+    }
+
+    #[test]
+    fn command_echo_is_visible_and_non_driving() {
+        // A command echo is VISIBLE (hidden=false, so it shows on resume/export)
+        // yet non-driving (is_command_echo=true, so it is projected out before
+        // the wire). It must not be conflated with an injected/hidden message,
+        // whose `hidden` axis means the opposite half (ADR-0050).
+        let m = Message::command_echo("/pursue ship it");
+        assert!(!m.hidden, "command echo must be visible on resume/export");
+        assert_eq!(m.role, Role::User);
+        assert!(m.is_command_echo());
+        // Round-trips with provenance intact (the durable record must survive).
+        let restored: Message = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert!(
+            restored.is_command_echo(),
+            "echo origin survives round-trip"
+        );
+        // A plain user message is not an echo.
+        assert!(!Message::new(Role::User, "hello").is_command_echo());
+        // An injected (hidden) message is not an echo even though it has origin.
+        assert!(
+            !Message::injected(
+                Role::User,
+                "x",
+                InjectionOrigin::new(InjectionKind::HiddenTurnInput)
+            )
+            .is_command_echo()
         );
     }
 }

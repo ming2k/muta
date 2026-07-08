@@ -73,6 +73,11 @@ pub struct PromptContext {
     /// how its wire protocol projects tools, thinking, or replay metadata, but
     /// the agent still owns identity, workflow, and behavior policy.
     pub provider_guidance: &'static str,
+    /// Whether the agent is running unattended this round — without human
+    /// intervention. When true the harness has reclaimed `ask_user` and auto-
+    /// approves every side-effecting tool, so the prompt tells the model no
+    /// human is reachable and it must decide and act on its own authority.
+    pub unattended: bool,
 }
 
 impl PromptContext {

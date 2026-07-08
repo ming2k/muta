@@ -54,7 +54,7 @@ compiler enforces the one-way boundary.
 | Module | Responsibility |
 |--------|----------------|
 | `render/` | The widget tree (transcript, steps, tools, overlays, chrome, composer). Entry point `render/mod.rs`. |
-| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, and option rows. |
+| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `document` | Semantic document model: `TranscriptMessage`, `Block`, `MessageKind`, markdown parsing. |
 | `layout` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing. |
 | `selection` | `SelectionState`, text/cell selection, character-boundary snapping. |

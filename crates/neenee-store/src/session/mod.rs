@@ -1764,7 +1764,13 @@ pub fn select_compaction(
         .iter()
         .enumerate()
         .filter(|(_, message)| {
-            message.role == Role::User && !message.content.starts_with("[Conversation checkpoint]")
+            message.role == Role::User
+                && !message.content.starts_with("[Conversation checkpoint]")
+                // Non-driving command echoes are recorded as Role::User for
+                // resume/audit faithfulness but are not real turns; exclude
+                // them so they don't inflate the turn count and skew which
+                // turns compaction preserves (ADR-0050).
+                && !message.is_command_echo()
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();

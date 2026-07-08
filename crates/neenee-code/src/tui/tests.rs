@@ -89,6 +89,35 @@ fn restored_user_message_origin_inferred_from_shape() {
 }
 
 #[test]
+fn restored_command_echo_origin_from_durable_provenance() {
+    // ADR-0050: durable slash/shell echoes are persisted as
+    // `Message::command_echo` — a visible user message carrying the
+    // `CommandEcho` provenance. On resume the stored origin is consulted
+    // FIRST (ahead of the shape heuristic), so an echo whose text lacks the
+    // `display_content` / `!` shape signals is still classified as a
+    // non-driving command, never as the turn's driving prompt.
+    use crate::tui::document::UserMessageOrigin;
+
+    // A slash echo: content is the literal `/cmd`, no display_content. The
+    // shape heuristic alone would misread this (no display_content → fall to
+    // the `!` check → fail → Chat). The durable origin must win.
+    let slash_echo = Message::command_echo("/pursue ship it");
+    assert!(slash_echo.is_command_echo());
+    let restored = transcript_message_from_core(slash_echo).unwrap();
+    assert_eq!(
+        restored.origin,
+        UserMessageOrigin::Slash,
+        "durable echo provenance must classify as Slash, not Chat"
+    );
+
+    // A shell echo: content is `!cmd`. Even though the `!` shape heuristic
+    // would also catch it, the origin-first path must handle it too.
+    let shell_echo = Message::command_echo("!ls -la");
+    let restored_shell = transcript_message_from_core(shell_echo).unwrap();
+    assert_eq!(restored_shell.origin, UserMessageOrigin::Slash);
+}
+
+#[test]
 fn restored_assistant_carries_provider_and_model_attribution() {
     // A persisted assistant message stamped by the harness keeps its
     // provider/model so a resumed session that mixed models stays

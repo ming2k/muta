@@ -71,6 +71,7 @@ pub async fn shell(
     let shell_token_slot = ctt_clone.clone();
     let shell_generation = generation_clone.clone();
     let shell_agent = agent.clone();
+    let shell_session = session.clone();
     let shell_session_id = session.id().await;
     tokio::spawn(async move {
         run_shell_command(
@@ -80,6 +81,7 @@ pub async fn shell(
             shell_token_slot,
             shell_generation,
             shell_agent,
+            shell_session,
         )
         .await;
     });

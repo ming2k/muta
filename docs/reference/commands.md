@@ -113,11 +113,13 @@ backend.
 | `/unattended on` | Run without human intervention (no confirmations, no questions) |
 | `/unattended off` | Restore interactive prompts |
 
-When on, the agent acts without human intervention: no permission
-confirmations before write/execute tools (`bash`, `write_file`,
-`edit_file`, …) and no questions to the user — it proceeds on its own
-authority. Affects the live process only. For the design intent and which
-surface the flag actually enforces, see
+When on, the agent acts without human intervention: tool permissions
+auto-approve before write/execute tools (`bash`, `write_file`,
+`edit_file`, …), the `ask_user` question tool is reclaimed (hidden from
+the model; any stale call short-circuits), interactive command stdin is
+closed instead of prompting, and the system prompt is told no human is
+reachable. Affects the live process only. For the design intent and every
+surface the flag enforces, see
 [Unattended operation](../explanation/agent-design/unattended.md).
 
 ### `/btw`

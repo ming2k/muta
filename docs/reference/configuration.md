@@ -240,7 +240,7 @@ which event honours which.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `hooks[].event` | — | The lifecycle event: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `PostCompact`, `Turn` (ADR-0030). `Turn` is `Deny`-forbidden — it may inject or observe but cannot abort the round |
+| `hooks[].event` | — | The lifecycle event: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `PostCompact`, `Turn` (ADR-0030, round end), `RoundStart` (round start), `PermissionRequest` (agent blocked on an approval prompt), `UserQuestion` (agent blocked on an `ask_user` question). `Turn`/`RoundStart` are `Deny`-forbidden (inject or observe only); `PermissionRequest`/`UserQuestion` are observe-only (fire-and-forget, ideal for desktop notifications). `PermissionRequest` honours a tool-name matcher |
 | `hooks[].matcher` | `*` | Tool-name filter. A `|`-separated list of exact names (`Write|Edit`) when only letters/digits/`_`/`|`; otherwise a regular expression. Only the tool events honour it |
 | `hooks[].command` | — | Shell command run when the event matches. Receives the event JSON on stdin; replies via exit code / stdout JSON |
 
@@ -259,11 +259,34 @@ command = ".neenee/hooks/guard-rm.sh"
 event   = "Stop"
 command = ".neenee/hooks/ci-gate.sh"
 
-# ADR-0030: fires once per tool round. Deny is ignored (no de-facto round cap);
-# inject context or observe. Carries the read-only-round streak.
+# ADR-0030: fires once per tool round, at round end. Deny is ignored (no
+# de-facto round cap); inject context or observe. Carries the read-only-round
+# streak.
 [[hooks]]
-event   = "Round"
+event   = "Turn"
 command = ".neenee/hooks/turn-watch.sh"
+
+# Symmetric partner: fires at the *start* of each tool round, after tools are
+# prepared but before the next model completion. Use it to (re)inject context at
+# the top of the model's attention for the round — e.g. to re-anchor the
+# principal's role after a run of read-only delegations. Deny is ignored here
+# too.
+[[hooks]]
+event   = "RoundStart"
+command = ".neenee/hooks/round-open.sh"
+
+# Interrupt notifications (observe-only): fire-and-forget when the agent blocks
+# waiting for you. The canonical use is a desktop/bell notification so a
+# long-running task that goes unattended still gets your attention. Outcomes are
+# ignored — these never grant/deny or alter the transcript. The matcher targets
+# the tool seeking approval (here: only bash). `UserQuestion` has no matcher.
+[[hooks]]
+event   = "PermissionRequest"
+matcher = "bash"
+command = ".neenee/hooks/notify.sh \"Needs approval\""
+[[hooks]]
+event   = "UserQuestion"
+command = ".neenee/hooks/notify.sh \"AI asked a question\""
 ```
 
 ## Feature tables

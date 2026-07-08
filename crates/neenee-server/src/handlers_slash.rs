@@ -84,6 +84,21 @@ pub async fn dispatch(
     if parts.is_empty() {
         return;
     }
+    // Record the slash invocation as a durable, non-driving echo so it
+    // survives resume/export/audit (ADR-0050). This happens for EVERY command
+    // uniformly — the literal `/cmd` text is persisted, never sent to the
+    // model (projected out in `prepare_turn_messages`), and on resume is
+    // reconstructed with `UserMessageOrigin::Slash`. Commands whose effects
+    // mutate state or stream a reply still do so independently; the echo is
+    // purely the invocation record. Best-effort: a failed persist logs but
+    // does not abort dispatch, since the command's primary effect is more
+    // important than the echo.
+    if let Err(error) = session
+        .mutate_messages(|w| w.push(Message::command_echo(&cmd)))
+        .await
+    {
+        tracing::warn!(?error, cmd = %cmd, "could not persist command echo");
+    }
     match BuiltinCmd::from_slash(parts[0]) {
         Some(BuiltinCmd::Provider) => {
             // Handled in TUI
@@ -141,7 +156,9 @@ pub async fn dispatch(
             let _ = resp_tx.send(turn(
                 &session.id().await,
                 RoundEvent::Text(format!(
-                    "Unattended {}: the agent {} run without human intervention (no confirmations, no questions).",
+                    "Unattended {}: the agent {} run without human intervention — the question \
+                     tool is reclaimed, tool permissions auto-approve, and no prompts or \
+                     questions can pause the session.",
                     if enabled { "ON" } else { "OFF" },
                     if enabled { "will" } else { "won't" },
                 )),

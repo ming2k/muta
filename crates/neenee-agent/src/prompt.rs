@@ -167,6 +167,43 @@ impl PromptSection for PersistenceGuidance {
     }
 }
 
+/// The autonomous-operation posture. Active only when the agent is running
+/// unattended this round. With the harness having reclaimed `ask_user` and
+/// auto-approving every side-effecting tool, this tells the model the human is
+/// unreachable — it must resolve ambiguity itself, pick a sensible default, and
+/// never block waiting for an answer that will not come. Leading `\n`
+/// separates it from the paragraphs above.
+struct UnattendedGuidance;
+
+const UNATTENDED: &str = "\nYou are running unattended: no human is reachable this turn. The \
+                          question tool has been reclaimed and every tool permission auto-approves, \
+                          so nothing you do will pause for confirmation. Decide and act on your own \
+                          authority: when faced with ambiguity, pick the most reasonable default \
+                          and proceed rather than asking — there is no one to answer. Surface any \
+                          irreversible or high-stakes choice you made on your own in your final \
+                          summary instead of stopping to ask.";
+
+impl PromptSection for UnattendedGuidance {
+    fn id(&self) -> &'static str {
+        "system.unattended"
+    }
+    fn channel(&self) -> PromptChannel {
+        PromptChannel::System
+    }
+    fn kind(&self) -> InjectionKind {
+        InjectionKind::SystemPrompt
+    }
+    fn rank(&self) -> u32 {
+        36
+    }
+    fn is_active(&self, ctx: &PromptContext) -> bool {
+        ctx.unattended
+    }
+    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+        Some(String::from(UNATTENDED))
+    }
+}
+
 /// The active pursuit objective, when one is armed. Leading `\n` separates
 /// it from the guidance paragraphs above.
 struct PursuitObjective;
@@ -291,6 +328,7 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);
     registry.register(PersistenceGuidance);
+    registry.register(UnattendedGuidance);
     registry.register(PursuitObjective);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
@@ -442,6 +480,7 @@ impl Agent {
             last_visible_user_text,
             model_guidance,
             provider_guidance,
+            unattended: self.get_unattended(),
         }
     }
 
@@ -463,6 +502,11 @@ impl Agent {
     /// round-boundary call sites (ADR-0039).
     pub(crate) fn prepare_turn_messages(&self, messages: &mut Vec<Message>) {
         crate::agent::remove_empty_assistant_messages(messages);
+        // Project out non-driving command echoes so they never reach the
+        // provider, while remaining durable + visible on resume/export. The
+        // predicate is the single `is_command_echo` check; this funnel is the
+        // one pre-wire chokepoint every backend passes through (ADR-0050).
+        messages.retain(|m| !m.is_command_echo());
         self.ensure_system_prompt(messages);
         self.inject_implicit_skills(messages);
     }

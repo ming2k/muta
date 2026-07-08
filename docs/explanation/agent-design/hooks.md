@@ -73,11 +73,33 @@ event." neenee keeps the first internal and exposes only the second.
 | `Stop` | The model tries to end the round | Deny (force another turn, feeding the reason back) or inject |
 | `PreCompact` | Before a summarizing compaction | Inject (folded into the summary prompt) |
 | `PostCompact` | After a compaction completes | Observe |
-| `Round` | Once per tool round (ADR-0030) | Inject only — **`Deny` is ignored**, so a round-count hook cannot become a de-facto round cap. Carries the read-only-round streak so a hook can target exploration-without-progress. The harness declares no built-in threshold here; users opt in. |
+| `Turn` | Once per tool round, at round **end** (ADR-0030) | Inject only — **`Deny` is ignored**, so a round-count hook cannot become a de-facto round cap. Carries the read-only-round streak so a hook can target exploration-without-progress. The harness declares no built-in threshold here; users opt in. |
+| `RoundStart` | Once per tool round, at round **start** — after tools are prepared, before the next model completion | Inject only — **`Deny` is ignored** (same constraint as `Turn`). The symmetric partner of `Turn`: use it to (re)inject context at the top of the model's attention for the upcoming round, e.g. to re-anchor the principal's role after a run of read-only delegations. |
+| `PermissionRequest` | The agent is about to **block** waiting for your approval (a tool with a side effect needs permission) | Observe-only — **`Pass` only**, fire-and-forget. The canonical use is a desktop/bell notification so you notice a long-running task is parked on you. Honours a tool-name matcher (e.g. only `bash`). Cannot grant or deny. |
+| `UserQuestion` | The agent is about to **block** on an `ask_user` question | Observe-only — same fire-and-forget contract as `PermissionRequest`. No matcher (`ask_user` is a single tool). |
 
 A hook returning a capability the event does not honour is ignored, so a
 script that unconditionally reports a deny only bites on events that act on a
 deny.
+
+## Scoped tool disabling (`ScopeTools`)
+
+A `PreToolUse`, `RoundStart`, or `Turn` hook may return `ScopeTools` to
+**temporarily** hide tools from the model — their schemas are dropped and
+dispatch rejects them — and have them come back automatically at a restore
+point. This lets a policy hook scope the toolset to a scenario (e.g. drop `bash`
+for a read-only sub-task) without you toggling `/tools` by hand.
+
+| Restore point | When the disable is undone |
+|---------------|---------------------------|
+| `round_end` | At the end of the current tool round (next `Turn` boundary) |
+| `turn_end` | When the whole turn ends (the model replies with no tool calls, or the turn terminates) |
+
+Scoped disables are **never persisted**: they live in memory only, never reach
+the session store, and never collide with your manual `/tools` toggles (which
+use a separate, persisted mask). Nested disables compose by reference count, so
+two hooks disabling the same tool at different restore points don't fight — the
+tool stays hidden until its latest restore point fires.
 
 ## Matchers
 

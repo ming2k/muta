@@ -3,6 +3,100 @@ use super::*;
 use crate::permission_store::PermissionRule;
 use futures::future::BoxFuture;
 
+/// Role-reanchoring note appended to a successful envoy's tool-result text in
+/// the principal's transcript. Counters "role bleed": after a run of read-only
+/// delegations the model may over-generalize the envoy's read-only framing onto
+/// the principal itself. The note pins the boundary explicitly and
+/// unconditionally — it does not rely on a `[hooks]` entry, so the guarantee is
+/// structural.
+const ENVOY_REANCHOR_OK: &str = "\
+[system] The read-only / toolset-scoped framing above applies to the envoy only. \
+You (the principal agent) retain your full toolset — including write and edit tools \
+and the shell — across this delegation. Perform any edits or writes yourself; the \
+envoy cannot.";
+
+/// Same role-reanchoring for a *failed* envoy. Reaffirms the boundary and nudges
+/// the principal toward acting directly rather than re-delegating a failing
+/// sub-task.
+const ENVOY_REANCHOR_FAILED: &str = "\
+[system] That envoy could not complete its sub-task. Its read-only / toolset-scoped \
+framing does not transfer to you: you (the principal agent) retain your full toolset \
+— including write and edit tools and the shell. Act directly on the findings above, \
+or re-delegate with a narrower scope.";
+
+/// Build the model-visible text for an envoy tool result: the envoy's summary
+/// wrapped in the standard `[<tool> result]:` header, followed by a
+/// deterministic role-reanchoring note (`ENVOY_REANCHOR_OK` on success,
+/// `ENVOY_REANCHOR_FAILED` on `failed`). This is the single choke point where
+/// an envoy's read-only framing enters the principal's transcript, so the
+/// re-anchor is applied here unconditionally — it cannot be forgotten by a
+/// missing `[hooks]` config. Extracted from [`Agent::record_tool_result`] so the
+/// contract (the anchor is present, and its tone tracks the failure flag) is
+/// unit-testable without a full `Agent` fixture.
+pub(crate) fn envoy_result_text(name: &str, summary: &str, failed: bool) -> String {
+    let reanchor = if failed {
+        ENVOY_REANCHOR_FAILED
+    } else {
+        ENVOY_REANCHOR_OK
+    };
+    format!("[{name} result]:\n{summary}\n\n{reanchor}")
+}
+
+/// In-memory only mask of tools a hook has temporarily disabled via a
+/// [`neenee_core::HookOutcome::ScopeTools`] outcome, partitioned by the
+/// [`neenee_core::RestorePoint`] at which each should come back.
+///
+/// Deliberately **separate** from the session-level, persisted
+/// [`Agent::disabled_tools`]: scoped disables never reach the session store
+/// (the snapshot path only clones the persisted mask), so they never survive a
+/// restart and never collide with a user's manual `/tools` toggles. Each bucket
+/// is a reference count (`HashMap<String, u32>`) rather than a flat set so two
+/// hooks disabling the same tool at different restore points don't fight: the
+/// earlier restore only decrements, the tool stays hidden until its last
+/// refcount reaches zero.
+#[derive(Default)]
+pub(crate) struct ScopedToolDisable {
+    round_end: HashMap<String, u32>,
+    turn_end: HashMap<String, u32>,
+}
+
+impl ScopedToolDisable {
+    /// Record a hook-fired disable for `tool` at `restore`. Increments the
+    /// refcount so nested disables compose.
+    fn disable(&mut self, tool: &str, restore: neenee_core::RestorePoint) {
+        let bucket = match restore {
+            neenee_core::RestorePoint::RoundEnd => &mut self.round_end,
+            neenee_core::RestorePoint::TurnEnd => &mut self.turn_end,
+        };
+        *bucket.entry(tool.to_string()).or_insert(0) += 1;
+    }
+
+    /// Whether `tool` is currently scoped-disabled (hidden from the model and
+    /// rejected at dispatch) under any restore point.
+    fn contains(&self, tool: &str) -> bool {
+        self.round_end.contains_key(tool) || self.turn_end.contains_key(tool)
+    }
+
+    /// Drop every RoundEnd-scoped disable (decrementing refcounts). Called at
+    /// the round boundary so tools a hook narrowed for just that round come
+    /// back. TurnEnd disables survive.
+    fn restore_round_end(&mut self) {
+        self.round_end.clear();
+    }
+
+    /// Drop every disable (both buckets). Called at turn end so the toolset is
+    /// fresh for the next user request.
+    fn restore_turn_end(&mut self) {
+        self.round_end.clear();
+        self.turn_end.clear();
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.round_end.is_empty() && self.turn_end.is_empty()
+    }
+}
+
 /// Mid-turn save-point closure installed by orchestration (ADR-0035).
 ///
 /// Invoked at each tool-round boundary with the *current full* turn history.
@@ -124,6 +218,11 @@ pub struct Agent {
     /// rebuilding the agent. Toggled from the session modal via
     /// `set_tool_enabled` / `ToggleTool`.
     disabled_tools: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Hook-installed *temporary* disable mask ([`HookOutcome::ScopeTools`]).
+    /// Not persisted: excluded from `disabled_tools_snapshot()` so it never
+    /// reaches the session store. Auto-restored at the configured
+    /// [`neenee_core::RestorePoint`]. See [`ScopedToolDisable`].
+    scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
     /// with the `todo` / `todo_update` tools via `TodoToolContext`.
@@ -428,6 +527,7 @@ impl Agent {
             resolved_tools,
             mcp_tools: Arc::new(std::sync::RwLock::new(Vec::new())),
             disabled_tools: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            scoped_disabled_tools: Arc::new(std::sync::Mutex::new(ScopedToolDisable::default())),
             todos,
             turn_counter,
             pursuit_state,
@@ -1298,6 +1398,65 @@ impl Agent {
         !guard.contains(name)
     }
 
+    /// Whether `name` is hidden from the model by *either* mask: the persisted
+    /// session-level mask (user `/tools` toggles) or the in-memory hook-scoped
+    /// mask ([`HookOutcome::ScopeTools`]). This is the model-facing truth —
+    /// `visible_tools` and the dispatch guard both consult it. The pub
+    /// [`Self::is_tool_enabled`] deliberately reports only the user mask so the
+    /// UI's Tools modal is not confused by transient hook scoping.
+    fn is_name_disabled(&self, name: &str) -> bool {
+        let user = self
+            .disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if user.contains(name) {
+            return true;
+        }
+        let scoped = self
+            .scoped_disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scoped.contains(name)
+    }
+
+    /// Apply hook-fired [`HookOutcome::ScopeTools`] disables: record each name
+    /// (only known tools, matching the user-mask contract) under its restore
+    /// point. Idempotent across repeated fires via refcounting.
+    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
+        if disables.is_empty() {
+            return;
+        }
+        let mut scoped = self
+            .scoped_disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (name, restore) in disables {
+            // Only known tools: a stale/typo'd name from a hook cannot poison
+            // the mask (mirrors `set_tool_enabled`'s known-tool guard).
+            if self.toolset.variants_of(name).is_some() {
+                scoped.disable(name, *restore);
+            }
+        }
+    }
+
+    /// Restore every RoundEnd-scoped disable. Called at the round boundary.
+    pub(crate) fn restore_scoped_round_end(&self) {
+        let mut scoped = self
+            .scoped_disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scoped.restore_round_end();
+    }
+
+    /// Restore every scoped disable (both buckets). Called at turn end.
+    pub(crate) fn restore_scoped_turn_end(&self) {
+        let mut scoped = self
+            .scoped_disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scoped.restore_turn_end();
+    }
+
     /// Restore the disabled-tool mask from a persisted set on resume
     /// (ADR-0048 Phase 2). Replaces the in-memory mask wholesale so a user
     /// toggle survives restart. Only known tool names are retained so a stale
@@ -1325,25 +1484,33 @@ impl Agent {
     }
 
     /// All installed tools that the model may see this turn: every tool whose
-    /// name is not in the disabled mask. Used at the schema-build choke points
-    /// so a disabled tool's definition never reaches the provider.
+    /// name is not disabled by *either* mask (the persisted user mask or the
+    /// in-memory hook-scoped mask). Used at the schema-build choke points so a
+    /// disabled tool's definition never reaches the provider.
     pub(crate) fn visible_tools(&self) -> Vec<Arc<dyn Tool>> {
-        let disabled = self
-            .disabled_tools
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let is_visible = |t: &Arc<dyn Tool>| !disabled.contains(t.name());
+        // `ask_user` is reclaimed under unattended: no human is reachable to
+        // answer, so admitting it would only deadlock a round. Drop its schema
+        // so the model never names it. The dispatch guard also short-circuits
+        // any stale call (a name carried over from an earlier turn's tool
+        // list) — see `execute_tool`.
+        let reclaim_ask_user = self.get_unattended();
         let mut tools: Vec<Arc<dyn Tool>> = self
             .resolved_tools
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .filter(|t| is_visible(t))
+            .filter(|t| !self.is_name_disabled(t.name()))
+            .filter(|t| !(reclaim_ask_user && t.name() == "ask_user"))
             .cloned()
             .collect();
         // Merge dynamically-refreshable MCP tools.
         if let Ok(mcp) = self.mcp_tools.read() {
-            tools.extend(mcp.iter().filter(|t| is_visible(t)).cloned());
+            tools.extend(
+                mcp.iter()
+                    .filter(|t| !self.is_name_disabled(t.name()))
+                    .filter(|t| !(reclaim_ask_user && t.name() == "ask_user"))
+                    .cloned(),
+            );
         }
         tools
     }
@@ -1469,6 +1636,12 @@ impl Agent {
             }
 
             self.prepare_turn_messages(messages);
+            // RoundStart hooks (symmetric to the round-end Turn hooks): inject
+            // any context at the top of this round's attention, before the
+            // model is asked for its next completion. No-op without a
+            // `[hooks]` config (envoys, tests).
+            self.run_round_start_hooks(messages, &state, tool_rounds)
+                .await;
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
             });
@@ -1521,6 +1694,11 @@ impl Agent {
                 // Mid-turn save point (ADR-0035): see the streaming path.
                 self.fire_round_persist(messages).await?;
                 self.run_turn_hooks(messages, &state, tool_rounds).await;
+                // Restore RoundEnd-scoped disables now that the round is over,
+                // so tools a hook narrowed for just this round come back for
+                // the next one. TurnEnd-scoped disables survive until the turn
+                // ends (see the return path below).
+                self.restore_scoped_round_end();
                 continue;
             }
 
@@ -1537,6 +1715,9 @@ impl Agent {
                 continue;
             }
 
+            // Turn end: clear every scoped disable so the toolset is fresh for
+            // the next user request.
+            self.restore_scoped_turn_end();
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: state.token_usage,
@@ -1586,6 +1767,10 @@ impl Agent {
             }
 
             self.prepare_turn_messages(messages);
+            // RoundStart hooks (see the non-streaming path). Inject any context
+            // at the top of this round before the stream request goes out.
+            self.run_round_start_hooks(messages, &state, tool_rounds)
+                .await;
             tracing::debug!(tool_round = tool_rounds, "requesting model completion");
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
@@ -1778,6 +1963,9 @@ impl Agent {
                 // with filesystem side effects.
                 self.fire_round_persist(messages).await?;
                 self.run_turn_hooks(messages, &state, tool_rounds).await;
+                // Restore RoundEnd-scoped disables (mirror of the non-streaming
+                // path). TurnEnd-scoped disables survive until turn end.
+                self.restore_scoped_round_end();
                 continue;
             }
 
@@ -1794,6 +1982,9 @@ impl Agent {
                 continue;
             }
 
+            // Turn end: clear every scoped disable so the toolset is fresh for
+            // the next user request.
+            self.restore_scoped_turn_end();
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: state.token_usage,
@@ -2197,6 +2388,10 @@ impl Agent {
         // Sidecar `envoy_meta` captures what the live event stream knew but
         // the bare transcript cannot reconstruct on resume: duration, the
         // task description, the toolset size, and an explicit failure flag.
+        // The envoy result text is built by `envoy_result_text`, which appends
+        // a deterministic role-reanchoring note at this single choke point (see
+        // its doc for the "role bleed" rationale). For non-envoy results the
+        // plain header is used unchanged.
         let tool_message = match result.envoy_payload() {
             Some((sub_messages, _)) => {
                 let meta = crate::message::EnvoyMeta {
@@ -2204,9 +2399,12 @@ impl Agent {
                     failed: result.is_error(),
                     ..Default::default()
                 };
-                Message::tool_result(call, format!("[{} result]:\n{}", call.name, text))
-                    .with_children(sub_messages.to_vec())
-                    .with_envoy_meta(meta)
+                Message::tool_result(
+                    call,
+                    envoy_result_text(&call.name, &text, result.is_error()),
+                )
+                .with_children(sub_messages.to_vec())
+                .with_envoy_meta(meta)
             }
             None => Message::tool_result(call, format!("[{} result]:\n{}", call.name, text)),
         };
@@ -2306,12 +2504,13 @@ impl Agent {
     /// Fire user-configured `Turn` hooks at the turn boundary and fold any
     /// `Inject` context into hidden user messages. `Deny` is already discarded
     /// by [`HookRegistry::run_turn`], so a turn hook cannot abort the round.
+    /// `ScopeTools` disables are applied to the scoped mask.
     async fn run_turn_hooks(&self, messages: &mut Vec<Message>, state: &TurnState, turn: usize) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
         }
-        let injected = registry
+        let side = registry
             .run_turn(
                 turn,
                 state.consecutive_readonly_rounds,
@@ -2319,13 +2518,76 @@ impl Agent {
                 self.hook_cwd().as_deref(),
             )
             .await;
-        for context in injected {
+        for context in side.injected {
             messages.push(Message::injected(
                 Role::User,
                 context,
                 InjectionOrigin::new(InjectionKind::Hook(HookEventKind::Turn)),
             ));
         }
+        self.apply_scoped_disables(&side.scoped_disables);
+    }
+
+    /// Fire user-configured `RoundStart` hooks at the *start* of each tool
+    /// round (after tools are prepared, before the next model completion) and
+    /// fold any `Inject` context into hidden user messages. `Deny` is already
+    /// discarded by [`HookRegistry::run_round_start`], so a round-start hook
+    /// cannot abort the round. `ScopeTools` disables are applied to the scoped
+    /// mask. The symmetric partner of [`Self::run_turn_hooks`].
+    async fn run_round_start_hooks(
+        &self,
+        messages: &mut Vec<Message>,
+        state: &TurnState,
+        round: usize,
+    ) {
+        let registry = self.hooks();
+        if registry.is_empty() {
+            return;
+        }
+        let side = registry
+            .run_round_start(
+                round,
+                state.consecutive_readonly_rounds,
+                &self.hook_session_id(),
+                self.hook_cwd().as_deref(),
+            )
+            .await;
+        for context in side.injected {
+            messages.push(Message::injected(
+                Role::User,
+                context,
+                InjectionOrigin::new(InjectionKind::Hook(HookEventKind::RoundStart)),
+            ));
+        }
+        self.apply_scoped_disables(&side.scoped_disables);
+    }
+
+    /// Fire `PermissionRequest` hooks at the moment the agent is about to block
+    /// on a permission decision. Observe-only: hooks run for side effects (the
+    /// canonical use is a fire-and-forget notification so the user notices the
+    /// agent is parked); outcomes are ignored by the registry. No-op without a
+    /// `[hooks]` config.
+    async fn fire_permission_request_hooks(&self, request: &neenee_core::PermissionRequest) {
+        let registry = self.hooks();
+        if registry.is_empty() {
+            return;
+        }
+        registry
+            .run_permission_request(request, &self.hook_session_id(), self.hook_cwd().as_deref())
+            .await;
+    }
+
+    /// Fire `UserQuestion` hooks at the moment the agent is about to block on
+    /// an `ask_user` question. Observe-only, same contract as
+    /// [`Self::fire_permission_request_hooks`].
+    async fn fire_user_question_hooks(&self, request: &neenee_core::UserQuestionRequest) {
+        let registry = self.hooks();
+        if registry.is_empty() {
+            return;
+        }
+        registry
+            .run_user_question(request, &self.hook_session_id(), self.hook_cwd().as_deref())
+            .await;
     }
 
     /// The opt-in hard-stop gate (ADR-0018). Called once per tool round with
@@ -2469,6 +2731,10 @@ impl Agent {
             .insert(request.id.clone(), sender);
         tracing::info!(questions = request.questions.len(), "asking user");
         let _ = event_tx.send(AgentEvent::UserQuestionRequest(request.clone()));
+        // Observe-only interrupt hook: fire notifications (desktop/bell) so the
+        // user notices the agent is blocked on their input. No-op without
+        // `[hooks]`. Outcomes are ignored — this never gates the question.
+        self.fire_user_question_hooks(&request).await;
 
         match receiver.await.unwrap_or(None) {
             Some(reply) => {
@@ -2555,6 +2821,14 @@ impl Agent {
             })
             .unwrap_or_default();
         if is_interactive_command(&command) {
+            // Unattended: no operator is reachable to type into the prompt, so
+            // the inline input panel would deadlock. Close stdin instead — the
+            // command then fails fast with a non-interactive remedy, which is
+            // the honest outcome for an interactive command run unattended.
+            if self.get_unattended() {
+                tracing::info!(command = %command, "interactive command stdin closed under unattended");
+                return StdinPolicy::default();
+            }
             let secret = command.split_whitespace().next().map(|t| {
                 let prog = t.rsplit('/').next().unwrap_or(t);
                 matches!(prog, "sudo" | "su" | "passwd" | "gpg" | "visudo")
@@ -2607,7 +2881,7 @@ impl Agent {
         // the hook with a null input so a guard is never bypassed by bad JSON.
         let tool_input = serde_json::from_str::<serde_json::Value>(&call.arguments)
             .unwrap_or(serde_json::Value::Null);
-        if let Some(reason) = self
+        let verdict = self
             .hooks()
             .check_pre_tool_use(
                 call.name.as_str(),
@@ -2615,8 +2889,12 @@ impl Agent {
                 &self.hook_session_id(),
                 self.hook_cwd().as_deref(),
             )
-            .await
-        {
+            .await;
+        // Apply any scoped disables from PreToolUse hooks first (so a policy
+        // hook can narrow the toolset for subsequent calls this round), then
+        // honour the deny if present.
+        self.apply_scoped_disables(&verdict.side.scoped_disables);
+        if let Some(reason) = verdict.deny {
             tracing::info!(tool = %call.name, "tool blocked by PreToolUse hook");
             return ToolOutput::Error {
                 message: format!("Blocked by hook: {}", reason),
@@ -2627,13 +2905,26 @@ impl Agent {
         // Defense in depth: even though disabled tools are dropped from the
         // schema build, a model that still names one (e.g. from an older
         // turn's tool list still in context) is rejected here rather than
-        // silently executed.
-        if !self.is_tool_enabled(call.name.as_str()) {
-            tracing::warn!(tool = %call.name, "tool disabled this session");
-            return ToolOutput::Text(format!(
-                "Tool '{}' is disabled for this session. Re-enable it in the Tools modal (/tools).",
-                call.name
-            ));
+        // silently executed. Both the user mask and the hook-scoped mask gate
+        // dispatch; the message distinguishes them so the model understands
+        // whether re-enabling is its business (it isn't — both are
+        // out-of-band to the model).
+        if self.is_name_disabled(call.name.as_str()) {
+            let user_disabled = self.is_tool_enabled(call.name.as_str());
+            tracing::warn!(tool = %call.name, user_disabled, "tool disabled (user or scoped mask)");
+            return ToolOutput::Text(if user_disabled {
+                format!(
+                    "Tool '{}' is disabled for this session. Re-enable it in the Tools modal (/tools).",
+                    call.name
+                )
+            } else {
+                // Scoped by a hook: transient, will auto-restore; the model
+                // should pick a different tool rather than wait.
+                format!(
+                    "Tool '{}' is temporarily out of scope for this task. Use a different tool.",
+                    call.name
+                )
+            });
         }
 
         // Operation-scope gate (ADR-0028). The main agent's scope is
@@ -2658,6 +2949,20 @@ impl Agent {
         }
 
         if call.name == "ask_user" {
+            // Defense in depth alongside `visible_tools` reclaiming the tool:
+            // a name carried over from an earlier turn's tool list (still in
+            // context) must not reach the parking path and deadlock the round.
+            // Under unattended there is no human to answer, so short-circuit
+            // with a refusal the model can act on.
+            if self.get_unattended() {
+                tracing::info!("ask_user short-circuited under unattended");
+                return ToolOutput::Text(
+                    "ask_user is unavailable: this session is running unattended and no human \
+                     is reachable to answer. Resolve the ambiguity yourself — pick the most \
+                     reasonable default and proceed."
+                        .to_string(),
+                );
+            }
             return self.execute_ask_user(call, call_id, event_tx).await;
         }
 
@@ -2684,6 +2989,10 @@ impl Agent {
                 let receiver = self.permissions.park_request(request.id.clone());
                 tracing::info!(tool = %request.tool, scope = %request.scope, "permission requested");
                 let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
+                // Observe-only interrupt hook: fire notifications so the user
+                // notices the agent is blocked awaiting approval. No-op without
+                // `[hooks]`. Outcomes are ignored — this never grants/denies.
+                self.fire_permission_request_hooks(&request).await;
 
                 match receiver.await.unwrap_or(PermissionDecision::Reject) {
                     PermissionDecision::Once => {
@@ -2945,4 +3254,126 @@ fn empty_response_error(response: &Message) -> HarnessError {
 /// turn loops route through (ADR-0039).
 pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
     messages.retain(|message| message.role != Role::Assistant || valid_assistant_response(message));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScopedToolDisable, envoy_result_text};
+
+    /// The successful envoy result carries the `[<tool> result]:` header, the
+    /// original summary verbatim, and the success re-anchor note.
+    #[test]
+    fn envoy_result_text_reanchors_on_success() {
+        let text = envoy_result_text("envoy", "Found the symbol in lib.rs", false);
+        assert!(
+            text.starts_with("[envoy result]:\n"),
+            "header present: {text}"
+        );
+        assert!(
+            text.contains("Found the symbol in lib.rs"),
+            "summary preserved verbatim: {text}"
+        );
+        // The anchor must pin the principal's write capability back to the
+        // principal and call out the read-only scope as envoy-only.
+        assert!(
+            text.contains("applies to the envoy only"),
+            "anchor scope pin missing: {text}"
+        );
+        assert!(
+            text.contains("retain your full toolset"),
+            "principal re-anchor missing: {text}"
+        );
+    }
+
+    /// A failed envoy carries a different (re-delegate-or-act-directly) anchor,
+    /// and still preserves the partial summary for the principal to act on.
+    #[test]
+    fn envoy_result_text_reanchors_on_failure() {
+        let text = envoy_result_text("envoy", "partial findings before crash", true);
+        assert!(
+            text.contains("partial findings before crash"),
+            "partial summary preserved: {text}"
+        );
+        assert!(
+            text.contains("could not complete its sub-task"),
+            "failure anchor missing: {text}"
+        );
+        // Both anchors must re-affirm the principal retains write capability.
+        assert!(
+            text.contains("retain your full toolset"),
+            "principal re-anchor missing on failure: {text}"
+        );
+        // And must NOT carry the success-only phrasing (regression guard against
+        // the success anchor leaking onto a failed envoy).
+        assert!(
+            !text.contains("applies to the envoy only"),
+            "success anchor leaked onto failure: {text}"
+        );
+    }
+
+    /// The re-anchor is unconditional for any envoy result — a regression guard
+    /// that a future refactor cannot silently drop it.
+    #[test]
+    fn envoy_result_text_anchor_is_unconditional() {
+        for failed in [false, true] {
+            let text = envoy_result_text("envoy", "x", failed);
+            assert!(
+                text.contains("[system]"),
+                "system anchor tag present (failed={failed}): {text}"
+            );
+        }
+    }
+
+    use neenee_core::RestorePoint;
+
+    /// A scoped disable hides the tool until its restore point fires.
+    #[test]
+    fn scoped_disable_hides_until_restore() {
+        let mut scoped = ScopedToolDisable::default();
+        assert!(!scoped.contains("bash"));
+        scoped.disable("bash", RestorePoint::RoundEnd);
+        assert!(scoped.contains("bash"));
+        scoped.restore_round_end();
+        assert!(
+            !scoped.contains("bash"),
+            "RoundEnd restore must re-enable the tool"
+        );
+        assert!(scoped.is_empty(), "both buckets drained");
+    }
+
+    /// RoundEnd restore only clears RoundEnd disables — TurnEnd disables
+    /// survive the round boundary.
+    #[test]
+    fn round_end_restore_keeps_turn_end_disables() {
+        let mut scoped = ScopedToolDisable::default();
+        scoped.disable("bash", RestorePoint::RoundEnd);
+        scoped.disable("edit_file", RestorePoint::TurnEnd);
+        scoped.restore_round_end();
+        assert!(
+            !scoped.contains("bash"),
+            "RoundEnd disable must be restored at the round boundary"
+        );
+        assert!(
+            scoped.contains("edit_file"),
+            "TurnEnd disable must survive the round boundary"
+        );
+    }
+
+    /// Nested disables compose via refcount: two hooks disable `bash` at
+    /// different restore points; the earlier (RoundEnd) restore must NOT bring
+    /// it back while the later (TurnEnd) is still in effect.
+    #[test]
+    fn nested_disables_refcount_correctly() {
+        let mut scoped = ScopedToolDisable::default();
+        scoped.disable("bash", RestorePoint::TurnEnd);
+        scoped.disable("bash", RestorePoint::RoundEnd);
+        assert!(scoped.contains("bash"));
+        scoped.restore_round_end();
+        assert!(
+            scoped.contains("bash"),
+            "bash still hidden: the TurnEnd disable outlives the RoundEnd restore"
+        );
+        scoped.restore_turn_end();
+        assert!(!scoped.contains("bash"), "bash back after turn end");
+    }
 }

@@ -1577,6 +1577,17 @@ pub(super) async fn run_app_loop(
             if matches!(sgr_guard.feed(&event), input::Feed::Drop) {
                 continue;
             }
+            // Text-triggered modal commands (`/provider`, `/tools`, …) consume
+            // the composer text the same way `SendSlash` does, but the action
+            // they resolve to is data-less (e.g. `OpenProvider`), so the typed
+            // `/cmd` — which should still be recallable from input history —
+            // would be lost. Snapshot the composer before `process_event`
+            // mutates it, then record it after dispatch if the resulting action
+            // is one of those commands. Keybinding-driven modals (Ctrl+R, F1,
+            // …) open with an empty composer and are excluded by the predicate.
+            let modal_cmd_history = (!app.input.is_empty())
+                .then(|| app.input.clone())
+                .filter(|_| !app.input.starts_with('!') && matches!(app.active_modal, Modal::None));
             let action = input::process_event(
                 event,
                 &mut app.input,
@@ -1613,6 +1624,30 @@ pub(super) async fn run_app_loop(
             // through `App::set_cursor`), so any keystroke that moved the caret
             // must still mark the terminal cursor for an immediate re-sync.
             app.note_cursor_moved();
+
+            // Record a text-triggered modal command (`/provider`, `/tools`, …)
+            // in BOTH the transcript and input history, exactly like the
+            // notification-style slash commands routed through `SendSlash`.
+            //
+            // This is the consistency point between the two command families:
+            // whether a command surfaces as a modal or as an inline reply, the
+            // user's invocation is recorded the same way — recallable from
+            // Ctrl+R history and visible in the scrollback. Modal *outcomes*
+            // (e.g. a provider switch) are emitted separately by the harness
+            // listener as follow-up notices, so the transcript reads as a
+            // natural pair: `> /provider` then `↳ Provider switched to …`.
+            //
+            // The composer text was consumed by `process_event` (the action is
+            // data-less), so we replay it from the pre-dispatch snapshot.
+            if action.is_text_modal_command()
+                && let Some(entry) = modal_cmd_history
+            {
+                runtime.messages.write().await.push(
+                    TranscriptMessage::new(Role::User, entry.clone())
+                        .with_origin(UserMessageOrigin::Slash),
+                );
+                app.record_input_history(entry);
+            }
 
             match action {
                 input::InputAction::None => {}

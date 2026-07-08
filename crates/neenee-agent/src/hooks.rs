@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use neenee_core::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, InjectionKind, InjectionOrigin,
-    Message, Role, SessionSource,
+    Message, PermissionRequest, RestorePoint, Role, SessionSource, UserQuestionRequest,
 };
 
 /// Evaluate a Claude-Code-style tool-name matcher against a tool name.
@@ -37,6 +37,43 @@ pub fn matcher_matches(matcher: &str, tool_name: &str) -> bool {
             tracing::warn!(matcher = matcher, "invalid regex in hook matcher; ignoring");
             false
         }
+    }
+}
+
+/// Side effects a hook run wants applied beyond its primary outcome: hidden
+/// context to inject, and tools to temporarily scope-disable (each with its
+/// restore point). Extracted from a batch of [`HookOutcome`]s so each
+/// lifecycle insertion point can apply them uniformly.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct HookSideEffects {
+    /// `Inject` contexts, in firing order, to fold into the transcript.
+    pub injected: Vec<String>,
+    /// `ScopeTools` disables: `(tool_name, restore_point)` pairs, in firing
+    /// order. The caller (the agent) applies these to its scoped mask.
+    pub scoped_disables: Vec<(String, RestorePoint)>,
+}
+
+impl HookSideEffects {
+    /// Fold a batch of outcomes into side effects, dropping anything the
+    /// firing event does not honour (the caller has already handled `Deny`
+    /// upstream where relevant).
+    fn from_outcomes(outcomes: Vec<HookOutcome>) -> Self {
+        let mut se = Self::default();
+        for o in outcomes {
+            match o {
+                HookOutcome::Inject { context } => se.injected.push(context),
+                HookOutcome::ScopeTools {
+                    disable,
+                    restore_at,
+                } => {
+                    for name in disable {
+                        se.scoped_disables.push((name, restore_at));
+                    }
+                }
+                _ => {}
+            }
+        }
+        se
     }
 }
 
@@ -92,9 +129,9 @@ impl HookRegistry {
         tool_input: &serde_json::Value,
         session_id: &str,
         cwd: Option<&Path>,
-    ) -> Option<String> {
+    ) -> PreToolUseVerdict {
         if self.hooks.is_empty() {
-            return None;
+            return PreToolUseVerdict::default();
         }
         let ctx = HookContext {
             session_id: session_id.to_string(),
@@ -104,13 +141,27 @@ impl HookRegistry {
                 tool_input: tool_input.clone(),
             },
         };
-        self.fire(HookEventKind::PreToolUse, Some(tool_name), &ctx)
-            .await
-            .into_iter()
-            .find_map(|o| match o {
-                HookOutcome::Deny { reason } => Some(reason),
-                _ => None,
-            })
+        let outcomes = self
+            .fire(HookEventKind::PreToolUse, Some(tool_name), &ctx)
+            .await;
+        let mut deny = None;
+        let mut side = HookSideEffects::default();
+        for o in outcomes {
+            match o {
+                HookOutcome::Deny { reason } if deny.is_none() => deny = Some(reason),
+                HookOutcome::Inject { context } => side.injected.push(context),
+                HookOutcome::ScopeTools {
+                    disable,
+                    restore_at,
+                } => {
+                    for name in disable {
+                        side.scoped_disables.push((name, restore_at));
+                    }
+                }
+                _ => {}
+            }
+        }
+        PreToolUseVerdict { deny, side }
     }
 
     /// `PostToolUse`: observers run; every `Inject` context is collected to be
@@ -317,17 +368,18 @@ impl HookRegistry {
     /// `Turn` (ADR-0030): fires once per tool turn. Every `Inject` context is
     /// collected as hidden user messages for the next turn. `Deny` is
     /// **ignored** by contract — a turn-count hook cannot abort the round (the
-    /// ADR-0009 concern). `consecutive_readonly` carries the read-only streak
-    /// so a hook can target exploration-without-progress without re-deriving it.
+    /// ADR-0009 concern). `ScopeTools` disables are gathered for the agent to
+    /// apply. `consecutive_readonly` carries the read-only streak so a hook can
+    /// target exploration-without-progress without re-deriving it.
     pub async fn run_turn(
         &self,
         turn: usize,
         consecutive_readonly: u32,
         session_id: &str,
         cwd: Option<&Path>,
-    ) -> Vec<String> {
+    ) -> HookSideEffects {
         if self.hooks.is_empty() {
-            return Vec::new();
+            return HookSideEffects::default();
         }
         let ctx = HookContext {
             session_id: session_id.to_string(),
@@ -337,14 +389,85 @@ impl HookRegistry {
                 consecutive_readonly,
             },
         };
-        self.fire(HookEventKind::Turn, None, &ctx)
-            .await
-            .into_iter()
-            .filter_map(|o| match o {
-                HookOutcome::Inject { context } => Some(context),
-                _ => None,
-            })
-            .collect()
+        HookSideEffects::from_outcomes(self.fire(HookEventKind::Turn, None, &ctx).await)
+    }
+
+    /// `RoundStart`: the symmetric partner of [`Self::run_turn`], fired at the
+    /// start of each tool round — after tools are prepared but before the next
+    /// model completion. Every `Inject` context is collected as hidden user
+    /// messages that land at the top of the model's attention for this round,
+    /// and `ScopeTools` disables are gathered. `Deny` is **ignored** by
+    /// contract (same constraint as `Turn`). Use this to re-inject context per
+    /// round (e.g. re-anchor the principal's role after read-only delegations).
+    pub async fn run_round_start(
+        &self,
+        round: usize,
+        consecutive_readonly: u32,
+        session_id: &str,
+        cwd: Option<&Path>,
+    ) -> HookSideEffects {
+        if self.hooks.is_empty() {
+            return HookSideEffects::default();
+        }
+        let ctx = HookContext {
+            session_id: session_id.to_string(),
+            cwd: cwd.map(Path::to_path_buf),
+            event: HookEvent::RoundStart {
+                round,
+                consecutive_readonly,
+            },
+        };
+        HookSideEffects::from_outcomes(self.fire(HookEventKind::RoundStart, None, &ctx).await)
+    }
+
+    /// `PermissionRequest`: observe-only. The agent is about to block waiting
+    /// for a permission decision; matching hooks fire (the typical use is a
+    /// fire-and-forget desktop notification so the user notices the agent is
+    /// blocked), but their outcomes are ignored — neither `Deny` nor `Inject`
+    /// can gate the prompt or alter the transcript. The tool-name matcher
+    /// targets the tool seeking approval.
+    pub async fn run_permission_request(
+        &self,
+        request: &PermissionRequest,
+        session_id: &str,
+        cwd: Option<&Path>,
+    ) {
+        if self.hooks.is_empty() {
+            return;
+        }
+        let ctx = HookContext {
+            session_id: session_id.to_string(),
+            cwd: cwd.map(Path::to_path_buf),
+            event: HookEvent::PermissionRequest {
+                request: request.clone(),
+            },
+        };
+        // Fire for side effects; discard outcomes by contract.
+        let _ = self
+            .fire(HookEventKind::PermissionRequest, Some(&request.tool), &ctx)
+            .await;
+    }
+
+    /// `UserQuestion`: observe-only, same contract as
+    /// [`Self::run_permission_request`]. Fires when the agent is about to block
+    /// on an `ask_user` question. Does not honour a matcher.
+    pub async fn run_user_question(
+        &self,
+        request: &UserQuestionRequest,
+        session_id: &str,
+        cwd: Option<&Path>,
+    ) {
+        if self.hooks.is_empty() {
+            return;
+        }
+        let ctx = HookContext {
+            session_id: session_id.to_string(),
+            cwd: cwd.map(Path::to_path_buf),
+            event: HookEvent::UserQuestion {
+                request: request.clone(),
+            },
+        };
+        let _ = self.fire(HookEventKind::UserQuestion, None, &ctx).await;
     }
 }
 
@@ -356,6 +479,17 @@ pub enum UserPromptVerdict {
     Deny(String),
     /// Proceed, prepending `context` to the prompt.
     Prepend(String),
+}
+
+/// The decision a `PreToolUse` hook produces. The first `Deny` blocks the call;
+/// any `Inject` / `ScopeTools` side effects are still applied.
+#[derive(Default)]
+pub struct PreToolUseVerdict {
+    /// First deny reason, if any. `None` lets the call proceed.
+    pub deny: Option<String>,
+    /// Side effects (`Inject` context, scoped disables) gathered from all
+    /// matching hooks, applied by the agent regardless of deny.
+    pub side: HookSideEffects,
 }
 
 #[cfg(test)]
@@ -379,5 +513,224 @@ mod tests {
     #[test]
     fn matcher_invalid_regex_matches_nothing() {
         assert!(!matcher_matches("[invalid", "anything"));
+    }
+
+    /// Stub hook that returns a fixed outcome regardless of context, but only
+    /// for one declared [`HookEventKind`]. Lets a test assert routing + outcome
+    /// handling without spinning up a real shell command.
+    struct StubHook {
+        kind: HookEventKind,
+        outcome: HookOutcome,
+    }
+
+    #[async_trait::async_trait]
+    impl Hook for StubHook {
+        fn kind(&self) -> HookEventKind {
+            self.kind
+        }
+        async fn fire(&self, _ctx: &HookContext) -> HookOutcome {
+            self.outcome.clone()
+        }
+    }
+
+    fn registry_of(hooks: Vec<Arc<dyn Hook>>) -> HookRegistry {
+        HookRegistry::new(hooks)
+    }
+
+    /// `RoundStart` honours `Inject` like `Turn` does — the symmetric round
+    /// boundary collects injected context for the upcoming round.
+    #[tokio::test]
+    async fn round_start_collects_inject() {
+        let reg = registry_of(vec![Arc::new(StubHook {
+            kind: HookEventKind::RoundStart,
+            outcome: HookOutcome::Inject {
+                context: "re-anchor".to_string(),
+            },
+        })]);
+        let side = reg.run_round_start(0, 0, "s", None).await;
+        assert_eq!(side.injected, vec!["re-anchor".to_string()]);
+        assert!(side.scoped_disables.is_empty());
+    }
+
+    /// `RoundStart` must discard `Deny` — a round-start hook cannot gate the
+    /// turn (same ADR-0009 concern that constrains `Turn`). Only `Inject`
+    /// (and `ScopeTools`) survives the filter.
+    #[tokio::test]
+    async fn round_start_discards_deny() {
+        let reg = registry_of(vec![
+            Arc::new(StubHook {
+                kind: HookEventKind::RoundStart,
+                outcome: HookOutcome::Deny {
+                    reason: "no".to_string(),
+                },
+            }),
+            Arc::new(StubHook {
+                kind: HookEventKind::RoundStart,
+                outcome: HookOutcome::Inject {
+                    context: "ok".to_string(),
+                },
+            }),
+        ]);
+        let side = reg.run_round_start(0, 0, "s", None).await;
+        assert_eq!(side.injected, vec!["ok".to_string()]);
+    }
+
+    /// Routing isolation: a `Turn` hook must not fire on `RoundStart` and vice
+    /// versa. Guards against a future refactor that folds both into one path
+    /// and accidentally cross-triggers.
+    #[tokio::test]
+    async fn round_start_is_routed_separately_from_turn() {
+        let reg = registry_of(vec![Arc::new(StubHook {
+            kind: HookEventKind::Turn,
+            outcome: HookOutcome::Inject {
+                context: "turn-leak".to_string(),
+            },
+        })]);
+        let side = reg.run_round_start(0, 0, "s", None).await;
+        assert!(
+            side.injected.is_empty() && side.scoped_disables.is_empty(),
+            "Turn hook must not fire on RoundStart"
+        );
+    }
+
+    /// `ScopeTools` outcomes are collected by `RoundStart` (and `Turn`) so the
+    /// agent can apply them to its scoped-disable mask. Regression guard that
+    /// the side-effect channel actually carries scoped disables.
+    #[tokio::test]
+    async fn round_start_collects_scope_tools() {
+        let reg = registry_of(vec![Arc::new(StubHook {
+            kind: HookEventKind::RoundStart,
+            outcome: HookOutcome::ScopeTools {
+                disable: vec!["bash".to_string(), "edit_file".to_string()],
+                restore_at: RestorePoint::RoundEnd,
+            },
+        })]);
+        let side = reg.run_round_start(0, 0, "s", None).await;
+        assert!(side.injected.is_empty());
+        assert_eq!(
+            side.scoped_disables,
+            vec![
+                ("bash".to_string(), RestorePoint::RoundEnd),
+                ("edit_file".to_string(), RestorePoint::RoundEnd),
+            ]
+        );
+    }
+
+    /// A recording hook: counts how many times `fire` ran, regardless of the
+    /// outcome it returned. Used to prove an observe-only event actually
+    /// dispatches the hook (for side effects) even though outcomes are dropped.
+    struct RecordingHook {
+        kind: HookEventKind,
+        matcher: Option<String>,
+        fires: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Hook for RecordingHook {
+        fn kind(&self) -> HookEventKind {
+            self.kind
+        }
+        fn matcher(&self) -> Option<&str> {
+            self.matcher.as_deref()
+        }
+        async fn fire(&self, _ctx: &HookContext) -> HookOutcome {
+            self.fires
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            HookOutcome::Pass
+        }
+    }
+
+    /// `PermissionRequest` is observe-only: the hook fires (for its side effect,
+    /// e.g. a notification) but a `Deny` outcome must NOT surface — a
+    /// notification hook can never grant/deny the prompt. We assert fire-count
+    /// rose (dispatch happened) and that the method returns `()` (no outcome to
+    /// act on).
+    #[tokio::test]
+    async fn permission_request_is_observe_only_but_fires() {
+        let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reg = registry_of(vec![Arc::new(RecordingHook {
+            kind: HookEventKind::PermissionRequest,
+            matcher: None,
+            fires: fires.clone(),
+        })]);
+        let request = neenee_core::PermissionRequest {
+            id: "permission_x".into(),
+            tool: "bash".into(),
+            label: "Run command".into(),
+            description: "rm -rf /tmp/x".into(),
+            arguments: "{}".into(),
+            scope: "command".into(),
+        };
+        reg.run_permission_request(&request, "s", None).await;
+        assert_eq!(
+            fires.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "PermissionRequest hook must fire for its side effect"
+        );
+    }
+
+    /// The `PermissionRequest` matcher targets the tool seeking approval, so a
+    /// `bash`-only notification hook does not fire for an `edit_file` request.
+    #[tokio::test]
+    async fn permission_request_matcher_targets_tool() {
+        let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reg = registry_of(vec![Arc::new(RecordingHook {
+            kind: HookEventKind::PermissionRequest,
+            matcher: Some("bash".into()),
+            fires: fires.clone(),
+        })]);
+        let bash_req = neenee_core::PermissionRequest {
+            id: "p1".into(),
+            tool: "bash".into(),
+            label: "".into(),
+            description: "".into(),
+            arguments: "".into(),
+            scope: "command".into(),
+        };
+        let edit_req = neenee_core::PermissionRequest {
+            id: "p2".into(),
+            tool: "edit_file".into(),
+            label: "".into(),
+            description: "".into(),
+            arguments: "".into(),
+            scope: "path".into(),
+        };
+        reg.run_permission_request(&bash_req, "s", None).await;
+        reg.run_permission_request(&edit_req, "s", None).await;
+        assert_eq!(
+            fires.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "only the bash request should match"
+        );
+    }
+
+    /// `UserQuestion` is observe-only and matcher-less: it fires once per
+    /// ask_user block, irrespective of content.
+    #[tokio::test]
+    async fn user_question_is_observe_only_but_fires() {
+        let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reg = registry_of(vec![Arc::new(RecordingHook {
+            kind: HookEventKind::UserQuestion,
+            matcher: None,
+            fires: fires.clone(),
+        })]);
+        let request = neenee_core::UserQuestionRequest {
+            id: "ask_user_x".into(),
+            questions: vec![neenee_core::UserQuestion {
+                header: Some("Pick one".into()),
+                question: "Which?".into(),
+                options: vec![neenee_core::UserQuestionOption {
+                    label: "A".into(),
+                    description: None,
+                }],
+                multi_select: false,
+            }],
+        };
+        reg.run_user_question(&request, "s", None).await;
+        assert_eq!(
+            fires.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "UserQuestion hook must fire for its side effect"
+        );
     }
 }

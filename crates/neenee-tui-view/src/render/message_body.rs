@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::document::{Block, DeliveryStatus, LinkRange, TranscriptMessage};
 use crate::layout::{BlockRegion, LayoutMap, LinkHit, TableCellHit, TableCellSegment};
+use crate::render::components::meta_strip::{MetaStrip, MetaTone};
 use crate::selection::{
     CellDragInfo, SelectionState, floor_grapheme_boundary, inclusive_grapheme_end,
 };
@@ -34,6 +35,13 @@ fn display_width_u16(s: &str) -> u16 {
 /// above it, on plain `surface`), so the panel itself holds only the typed
 /// text. The "Sent" word is dropped: `turn N · HH:MM` is enough provenance,
 /// and queued messages keep their `⏸ Queued` pending marker.
+///
+/// The whole header row is composed from the shared `MetaStrip` component
+/// (`render/components/meta_strip.rs`) — the same two-tone "anchor · detail"
+/// treatment the assistant round header uses. Because a user turn is the
+/// larger, user-perceived scope, the strip leads with a `▌` gutter rail (accent
+/// tone) before the anchor, giving it a stronger visual anchor than the
+/// in-round band.
 ///
 /// `msg.turn` is the conversation *turn* counter stamped at send time (one
 /// bump per user↔assistant exchange), NOT the tool-round counter shown in the
@@ -308,56 +316,44 @@ pub fn draw_message_body(
                             // Two-tone label, no background band (matches the
                             // round header row in `layout_default`): the turn
                             // anchor is info-tone bold, the time reads as
-                            // muted metadata. Queued messages keep their own
-                            // `⏸ Queued` pending marker (warn tone, italic).
-                            let anchor = if is_queued {
-                                "⏸ Queued".to_string()
-                            } else {
-                                sent_header_anchor(msg, is_queued)
-                            };
-                            let meta = if is_queued {
+                            // muted metadata. Because a user turn is the larger
+                            // user-visible scope, it gets an explicit gutter
+                            // rail before the anchor. Use a filled left half
+                            // block (`▌`) rather than a box-drawing line: it
+                            // reads as a stronger visual guide without looking
+                            // like a border. The rail consumes the same width
+                            // as the old text gap, so `turn N` / `⏸ Queued`
+                            // stay aligned with the message body.
+                            let turn_gutter = if USER_MESSAGE_TEXT_GAP_COLS == 0 {
                                 String::new()
                             } else {
-                                sent_header_meta(msg, is_queued)
+                                format!(
+                                    "▌{}",
+                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS.saturating_sub(1))
+                                )
                             };
-                            let used = USER_MESSAGE_TEXT_GAP_COLS + anchor.width() + meta.width();
-                            let anchor_style = if is_queued {
-                                Style::default()
-                                    .fg(theme.warn())
-                                    .add_modifier(Modifier::ITALIC)
+                            let strip = if is_queued {
+                                MetaStrip::new()
+                                    .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
+                                    .lead(turn_gutter.clone(), MetaTone::Accent)
+                                    .status("⏸ Queued", MetaTone::WarningItalic)
+                                    .fill_tail(theme.surface())
                             } else {
-                                Style::default()
-                                    .fg(theme.info())
-                                    .add_modifier(Modifier::BOLD)
+                                let mut strip = MetaStrip::new()
+                                    .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
+                                    .lead(turn_gutter, MetaTone::Accent)
+                                    .anchor(sent_header_anchor(msg, is_queued))
+                                    .fill_tail(theme.surface());
+                                let meta = sent_header_meta(msg, is_queued);
+                                if msg.turn.is_some() {
+                                    strip = strip.detail(meta);
+                                } else {
+                                    strip = strip.status(meta, MetaTone::Muted);
+                                }
+                                strip
                             };
-                            // Time (and the " · " separator) reads as muted
-                            // metadata, matching every other timestamp in the
-                            // transcript — grey, no bold.
-                            let meta_style = Style::default().fg(theme.muted());
-                            let mut spans = vec![
-                                Span::styled(
-                                    user_gutter.clone(),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                                Span::styled(
-                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                                Span::styled(anchor, anchor_style),
-                                Span::styled(meta, meta_style),
-                                Span::styled(
-                                    padded_tail(user_content_w, used),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                                Span::styled(
-                                    user_gutter.clone(),
-                                    Style::default().bg(theme.surface()),
-                                ),
-                            ];
-                            spans.shrink_to_fit();
-                            let line = Line::from(spans);
                             let rect = Rect::new(area.x, *current_y, area.width, 1);
-                            frame.render_widget(Paragraph::new(line), rect);
+                            strip.render(frame, rect, theme);
                             *current_y += 1;
                         }
                     }

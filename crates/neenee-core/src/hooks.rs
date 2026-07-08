@@ -43,6 +43,28 @@ pub enum HookEventKind {
     /// de-facto turn cap (the ADR-0009 concern). The harness declares no
     /// built-in threshold on this axis; it only provides the trigger point.
     Turn,
+    /// Fires at the *start* of each tool round — after tools are prepared but
+    /// before the model is asked for its next completion. The symmetric partner
+    /// of [`HookEventKind::Turn`] (which fires at round end). Lets a hook
+    /// re-inject context at the round boundary so it lands at the top of the
+    /// model's attention, e.g. to re-anchor the principal's role after a run of
+    /// read-only delegations (anti "role bleed"). Constrained the same way as
+    /// `Turn`: only `Inject` is honoured — `Deny` is ignored so a round-start
+    /// hook cannot gate or cap the turn.
+    RoundStart,
+    /// Fires when the agent is about to block on a permission request (a tool
+    /// with a real `ScopeTarget` needs user approval before it runs). Honours a
+    /// tool-name matcher (so a hook can target e.g. only `bash` requests).
+    /// Constrained: **observe-only** — only `Pass` is honoured; `Deny`/`Inject`
+    /// are ignored so a notification hook cannot gate the prompt or alter the
+    /// transcript. The natural use is fire-and-forget: spawn a desktop
+    /// notification / terminal bell so the user knows the agent is blocked.
+    PermissionRequest,
+    /// Fires when the agent is about to block on an `ask_user` question (the
+    /// model needs the operator's input). Same observe-only constraint as
+    /// [`HookEventKind::PermissionRequest`]. Does not honour a matcher
+    /// (`ask_user` is a single tool).
+    UserQuestion,
 }
 
 impl HookEventKind {
@@ -50,7 +72,10 @@ impl HookEventKind {
     pub fn is_tool_event(self) -> bool {
         matches!(
             self,
-            Self::PreToolUse | Self::PostToolUse | Self::PostToolUseFailure
+            Self::PreToolUse
+                | Self::PostToolUse
+                | Self::PostToolUseFailure
+                | Self::PermissionRequest
         )
     }
 }
@@ -104,6 +129,25 @@ pub enum HookEvent {
         turn: usize,
         consecutive_readonly: u32,
     },
+    /// Fires at the start of each tool round. `round` is the zero-based index of
+    /// the round about to run (so the first round is `0`); `consecutive_readonly`
+    /// is the read-only streak carried in from the previous turn. Only `Inject`
+    /// is honoured (see [`HookEventKind::RoundStart`]).
+    RoundStart {
+        round: usize,
+        consecutive_readonly: u32,
+    },
+    /// The agent is about to block waiting for a permission decision. Observe-
+    /// only (see [`HookEventKind::PermissionRequest`]). Carries the full
+    /// request so a notification hook can render "which tool / what scope".
+    PermissionRequest {
+        request: crate::PermissionRequest,
+    },
+    /// The agent is about to block waiting for the user to answer an
+    /// `ask_user` question. Observe-only (see [`HookEventKind::UserQuestion`]).
+    UserQuestion {
+        request: crate::UserQuestionRequest,
+    },
 }
 
 impl HookEvent {
@@ -119,6 +163,9 @@ impl HookEvent {
             Self::PreCompact => HookEventKind::PreCompact,
             Self::PostCompact => HookEventKind::PostCompact,
             Self::Turn { .. } => HookEventKind::Turn,
+            Self::RoundStart { .. } => HookEventKind::RoundStart,
+            Self::PermissionRequest { .. } => HookEventKind::PermissionRequest,
+            Self::UserQuestion { .. } => HookEventKind::UserQuestion,
         }
     }
 
@@ -129,6 +176,7 @@ impl HookEvent {
             Self::PreToolUse { tool_name, .. }
             | Self::PostToolUse { tool_name, .. }
             | Self::PostToolUseFailure { tool_name, .. } => Some(tool_name),
+            Self::PermissionRequest { request } => Some(&request.tool),
             _ => None,
         }
     }
@@ -152,6 +200,36 @@ pub enum HookOutcome {
     /// round. Honoured on `UserPromptSubmit` (prepended), `Stop`,
     /// `PostToolUse`, and `Turn`. Ignored elsewhere.
     Inject { context: String },
+    /// Temporarily hide the named tools from the model (their schemas are
+    /// dropped and dispatch rejects them) until the [`RestorePoint`] fires,
+    /// where they are re-enabled automatically. Honoured on `PreToolUse`,
+    /// `RoundStart`, and `Turn`. **Not persisted**: scoped disables live only
+    /// in memory and never reach the session store, so they never survive a
+    /// restart and never collide with a user's manual `/tools` toggles (which
+    /// use a separate, persisted mask).
+    ///
+    /// This lets a hook scope the agent's toolset to a scenario — e.g. a
+    /// `PreToolUse` policy hook can drop `bash` for a read-only sub-task and
+    /// have it come back at the round boundary — without the user having to
+    /// manage `/tools` manually.
+    ScopeTools {
+        disable: Vec<String>,
+        restore_at: RestorePoint,
+    },
+}
+
+/// When a [`HookOutcome::ScopeTools`] disable is automatically undone. The
+/// harness clears every scoped disable whose restore point has fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestorePoint {
+    /// Undo at the end of the current tool round (the next `Turn` boundary).
+    /// Good for "narrow the toolset for just this round" policies.
+    RoundEnd,
+    /// Undo when the whole turn ends (the model emits a text reply with no
+    /// tool calls, or the turn otherwise terminates). Good for "narrow the
+    /// toolset for the rest of this user request" policies.
+    TurnEnd,
 }
 
 /// One user-configurable lifecycle hook (ADR-0025). A hook declares the

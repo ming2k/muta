@@ -460,6 +460,30 @@ pub enum InputAction {
     TerminalResized,
 }
 
+impl InputAction {
+    /// Whether this action is a modal-opening command reached by typing a
+    /// slash command into the composer (e.g. `/provider`) — as opposed to a
+    /// keybinding such as Ctrl+R (history) or F1 (help).
+    ///
+    /// These commands consume the composer text (the typed `/cmd`) the same
+    /// way `SendSlash` does, but unlike `SendSlash` they are intercepted
+    /// locally and never forwarded to the harness. The text they consumed is
+    /// therefore not carried on the action and would be lost for input-history
+    /// purposes; the event loop snapshots the composer before dispatch and uses
+    /// this predicate to decide whether to record it.
+    pub fn is_text_modal_command(&self) -> bool {
+        matches!(
+            self,
+            InputAction::OpenProvider
+                | InputAction::OpenPermissions
+                | InputAction::OpenTools
+                | InputAction::OpenMcp
+                | InputAction::OpenSkills
+                | InputAction::OpenConfig
+        )
+    }
+}
+
 /// Insert a literal newline at the cursor position, but only in modals that
 /// accept free-text input. Used by the Alt+Enter and Ctrl+J multi-line
 /// entry bindings (plain Enter sends the message).

@@ -261,6 +261,38 @@ fn context_to_json(ctx: &HookContext) -> String {
             value["turn"] = json!(turn);
             value["consecutive_readonly"] = json!(consecutive_readonly);
         }
+        HookEvent::RoundStart {
+            round,
+            consecutive_readonly,
+        } => {
+            value["round"] = json!(round);
+            value["consecutive_readonly"] = json!(consecutive_readonly);
+        }
+        HookEvent::PermissionRequest { request } => {
+            value["tool"] = json!(request.tool);
+            value["label"] = json!(request.label);
+            value["description"] = json!(request.description);
+            value["scope"] = json!(request.scope);
+            value["arguments"] = json!(request.arguments);
+        }
+        HookEvent::UserQuestion { request } => {
+            // Render the question(s) as plain text so a notification script can
+            // show them without parsing the nested options structure.
+            let summary = request
+                .questions
+                .iter()
+                .map(|q| {
+                    let header = q
+                        .header
+                        .as_deref()
+                        .map(|h| format!("{h}: "))
+                        .unwrap_or_default();
+                    format!("{header}{}", q.question)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            value["questions"] = json!(summary);
+        }
         HookEvent::PreCompact | HookEvent::PostCompact => {}
     }
     serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
@@ -278,6 +310,9 @@ fn event_name(event: &HookEvent) -> &'static str {
         HookEvent::PreCompact => "PreCompact",
         HookEvent::PostCompact => "PostCompact",
         HookEvent::Turn { .. } => "Turn",
+        HookEvent::RoundStart { .. } => "RoundStart",
+        HookEvent::PermissionRequest { .. } => "PermissionRequest",
+        HookEvent::UserQuestion { .. } => "UserQuestion",
     }
 }
 
