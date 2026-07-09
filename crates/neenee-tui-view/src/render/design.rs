@@ -14,6 +14,11 @@ pub(super) const TRANSCRIPT_BODY_LEADING_INDENT: u16 = 2;
 /// Minimum readable width for compact expandable step header rows.
 pub(super) const STEP_MIN_WIDTH: usize = 8;
 
+/// Inner indent for expanded tool-step body content. The transcript band already
+/// carries the outer gutter; this indent aligns label-free tool details with
+/// prose-like body content inside that band.
+pub(super) const TOOL_STEP_BODY_INDENT_COLS: usize = 2;
+
 /// One blank row inserted between transcript items unless a component already
 /// provides its own separator.
 pub(super) const MESSAGE_GAP_ROWS: usize = 1;
@@ -132,6 +137,14 @@ pub(super) const MODAL_TITLE_META_GAP: usize = 2;
 // prose or inside an expanded tool step. These tokens are that contract: the
 // geometry every code band agrees on. Colors live in `theme` (incl. the diff
 // tokens); spacing/gutter live here.
+
+/// Horizontal inset of block-level solid surfaces from the already-inset
+/// transcript band. This keeps markdown code/math bands visually panel-like
+/// without re-applying the global transcript gutter.
+pub(super) const BLOCK_SURFACE_H_INSET: u16 = 2;
+
+/// Columns between the math marker glyph and the rendered math text.
+pub(super) const MATH_MARKER_GAP_COLS: usize = 2;
 
 /// Columns of left padding inside a code band before the line-number gutter.
 /// Markdown and tool-step bands use the same inner left margin so the code

@@ -14,9 +14,9 @@ use crate::selection::{
 };
 
 use super::design::{
-    CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, CODE_BAND_LEFT_INDENT,
-    USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS, USER_MESSAGE_TEXT_GAP_COLS,
-    USER_MESSAGE_TRANSITION_ROWS,
+    BLOCK_SURFACE_H_INSET, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, CODE_BAND_LEFT_INDENT,
+    MATH_MARKER_GAP_COLS, USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS,
+    USER_MESSAGE_TEXT_GAP_COLS, USER_MESSAGE_TRANSITION_ROWS,
 };
 use super::markdown_table::{TableRowInfo, build_table_render, push_table_segment};
 use super::text_layout::{
@@ -843,13 +843,12 @@ pub fn draw_message_body(
             }
             Block::Math { content } => {
                 let math_bg = theme.code_surface();
-                let h_inset: u16 = 2;
-                let band_x = area.x + h_inset;
-                let band_w = area.width.saturating_sub(2 * h_inset).max(1);
+                let band_x = area.x + BLOCK_SURFACE_H_INSET;
+                let band_w = area.width.saturating_sub(2 * BLOCK_SURFACE_H_INSET).max(1);
                 let full_width = band_w as usize;
                 let left_indent = CODE_BAND_LEFT_INDENT;
                 let marker = "∑";
-                let marker_gap = 2usize;
+                let marker_gap = MATH_MARKER_GAP_COLS;
                 let indent = left_indent + marker.width() + marker_gap;
                 let wrap_width = full_width.saturating_sub(indent + 1).max(1);
                 let lines = wrap_text(content, wrap_width);
@@ -935,13 +934,12 @@ pub fn draw_message_body(
                 // line-number gutter, matching opencode's clean look. No
                 // `╭─ ╰─` frame, no per-line `│` rule.
                 let code_bg = theme.code_surface();
-                // The solid-background band is inset from the transcript edges so it
-                // reads as a distinct panel rather than bleeding into the
-                // terminal frame. Content (gutter + code) lives inside the
-                // band; the surrounding cells keep `app_bg`.
-                let h_inset: u16 = 2;
-                let band_x = area.x + h_inset;
-                let band_w = area.width.saturating_sub(2 * h_inset).max(1);
+                // The solid-background band is inset inside the transcript band so
+                // it reads as a distinct panel rather than bleeding into the
+                // surrounding app background. Content (gutter + code) lives inside
+                // the band; the surrounding cells keep `app_bg`.
+                let band_x = area.x + BLOCK_SURFACE_H_INSET;
+                let band_w = area.width.saturating_sub(2 * BLOCK_SURFACE_H_INSET).max(1);
                 let full_width = band_w as usize;
 
                 // Split into logical lines, tracking each one's byte offset

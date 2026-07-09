@@ -684,6 +684,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "flux-text"
+version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
+dependencies = [
+ "flux",
+ "flux-text-sys",
+]
+
+[[package]]
+name = "flux-text-layout"
+version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
+dependencies = [
+ "flux-sys",
+ "flux-text",
+ "flux-text-sys",
+]
+
+[[package]]
+name = "flux-text-sys"
+version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
+dependencies = [
+ "bindgen",
+ "pkg-config",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1701,6 +1729,18 @@ dependencies = [
  "tracing",
  "uuid",
  "yaml_serde",
+]
+
+[[package]]
+name = "neenee-editor"
+version = "0.16.0"
+dependencies = [
+ "flux",
+ "flux-text",
+ "flux-text-layout",
+ "iris",
+ "pkg-config",
+ "unicode-segmentation",
 ]
 
 [[package]]

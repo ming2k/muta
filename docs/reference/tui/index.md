@@ -66,6 +66,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 - [Architecture](architecture.md) — the engine / view / shell layers, the
   `TranscriptView` seam, and the component reuse tiers
 - [Color palette](theme.md) — all `Theme` tokens with RGB values
+- [Transcript spacing](transcript-spacing.md) — spacing ownership rules for transcript layouts and components
 - [Key measurements](layout.md#key-measurements) — indents, margins, scroll steps
 - [Half-block characters](half-block-chars.md) — `╻╹▀▄┃` transition reference
 

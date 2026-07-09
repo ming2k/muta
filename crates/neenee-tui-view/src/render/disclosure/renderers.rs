@@ -26,8 +26,9 @@ use crate::render::text_layout::{
 use crate::render::tools::{ArgLayout, DiffLine, DiffOp, ResultKind, ToolStatus};
 use crate::render::{
     CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, EnvoyBarInfo, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, StickyInfo, TOOL_STEP_BODY_TOP_GAP_ROWS,
-    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, Theme,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, StickyInfo, TOOL_STEP_BODY_INDENT_COLS,
+    TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
+    Theme,
 };
 
 /// Cursor + environment carried through the tool-step body renderers.
@@ -1630,7 +1631,7 @@ pub fn draw_tool_step(
     if expanded {
         let surface = theme.surface();
         let pad = Style::default().bg(surface);
-        let indent = 2usize;
+        let indent = TOOL_STEP_BODY_INDENT_COLS;
         let inner_w = inner_width.saturating_sub(indent);
 
         {

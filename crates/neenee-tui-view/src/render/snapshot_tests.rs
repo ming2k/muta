@@ -18,6 +18,7 @@ use neenee_tui::Rect;
 use crate::document::{MessageKind, TranscriptMessage};
 use crate::layout::LayoutMap;
 use crate::selection::SelectionState;
+use neenee_core::Role;
 
 use super::Theme;
 use super::disclosure::draw_tool_step;
@@ -455,7 +456,7 @@ fn edit_file_diff_renders_from_structured_patch() {
 /// [`render_grid`], this exercises `draw_transcript` so the message-level
 /// spacing between consecutive steps is captured. Backgrounds are omitted:
 /// these tests are about row counts, not palette.
-fn render_transcript_grid(steps: &[TranscriptMessage], width: u16, height: u16) -> String {
+fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u16) -> String {
     use super::{Theme, TranscriptView, draw_transcript};
     use crate::layout::LayoutMap;
 
@@ -468,7 +469,7 @@ fn render_transcript_grid(steps: &[TranscriptMessage], width: u16, height: u16) 
             f,
             &mut layout_map,
             TranscriptView {
-                messages: steps,
+                messages,
                 scroll: 0,
                 selection: &selection,
                 cell_selection: None,
@@ -613,4 +614,135 @@ fn expanded_body_pads_itself_neighbours_stay_flush() {
         ),
     ];
     insta::assert_snapshot!(render_transcript_grid(&steps, 60, 16));
+}
+
+/// A user panel followed by a tool step keeps one explicit blank row between the
+/// panel transition and the step header, so the two shapes never visually stick
+/// together.
+#[test]
+fn user_message_before_tool_step_has_single_separator_row() {
+    let messages = vec![
+        TranscriptMessage::new(Role::User, "inspect files").with_turn(1),
+        tool_step_structured(
+            "read_text",
+            r#"{"path":"src/lib.rs"}"#,
+            neenee_core::ToolOutput::Code {
+                lang: None,
+                text: "pub fn main() {}".into(),
+                start_line: 1,
+                prefix: None,
+                suffix: None,
+            },
+            false,
+        ),
+    ];
+
+    let grid = render_transcript_grid(&messages, 60, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let user_text_idx = rows
+        .iter()
+        .position(|row| row.contains("inspect files"))
+        .expect("user text row must render");
+    let tool_idx = rows
+        .iter()
+        .position(|row| row.contains("Read ") && row.contains('+'))
+        .expect("collapsed tool header must render");
+
+    // User row + one bottom transition row + one blank separator row + header.
+    assert_eq!(
+        tool_idx - user_text_idx,
+        3,
+        "user panel should have exactly one blank row before a following tool step:\n{grid}"
+    );
+    assert!(
+        rows[tool_idx - 1].trim().is_empty(),
+        "row immediately before tool header should be the separator blank row:\n{grid}"
+    );
+}
+
+/// Expanded reasoning traces own only their internal top/block gaps; they do
+/// not append a trailing bottom gap, because layout-level message spacing owns
+/// the gap before the following assistant text.
+#[test]
+fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
+    let mut reasoning = TranscriptMessage::thinking("first thought\n\nsecond thought").with_turn(1);
+    reasoning.pin_thinking_expanded(true);
+    let assistant = TranscriptMessage::new(Role::Assistant, "final answer").with_turn(2);
+    let messages = vec![reasoning, assistant];
+
+    let grid = render_transcript_grid(&messages, 72, 18);
+    let rows: Vec<&str> = grid.lines().collect();
+    let summary_idx = rows
+        .iter()
+        .position(|row| row.contains("Thinking ·"))
+        .expect("reasoning summary must render");
+    let first_idx = rows
+        .iter()
+        .position(|row| row.contains("first thought"))
+        .expect("first reasoning block must render");
+    let second_idx = rows
+        .iter()
+        .position(|row| row.contains("second thought"))
+        .expect("second reasoning block must render");
+    let answer_idx = rows
+        .iter()
+        .position(|row| row.contains("final answer"))
+        .expect("assistant text must render");
+
+    assert_eq!(
+        first_idx - summary_idx,
+        2,
+        "reasoning body should start after one blank top-gap row:\n{grid}"
+    );
+    assert_eq!(
+        second_idx - first_idx,
+        2,
+        "reasoning blocks should be separated by one blank row:\n{grid}"
+    );
+    assert_eq!(
+        answer_idx - second_idx,
+        2,
+        "reasoning trace should have exactly one trailing layout separator before the next message:\n{grid}"
+    );
+}
+
+/// The default layout gives a stamped tool round one leading gap at the top of
+/// the transcript, a one-line round header, then one gap before the first step.
+#[test]
+fn default_round_header_has_single_gap_above_and_below() {
+    let step = tool_step_structured(
+        "read_text",
+        r#"{"path":"a.rs"}"#,
+        neenee_core::ToolOutput::Code {
+            lang: None,
+            text: "x".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(7)
+    .with_attribution("anthropic", "claude-sonnet");
+
+    let grid = render_transcript_grid(&[step], 72, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let round_idx = rows
+        .iter()
+        .position(|row| row.contains("◆ round 7"))
+        .expect("round header must render");
+    let tool_idx = rows
+        .iter()
+        .position(|row| row.contains("Read ") && row.contains('+'))
+        .expect("tool header must render");
+
+    assert!(
+        round_idx > 0 && rows[round_idx - 1].trim().is_empty(),
+        "round header should have one blank leading row at the top of the transcript stream:\n{grid}"
+    );
+    assert_eq!(
+        tool_idx - round_idx,
+        2,
+        "round header should have one blank row below it before the first step:\n{grid}"
+    );
 }
