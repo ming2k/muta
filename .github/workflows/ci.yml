@@ -33,6 +33,25 @@ permissions:
   contents: read
 
 jobs:
+  # First line of defense: the committed Cargo.lock must resolve against
+  # Cargo.toml *without* any local path override. The optics packages (iris,
+  # flux, ...) are git deps in Cargo.toml but get rewritten to source-less
+  # path entries when Cargo.lock is regenerated with this repo's gitignored
+  # .cargo/config.toml patch active — and a lock in that state makes every
+  # later `--locked` step fail with "cannot update the lock file". This job
+  # catches that in ~20s instead of at the first compile step. It needs
+  # network access to fetch the pinned git rev, so it can't use --offline.
+  lockfile:
+    name: Lockfile resolves (--locked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # `cargo fetch --locked` fails (exit 101) if Cargo.lock is out of sync
+      # with Cargo.toml; a clean run proves the lock is committable as-is.
+      - run: cargo fetch --locked
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
