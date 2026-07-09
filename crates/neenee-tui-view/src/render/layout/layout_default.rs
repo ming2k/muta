@@ -45,8 +45,8 @@ pub struct Default;
 
 impl TranscriptLayout for Default {
     fn run(&mut self, stream: &mut Stream<'_, '_>) {
-        let messages_len = stream.messages.len();
-        let mut mi = 0;
+        let messages_len = stream.message_end;
+        let mut mi = stream.message_start;
 
         while mi < messages_len {
             let msg = &stream.messages[mi];
@@ -115,6 +115,7 @@ impl TranscriptLayout for Default {
 
             mi += 1;
         }
+        stream.finish_virtual();
     }
 }
 

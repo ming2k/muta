@@ -74,6 +74,188 @@ impl Strategy {
     }
 }
 
+/// Cached line geometry for a settled transcript. It lets the renderer locate
+/// the chunks intersecting a viewport with binary search, then asks the layout
+/// strategy to draw only those chunks. The index is intentionally discarded on
+/// any transcript/width change by [`super::HeightCache`], so it never guesses
+/// about mutable live output.
+#[derive(Clone)]
+pub struct VirtualLayoutIndex {
+    strategy: Strategy,
+    source_ptr: usize,
+    source_len: usize,
+    chunks: Vec<VirtualChunk>,
+    total_lines: usize,
+}
+
+#[derive(Clone)]
+struct VirtualChunk {
+    message_start: usize,
+    message_end: usize,
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct VirtualWindow {
+    pub message_start: usize,
+    pub message_end: usize,
+    pub prefix_lines: usize,
+    pub skip_rows: usize,
+    pub total_lines: usize,
+}
+
+impl VirtualLayoutIndex {
+    pub fn matches(&self, messages: &[TranscriptMessage], strategy: Strategy) -> bool {
+        self.strategy == strategy
+            && self.source_ptr == messages.as_ptr() as usize
+            && self.source_len == messages.len()
+    }
+
+    pub fn window(&self, scroll: usize, view_height: u16) -> Option<VirtualWindow> {
+        if self.chunks.is_empty() {
+            return None;
+        }
+        let start = self
+            .chunks
+            .partition_point(|chunk| chunk.end_line <= scroll);
+        let start = start.min(self.chunks.len().saturating_sub(1));
+        let viewport_end = scroll.saturating_add(view_height as usize).max(scroll + 1);
+        let mut end = self
+            .chunks
+            .partition_point(|chunk| chunk.start_line < viewport_end);
+        end = end.max(start + 1).min(self.chunks.len());
+        let first = &self.chunks[start];
+        let last = &self.chunks[end - 1];
+        Some(VirtualWindow {
+            message_start: first.message_start,
+            message_end: last.message_end,
+            prefix_lines: first.start_line,
+            skip_rows: scroll.saturating_sub(first.start_line),
+            total_lines: self.total_lines,
+        })
+    }
+}
+
+/// Build an exact index only once every message body has a stable cached
+/// height. While a live tail is still streaming the caller naturally falls
+/// back to the cache-only path; once that tail settles, the next draw upgrades
+/// to a fully virtualized transcript.
+pub fn build_virtual_index(
+    messages: &[TranscriptMessage],
+    cache: &HeightCache,
+    strategy: Strategy,
+) -> Option<VirtualLayoutIndex> {
+    if messages.is_empty() {
+        return None;
+    }
+    let mut chunks = Vec::new();
+    let mut line = 0usize;
+    let mut index = 0usize;
+    while index < messages.len() {
+        let start = index;
+        let height = match strategy {
+            Strategy::Legacy => {
+                let message = &messages[index];
+                let mut height = cached_height(cache, message)?;
+                let next = messages.get(index + 1);
+                let next_is_tool_step =
+                    next.is_some_and(|next| next.is_tool_step() || next.is_envoy_task());
+                let collapsed_tool_into_tool_step = message.is_tool_step()
+                    && message.tool_step_expanded() == Some(false)
+                    && next_is_tool_step;
+                if !collapsed_tool_into_tool_step
+                    && (message.role == neenee_core::Role::User || next.is_some())
+                {
+                    height += MESSAGE_GAP_ROWS;
+                }
+                index += 1;
+                height
+            }
+            Strategy::Default => {
+                let message = &messages[index];
+                if message.is_tool_step()
+                    && message.turn.is_some()
+                    && default_group_start(messages, index)
+                {
+                    let end = default_group_end(messages, index);
+                    // First group owns the one leading blank row. For all later
+                    // groups the prior non-group/group chunk already emitted
+                    // the separating gap, matching `layout_default::Default`.
+                    let mut height = if index == 0 { MESSAGE_GAP_ROWS } else { 0 };
+                    height += 1 + MESSAGE_GAP_ROWS; // header + gap below header
+                    for message in &messages[index..end] {
+                        height += cached_height(cache, message)?;
+                    }
+                    height += MESSAGE_GAP_ROWS;
+                    index = end;
+                    height
+                } else {
+                    let mut height = cached_height(cache, message)?;
+                    let next = messages.get(index + 1);
+                    let next_is_tool_step =
+                        next.is_some_and(|next| next.is_tool_step() || next.is_envoy_task());
+                    let collapsed_tool_into_tool_step = message.is_tool_step()
+                        && message.tool_step_expanded() == Some(false)
+                        && next_is_tool_step;
+                    if !collapsed_tool_into_tool_step
+                        && (message.role == neenee_core::Role::User || next.is_some())
+                    {
+                        height += MESSAGE_GAP_ROWS;
+                    }
+                    index += 1;
+                    height
+                }
+            }
+        };
+        chunks.push(VirtualChunk {
+            message_start: start,
+            message_end: index,
+            start_line: line,
+            end_line: line + height,
+        });
+        line += height;
+    }
+    Some(VirtualLayoutIndex {
+        strategy,
+        source_ptr: messages.as_ptr() as usize,
+        source_len: messages.len(),
+        chunks,
+        total_lines: line,
+    })
+}
+
+fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usize> {
+    cache.get(message.id).map(usize::from)
+}
+
+fn default_group_start(messages: &[TranscriptMessage], index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    let previous = &messages[index - 1];
+    previous.role == neenee_core::Role::User
+        || previous.is_notice()
+        || previous.turn != messages[index].turn
+}
+
+fn default_group_end(messages: &[TranscriptMessage], start: usize) -> usize {
+    let turn = messages[start].turn;
+    let mut end = start;
+    while end < messages.len() {
+        let message = &messages[end];
+        if message.role == neenee_core::Role::User
+            || message.is_notice()
+            || message.turn != turn
+            || !(message.is_tool_step() || message.is_envoy_task() || message.is_thinking())
+        {
+            break;
+        }
+        end += 1;
+    }
+    end
+}
+
 /// The shared render context handed to a layout. Owns the mutable scroll/Y
 /// state and the references a layout needs to paint.
 ///
@@ -99,6 +281,14 @@ pub struct Stream<'a, 'f> {
     pub cell_selection: Option<&'a CellDragInfo>,
     pub hovered_step: Option<usize>,
     pub focused_target: Option<InteractiveTarget>,
+    /// First / exclusive-last message selected by a [`VirtualLayoutIndex`].
+    /// The normal path covers the full slice.
+    pub message_start: usize,
+    pub message_end: usize,
+    /// Exact total stream height from the virtual index. Layout strategies set
+    /// this after painting the selected window, avoiding a trailing walk just
+    /// to rediscover the scroll extent.
+    pub virtual_total_lines: Option<usize>,
 
     // ── mutable scroll / Y accounting ──────────────────────────────────────
     pub current_y: u16,
@@ -119,7 +309,10 @@ impl<'a, 'f> Stream<'a, 'f> {
     pub fn badge(&mut self, _mi: usize) {}
 
     /// Dispatch a single message to its per-kind drawer, honoring the
-    /// height-cache fast path for skippable (plain-text / notice) messages.
+    /// height-cache fast path for every settled message. Running tool/envoy/
+    /// reasoning steps retain their live renderer because their visible height
+    /// can still change; completed expanded steps are safe to cache and can be
+    /// skipped wholesale when fully off-screen.
     /// `content_lines` is advanced by the message's true height; `current_y`
     /// stops advancing once it reaches the viewport bottom.
     pub fn dispatch(&mut self, mi: usize) {
@@ -127,8 +320,16 @@ impl<'a, 'f> Stream<'a, 'f> {
         let viewport_bottom = self.band.y + self.band.height;
 
         let body_before = self.content_lines;
-        let skippable =
-            msg.is_notice() || (!msg.is_envoy_task() && !msg.is_tool_step() && !msg.is_thinking());
+        let skippable = msg.is_notice()
+            || (!msg.is_envoy_task()
+                && if msg.is_tool_step() {
+                    !msg.tool_step_status()
+                        .is_some_and(|status| status.is_running())
+                } else if msg.is_thinking() {
+                    !msg.is_thinking_streaming()
+                } else {
+                    true
+                });
         let cached_height = if skippable {
             self.height_cache.get(msg.id)
         } else {
@@ -247,6 +448,13 @@ impl<'a, 'f> Stream<'a, 'f> {
     /// chrome row (round header) is on-screen before painting it.
     pub fn viewport_bottom(&self) -> u16 {
         self.band.y + self.band.height
+    }
+
+    /// Complete a virtualized pass after the selected chunks have been drawn.
+    pub fn finish_virtual(&mut self) {
+        if let Some(total) = self.virtual_total_lines {
+            self.content_lines = total;
+        }
     }
 }
 

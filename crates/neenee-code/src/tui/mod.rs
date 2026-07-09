@@ -67,6 +67,27 @@ use crate::tui::transcript::{finalize_streaming_reasoning, transcript_messages_f
 
 use neenee_store::session::SessionStore;
 
+/// Whether an inbound response is a high-frequency visual update that can wait
+/// for the active 10fps render heartbeat. The listener still applies it and
+/// marks the UI dirty immediately; it merely avoids waking the event loop for
+/// every token. Starts, ends, errors, permissions, and tool lifecycle changes
+/// remain immediate so the UI never feels unresponsive at a state boundary.
+fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
+    matches!(
+        response,
+        AgentResponse::Round {
+            event: RoundEvent::StreamDelta(_)
+                | RoundEvent::StreamReasoningDelta(_)
+                | RoundEvent::ToolStream { .. }
+                | RoundEvent::Envoy {
+                    event: neenee_core::EnvoyEvent::StreamDelta(_),
+                    ..
+                },
+            ..
+        }
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_tui(
     tx: mpsc::UnboundedSender<AgentRequest>,
@@ -235,11 +256,19 @@ pub async fn run_tui(
         let mut listener_side_id: Option<String> = None;
         while let Some(resp) = rx.recv().await {
             // Stage 3/4: any handled response can change shared state the loop
-            // renders from, so signal a redraw (the flag) and wake the loop's
-            // `select!` immediately (the notify). One pair here covers every
-            // listener mutation (transcript, activity, todos, modals, …).
+            // renders from, so signal a redraw. High-frequency stream deltas
+            // deliberately do not wake the loop one-by-one: while responding,
+            // its 10fps heartbeat coalesces them into a smooth stream without
+            // repeatedly cloning and laying out a long transcript.
             dirty_clone.store(true, Ordering::Release);
-            dirty_notify_clone.notify_one();
+            // A side conversation can receive stream deltas while the primary
+            // activity indicator is idle. In that case there is no 10fps
+            // heartbeat to flush the dirty bit, so retain the immediate wake.
+            let defer_stream_wakeup =
+                is_coalescible_stream_update(&resp) && ir_clone.load(Ordering::SeqCst);
+            if !defer_stream_wakeup {
+                dirty_notify_clone.notify_one();
+            }
             // `/serve` hot-attach: clone the response into the broadcast
             // channel so WebSocket clients see the live stream. No-op when
             // serve is inactive (the lock holds None).
@@ -314,9 +343,16 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::StreamDelta(delta) => {
-                            let mut msgs = buf.write().await;
-                            if let Some(last) = msgs.last_mut() {
+                            let mut msgs = buf.write_streaming().await;
+                            let changed = if let Some(last) = msgs.last_mut() {
                                 last.push_stream(&delta);
+                                Some(last.id)
+                            } else {
+                                None
+                            };
+                            if let Some(id) = changed {
+                                msgs.invalidate_message_height(id);
+                                msgs.record_text_delta(id, delta);
                             }
                         }
                         RoundEvent::StreamEnd(final_content) => {
@@ -369,14 +405,18 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::StreamReasoningDelta(delta) => {
-                            let mut msgs = buf.write().await;
-                            if let Some(last) =
+                            // Reasoning traces do not have a `HeightCache`
+                            // entry, so their high-frequency deltas can retain
+                            // the ordinary text-message entries unchanged.
+                            let mut msgs = buf.write_streaming().await;
+                            let changed = if let Some(last) =
                                 msgs.last_mut().filter(|message| message.is_thinking())
                             {
                                 last.push_stream(&delta);
                                 if let MessageKind::Thinking { content, .. } = &mut last.kind {
                                     content.push_str(&delta);
                                 }
+                                Some(last.id)
                             } else {
                                 // StreamStart inserts an empty assistant placeholder before
                                 // the first reasoning delta. Reasoning renders as its own
@@ -393,7 +433,7 @@ pub async fn run_tui(
                                 }
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
-                                let mut thinking = TranscriptMessage::thinking(delta)
+                                let mut thinking = TranscriptMessage::thinking(delta.clone())
                                     .with_attribution(provider, model);
                                 // A reasoning trace's default disclosure honors the
                                 // `[tui.default_expanded] thinking` config (collapsed by
@@ -405,6 +445,12 @@ pub async fn run_tui(
                                 ));
                                 msgs.push(thinking);
                                 reasoning_start = Some(std::time::Instant::now());
+                                None
+                            };
+                            if let Some(id) = changed {
+                                msgs.record_reasoning_delta(id, delta);
+                            } else {
+                                msgs.require_transcript_snapshot();
                             }
                         }
                         RoundEvent::StreamReasoningEnd(content) => {
@@ -564,11 +610,15 @@ pub async fn run_tui(
                             // Live partial output from a running tool (e.g. bash
                             // stdout). Accumulate into the running step so it updates
                             // in place instead of freezing on a spinner.
-                            let mut msgs = buf.write().await;
-                            if !msgs
+                            // Tool steps are not height-cached, so do not evict
+                            // the cached plain-text history for every stdout line.
+                            let mut msgs = buf.write_streaming().await;
+                            let applied = msgs
                                 .iter_mut()
-                                .any(|message| message.push_tool_stream(&id, &stream))
-                            {
+                                .any(|message| message.push_tool_stream(&id, &stream));
+                            if applied {
+                                msgs.record_tool_stream(id, stream);
+                            } else {
                                 // Unknown id: drop silently — the matching ToolCall may
                                 // have been dropped with an aborted turn.
                             }
@@ -612,13 +662,23 @@ pub async fn run_tui(
                                 }
                                 _ => {}
                             }
-                            let mut msgs = buf.write().await;
-                            if let Some(message) = msgs
-                        .iter_mut()
-                        .find(|m| m.is_tool_step() && matches!(&m.kind, crate::tui::document::MessageKind::ToolStep { id, .. } if id == &parent_call_id))
-                    {
-                        message.push_envoy_event(&event);
-                    }
+                            // Nested assistant deltas mutate a child of the
+                            // enclosing tool step. Like top-level tool streams,
+                            // they have no standalone height-cache entry.
+                            let mut msgs =
+                                if matches!(&event, neenee_core::EnvoyEvent::StreamDelta(_)) {
+                                    buf.write_streaming().await
+                                } else {
+                                    buf.write().await
+                                };
+                            let applied = msgs
+                                .iter_mut()
+                                .find(|m| m.is_tool_step() && matches!(&m.kind, crate::tui::document::MessageKind::ToolStep { id, .. } if id == &parent_call_id))
+                                .is_some_and(|message| message.push_envoy_event(&event));
+                            if applied && matches!(&event, neenee_core::EnvoyEvent::StreamDelta(_))
+                            {
+                                msgs.record_envoy_event(parent_call_id, event);
+                            }
                         }
                         RoundEvent::PermissionRequest(request) => {
                             // A single model response can carry several write tool

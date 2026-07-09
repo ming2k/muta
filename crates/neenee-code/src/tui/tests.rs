@@ -1,5 +1,5 @@
 use super::*;
-use neenee_core::{Message, Role, ToolCall};
+use neenee_core::{AgentResponse, Message, Role, RoundEvent, ToolCall};
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -19,10 +19,60 @@ use crate::tui::selection::{SelectionDrag, SelectionState};
 use crate::tui::transcript::{
     finalize_streaming_reasoning, transcript_message_from_core, transcript_messages_from_core,
 };
+use crate::tui::versioned::{TranscriptPatch, TranscriptUpdate};
 use crate::tui::{ActivityTab, Modal};
 use neenee_core::{AgentRequest, ProviderPickerSnapshot};
 
 use std::collections::HashMap;
+
+#[test]
+fn only_high_frequency_stream_updates_are_coalesced() {
+    let stream_delta = AgentResponse::Round {
+        session_id: "session".to_string(),
+        event: RoundEvent::StreamDelta("hello".to_string()),
+    };
+    let tool_stream = AgentResponse::Round {
+        session_id: "session".to_string(),
+        event: RoundEvent::ToolStream {
+            id: "call".to_string(),
+            stream: neenee_core::ToolStream::Stdout("line\n".to_string()),
+        },
+    };
+    let stream_start = AgentResponse::Round {
+        session_id: "session".to_string(),
+        event: RoundEvent::StreamStart,
+    };
+    let stream_end = AgentResponse::Round {
+        session_id: "session".to_string(),
+        event: RoundEvent::StreamEnd("done".to_string()),
+    };
+
+    assert!(is_coalescible_stream_update(&stream_delta));
+    assert!(is_coalescible_stream_update(&tool_stream));
+    assert!(!is_coalescible_stream_update(&stream_start));
+    assert!(!is_coalescible_stream_update(&stream_end));
+}
+
+#[test]
+fn transcript_patch_updates_only_the_live_message() {
+    let mut messages = vec![
+        TranscriptMessage::new(Role::Assistant, "frozen history"),
+        TranscriptMessage::new(Role::Assistant, ""),
+    ];
+    let history_id = messages[0].id;
+    let live_id = messages[1].id;
+
+    assert!(crate::tui::event_loop::apply_transcript_patch(
+        &mut messages,
+        TranscriptPatch::Updates(vec![TranscriptUpdate::TextDelta {
+            message_id: live_id,
+            delta: "live tail".to_string(),
+        }]),
+    ));
+    assert_eq!(messages[0].id, history_id);
+    assert_eq!(messages[0].raw, "frozen history");
+    assert_eq!(messages[1].raw, "live tail");
+}
 
 #[test]
 fn restored_history_hides_harness_messages() {

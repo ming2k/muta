@@ -217,15 +217,16 @@ pub struct TranscriptView<'a> {
 /// the message's stable [`TranscriptMessage::id`](crate::document::TranscriptMessage::id).
 ///
 /// Correctness rests on one invariant, enforced by the caller: the cache is
-/// cleared whenever the transcript could have changed (any `messages_version`
-/// bump) and whenever the wrap width changes ([`Self::prepare`]). So a cached
-/// height is only ever consulted while the message's content **and** the
+/// invalidated for every changed message (or cleared for a structural change)
+/// and whenever the wrap width changes ([`Self::prepare`]). So a cached height
+/// is only ever consulted while the message's content **and** the
 /// layout width are identical to when it was measured — making the cached row
 /// count exactly reproduce a fresh layout.
 #[derive(Default)]
 pub struct HeightCache {
     width: u16,
     heights: std::collections::HashMap<u64, u16>,
+    virtual_index: Option<layout::VirtualLayoutIndex>,
 }
 
 impl HeightCache {
@@ -235,6 +236,7 @@ impl HeightCache {
     pub fn prepare(&mut self, width: u16) {
         if self.width != width {
             self.heights.clear();
+            self.virtual_index = None;
             self.width = width;
         }
     }
@@ -246,12 +248,52 @@ impl HeightCache {
 
     /// Record the freshly-measured height for message `id`.
     pub fn set(&mut self, id: u64, height: u16) {
-        self.heights.insert(id, height);
+        if self.heights.insert(id, height) != Some(height) {
+            self.virtual_index = None;
+        }
     }
 
     /// Drop every entry. Called when the transcript mutates (the version moved).
     pub fn clear(&mut self) {
         self.heights.clear();
+        self.virtual_index = None;
+    }
+
+    /// Drop only the messages whose wrapped height changed. Streaming modifies
+    /// the live tail one message at a time; retaining the frozen history is
+    /// what lets a long transcript keep taking the off-screen fast path while
+    /// that tail grows.
+    pub fn invalidate_messages(&mut self, ids: impl IntoIterator<Item = u64>) {
+        let mut changed = false;
+        for id in ids {
+            changed |= self.heights.remove(&id).is_some();
+        }
+        if changed {
+            self.virtual_index = None;
+        }
+    }
+
+    /// Return the exact message chunks that intersect the viewport when every
+    /// settled message height is known. The index is built once after a stable
+    /// transcript is measured; later frames use binary search and only draw
+    /// the selected chunks.
+    pub fn virtual_window(
+        &mut self,
+        messages: &[TranscriptMessage],
+        strategy: layout::Strategy,
+        scroll: usize,
+        view_height: u16,
+    ) -> Option<layout::VirtualWindow> {
+        if self
+            .virtual_index
+            .as_ref()
+            .is_none_or(|index| !index.matches(messages, strategy))
+        {
+            self.virtual_index = layout::build_virtual_index(messages, self, strategy);
+        }
+        self.virtual_index
+            .as_ref()
+            .and_then(|index| index.window(scroll, view_height))
     }
 }
 
@@ -472,11 +514,14 @@ pub fn draw_transcript(
     let band = transcript_band_rect(transcript_area);
     let mut current_y = band.y;
     // Account for scroll. Owned by the layout `Stream` once the loop runs; not
-    // mutated locally here, so it is not `mut`.
-    let skip_rows = scroll as usize;
+    // mutated locally here unless a virtual index selects a later chunk.
+    let mut skip_rows = scroll as usize;
     // Total stream height, counted independently of the viewport clip so the
     // app loop can follow the bottom.
     let mut content_lines: usize = 0;
+    let mut message_start = 0usize;
+    let mut message_end = messages.len();
+    let mut virtual_total_lines = None;
     // Expanded steps collected during the pass, for the sticky pinned header.
     let mut sticky_steps: Vec<StickyStep> = Vec::new();
 
@@ -501,6 +546,16 @@ pub fn draw_transcript(
         // advanced from their cached height instead of being re-wrapped.
         height_cache.prepare(band.width);
 
+        if let Some(window) =
+            height_cache.virtual_window(messages, layout, scroll as usize, band.height)
+        {
+            message_start = window.message_start;
+            message_end = window.message_end;
+            content_lines = window.prefix_lines;
+            skip_rows = window.skip_rows;
+            virtual_total_lines = Some(window.total_lines);
+        }
+
         // Delegate message arrangement to the selected layout strategy. The
         // `Stream` carries every piece of shared render state (scroll/Y
         // accounting, layout map, height cache, theme, hover/focus) and
@@ -519,6 +574,9 @@ pub fn draw_transcript(
             cell_selection,
             hovered_step,
             focused_target,
+            message_start,
+            message_end,
+            virtual_total_lines,
             current_y,
             skip_rows,
             content_lines,
@@ -1076,6 +1134,29 @@ mod tests {
         );
         // The skip path must actually have been reachable (cache populated).
         assert!(cache.get(messages[0].id).is_some());
+    }
+
+    #[test]
+    fn virtual_index_selects_only_chunks_intersecting_the_viewport() {
+        let messages = (0..4)
+            .map(|i| TranscriptMessage::new(neenee_core::Role::Assistant, format!("m{i}")))
+            .collect::<Vec<_>>();
+        let mut cache = HeightCache::default();
+        cache.prepare(80);
+        // Four-line bodies plus a one-row gap after every message except the
+        // last: chunks begin at 0, 5, 10, and 15.
+        for message in &messages {
+            cache.set(message.id, 4);
+        }
+
+        let window = cache
+            .virtual_window(&messages, crate::render::layout::Strategy::Default, 6, 3)
+            .expect("all message heights are cached");
+        assert_eq!(window.message_start, 1);
+        assert_eq!(window.message_end, 2);
+        assert_eq!(window.prefix_lines, 5);
+        assert_eq!(window.skip_rows, 1);
+        assert_eq!(window.total_lines, 19);
     }
 
     #[test]

@@ -13,8 +13,8 @@ pub struct Legacy;
 
 impl TranscriptLayout for Legacy {
     fn run(&mut self, stream: &mut Stream<'_, '_>) {
-        let messages_len = stream.messages.len();
-        for mi in 0..messages_len {
+        let messages_len = stream.message_end;
+        for mi in stream.message_start..messages_len {
             let msg = &stream.messages[mi];
 
             // Per-turn label hook (currently a no-op — the model attribution
@@ -46,5 +46,6 @@ impl TranscriptLayout for Legacy {
                 stream.message_gap();
             }
         }
+        stream.finish_virtual();
     }
 }

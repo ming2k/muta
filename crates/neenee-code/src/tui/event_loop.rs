@@ -26,7 +26,7 @@ use crate::tui::clipboard;
 use crate::tui::clipboard_ops;
 use crate::tui::completion::CompletionKind;
 use crate::tui::composer_attachments;
-use crate::tui::document::{NoticeSeverity, TranscriptMessage, UserMessageOrigin};
+use crate::tui::document::{MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin};
 use crate::tui::input::{self};
 use crate::tui::interaction::{self, ClickTarget};
 use crate::tui::layout::{InteractiveTarget, InteractiveTargetKind, LayoutMap};
@@ -36,7 +36,7 @@ use crate::tui::selection::{
     inclusive_grapheme_end,
 };
 use crate::tui::step_interaction::StepKind;
-use crate::tui::versioned::Versioned;
+use crate::tui::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate, Versioned};
 use crate::tui::{ActivityTab, App, CaretOwner, Modal, Recess};
 
 use neenee_core::AgentResponse;
@@ -51,6 +51,80 @@ pub(super) fn now_epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or_default()
+}
+
+/// Apply only the cache invalidation actually caused by the most recent
+/// transcript mutation. A streaming assistant tail is the common long-session
+/// case: invalidating that one id preserves the measured heights of every
+/// earlier message. Structural/unknown writes remain conservatively global.
+fn apply_height_invalidation(cache: &mut render::HeightCache, invalidation: HeightInvalidation) {
+    match invalidation {
+        HeightInvalidation::None => {}
+        HeightInvalidation::Messages(ids) => cache.invalidate_messages(ids),
+        HeightInvalidation::All => cache.clear(),
+    }
+}
+
+/// Replay high-frequency stream changes into the app-owned transcript. Returns
+/// `false` when the local copy cannot safely apply the patch, making the caller
+/// fall back to a full snapshot. The fallback preserves correctness across a
+/// session replacement, missed update, or unexpected event ordering; ordinary
+/// text/tool streaming stays on this cheap path.
+pub(super) fn apply_transcript_patch(
+    messages: &mut [TranscriptMessage],
+    patch: TranscriptPatch,
+) -> bool {
+    let updates = match patch {
+        TranscriptPatch::None => return true,
+        TranscriptPatch::Replace => return false,
+        TranscriptPatch::Updates(updates) => updates,
+    };
+
+    for update in updates {
+        let applied = match update {
+            TranscriptUpdate::TextDelta { message_id, delta } => {
+                let Some(message) = messages
+                    .iter_mut()
+                    .rfind(|message| message.id == message_id)
+                    .filter(|message| matches!(message.kind, MessageKind::Text))
+                else {
+                    return false;
+                };
+                message.push_stream(&delta);
+                true
+            }
+            TranscriptUpdate::ReasoningDelta { message_id, delta } => {
+                let Some(message) = messages
+                    .iter_mut()
+                    .rfind(|message| message.id == message_id)
+                    .filter(|message| message.is_thinking())
+                else {
+                    return false;
+                };
+                message.push_stream(&delta);
+                if let MessageKind::Thinking { content, .. } = &mut message.kind {
+                    content.push_str(&delta);
+                    true
+                } else {
+                    false
+                }
+            }
+            TranscriptUpdate::ToolStream { id, stream } => messages
+                .iter_mut()
+                .any(|message| message.push_tool_stream(&id, &stream)),
+            TranscriptUpdate::EnvoyEvent {
+                parent_call_id,
+                event,
+            } => messages
+                .iter_mut()
+                .find(|message| message.tool_step_call_id() == Some(parent_call_id.as_str()))
+                .is_some_and(|message| message.push_envoy_event(&event)),
+        };
+        if !applied {
+            return false;
+        }
+    }
+    true
 }
 
 pub(super) struct UiRuntime {
@@ -669,13 +743,15 @@ pub(super) async fn run_app_loop(
         let messages_version = runtime.messages.version();
         let transcript_changed = messages_version != app.messages_version;
         if transcript_changed {
-            app.messages = runtime.messages.read().await.clone();
+            let patch = runtime.messages.take_transcript_patch();
+            if !apply_transcript_patch(&mut app.messages, patch) {
+                app.messages = runtime.messages.read().await.clone();
+            }
             app.messages_version = messages_version;
-            // The transcript changed, so cached per-message heights may be
-            // stale; drop them. While the user is merely typing (no transcript
-            // mutation) this is skipped, keeping the height cache warm so the
-            // render pass can skip re-wrapping off-screen messages.
-            app.layout_height_cache.clear();
+            apply_height_invalidation(
+                &mut app.layout_height_cache,
+                runtime.messages.take_height_invalidation(),
+            );
         }
         // Mirror the side buffer for the `/btw` banner (ADR-0017), likewise
         // gated on its version so it is cloned only when it changes — even
@@ -683,11 +759,17 @@ pub(super) async fn run_app_loop(
         // primary transcript.
         let side_messages_version = runtime.side_messages.version();
         if side_messages_version != app.side_messages_version {
-            app.side_messages = runtime.side_messages.read().await.clone();
+            let patch = runtime.side_messages.take_transcript_patch();
+            if !apply_transcript_patch(&mut app.side_messages, patch) {
+                app.side_messages = runtime.side_messages.read().await.clone();
+            }
             app.side_messages_version = side_messages_version;
             // The side view shares the same height cache (keyed by message id),
-            // so a side-buffer change invalidates it too.
-            app.layout_height_cache.clear();
+            // so consume its targeted invalidations too.
+            apply_height_invalidation(
+                &mut app.layout_height_cache,
+                runtime.side_messages.take_height_invalidation(),
+            );
         }
         app.parent_status = *runtime.parent_status.lock().await;
         // Drain a pending side-view transition (enter/leave `/btw`).

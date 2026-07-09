@@ -14,7 +14,7 @@ use crate::blobs::BlobStore;
 use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
-use neenee_core::{InjectionKind, InjectionOrigin, Message, Provider, Pursuit, Role};
+use neenee_core::{InjectionKind, InjectionOrigin, Message, Provider, Pursuit, Role, count_tokens};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1813,6 +1813,48 @@ pub fn select_compaction(
     })
 }
 
+/// Choose the deepest coherent compaction that leaves room for the checkpoint
+/// summary inside the configured working-memory target. The configured number
+/// of preserved turns is still preferred, but on a large-context model it must
+/// not make the absolute active-window ceiling ineffective.
+fn select_compaction_for_target(
+    messages: &[Message],
+    preserve_turns: usize,
+    target_tokens: usize,
+) -> Option<CompactionSelection> {
+    let complete_turns = messages
+        .iter()
+        .filter(|message| {
+            message.role == Role::User
+                && !message.content.starts_with("[Conversation checkpoint]")
+                && !message.is_command_echo()
+        })
+        .count();
+    // Keep the current/latest real turn verbatim. If that one turn alone is
+    // enormous it can exceed a soft target, but the projection never silently
+    // truncates the user's current request.
+    let maximum = preserve_turns.min(complete_turns.saturating_sub(1)).max(1);
+    let tail_budget = target_tokens.saturating_mul(3) / 4;
+    let mut fallback = None;
+    for turns in (1..=maximum).rev() {
+        let selection = select_compaction(messages, turns)?;
+        if estimate_tokens(&selection.tail) <= tail_budget {
+            return Some(selection);
+        }
+        fallback = Some(selection);
+    }
+    fallback
+}
+
+/// Allocate the remaining working-memory budget to the checkpoint after the
+/// verbatim tail is accounted for. A small floor preserves a useful task state
+/// even when a recent tail is unusually large.
+fn summary_token_budget(target_tokens: usize, tail: &[Message]) -> usize {
+    target_tokens
+        .saturating_sub(estimate_tokens(tail))
+        .max(2_000)
+}
+
 /// Character budget for the compaction summary, derived from the post-
 /// compaction token target. The summary may fill the target (the preserved
 /// tail sits alongside it), bounded to a sane range so huge windows do not
@@ -1936,12 +1978,16 @@ pub fn compact_messages(
     preserve_turns: usize,
 ) -> Option<ContextProjectionResult> {
     let before_chars = estimate_bytes(messages);
-    let selection = select_compaction(messages, preserve_turns)?;
-    let budget_chars = summary_char_budget(target_tokens);
-    let summary = build_excerpt_summary(
-        &selection.archived,
-        budget_chars,
-        selection.previous_summary.as_deref(),
+    let selection = select_compaction_for_target(messages, preserve_turns, target_tokens)?;
+    let summary_tokens = summary_token_budget(target_tokens, &selection.tail);
+    let budget_chars = summary_char_budget(summary_tokens);
+    let summary = truncate_summary_to_token_budget(
+        build_excerpt_summary(
+            &selection.archived,
+            budget_chars,
+            selection.previous_summary.as_deref(),
+        ),
+        summary_tokens,
     );
     Some(build_compaction_result(before_chars, selection, summary))
 }
@@ -2198,11 +2244,13 @@ pub async fn run_compaction(
 ) -> Result<Option<ContextProjectionResult>, String> {
     let before_chars = estimate_bytes(history);
     let before_tokens = estimate_tokens(history);
-    let Some(selection) = select_compaction(history, preserve_turns) else {
+    let Some(selection) = select_compaction_for_target(history, preserve_turns, target_tokens)
+    else {
         return Ok(None);
     };
 
-    let budget_chars = summary_char_budget(target_tokens);
+    let summary_tokens = summary_token_budget(target_tokens, &selection.tail);
+    let budget_chars = summary_char_budget(summary_tokens);
     let summary = match provider.as_ref() {
         Some(provider) => {
             match summarize_with_provider(
@@ -2235,6 +2283,7 @@ pub async fn run_compaction(
         ),
     };
 
+    let summary = truncate_summary_to_token_budget(summary, summary_tokens);
     let result = build_compaction_result(before_chars, selection, summary);
     tracing::debug!(
         before_chars,
@@ -2256,6 +2305,32 @@ fn truncate_utf8(text: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &text[..end]
+}
+
+/// Enforce the allocated checkpoint budget even when a summarizing provider
+/// ignores its requested length. The estimator is the same one that drives
+/// projection thresholds, so the active working window has one consistent
+/// unit of account.
+fn truncate_summary_to_token_budget(text: String, max_tokens: usize) -> String {
+    if count_tokens(&text).max(0) as usize <= max_tokens {
+        return text;
+    }
+    let boundaries = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect::<Vec<_>>();
+    let mut low = 0usize;
+    let mut high = boundaries.len().saturating_sub(1);
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if count_tokens(&text[..boundaries[middle]]).max(0) as usize <= max_tokens {
+            low = middle;
+        } else {
+            high = middle.saturating_sub(1);
+        }
+    }
+    text[..boundaries[low]].trim_end().to_string()
 }
 
 /// Diagnostic scan of stored session files. When `project_root` is `None`
@@ -3415,6 +3490,36 @@ mod tests {
             Message::new(neenee_core::Role::Assistant, "answer"),
         ];
         assert!(compact_messages(&messages, 10_000, 1).is_none());
+    }
+
+    #[test]
+    fn compaction_reduces_preserved_tail_to_honor_working_memory_target() {
+        let mut messages = Vec::new();
+        for turn in 0..4 {
+            let body = format!("turn-{turn} {}", "word ".repeat(200));
+            messages.push(Message::new(Role::User, body.clone()));
+            messages.push(Message::new(Role::Assistant, body));
+        }
+
+        // Three complete turns are requested, but that would consume almost
+        // all of this 800-token target. The selector keeps one recent turn so
+        // a checkpoint still has room to carry durable task state.
+        let selection = select_compaction_for_target(&messages, 3, 800).unwrap();
+        assert_eq!(
+            selection
+                .tail
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .count(),
+            1
+        );
+        assert!(estimate_tokens(&selection.tail) <= 600);
+    }
+
+    #[test]
+    fn summary_truncation_respects_the_projection_token_unit() {
+        let summary = truncate_summary_to_token_budget("中".repeat(400), 100);
+        assert!(count_tokens(&summary) <= 100);
     }
 
     #[test]
