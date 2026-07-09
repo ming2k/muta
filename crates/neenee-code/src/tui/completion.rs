@@ -5,7 +5,7 @@
 
 use crate::startup::BuiltinCmd;
 use crate::tui::App;
-pub use neenee_tui_view::completion::{Completion, CompletionKind};
+pub use neenee_tui_view::completion::{Completion, CompletionItemKind, CompletionKind};
 
 // The built-in slash-command vocabulary (names + descriptions) lives in ONE
 // place: `startup::BuiltinCmd::ALL`. Completion, `/help`, and the dispatch
@@ -170,6 +170,141 @@ pub(super) fn path_query_match(path: &str, query: &str) -> bool {
     }
 }
 
+/// Whether a `@`-mention query is an *explicit* path prefix that should be
+/// resolved against the real filesystem (and expanded to an absolute path)
+/// rather than filtered against the recursive project scan. Covers the
+/// conventions shells and editors use:
+/// - `../` / `..` — parent of the project root
+/// - `./` / `.`   — explicit current dir (rare, but unambiguous)
+/// - `~/` / `~`   — the user's home directory
+/// - `/`          — filesystem root
+///
+/// A plain relative segment like `src/` is NOT explicit and keeps using the
+/// project scan, so the common case is unaffected.
+pub(super) fn is_explicit_path_prefix(query: &str) -> bool {
+    query.starts_with("../")
+        || query == ".."
+        || query.starts_with("./")
+        || query == "."
+        || query.starts_with("~/")
+        || query == "~"
+        || query.starts_with('/')
+}
+
+/// Expand an explicit-path query into `(absolute_dir, name_prefix)`: the
+/// directory whose immediate children we should list (absolute, canonicalized
+/// where possible so candidates render as clean absolute paths) and the
+/// filename fragment the user is still typing. Splits the query at its last
+/// `/`; the directory portion is resolved against the matching base — `~` →
+/// home, `/` → root, `.`/`..` → the supplied project `cwd` — and the trailing
+/// segment becomes the prefix filter. `None` only when the `~` base cannot be
+/// resolved at all.
+///
+/// Examples (cwd `/proj`):
+/// - `../src/fo` → (`/src`, `"fo"`)
+/// - `~/notes/a` → (`<home>/notes`, `"a"`)
+/// - `/etc/h`     → (`/etc`, `"h"`)
+pub(super) fn resolve_explicit_dir(
+    query: &str,
+    cwd: &std::path::Path,
+) -> Option<(std::path::PathBuf, String)> {
+    use std::path::PathBuf;
+
+    // The base the leading prefix anchors to, plus the remainder of the query
+    // that still travels with it (e.g. `../src/fo` → base cwd, remainder
+    // `../src/fo`; `~/notes/a` → base home, remainder `notes/a`).
+    let (base, remainder): (PathBuf, &str) =
+        if let Some(rest) = query.strip_prefix("~/").or_else(|| query.strip_prefix("~")) {
+            let home = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+            (home.unwrap_or_default(), rest)
+        } else if let Some(rest) = query.strip_prefix('/') {
+            (PathBuf::from("/"), rest)
+        } else {
+            // `../`, `./`, bare `..`/`.` — resolve relative to the project root
+            // captured at startup (NOT the live process cwd, which can drift).
+            (cwd.to_path_buf(), query)
+        };
+
+    // Split the remainder into its directory portion + trailing name prefix.
+    // `../src/fo` → dir `../src`, prefix `fo`. A remainder with no `/` (e.g.
+    // `@~foo` after stripping `~`) means everything is the prefix and the
+    // directory is just the base.
+    let last_sep = remainder.rfind('/');
+    let dir = match last_sep {
+        Some(idx) => base.join(&remainder[..=idx]),
+        None => base,
+    };
+    let name_prefix = match last_sep {
+        Some(idx) => remainder[idx + 1..].to_string(),
+        None => remainder.to_string(),
+    };
+
+    // Canonicalize so the candidates we render are clean absolute paths with
+    // no `..`/`.` segments. Fall back to the raw join when canonicalization
+    // fails (e.g. the parent dir is unreadable) rather than dropping the menu.
+    let canonical = dir.canonicalize().unwrap_or(dir);
+    Some((canonical, name_prefix))
+}
+
+/// Build a project-relative [`Completion`] for a cached scan entry `label`.
+/// `at_start`/`cursor_end` are the inclusive `(@..cursor)` byte range; the
+/// replacement covers only the path portion (after the `@`). Directory labels
+/// (trailing `/`) keep the `@` so the popup can descend; files drop the `@`
+/// on accept since the trigger has served its purpose.
+pub(super) fn path_completion(label: &str, at_start: usize, cursor_end: usize) -> Completion {
+    let is_dir = label.ends_with('/');
+    Completion {
+        label: label.to_string(),
+        description: String::new(),
+        replace_start: at_start + 1,
+        replace_end: cursor_end,
+        kind: if is_dir {
+            CompletionItemKind::PathDir
+        } else {
+            CompletionItemKind::PathFile
+        },
+    }
+}
+
+/// Build an absolute-path [`Completion`] for an explicit-path entry. Because
+/// the user asked to descend the real filesystem, every candidate is terminal
+/// on accept (the absolute path is concrete): the `@` trigger is dropped and,
+/// for files, a trailing space is appended by the accept path. All explicit
+/// candidates share [`CompletionItemKind::PathExplicit`]; directories keep a
+/// trailing `/` label only for display.
+pub(super) fn path_completion_abs(
+    label: &str,
+    at_start: usize,
+    cursor_end: usize,
+    is_dir: bool,
+) -> Completion {
+    let label = if is_dir {
+        format!("{}/", label.trim_end_matches('/'))
+    } else {
+        label.to_string()
+    };
+    Completion {
+        label,
+        description: String::new(),
+        replace_start: at_start + 1,
+        replace_end: cursor_end,
+        kind: CompletionItemKind::PathExplicit,
+    }
+}
+
+/// Stable ordering for path completions: directories first (alphabetic), then
+/// files (alphabetic), case-insensitively so `README.md`/`readme.md` stay
+/// adjacent on case-insensitive filesystems. Mirrors the scan sort.
+pub(super) fn sort_path_completions(comps: &mut [Completion]) {
+    comps.sort_by(|a, b| {
+        let a_dir = a.label.ends_with('/');
+        let b_dir = b.label.ends_with('/');
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+    });
+}
+
 /// Pure core of [`App::active_mention_range`]. Given the input bytes and a
 /// byte offset sitting at the caret, return the inclusive `(start, end)` range
 /// of the `@mention` token the caret is inside, or `None` when no token is
@@ -299,6 +434,16 @@ impl App {
 
         // Inline `@path` file mention completion.
         if let Some(range) = self.active_mention_range() {
+            let (at_start, cursor_end) = range;
+            // The path text after the `@` trigger.
+            let query = &self.input[at_start + 1..cursor_end];
+            // Explicit path prefixes (`@../`, `@./`, `@~/`, `@/`) resolve
+            // against the real filesystem and expand to absolute paths, so
+            // the user can mention files outside the project scan (req: `@`
+            // should support `@../`-style completion, expanded to absolute).
+            if is_explicit_path_prefix(query) {
+                return self.enumerate_explicit_path_completions(range);
+            }
             return self.enumerate_path_completions(range);
         }
 
@@ -341,22 +486,58 @@ impl App {
             .iter()
             .filter(|p| path_query_match(p, &after_at))
             .take(MAX_PATH_COMPLETIONS)
-            .map(|p| Completion {
-                label: p.clone(),
-                description: String::new(),
-                replace_start: at_start + 1,
-                replace_end: cursor_end,
-            })
+            .map(|p| path_completion(p, at_start, cursor_end))
             .collect();
         // path_query_match + scan already sort, but the take() may have
         // shuffled entries between filter phases; re-sort for stability.
-        comps.sort_by(|a, b| {
-            let a_dir = a.label.ends_with('/');
-            let b_dir = b.label.ends_with('/');
-            b_dir
-                .cmp(&a_dir)
-                .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
-        });
+        sort_path_completions(&mut comps);
+        comps
+    }
+
+    /// Enumerate filesystem entries for an **explicit** path prefix — one
+    /// starting with `../`, `./`, `~/`, or `/`. Unlike the project-scan
+    /// pipeline, this reads the real directory at the resolved prefix and
+    /// expands candidates to absolute paths, so the user can mention files
+    /// *outside* the project tree (the project scan only covers cwd
+    /// descendants). Every candidate is terminal on accept (the absolute path
+    /// is concrete): the `@` trigger is dropped and, for files, a trailing
+    /// space is appended by the accept path — matching the requirement that
+    /// an explicit `@../`-style mention expand to a clean absolute path.
+    fn enumerate_explicit_path_completions(
+        &mut self,
+        mention_range: (usize, usize),
+    ) -> Vec<Completion> {
+        let (at_start, cursor_end) = mention_range;
+        let query = self.input[at_start + 1..cursor_end].to_string();
+        let Some((dir, name_prefix)) = resolve_explicit_dir(&query, &self.cwd) else {
+            return Vec::new();
+        };
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => return Vec::new(),
+        };
+        let mut comps: Vec<Completion> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_str()?.to_string();
+                if name == ".git" {
+                    return None;
+                }
+                if !name.to_lowercase().starts_with(&name_prefix.to_lowercase()) {
+                    return None;
+                }
+                let is_dir = entry.file_type().ok()?.is_dir();
+                // `read_dir` was given an already-canonicalized absolute dir,
+                // so `entry.path()` yields the absolute target. `path_completion_abs`
+                // adds the trailing `/` for directories and tags the candidate
+                // terminal (PathExplicit).
+                let abs = entry.path();
+                let label = abs.to_str()?.to_string();
+                Some(path_completion_abs(&label, at_start, cursor_end, is_dir))
+            })
+            .take(MAX_PATH_COMPLETIONS)
+            .collect();
+        sort_path_completions(&mut comps);
         comps
     }
 

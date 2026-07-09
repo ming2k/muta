@@ -19,7 +19,7 @@ use neenee_core::{
     ProviderPickerSnapshot, Pursuit, Role, SessionOverview, TodoList,
 };
 
-use crate::tui::completion::PathScan;
+use crate::tui::completion::{CompletionItemKind, PathScan};
 use crate::tui::composer_attachments;
 use crate::tui::document::{DeliveryStatus, TranscriptMessage};
 use crate::tui::event_loop::resolve_focused_mut;
@@ -750,16 +750,35 @@ impl App {
         let Some(comp) = completions.get(idx) else {
             return;
         };
-        let replace_start = comp.replace_start;
+        // `@` is only a completion *trigger*: once a concrete candidate is
+        // chosen it should not survive into the message context. So for any
+        // terminal accept (slash command, file, or explicit-path expand) the
+        // replacement range is widened to also consume the leading `@` byte.
+        // Project-scan directories are the one exception — they keep the `@`
+        // so the popup can re-trigger on the directory's contents (descend).
+        let drop_at = matches!(
+            comp.kind,
+            CompletionItemKind::Slash
+                | CompletionItemKind::PathFile
+                | CompletionItemKind::PathExplicit
+        );
+        let replace_start = if drop_at {
+            // Consume the `@` itself (it sits one byte before the path range).
+            comp.replace_start.saturating_sub(1)
+        } else {
+            comp.replace_start
+        };
         let replace_end = comp.replace_end;
         let mut label = comp.label.clone();
-        let is_slash = label.starts_with('/');
-        let is_dir = label.ends_with('/');
         // File accept: append a trailing space so the user can keep typing
         // their message (matches opencode's splice behaviour). Directories
-        // end in `/` (re-trigger on the dir's contents) and slash commands
-        // are terminal (see the doc comment), so neither gets the space.
-        if !is_dir && !is_slash {
+        // end in `/` and slash commands are terminal, so neither gets the
+        // space. Explicit-path files still want the trailing space.
+        let is_terminal_file = matches!(
+            comp.kind,
+            CompletionItemKind::PathFile | CompletionItemKind::PathExplicit
+        );
+        if is_terminal_file {
             let needs_space = self
                 .input
                 .get(replace_end..)
@@ -780,12 +799,13 @@ impl App {
         // Drop the cached project scan so newly-created files become
         // visible on the next `@` mention without a restart.
         self.path_scan_cache = None;
-        // A slash-command accept is a commit: exit completion so the popup
-        // does not re-open on the just-spliced label (which would collapse
-        // to a single exact match and, with a trailing space, fire the
-        // subcommand menu). Applies equally to Tab and Enter since both
-        // route through here. `@path` accepts stay live for Tab cycling.
-        if is_slash {
+        // A terminal accept is a commit: exit completion so the popup does
+        // not re-open on the just-spliced label (which would collapse to a
+        // single exact match and, for slash commands, with a trailing space
+        // fire the subcommand menu). Applies equally to Tab and Enter since
+        // both route through here. Project-scan `@path` *directory* accepts
+        // stay live so Tab keeps descending the directory tree.
+        if !matches!(comp.kind, CompletionItemKind::PathDir) {
             self.suggestion_index = None;
             self.completion_dismissed = true;
         }

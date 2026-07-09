@@ -174,6 +174,10 @@ fn apply_question_other_paste(app: &mut App, read: ClipboardRead) {
                     qm.update(crate::tui::question_model::QuestionAction::Paste(stripped))
                         .0,
                 );
+                // A paste can span many lines once wrapped; re-arm follow so the
+                // body scrolls to keep the caret (end of the pasted text) on
+                // screen.
+                app.question_modal_follow = true;
             }
             app.copy_toast_message =
                 format!("pasted {chars} char{}", if chars == 1 { "" } else { "s" });

@@ -78,13 +78,17 @@ pub fn draw_question_modal(
     let mut option_rows: Vec<(usize, usize, usize)> = Vec::new();
     let body_width = f.body.width as usize;
     let mut highlighted_row = None;
-    // Body row index of the "Other" free-text field line, captured only while
-    // "Other" is highlighted so the real terminal cursor can be placed there
-    // after the body scroll is resolved.
-    let mut other_field_row: Option<usize> = None;
-    // The typed text of the active question's "Other" field, captured only
-    // while "Other" is highlighted, so the cursor column can be computed.
-    let mut other_field_value: Option<&str> = None;
+    // Body row index + column of the "Other" free-text field's caret,
+    // captured only while "Other" is highlighted. Unlike a plain list row,
+    // the field can span several wrapped lines, so both the body-scroll
+    // follow target and the real terminal cursor position refer to the
+    // *caret row* (last wrapped line), not the "Other" label row —
+    // otherwise a multi-line field leaves the caret scrolled out of view.
+    let mut other_caret_row: Option<usize> = None;
+    let mut other_caret_col: usize = 0;
+    // 5-column indent of the "Other" free-text field, matching the `"     "`
+    // prefix passed to `push_wrapped_styled`.
+    const OTHER_FIELD_INDENT: usize = 5;
     if let Some(q) = question {
         if let Some(header) = &q.header {
             push_wrapped_styled(
@@ -155,17 +159,13 @@ pub fn draw_question_modal(
             theme,
         );
         // The free-text field row sits directly beneath the "Other" option
-        // line. Record its body row index so we can place the *real* terminal
-        // cursor there after the body is laid out. We render the typed text
-        // *without* a trailing `█` glyph: the terminal's own block cursor
-        // (placed below via `set_cursor_position`) is the caret, which is what
-        // the host IME samples to anchor its composition window. A painted
-        // glyph would be a fake cursor the IME cannot see.
-        other_field_row = other_highlighted.then_some(body_lines.len());
+        // line. We render the typed text *without* a trailing `█` glyph: the
+        // terminal's own block cursor (placed below via `set_cursor_position`)
+        // is the caret, which is what the host IME samples to anchor its
+        // composition window. A painted glyph would be a fake cursor the IME
+        // cannot see.
         if other_highlighted {
-            other_field_value = Some(other_text_value);
-        }
-        if other_highlighted {
+            let field_start_row = body_lines.len();
             push_wrapped_styled(
                 &mut body_lines,
                 "     ",
@@ -174,6 +174,20 @@ pub fn draw_question_modal(
                 Style::default().fg(theme.brand()),
                 body_width,
             );
+            // Resolve the caret location through the *same* `wrap_text` pass
+            // the renderer used (same indent budget) so the body-scroll follow
+            // target and the cursor placement both point at the caret's real
+            // visual row + column. The field is append-only, so the caret is
+            // always at the end of the text: last wrapped row, end column.
+            let wrap_budget = body_width.saturating_sub(OTHER_FIELD_INDENT).max(1);
+            let wrapped = wrap_text(other_text_value, wrap_budget);
+            let wrapped_rows = wrapped.len().max(1);
+            let caret_local_col = wrapped
+                .last()
+                .map(|wl| neenee_tui::text::cursor_column(&wl.text, wl.text.len()))
+                .unwrap_or(0);
+            other_caret_row = Some(field_start_row + wrapped_rows.saturating_sub(1));
+            other_caret_col = caret_local_col;
         }
         option_rows.push((other_index, other_start, body_lines.len()));
     }
@@ -182,8 +196,14 @@ pub fn draw_question_modal(
     // ↑↓ / digit-jump); a manual wheel/page scroll clears the flag so the user
     // can browse a long question or option list without the body snapping back
     // to the cursor. Mirrors the session / history modals.
+    //
+    // When the "Other" free-text field is active, the caret can sit several
+    // rows below the "Other" label (the field wraps), so follow the *caret*
+    // row instead of the label row — otherwise typing past the first line
+    // scrolls the caret out of view.
+    let follow_target = other_caret_row.or(highlighted_row);
     let follow = if follow_highlight {
-        highlighted_row
+        follow_target
     } else {
         None
     };
@@ -198,33 +218,17 @@ pub fn draw_question_modal(
     // the end of the typed text (the field is append-only, so the caret is
     // always at the end).
     //
-    // The field may wrap across several body rows, so we resolve the caret
-    // through the *same* `wrap_text` pass the renderer used (same indent
-    // budget) to find which visual row and column the caret lands on, then map
-    // that onto the scrolled body window. Only place the cursor when that row
-    // is actually on screen; otherwise the terminal cursor has no honest
-    // coordinate here, so we leave it unset and the event loop hides it (the
-    // field isn't interactable while scrolled away anyway, and
-    // `caret_owner()` still reports ownership so the IME stays bound to the
-    // modal region).
-    const OTHER_FIELD_INDENT: usize = 5; // "     "
-    if let (Some(row), Some(field_text)) = (other_field_row, other_field_value) {
+    // The caret row was resolved through the *same* `wrap_text` pass used for
+    // the follow target above, and `follow` has already nudged `scroll` to
+    // keep it on screen. We still guard by the visible window: if the field is
+    // scrolled away (e.g. the user is browsing with wheel/Pg), there is no
+    // honest coordinate and the event loop leaves the cursor hidden.
+    if let Some(caret_row) = other_caret_row {
         let visible_top = *scroll;
         let visible_bottom = scroll.saturating_add(f.body.height as usize);
-        // The field occupies one row per wrapped line, starting at `row`.
-        let wrap_budget = body_width.saturating_sub(OTHER_FIELD_INDENT).max(1);
-        let wrapped = wrap_text(field_text, wrap_budget);
-        let wrapped_rows = wrapped.len().max(1);
-        // Caret is at the end of the text: last wrapped row, end column.
-        let last = wrapped.last();
-        let caret_local_col = last
-            .map(|wl| neenee_tui::text::cursor_column(&wl.text, wl.text.len()))
-            .unwrap_or(0);
-        let caret_row = row + wrapped_rows.saturating_sub(1);
-
         if caret_row >= visible_top && caret_row < visible_bottom {
             let indent: u16 = OTHER_FIELD_INDENT as u16;
-            let cursor_x = f.body.x + indent + caret_local_col as u16;
+            let cursor_x = f.body.x + indent + other_caret_col as u16;
             let cursor_y = f.body.y + (caret_row - visible_top) as u16;
             // Clamp to the body's right edge so a wide-glyph caret at the last
             // column never lands in the scrollbar gutter.

@@ -8,7 +8,9 @@ use tokio::sync::mpsc;
 
 use crate::tui::app::{App, CaretOwner};
 use crate::tui::completion::CompletionKind;
-use crate::tui::completion::{manual_walk, mention_range_at, path_query_match};
+use crate::tui::completion::{
+    is_explicit_path_prefix, manual_walk, mention_range_at, path_query_match, resolve_explicit_dir,
+};
 use crate::tui::config;
 use crate::tui::event_loop::{display_status, focused_messages_mut};
 use crate::tui::layout::{InteractiveTarget, LayoutMap};
@@ -475,6 +477,119 @@ fn mention_range_handles_multibyte_before_at() {
         mention_range_at(s, cursor_byte),
         Some((at_byte, cursor_byte))
     );
+}
+
+// ----- explicit-path (`@../`, `@./`, `@~/`, `@/`) completion tests -----
+
+#[test]
+fn is_explicit_path_prefix_recognizes_all_shell_conventions() {
+    // The four explicit prefixes route to filesystem resolution + absolute
+    // expansion; plain relative segments fall through to the project scan.
+    assert!(is_explicit_path_prefix("../"));
+    assert!(is_explicit_path_prefix(".."));
+    assert!(is_explicit_path_prefix("./"));
+    assert!(is_explicit_path_prefix("."));
+    assert!(is_explicit_path_prefix("~/"));
+    assert!(is_explicit_path_prefix("~"));
+    assert!(is_explicit_path_prefix("/"));
+    assert!(is_explicit_path_prefix("/etc/host"));
+    assert!(is_explicit_path_prefix("../src/fo"));
+    assert!(is_explicit_path_prefix("~/notes/a"));
+    // Plain relative queries are NOT explicit — they use the project scan.
+    assert!(!is_explicit_path_prefix("src/"));
+    assert!(!is_explicit_path_prefix("Cargo.toml"));
+    assert!(!is_explicit_path_prefix(""));
+}
+
+#[test]
+fn resolve_explicit_dir_splits_dir_and_name_prefix() {
+    // `../src/fo` from a temp cwd: the directory portion resolves to the
+    // canonicalized parent's `src`, the trailing `fo` is the name prefix.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/foobar.rs"), "x").unwrap();
+    // The "project" is a subdir of `tmp`; `../` escapes it into `tmp`.
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let (dir, prefix) = resolve_explicit_dir("../src/fo", &project).expect("resolved");
+    // The directory is absolute and canonicalized (no `..`).
+    assert!(dir.is_absolute(), "dir must be absolute: {dir:?}");
+    assert!(dir.ends_with("src"), "dir resolves into src: {dir:?}");
+    assert_eq!(prefix, "fo");
+}
+
+#[test]
+fn resolve_explicit_dir_home_prefix_uses_home() {
+    // `~/notes/a` resolves the directory under the user's home, regardless of
+    // the project cwd. We only assert structural correctness (absolute, ends
+    // with `notes`, prefix `a`) since the real home path varies per machine.
+    let dummy_cwd = std::path::PathBuf::from("/some/project");
+    let (dir, prefix) = resolve_explicit_dir("~/notes/a", &dummy_cwd).expect("resolved");
+    assert!(
+        dir.is_absolute(),
+        "home-relative dir must be absolute: {dir:?}"
+    );
+    assert!(dir.ends_with("notes"), "dir resolves into ~/notes: {dir:?}");
+    assert_eq!(prefix, "a");
+}
+
+#[test]
+fn resolve_explicit_dir_absolute_prefix_uses_root() {
+    // `/etc/h` resolves to `/etc` with prefix `h`, independent of cwd.
+    let dummy_cwd = std::path::PathBuf::from("/some/project");
+    let (dir, prefix) = resolve_explicit_dir("/etc/h", &dummy_cwd).expect("resolved");
+    assert_eq!(dir, std::path::PathBuf::from("/etc"));
+    assert_eq!(prefix, "h");
+}
+
+#[test]
+fn enumerate_explicit_path_completion_expands_to_absolute() {
+    // `@../` from a temp project lists the parent directory's children as
+    // absolute paths. The candidates are terminal (PathExplicit): accepting
+    // one drops the `@` and splices the absolute path — the core of req 1.
+    use crate::tui::completion::CompletionItemKind;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("sibling.md"), "x").unwrap();
+    // The "project" is a subdirectory of `tmp`; its parent (`tmp`) holds
+    // `sibling.md`, reachable only via `../`.
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let (mut app, _proj_tmp) = app_in_tempdir(&[], &[]);
+    // Override the captured cwd to the project subdir so `../` escapes it.
+    app.cwd = project.clone();
+    app.input = "@../sib".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let sibling = completions
+        .iter()
+        .find(|c| c.label.ends_with("sibling.md"))
+        .expect("sibling.md reachable via @../");
+    // The label is an absolute path (req 1: expanded to absolute).
+    assert!(
+        std::path::Path::new(&sibling.label).is_absolute(),
+        "explicit completion must be absolute: {}",
+        sibling.label
+    );
+    // Every explicit candidate is terminal on accept.
+    assert_eq!(sibling.kind, CompletionItemKind::PathExplicit);
+
+    // Accepting it drops the `@` and splices the absolute path + space.
+    let idx = completions
+        .iter()
+        .position(|c| c.label.ends_with("sibling.md"))
+        .unwrap();
+    app.accept_completion(idx);
+    assert!(
+        !app.input.contains('@'),
+        "@ trigger must be dropped on accept: {}",
+        app.input
+    );
+    assert!(
+        app.input.trim().ends_with("sibling.md"),
+        "absolute path spliced: {}",
+        app.input
+    );
+    assert!(app.completion_dismissed, "explicit accept is terminal");
 }
 
 #[test]
@@ -1011,29 +1126,40 @@ fn accept_slash_completion_does_not_append_trailing_space() {
 }
 
 #[test]
-fn accept_path_completion_stays_live_for_tab_cycling() {
-    // `@path` accepts are NOT terminal: Tab is meant to keep cycling the
-    // surviving candidates, so accept_completion must not latch the
-    // dismissal flag for path mentions. This guards against the slash
-    // terminal-accept logic accidentally suppressing path cycling.
-    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml", "README.md"], &[]);
+fn accept_path_dir_completion_stays_live_for_descend() {
+    // `@path` *directory* accepts stay live so Tab can keep descending the
+    // directory tree: the `@` trigger is kept and the popup re-triggers on the
+    // directory's contents. This guards against the terminal-accept logic
+    // accidentally suppressing directory navigation.
+    let (mut app, _tmp) = app_in_tempdir(&["src/main.rs", "src/util.rs"], &["src"]);
     app.input = "@".to_string();
     app.cursor_position = 1;
     let completions = app.completions();
-    assert!(completions.len() >= 2, "multiple path candidates");
-    app.accept_completion(0);
-    // Path accept must NOT latch dismissal — Tab cycling continues.
+    // The first candidate is a directory (`src/` sorts before files).
+    let dir_idx = completions
+        .iter()
+        .position(|c| c.label == "src/")
+        .expect("src/ directory in candidates");
+    app.accept_completion(dir_idx);
+    // Directory accept must NOT latch dismissal — descend continues.
     assert!(
         !app.completion_dismissed,
-        "path accept must stay live for Tab cycling"
+        "directory accept must stay live for descend"
+    );
+    // The `@` trigger is kept so the popup re-triggers on `src/`'s contents.
+    assert!(
+        app.input.starts_with("@src/"),
+        "dir accept keeps @: {}",
+        app.input
     );
 }
 
 #[test]
-fn accept_path_completion_appends_trailing_space() {
-    // Path mentions still append a trailing space (matches opencode) so the
-    // user can keep typing their message. This guards against the slash fix
-    // accidentally suppressing the space for file completions too.
+fn accept_path_file_completion_is_terminal_and_drops_at() {
+    // `@path` *file* accepts are terminal: the `@` is only a completion
+    // trigger and must not survive into the message context once a concrete
+    // file is chosen, so accept_completion drops the `@`, appends a trailing
+    // space, and latches the dismissal flag.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
     app.input = "@Ca".to_string();
     app.cursor_position = app.input.chars().count();
@@ -1043,7 +1169,34 @@ fn accept_path_completion_appends_trailing_space() {
         .position(|c| c.label == "Cargo.toml")
         .expect("Cargo.toml in candidates");
     app.accept_completion(idx);
-    assert_eq!(app.input, "@Cargo.toml ");
+    // The `@` trigger is dropped; a trailing space lets the user keep typing.
+    assert_eq!(app.input, "Cargo.toml ");
+    assert!(
+        app.completion_dismissed,
+        "file accept must be terminal (latch dismissal)"
+    );
+}
+
+#[test]
+fn accept_path_file_completion_inline_preserves_surrounding_text() {
+    // An inline `@mention` mid-sentence: accepting a file must drop the `@`
+    // and splice the path in place, preserving the surrounding prose. This is
+    // the real-world case — `look at @Cargo` in the middle of a message.
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    // Cursor sits right after the `@Cargo` token, inside the mention.
+    // `look at @Cargo please`: `look at ` is 8 chars, `@Cargo` is 6 → cursor
+    // at char index 14 sits just past the `o`.
+    app.input = "look at @Cargo please".to_string();
+    app.cursor_position = 14;
+    let completions = app.completions();
+    let idx = completions
+        .iter()
+        .position(|c| c.label == "Cargo.toml")
+        .expect("Cargo.toml in candidates");
+    app.accept_completion(idx);
+    // The `@` is dropped; the path replaces `@Cargo`; trailing `please` is
+    // preserved; the existing space before it is reused (no double space).
+    assert_eq!(app.input, "look at Cargo.toml please");
 }
 
 #[test]

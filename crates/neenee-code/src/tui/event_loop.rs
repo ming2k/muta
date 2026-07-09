@@ -1563,6 +1563,22 @@ pub(super) async fn run_app_loop(
             let has_exact_suggestion = completions.iter().any(|c| {
                 c.replace_start == 0 && c.replace_end == app.input.len() && c.label == app.input
             });
+            // Whether the composer's first `/token` is a recognized command.
+            // Used by the Enter handler to route a `/`-leading input as a
+            // command (only when known) or fall back to chat (so a stray `/`
+            // doesn't trip the backend's "Unknown command" error). Covers
+            // built-ins, the app's discovered custom commands, and the
+            // frontend-only `/serve`.
+            let recognized_command = app
+                .input
+                .split_whitespace()
+                .next()
+                .map(|first| {
+                    crate::startup::BuiltinCmd::from_slash(first).is_some()
+                        || app.custom_commands.iter().any(|(name, _)| name == first)
+                        || first == "/serve"
+                })
+                .unwrap_or(false);
             let completion_kind = if suppress_completions {
                 crate::tui::CompletionKind::None
             } else {
@@ -1624,6 +1640,26 @@ pub(super) async fn run_app_loop(
             // through `App::set_cursor`), so any keystroke that moved the caret
             // must still mark the terminal cursor for an immediate re-sync.
             app.note_cursor_moved();
+
+            // A `/`-leading input whose first token is NOT a recognized command
+            // (built-in, discovered custom command, or the frontend-only
+            // `/serve`) is ordinary prose, not a command invocation: the `/` is
+            // just a character the user typed. Convert the SendSlash the input
+            // layer produced into a SendChat so the message ships normally
+            // instead of tripping the backend's "Unknown command" error. The
+            // recognition is computed here (not in the input layer) because
+            // only the loop has access to both the built-in vocabulary and the
+            // app's discovered custom commands.
+            let action =
+                if matches!(action, input::InputAction::SendSlash(_)) && !recognized_command {
+                    if let input::InputAction::SendSlash(text) = action {
+                        input::InputAction::SendChat(text)
+                    } else {
+                        action
+                    }
+                } else {
+                    action
+                };
 
             // Record a text-triggered modal command (`/provider`, `/tools`, …)
             // in BOTH the transcript and input history, exactly like the
@@ -3676,6 +3712,11 @@ pub(super) async fn run_app_loop(
                             qm.update(crate::tui::question_model::QuestionAction::InsertChar(c))
                                 .0,
                         );
+                        // Typing into the "Other" field may grow it onto a new
+                        // wrapped line, pushing the caret below the viewport.
+                        // Re-arm follow so the body scrolls to track the
+                        // caret (not just the "Other" label row).
+                        app.question_modal_follow = true;
                     }
                 }
                 input::InputAction::QuestionBackspace => {
@@ -3686,6 +3727,9 @@ pub(super) async fn run_app_loop(
                             qm.update(crate::tui::question_model::QuestionAction::Backspace)
                                 .0,
                         );
+                        // Backspace can collapse the field back up a line;
+                        // re-arm follow so the caret stays on screen.
+                        app.question_modal_follow = true;
                     }
                 }
                 input::InputAction::PermissionSubmit => {

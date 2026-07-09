@@ -19,11 +19,34 @@ pub enum CompletionKind {
     Path,
 }
 
+/// What a [`Completion`] candidate represents, which controls the accept
+/// semantics in `App::accept_completion`. Kept on the candidate itself (rather
+/// than re-derived from the label) so absolute-path mention labels (which
+/// legitimately start with `/`) are never confused with slash commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompletionItemKind {
+    /// `/command` — replaces the whole input; a terminal accept (popup closes).
+    #[default]
+    Slash,
+    /// `@path` file mention — the leading `@` trigger is dropped on accept
+    /// (the concrete path is what enters the message context) and a trailing
+    /// space is appended; a terminal accept.
+    PathFile,
+    /// `@path` directory mention from the project scan — the `@` trigger is
+    /// kept so the popup can re-trigger on the directory's contents (descend
+    /// navigation); no trailing space; stays live for further cycling.
+    PathDir,
+    /// `@path` mention resolved from an explicit prefix (`../`, `./`, `~/`,
+    /// `/`) — expanded to an absolute path. Terminal on accept (the absolute
+    /// path is concrete): the `@` is dropped, files get a trailing space.
+    PathExplicit,
+}
+
 /// A single completion candidate rendered in the completion menu. The
 /// `replace_start..replace_end` byte range is the slice of the current input
 /// that gets overwritten by `label` when the candidate is accepted, so slash
 /// commands (which replace the whole input) and inline `@path` mentions
-/// (which replace only the `@prefix` token) share one accept path.
+/// (which replace the `@`-prefixed token) share one accept path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completion {
     /// Text to insert at the replace range.
@@ -34,6 +57,9 @@ pub struct Completion {
     pub replace_start: usize,
     /// Byte offset in `App::input` where the replacement ends.
     pub replace_end: usize,
+    /// What this candidate is and how accepting it behaves. See
+    /// [`CompletionItemKind`].
+    pub kind: CompletionItemKind,
 }
 
 impl Completion {
@@ -45,6 +71,7 @@ impl Completion {
             description: description.to_string(),
             replace_start: 0,
             replace_end: input_len,
+            kind: CompletionItemKind::Slash,
         }
     }
 }
