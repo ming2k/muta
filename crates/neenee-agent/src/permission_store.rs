@@ -110,9 +110,16 @@ impl PermissionStore {
 
     // ── allowlist ───────────────────────────────────────────────────────
 
-    /// Check whether a rule is in the "always allow" set.
+    /// Check whether a rule is in the "always allow" set. A stored scope of
+    /// `"*"` is a wildcard for that tool, matching the documented
+    /// `[[permissions.allow]] tool = "bash", scope = "*"` behaviour.
     pub fn is_always_allowed(&self, rule: &PermissionRule) -> bool {
-        lock(&self.state).always.contains(rule)
+        let state = lock(&self.state);
+        state.always.contains(rule)
+            || state.always.contains(&PermissionRule {
+                tool: rule.tool.clone(),
+                scope: "*".to_string(),
+            })
     }
 
     /// Add a rule to the "always allow" set and persist.
@@ -294,6 +301,23 @@ mod tests {
         }));
         assert!(store.is_always_allowed(&PermissionRule {
             tool: "read_text".to_string(),
+            scope: "*".to_string(),
+        }));
+    }
+
+    #[test]
+    fn wildcard_scope_allows_any_scope_for_same_tool() {
+        let store = PermissionStore::new();
+        store.seed_from_config(&[PermissionRuleConfig {
+            tool: "bash".to_string(),
+            scope: "*".to_string(),
+        }]);
+        assert!(store.is_always_allowed(&PermissionRule {
+            tool: "bash".to_string(),
+            scope: "git status".to_string(),
+        }));
+        assert!(!store.is_always_allowed(&PermissionRule {
+            tool: "edit_file".to_string(),
             scope: "*".to_string(),
         }));
     }

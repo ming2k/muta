@@ -160,9 +160,9 @@ impl CompiledRule {
     ) -> Self {
         Self {
             name: name.to_string(),
-            matcher: CompiledMatcher::Regex(
-                Regex::new(pattern).expect("built-in bash policy regex must compile"),
-            ),
+            matcher: CompiledMatcher::Regex(Regex::new(pattern).unwrap_or_else(|error| {
+                panic!("built-in bash policy regex must compile: {error}")
+            })),
             action,
             reason: reason.to_string(),
             origin: RuleOrigin::Builtin,
