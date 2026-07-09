@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-09
+
+### Added
+
+- **Explicit-path `@mentions`.** The `@` mention trigger now accepts filesystem
+  path prefixes (`@../`, `@./`, `@~/`, `@/`) and resolves them against the real
+  directory, so files *outside* the project scan can be mentioned. Candidates
+  expand to absolute paths, letting you reference any file on disk, not just
+  descendants of the working directory.
+
+- **Writing-a-skill guide.** Added `docs/how-to/write-a-skill.md` walking
+  through authoring a skill: where to place it (project-local vs user-global),
+  how the harness discovers it, and the minimal YAML frontmatter it needs.
+
+### Changed
+
+- **`@mention` accept drops the trigger.** The `@` is now treated purely as a
+  completion *trigger*: once a concrete candidate is chosen, accepting a file
+  (or an explicit-path) mention removes the leading `@`, splices the path in
+  place (preserving surrounding prose), and appends a trailing space so you can
+  keep typing. Directory accepts keep the `@` so the popup re-triggers to
+  descend into the directory's contents. Absolute-path mention labels (which
+  legitimately start with `/`) are no longer mistaken for slash commands.
+
+### Fixed
+
+- **Stray `/` no longer errors.** A message whose first token begins with `/`
+  but is not a recognized command (built-in, discovered custom command, or the
+  frontend-only `/serve`) is now sent as ordinary chat instead of being
+  dispatched as a slash command the backend rejected with "Unknown command".
+  The `/` is just a character you typed.
+
+- **Question-modal caret tracking.** Pasting, typing, or backspacing in the
+  "Other" free-text field now re-arms follow-scrolling, so the modal body
+  scrolls to keep the caret on screen as the field wraps across lines.
+
 ## [0.17.0] - 2026-07-09
 
 ### Added
@@ -1160,7 +1196,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/ming2k/neenee/releases/tag/v0.18.0
 [0.17.0]: https://github.com/ming2k/neenee/releases/tag/v0.17.0
 [0.16.0]: https://github.com/ming2k/neenee/releases/tag/v0.16.0
 [0.15.0]: https://github.com/ming2k/neenee/releases/tag/v0.15.0
