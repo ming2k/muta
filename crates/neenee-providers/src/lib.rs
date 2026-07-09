@@ -20,6 +20,6 @@ pub use neenee_ai_sdk_google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
 pub use neenee_ai_sdk_openai::OpenAiCompatProvider;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS,
-    OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OpenAiProviderSpec, build_provider_for_channel,
-    openai_provider_spec,
+    OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OpenAiProviderSpec, XAI_BUILTIN_MODELS,
+    build_provider_for_channel, openai_provider_spec,
 };

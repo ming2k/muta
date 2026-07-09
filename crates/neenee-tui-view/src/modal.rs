@@ -47,6 +47,9 @@ pub enum Modal {
     /// from the chosen template; `Esc` returns to the picker. See
     /// `App::template_choice` and [`crate::providers::PROVIDER_TEMPLATES`].
     ProviderTemplate,
+    /// OAuth-in-progress sheet for SuperGrok. Stays open while browser authorize
+    /// + loopback callback run; on success transitions to [`Self::CustomProvider`].
+    OauthPending,
     /// Provider editor: a per-template form (Name, Base URL, Token, and — when
     /// a template opts in — Model) for defining a user provider without
     /// editing config.toml by hand. The protocol and seeded models come from the

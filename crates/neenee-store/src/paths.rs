@@ -102,6 +102,13 @@ impl Dirs {
         self.config_dir.join("credentials.toml")
     }
 
+    /// OAuth token sets, keyed by provider id (`auth.toml`, 0600). Sibling of
+    /// `credentials.toml` for SuperGrok / future OAuth providers. See
+    /// `neenee_auth::store`.
+    pub fn auth_file(&self) -> PathBuf {
+        self.config_dir.join("auth.toml")
+    }
+
     /// Content-addressed blob store root. Large payloads are stored under
     /// `<root>/<2-char-prefix>/<hash>`.
     pub fn blobs_dir(&self) -> PathBuf {

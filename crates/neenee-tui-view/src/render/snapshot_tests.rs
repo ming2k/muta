@@ -318,6 +318,33 @@ fn bash_expanded_preserves_stdout_stderr_interleaving() {
 }
 
 #[test]
+fn bash_expanded_folds_long_output_keeping_tail_events() {
+    // A long stdout (well past HEAD + TAIL + 1 = 7 lines) folds its middle
+    // into a single `⋯ N lines hidden` row, while the head, the tail, and the
+    // trailing `exit 1` event footer all stay visible. This is the fix for the
+    // "verbose stdout buries the exit code" symptom on an expanded bash step.
+    let stdout = (1..=20)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let m = tool_step_structured(
+        "bash",
+        r#"{"command":"cargo build"}"#,
+        neenee_core::ToolOutput::Shell {
+            command: "cargo build".into(),
+            stdout,
+            stderr: String::new(),
+            lines: Vec::new(),
+            exit: Some(1),
+            truncated: false,
+            termination: neenee_core::tool_output::ShellTermination::Exited,
+        },
+        true,
+    );
+    insta::assert_snapshot!(render_grid(&m, 80, 40));
+}
+
+#[test]
 fn grep_expanded_renders_grouped_matches() {
     let m = tool_step(
         "grep",
@@ -574,10 +601,11 @@ fn collapsed_tool_steps_stack_flush() {
     );
 }
 
-/// An expanded body is padded one row from its own header (top) and one row
-/// from the next header (bottom); collapsed neighbours around it stay flush.
+/// An expanded body sits flush against its own header (no top gap — the body
+/// indent owns the grouping) but keeps its trailing separator row before the
+/// next header; collapsed neighbours around it stay flush.
 #[test]
-fn expanded_body_pads_itself_neighbours_stay_flush() {
+fn expanded_body_flush_to_header_neighbours_stay_flush() {
     let steps = vec![
         tool_step_structured(
             "read_text",
@@ -598,7 +626,7 @@ fn expanded_body_pads_itself_neighbours_stay_flush() {
                 pattern: "foo".into(),
                 lines: vec!["src/a.rs:10:1:foo".into(), "src/b.rs:5:1:foo".into()],
             },
-            true, // expanded — body padded above + below
+            true, // expanded — body sits flush under header, trailing sep row after
         ),
         tool_step_structured(
             "read_text",
@@ -610,7 +638,7 @@ fn expanded_body_pads_itself_neighbours_stay_flush() {
                 prefix: None,
                 suffix: None,
             },
-            false, // collapsed — flush below the expanded body's trailing gap
+            false, // collapsed — flush below the expanded body's trailing separator row
         ),
     ];
     insta::assert_snapshot!(render_transcript_grid(&steps, 60, 16));

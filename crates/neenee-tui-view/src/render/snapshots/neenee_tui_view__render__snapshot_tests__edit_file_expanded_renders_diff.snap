@@ -1,15 +1,13 @@
 ---
-source: crates/neenee-code/src/tui/render/snapshot_tests.rs
+source: crates/neenee-tui-view/src/render/snapshot_tests.rs
 expression: "render_grid(&m, 80, 30)"
 ---
 - Edit a.rs +1 -1
-
    1   - let x = 1;
       1+ let x = 2;
 
 backgrounds:
 A=#070808  B=#201414  C=#402828  D=#121F16  E=#2A4030  .=reset
 0: A80
-1: A80
-2: B17 C2 B61
-3: D17 E2 D61
+1: B17 C2 B61
+2: D17 E2 D61

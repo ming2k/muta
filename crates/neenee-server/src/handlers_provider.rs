@@ -135,9 +135,8 @@ pub async fn switch(
 }
 
 /// `AgentRequest::AddProvider` — persist a user-defined ("custom") provider to
-/// `config.providers`, then activate it. The provider is a single-channel entry
-/// carrying its own protocol, endpoint, inline key, and model, so it round-trips
-/// through config and is reachable by the same catalog path as a built-in.
+/// `config.providers`, then activate it. For SuperGrok OAuth the TUI runs
+/// [`authorize`] first, then calls this with `auth = XaiOAuth`.
 #[allow(clippy::too_many_arguments)]
 pub async fn add(
     config: &mut Config,
@@ -152,6 +151,7 @@ pub async fn add(
     api_key: String,
     user_agent: Option<String>,
     models: Vec<String>,
+    auth: neenee_core::ChannelAuth,
 ) {
     use neenee_store::config::{UserChannelConfig, UserProviderConfig, UserTransport};
 
@@ -164,6 +164,11 @@ pub async fn add(
     };
     let trimmed_key = api_key.trim();
     let api_key = (!trimmed_key.is_empty()).then(|| trimmed_key.to_string());
+    // Pasted API key on an OAuth template → ordinary ApiKey auth.
+    let auth = match (auth, api_key.is_some()) {
+        (neenee_core::ChannelAuth::XaiOAuth, true) => neenee_core::ChannelAuth::ApiKey,
+        (other, _) => other,
+    };
     let base_url = {
         let trimmed = base_url.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -188,6 +193,7 @@ pub async fn add(
             user_agent: user_agent.clone(),
             effort: None,
             thinking: None,
+            auth,
         })
         .collect();
     // A provider must serve at least one model; a template with no usable model
@@ -609,6 +615,205 @@ fn unique_provider_id(config: &Config, name: &str) -> String {
     unreachable!("unbounded suffix search must eventually find an id")
 }
 
+/// `AgentRequest::AuthorizeOAuth` — xAI SuperGrok OAuth before a provider
+/// instance exists. Persists tokens under `auth.toml` key `xai`.
+pub async fn authorize(
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    method: neenee_core::LoginMethod,
+) {
+    let label = neenee_auth::AUTH_PROVIDER_ID.to_string();
+    if run_xai_oauth(resp_tx, &label, method).await {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            neenee_core::ConnectStatus::Done { provider: label },
+        ));
+    }
+}
+
+/// `AgentRequest::ConnectProvider` — re-auth an existing OAuth provider, then
+/// activate it.
+pub async fn connect(
+    config: &Config,
+    agent: &Agent,
+    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_usage: &mut ProviderUsage,
+    provider_id: String,
+    method: neenee_core::LoginMethod,
+) {
+    let auth_mode = catalog::build_picker_state(config, provider_usage)
+        .rows
+        .into_iter()
+        .find(|r| r.id == provider_id)
+        .map(|r| r.auth)
+        .unwrap_or_default();
+    if auth_mode != neenee_core::ChannelAuth::XaiOAuth {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            neenee_core::ConnectStatus::Failed {
+                provider: provider_id,
+                message: "not an OAuth provider".to_string(),
+            },
+        ));
+        return;
+    }
+    if !run_xai_oauth(resp_tx, &provider_id, method).await {
+        return;
+    }
+    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+        neenee_core::ConnectStatus::Done {
+            provider: provider_id.clone(),
+        },
+    ));
+    let model = catalog::build_picker_state(config, provider_usage)
+        .rows
+        .into_iter()
+        .find(|r| r.id == provider_id)
+        .map(|r| r.model)
+        .unwrap_or_else(|| "grok-4.5".to_string());
+    activate(
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        provider_id,
+        model,
+    )
+    .await;
+}
+
+/// Shared xAI OAuth body: browser loopback (PKCE) or device-code.
+async fn run_xai_oauth(
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    label: &str,
+    method: neenee_core::LoginMethod,
+) -> bool {
+    use neenee_auth::{AUTH_PROVIDER_ID, AuthStore, XaiOAuth};
+
+    let oauth = XaiOAuth::new();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let result = match method {
+        neenee_core::LoginMethod::Device => {
+            let device = match neenee_auth::request_device_code(oauth.client()).await {
+                Ok(d) => d,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_core::ConnectStatus::Failed {
+                            provider: label.to_string(),
+                            message: msg,
+                        },
+                    ));
+                    return false;
+                }
+            };
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                neenee_core::ConnectStatus::Pending {
+                    provider: label.to_string(),
+                    url: device.user_url().to_string(),
+                    user_code: device.user_code.clone(),
+                    message: "Open the URL on any device and enter the code to authorize xAI (SuperGrok).".to_string(),
+                },
+            ));
+            neenee_auth::poll_device_code(oauth.client(), &device)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        neenee_core::LoginMethod::Browser => {
+            let login = match oauth.begin_browser_login().await {
+                Ok(l) => l,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_core::ConnectStatus::Failed {
+                            provider: label.to_string(),
+                            message: msg,
+                        },
+                    ));
+                    return false;
+                }
+            };
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                neenee_core::ConnectStatus::Pending {
+                    provider: label.to_string(),
+                    url: login.url.clone(),
+                    user_code: String::new(),
+                    message: "Complete authorization in your browser (or open the link below).".to_string(),
+                },
+            ));
+            login
+                .complete(oauth.client())
+                .await
+                .map_err(|e| e.to_string())
+        }
+    };
+
+    let tokens = match result {
+        Ok(t) => t,
+        Err(msg) => {
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                neenee_core::ConnectStatus::Failed {
+                    provider: label.to_string(),
+                    message: msg,
+                },
+            ));
+            return false;
+        }
+    };
+
+    let set = neenee_auth::TokenSet {
+        access: tokens.access_token,
+        refresh: tokens.refresh_token.unwrap_or_default(),
+        expires_ms: now_ms + (tokens.expires_in.unwrap_or(3600) as i64) * 1000,
+    };
+    let mut store = AuthStore::load();
+    store.set(AUTH_PROVIDER_ID, set);
+    if let Err(e) = store.save() {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            neenee_core::ConnectStatus::Failed {
+                provider: label.to_string(),
+                message: format!("could not save tokens: {e}"),
+            },
+        ));
+        return false;
+    }
+    true
+}
+
+async fn refresh_xai_oauth_if_needed(config: &Config, provider_id: &str) {
+    use neenee_auth::{AUTH_PROVIDER_ID, AuthStore, XaiOAuth};
+
+    let is_oauth = config
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.channels.first())
+        .is_some_and(|ch| ch.auth == neenee_core::ChannelAuth::XaiOAuth);
+    if !is_oauth {
+        return;
+    }
+    let Some(stored) = AuthStore::load().get(AUTH_PROVIDER_ID).cloned() else {
+        return;
+    };
+    if stored.access.is_empty() || stored.refresh.is_empty() {
+        return;
+    }
+    let oauth = XaiOAuth::new();
+    match oauth.resolve_access_token(stored).await {
+        Ok((_access, tokens)) => {
+            let mut store = AuthStore::load();
+            store.set(AUTH_PROVIDER_ID, tokens);
+            let _ = store.save();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "xAI OAuth: token refresh failed; clearing store");
+            let mut store = AuthStore::load();
+            store.remove(AUTH_PROVIDER_ID);
+            let _ = store.save();
+        }
+    }
+}
+
 /// Shared tail of [`switch`] and [`add`]: rebuild the active provider through the
 /// catalog (so api-key / endpoint / user-agent resolution matches startup), swap
 /// it into the shared holder, re-seed mid-turn relief, and push the key + picker
@@ -622,6 +827,8 @@ async fn activate(
     provider_type: String,
     model: String,
 ) {
+    refresh_xai_oauth_if_needed(config, &provider_type).await;
+
     // For multi-model providers the explicit model selects the channel (and thus
     // the per-model transport); build_provider_for_model reads `default_model` as
     // a fallback.

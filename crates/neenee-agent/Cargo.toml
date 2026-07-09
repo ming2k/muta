@@ -9,6 +9,7 @@ license = "MIT"
 neenee-core = { path = "../neenee-core" }
 neenee-store = { path = "../neenee-store" }
 neenee-providers = { path = "../neenee-providers" }
+neenee-auth = { path = "../neenee-auth" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }

@@ -11,6 +11,7 @@ neenee-store = { path = "../neenee-store" }
 neenee-providers = { path = "../neenee-providers" }
 neenee-tools = { path = "../neenee-tools" }
 neenee-agent = { path = "../neenee-agent" }
+neenee-auth = { path = "../neenee-auth" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

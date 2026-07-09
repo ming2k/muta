@@ -25,10 +25,10 @@ use crate::render::text_layout::{
 };
 use crate::render::tools::{ArgLayout, DiffLine, DiffOp, ResultKind, ToolStatus};
 use crate::render::{
-    CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, EnvoyBarInfo, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, StickyInfo, TOOL_STEP_BODY_INDENT_COLS,
-    TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
-    Theme,
+    BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
+    EnvoyBarInfo, REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
+    STEP_MIN_WIDTH, StickyInfo, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, Theme,
 };
 
 /// Cursor + environment carried through the tool-step body renderers.
@@ -664,8 +664,12 @@ fn termination_footer(
     match term {
         T::Exited => None,
         T::IdleBlocked => Some((
-            "⏸ no output for a while — likely waiting for input (e.g. a password prompt). \
-             Use a non-interactive flag (--passphrase-file / SUDO_ASKPASS / `y | …`) instead."
+            "⏸ no output for a while — likely waiting for input. If this is a \
+             password (sudo/gpg/pinentry), approve the inline prompt or use a \
+             non-interactive flag (--passphrase-file / SUDO_ASKPASS / `y | …`). \
+             Full-screen TUI tools (whiptail/dialog/pinentry-curses) read the \
+             terminal directly, not stdin, so they can't be fed here — give \
+             them a real terminal or a non-interactive equivalent."
                 .to_string(),
             warn_style,
         )),
@@ -754,67 +758,27 @@ fn draw_bash_content(
         ..
     }) = structured
     {
-        // Declared once so both the interleaved-`lines` branch and the
-        // legacy/seed fallback share the running offset, which then feeds the
-        // truncated / exit footer below.
+        // Materialize the output stream once, then emit it through the folding
+        // emitter: a head of leading context, a `⋯ N lines hidden` row for the
+        // verbose middle, and a tail of trailing context. Only output goes
+        // through the fold — the exit / truncated / termination footers below
+        // stay outside it, so the trailing "events" are always visible even for
+        // a huge log. Short output (≤ HEAD + TAIL + 1 lines) renders verbatim;
+        // `emit_bash_lines_folded` is a no-op on an empty stream.
         let mut byte_offset = 0usize;
-        if !lines.is_empty() {
-            // Arrival-ordered view: stdout and stderr interleaved exactly as the
-            // process wrote them, each line coloured by its source stream. This
-            // is the fix for the "all-stdout-then-all-stderr" reorder symptom.
-            for line in lines {
-                let style = if line.stream == neenee_core::tool_output::ShellStream::Err {
-                    stderr_style
-                } else {
-                    base
-                };
-                byte_offset = emit_bash_lines(
-                    ctx,
-                    mi,
-                    block_idx,
-                    indent,
-                    wrap_w,
-                    pad,
-                    sel_range,
-                    &line.text,
-                    style,
-                    byte_offset,
-                );
-            }
-        } else {
-            // Legacy / live-seed fallback: no ordered lines, so fall back to
-            // the all-stdout-then-all-stderr bands. This is the path live
-            // streaming takes before the final result lands (the streaming seed
-            // accumulates into the flat strings) and the path restored sessions
-            // with only the flat strings take.
-            if !stdout.is_empty() {
-                byte_offset = emit_bash_lines(
-                    ctx,
-                    mi,
-                    block_idx,
-                    indent,
-                    wrap_w,
-                    pad,
-                    sel_range,
-                    stdout,
-                    base,
-                    byte_offset,
-                );
-            }
-            if !stderr.is_empty() {
-                byte_offset = emit_bash_lines(
-                    ctx,
-                    mi,
-                    block_idx,
-                    indent,
-                    wrap_w,
-                    pad,
-                    sel_range,
-                    stderr,
-                    stderr_style,
-                    byte_offset,
-                );
-            }
+        let output_rows = bash_structured_lines(lines, stdout, stderr, base, stderr_style);
+        if !output_rows.is_empty() {
+            byte_offset = emit_bash_lines_folded(
+                ctx,
+                mi,
+                block_idx,
+                indent,
+                wrap_w,
+                pad,
+                sel_range,
+                &output_rows,
+                byte_offset,
+            );
         }
         if *truncated {
             byte_offset = emit_bash_lines(
@@ -874,7 +838,13 @@ fn draw_bash_content(
 
     // Legacy fallback for non-Shell results (e.g. restored sessions whose
     // structured payload was not persisted): render the composed `content`
-    // string, highlighting the conventional section markers.
+    // string, highlighting the conventional section markers. This path does
+    // *not* middle-fold: the legacy `content` string inlines its markers
+    // (`Exit N`, `STDOUT:`, `[Output truncated` …) at arbitrary positions, so a
+    // head/tail window could hide a trailing event marker. Restored sessions
+    // are also the rare case — the live structured `Shell` path is what every
+    // fresh bash call takes, and it folds above. Folding here is low value and
+    // high risk, so the full content is rendered verbatim.
     let content = content.trim_end_matches(&['\r', '\n'][..]);
     if content.is_empty() {
         return;
@@ -963,6 +933,152 @@ fn emit_bash_lines(
         }
         byte_offset += logical_line.len() + 1;
     }
+    byte_offset
+}
+
+/// Materialize a structured `Shell` result's output stream into an ordered
+/// list of `(text, style)` logical lines, in the same byte-offset layout
+/// [`emit_bash_lines`] uses (one logical line per entry; the caller anchors
+/// them sequentially). Each entry carries its per-stream style so a folded
+/// view still colours stdout/stderr correctly even when the middle is dropped.
+///
+/// Prefers the arrival-ordered `lines` (the TUI-authoritative interleaved
+/// view), falling back to the all-stdout-then-all-stderr flat strings for the
+/// legacy / live-seed / restored-session path. Empty bands contribute nothing.
+fn bash_structured_lines(
+    lines: &[neenee_core::tool_output::ShellLine],
+    stdout: &str,
+    stderr: &str,
+    base: Style,
+    stderr_style: Style,
+) -> Vec<(String, Style)> {
+    use neenee_core::tool_output::ShellStream;
+    let mut out: Vec<(String, Style)> = Vec::new();
+    if !lines.is_empty() {
+        for l in lines {
+            let style = if l.stream == ShellStream::Err {
+                stderr_style
+            } else {
+                base
+            };
+            // `emit_bash_lines` normalizes CR/BS itself, so pass the raw text.
+            out.push((l.text.clone(), style));
+        }
+        return out;
+    }
+    // Legacy / live-seed fallback: all-stdout band then all-stderr band.
+    for (text, style) in [(stdout, base), (stderr, stderr_style)] {
+        let text = text.trim_end_matches(&['\r', '\n'][..]);
+        if text.is_empty() {
+            continue;
+        }
+        for line in text.split('\n') {
+            out.push((line.to_string(), style));
+        }
+    }
+    out
+}
+
+/// Render `rows` (logical `(text, style)` lines) at `indent`, folding the
+/// verbose middle into a single dim `⋯ N lines hidden` row when there are
+/// more than `BASH_FOLD_HEAD_ROWS + BASH_FOLD_TAIL_ROWS + 1` lines. Visible
+/// rows are registered for selection at their true `output`-space byte
+/// offsets: `byte_offset` advances past *every* logical line (including the
+/// hidden ones) so the tail rows anchor correctly, exactly as the unfolded
+/// path would. The synthesized ellipsis row is not selectable (it is a
+/// summary, not real content).
+///
+/// This preserves the contract that a selection spanning the fold copies the
+/// visible head and tail text only — the hidden middle is neither painted nor
+/// selectable, matching "you can't select what isn't on screen."
+#[allow(clippy::too_many_arguments)]
+fn emit_bash_lines_folded(
+    ctx: &mut RenderCtx<'_, '_>,
+    mi: usize,
+    block_idx: usize,
+    indent: usize,
+    wrap_w: usize,
+    pad: Style,
+    sel_range: Option<(usize, Option<usize>)>,
+    rows: &[(String, Style)],
+    mut byte_offset: usize,
+) -> usize {
+    let total = rows.len();
+    let fold_after = BASH_FOLD_HEAD_ROWS + BASH_FOLD_TAIL_ROWS + 1;
+    if total <= fold_after {
+        for (text, style) in rows {
+            byte_offset = emit_bash_lines(
+                ctx,
+                mi,
+                block_idx,
+                indent,
+                wrap_w,
+                pad,
+                sel_range,
+                text,
+                *style,
+                byte_offset,
+            );
+        }
+        return byte_offset;
+    }
+
+    // Window: first HEAD rows, one ellipsis row, last TAIL rows.
+    let head_end = BASH_FOLD_HEAD_ROWS;
+    let tail_start = total - BASH_FOLD_TAIL_ROWS;
+    let hidden = tail_start - head_end;
+
+    // ── head ──
+    for (text, style) in rows[..head_end].iter() {
+        byte_offset = emit_bash_lines(
+            ctx,
+            mi,
+            block_idx,
+            indent,
+            wrap_w,
+            pad,
+            sel_range,
+            text,
+            *style,
+            byte_offset,
+        );
+    }
+
+    // ── ellipsis ──
+    // Advance `byte_offset` past every hidden logical line so the tail rows
+    // anchor at their true `output`-space positions. Each hidden line occupies
+    // `text.len() + 1` bytes in the flat stream (the `+1` is the `\n`
+    // separator `emit_bash_lines` counts). `normalize_carriage_returns` can
+    // only shrink a line, so this upper bound keeps offsets monotonic; the
+    // tail offsets stay past the head, which is all selection anchoring needs.
+    for (text, _style) in rows[head_end..tail_start].iter() {
+        byte_offset += text.len() + 1;
+    }
+    let ellipsis_text = format!("⋯ {} lines hidden", hidden);
+    let used = indent + ellipsis_text.width();
+    let ellipsis_line = Line::from(vec![
+        Span::styled(" ".repeat(indent), pad),
+        Span::styled(ellipsis_text, pad.fg(ctx.theme.dim())),
+        Span::styled(padded_tail(ctx.full_width, used), pad),
+    ]);
+    let _ = ctx.paint(ellipsis_line); // summary row: not registered for selection
+
+    // ── tail ──
+    for (text, style) in rows[tail_start..].iter() {
+        byte_offset = emit_bash_lines(
+            ctx,
+            mi,
+            block_idx,
+            indent,
+            wrap_w,
+            pad,
+            sel_range,
+            text,
+            *style,
+            byte_offset,
+        );
+    }
+
     byte_offset
 }
 

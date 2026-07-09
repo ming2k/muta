@@ -64,11 +64,18 @@ pub struct ProviderTemplate {
     /// Template-specific user agent. Most providers use the default agent, but
     /// the coding-plan endpoints validate this header.
     pub user_agent: Option<&'static str>,
+    /// How seeded channels authenticate. `XaiOAuth` starts browser OAuth
+    /// before the name editor (OAuth-first add flow).
+    pub auth: neenee_core::ChannelAuth,
 }
 
 impl ProviderTemplate {
     /// The ordered, visible editor fields for this template (create mode).
+    /// OAuth templates only ask for the instance name (auth already completed).
     pub fn fields(&self) -> Vec<CustomField> {
+        if self.auth == neenee_core::ChannelAuth::XaiOAuth {
+            return vec![CustomField::Name];
+        }
         let mut fields = vec![CustomField::Name];
         if self.needs_url {
             fields.push(CustomField::BaseUrl);
@@ -79,6 +86,11 @@ impl ProviderTemplate {
         }
         // No Effort/Thinking: ADR-0046 made reasoning a per-model concern.
         fields
+    }
+
+    /// Whether selecting this template starts OAuth before the name editor.
+    pub fn oauth_first(&self) -> bool {
+        self.auth == neenee_core::ChannelAuth::XaiOAuth
     }
 }
 
@@ -114,6 +126,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.openai.com/v1/chat/completions"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "Anthropic",
@@ -125,6 +138,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.anthropic.com/v1/messages"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "Google Gemini",
@@ -136,6 +150,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "DeepSeek",
@@ -150,6 +165,19 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.deepseek.com/v1/chat/completions"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
+    },
+    ProviderTemplate {
+        label: "xAI OAuth",
+        description: "Grok 4.x via SuperGrok subscription (browser OAuth)",
+        protocol: "openai",
+        models: neenee_providers::XAI_BUILTIN_MODELS,
+        needs_url: false,
+        url_hint: "https://api.x.ai/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.x.ai/v1/chat/completions"),
+        user_agent: None,
+        auth: neenee_core::ChannelAuth::XaiOAuth,
     },
     ProviderTemplate {
         label: "Kimi Code",
@@ -162,6 +190,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
         user_agent: Some("opencode/0.1.0"),
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "ZAI Code",
@@ -174,6 +203,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.z.ai/api/coding/paas/v4/chat/completions"),
         user_agent: Some("opencode/1.17.10"),
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "OpenCode Go",
@@ -185,6 +215,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "Anthropic (sub2api)",
@@ -196,6 +227,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: None,
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
         label: "OpenAI (sub2api)",
@@ -207,6 +239,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: None,
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
     // Antigravity — a sub2api-style Gemini-native 中转站. The relay forwards
     // model ids verbatim to the Gemini REST surface, so the `gemini` protocol
@@ -236,6 +269,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         needs_model: false,
         default_url: Some("https://relay.example.com/antigravity/v1beta"),
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     },
 ];
 

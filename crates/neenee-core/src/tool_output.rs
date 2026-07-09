@@ -195,44 +195,121 @@ pub enum StdinPolicy {
 }
 
 /// Classify a shell `command` string as likely-interactive (would block
-/// waiting for stdin the agent cannot supply). This is the **advisory** L3
+/// waiting for input the agent cannot supply). This is the **advisory** L3
 /// layer: it speeds up failure and improves the error message for known
 /// interactive binaries, but correctness does **not** depend on it — the L1
 /// `stdin=/dev/null` hard floor (instant EOF) and the L2 idle watchdog catch
 /// anything the classifier misses, just slower and with a less specific
-/// message. So the classifier stays a small, conservative match on the
-/// leading program token: false negatives are merely slow, never wrong.
+/// message. So the classifier scans **every** program token in the command
+/// (splitting on whitespace *and* shell separators `|`, `&`, `;`, parens) so
+/// an interactive binary reached indirectly — via a pipeline (`echo pw |
+/// sudo -S x`), a command list (`cd a && gpg …`), or a wrapper (`git commit
+/// -S` → pinentry, `apt install` → whiptail) — is still caught. False
+/// positives merely offer an input prompt the operator can decline; false
+/// negatives are merely slow, never wrong.
 ///
 /// Matched unambiguously: privilege/password tools (`sudo`/`su`/`passwd`/
-/// `visudo`/`pinentry*`), `gpg` (unless a non-interactive flag like
-/// `--passphrase-file`/`--batch` is present), editors, pagers, and live
-/// monitors (`vim`/`nano`/`emacs`/`less`/`more`/`man`/`top`/`htop`/`watch`).
+/// `visudo`/`adduser`/`useradd`/`pinentry*`), full-screen dialog/TUI tools that
+/// seize the terminal (`whiptail`/`dialog`), `gpg` (unless a non-interactive
+/// flag like `--passphrase-file`/`--batch` is present), editors, pagers, and
+/// live monitors (`vim`/`vi`/`nano`/`emacs`/`less`/`more`/`man`/`top`/`htop`/
+/// `watch`).
 pub fn is_interactive_command(command: &str) -> bool {
-    // The leading token is the program: skip leading whitespace, then read
-    // up to the first whitespace. Shell builtins/punctuation (`if`, `for`,
-    // `(`, …) and absolute paths (`/usr/bin/sudo`) are handled by taking the
-    // basename-ish tail after the last `/`.
-    let trimmed = command.trim_start();
-    let first = match trimmed.split_whitespace().next() {
-        Some(s) => s,
-        None => return false,
-    };
-    let prog = first.rsplit('/').next().unwrap_or(first);
-    // `sudo`/`su` etc. with a non-interactive arg still match — the operator
-    // is offered input regardless; declining just yields Closed. The one
-    // refinement worth the complexity: `gpg` with `--batch` /
-    // `--passphrase-*` is genuinely non-interactive.
-    if prog.eq_ignore_ascii_case("gpg") {
-        return !trimmed.contains("--batch") && !trimmed.contains("--passphrase");
-    }
-    matches!(
-        prog,
-        "sudo" | "su" | "passwd" | "chpasswd" | "visudo" | "adduser" | "useradd"
-    ) || prog.starts_with("pinentry")
-        || matches!(
+    // Scan *every* program token, not just the first. Interactive programs are
+    // very often reached indirectly — `git commit -S` shells out to pinentry,
+    // `apt install foo` spawns whiptail, a pipeline `echo pw | sudo -S x` buries
+    // the privileged binary past the first token, and `cd a && gpg …` puts gpg
+    // behind `cd`. The old "leading token only" check silently missed all of
+    // these, so the input-injection panel never offered to help and the command
+    // ran straight into the idle watchdog.
+    //
+    // Tokens are split on shell separators too (|, &, ;, parens) so a binary
+    // reached via a pipeline or a command list is still seen. Each token is
+    // reduced to its basename (`/usr/bin/sudo` → `sudo`). This is the advisory
+    // L3 layer: a false positive merely offers an input prompt the operator can
+    // decline; a false negative is merely slow (caught by L1/L2). So we err on
+    // the side of matching.
+    //
+    // The single refinement worth the complexity: `gpg` with `--batch` /
+    // `--passphrase*` is genuinely non-interactive, so it is skipped when those
+    // flags appear anywhere in the command.
+    let gpg_noninteractive = command.contains("--batch") || command.contains("--passphrase");
+    for tok in
+        command.split(|c: char| c.is_whitespace() || matches!(c, '|' | '&' | ';' | '(' | ')'))
+    {
+        let prog = tok.rsplit('/').next().unwrap_or(tok);
+        if prog.is_empty() {
+            continue;
+        }
+        if prog.eq_ignore_ascii_case("gpg") {
+            // Bare gpg prompts via pinentry; with a non-interactive flag it
+            // does not.
+            if !gpg_noninteractive {
+                return true;
+            }
+            continue;
+        }
+        if matches!(
             prog,
-            "vim" | "vi" | "nano" | "emacs" | "less" | "more" | "man" | "top" | "htop" | "watch"
-        )
+            "sudo" | "su" | "passwd" | "chpasswd" | "visudo" | "adduser" | "useradd"
+        ) || prog.starts_with("pinentry")
+            || matches!(
+                prog,
+                // Full-screen TUI / dialog tools that seize the terminal via
+                // ncurses (writing to /dev/tty): a piped stdin can never
+                // satisfy them, and even isolated they block until killed.
+                "whiptail" | "dialog"
+            )
+            || matches!(
+                prog,
+                "vim"
+                    | "vi"
+                    | "nano"
+                    | "emacs"
+                    | "less"
+                    | "more"
+                    | "man"
+                    | "top"
+                    | "htop"
+                    | "watch"
+            )
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a shell `command` is asking for a *secret* (password/passphrase),
+/// so the inline input panel can mask the operator's typing. Uses the same
+/// token scan as [`is_interactive_command`] (splitting on whitespace *and*
+/// shell separators) so a credential-requiring binary reached via a pipeline
+/// (`echo pw | sudo -S x`) or a list (`cd a && gpg …`) is still recognised —
+/// the old "first token only" check would leave a buried `sudo` unmasked.
+///
+/// `gpg --batch` / `gpg --passphrase*` read the secret from a file/flag, not a
+/// prompt, so they are not treated as secret here (the operator is never asked
+/// to type anything).
+pub fn is_secret_command(command: &str) -> bool {
+    let gpg_noninteractive = command.contains("--batch") || command.contains("--passphrase");
+    for tok in
+        command.split(|c: char| c.is_whitespace() || matches!(c, '|' | '&' | ';' | '(' | ')'))
+    {
+        let prog = tok.rsplit('/').next().unwrap_or(tok);
+        if prog.is_empty() {
+            continue;
+        }
+        if prog.eq_ignore_ascii_case("gpg") {
+            if !gpg_noninteractive {
+                return true;
+            }
+            continue;
+        }
+        if matches!(prog, "sudo" | "su" | "passwd" | "visudo") || prog.starts_with("pinentry") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Why a shell step stopped. Drives the themed termination footer (L6) so the
@@ -408,7 +485,10 @@ fn skip_csi_params(bytes: &[u8], mut i: usize) -> usize {
 ///
 /// The model: a `\r` returns the caret to column 0 *without* erasing, so text
 /// after it **overwrites** the existing buffer from the start. `\b` steps one
-/// column back. This reproduces what the user saw on their terminal for the
+/// column back. `\t` is expanded to spaces at the next [`TAB_WIDTH`]-column
+/// stop (raw tabs report width 0 to `unicode_width`, so keeping them would
+/// desync the wrapper's column math from the grid and scramble the band's
+/// right edge). This reproduces what the user saw on their terminal for the
 /// common cases (single-segment overwrite, progress percentage replacing its
 /// own prefix) without committing to a full VT100 state machine — which would
 /// be terminal-emulator scope and would re-introduce the alt-screen /
@@ -441,11 +521,30 @@ pub fn normalize_carriage_returns(s: &str) -> String {
                 // Backspace: step one column left, but never below 0.
                 col = col.saturating_sub(1);
             }
+            // Expand tabs to the next 8-column stop instead of keeping the
+            // raw `\t`. unicode_width reports a tab as width 0, so a kept tab
+            // would be invisible to the downstream wrapper/padded_tail: they'd
+            // under-count the line's real columns, the padded tail would be
+            // too long, and the `code_bg` band would drift past the terminal's
+            // right edge — the classic "bash output scrambles the layout"
+            // symptom for indented/aligned command output (code, tables,
+            // `ls`/column output). Expanding to spaces makes the width math the
+            // wrapper computes agree with what the grid actually paints.
+            '\t' => {
+                let stop = TAB_WIDTH;
+                let target = (col / stop + 1) * stop;
+                while col < target {
+                    if col < cells.len() {
+                        cells[col] = ' ';
+                    } else {
+                        cells.push(' ');
+                    }
+                    col += 1;
+                }
+            }
             // Drop stray control bytes (BEL/FF/VT/…): no single-line rendering,
-            // and they'd corrupt width math. `\t` is excluded (kept as a
-            // normal cell) since tabs are meaningful indentation the
-            // downstream wrapper measures.
-            c if c.is_control() && c != '\t' => continue,
+            // and they'd corrupt width math.
+            c if c.is_control() => continue,
             c => {
                 if col < cells.len() {
                     cells[col] = c;
@@ -465,12 +564,13 @@ pub fn normalize_carriage_returns(s: &str) -> String {
 }
 
 /// Whether `s` needs [`normalize_carriage_returns`] to run. True when it
-/// contains a `\r`, a `\b`, or any control byte other than `\t` (which is
-/// preserved as meaningful whitespace). Kept separate so the fast path and
-/// any caller-side pre-check share one definition of "needs work".
+/// contains a `\r`, a `\b`, a `\t`, or any other control byte. Kept separate
+/// so the fast path and any caller-side pre-check share one definition of
+/// "needs work". (`\t` is included because it must be expanded to spaces —
+/// see the loop body — not because it is "stray".)
 fn needs_normalization(s: &str) -> bool {
     s.chars()
-        .any(|c| c == '\r' || c == '\u{8}' || (c.is_control() && c != '\t'))
+        .any(|c| c == '\r' || c == '\u{8}' || c == '\t' || c.is_control())
 }
 
 /// Prefix each line of `text` with its 1-based file line number, derived from
@@ -636,6 +736,12 @@ pub const SHELL_MAX_OUTPUT_CHARS: usize = 8000;
 /// When the output is large, the text path keeps this many leading characters.
 pub const SHELL_TRUNCATED_CHARS: usize = 4000;
 
+/// The column width a tab expands to in [`normalize_carriage_returns`]. Raw
+/// `\t` bytes report width 0 to `unicode_width`, so they are rewritten to this
+/// many spaces (aligned to the next stop) before the renderer ever measures
+/// them — keeping the wrapper's column math in sync with the grid.
+pub const TAB_WIDTH: usize = 8;
+
 /// Reconstruct the legacy bash-tool display string from structured fields.
 /// Mirrors `BashTool::call` byte-for-byte so migrating to [`ToolOutput::Shell`]
 /// changes nothing for text-based consumers. The truncation policy
@@ -740,11 +846,16 @@ mod tests {
     }
 
     #[test]
-    fn tabs_preserved_as_meaningful_whitespace() {
-        // `\t` is a control byte but means indentation here; it must survive
-        // the stray-byte scrub (only BEL/FF/VT/… are dropped).
+    fn tabs_expanded_to_spaces() {
+        // `\t` is expanded to spaces at the next 8-column stop (raw tabs
+        // report width 0 to unicode_width, which would desync the wrapper's
+        // column math and scramble the band's right edge).
         use super::normalize_carriage_returns;
-        assert_eq!(normalize_carriage_returns("a\tb"), "a\tb");
+        assert_eq!(normalize_carriage_returns("a\tb"), "a       b");
+        // A leading tab lands on stop 8.
+        assert_eq!(normalize_carriage_returns("\tab"), "        ab");
+        // Two tabs in a row still snap to stops.
+        assert_eq!(normalize_carriage_returns("\t\tend"), "                end");
     }
 
     #[test]
@@ -787,6 +898,67 @@ mod tests {
         assert!(!is_interactive_command(
             "gpg --passphrase-file /tmp/pw --decrypt f"
         ));
+    }
+
+    #[test]
+    fn interactive_classifier_catches_nested_invocation() {
+        // The interactive binary is NOT the leading token — it is reached via
+        // a pipeline, a `&&` list, or an absolute path. The old "first token
+        // only" check missed all of these.
+        use super::is_interactive_command;
+        // Buried past a pipeline (`echo pw | sudo -S x`).
+        assert!(is_interactive_command("echo secret | sudo -S apt update"));
+        // Behind a `cd &&` list.
+        assert!(is_interactive_command("cd /etc && visudo"));
+        // Absolute path → basename match.
+        assert!(is_interactive_command("cd /root && /usr/bin/sudo ls"));
+        // Bare gpg behind a list (no non-interactive flag).
+        assert!(is_interactive_command("cd a && gpg --sign f"));
+        // gpg behind a list but WITH a passphrase flag → still non-interactive.
+        assert!(!is_interactive_command("cd a && gpg --batch --sign f"));
+    }
+
+    #[test]
+    fn interactive_classifier_flags_dialog_tools() {
+        // Full-screen TUI tools that seize the terminal via ncurses /dev/tty.
+        use super::is_interactive_command;
+        assert!(is_interactive_command(
+            "whiptail --title hi --msgbox x 10 40"
+        ));
+        assert!(is_interactive_command("dialog --menu pick 10 40 3"));
+        // Reached indirectly (apt spawns whiptail is implicit, but an explicit
+        // `... && whiptail ...` must also match).
+        assert!(is_interactive_command(
+            "prepare.sh && whiptail --gauge work 10 40 0"
+        ));
+    }
+
+    #[test]
+    fn secret_classifier_flags_credential_binaries() {
+        use super::is_secret_command;
+        // Direct credential binaries.
+        assert!(is_secret_command("sudo apt update"));
+        assert!(is_secret_command("passwd user"));
+        assert!(is_secret_command("pinentry-curses"));
+        assert!(is_secret_command("gpg --decrypt f"));
+        // Buried past a pipeline: the operator is still typing a password, so
+        // the input panel must mask it. (The old first-token-only check would
+        // have left this unmasked.)
+        assert!(is_secret_command("echo secret | sudo -S apt update"));
+    }
+
+    #[test]
+    fn secret_classifier_leaves_non_secret_input_unmasked() {
+        use super::is_secret_command;
+        // Editors/pagers/dialog tools are interactive but not secrets: their
+        // input panel should NOT mask typing.
+        assert!(!is_secret_command("vim file.txt"));
+        assert!(!is_secret_command("less README.md"));
+        assert!(!is_secret_command("whiptail --msgbox hi 10 40"));
+        // gpg with a non-interactive flag reads the secret from a file, never
+        // asking the operator to type → not a secret prompt.
+        assert!(!is_secret_command("gpg --batch --sign f"));
+        assert!(!is_secret_command("gpg --passphrase-file pw --decrypt f"));
     }
 
     #[test]

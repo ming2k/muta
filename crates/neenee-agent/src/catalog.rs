@@ -38,7 +38,17 @@ pub fn default_provider_id(config: &Config) -> &str {
 /// fields (`base_url`, `user_agent`) fall back to localhost defaults so a
 /// minimal entry still builds.
 fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Channel {
-    let api_key = env_or_config(uc.api_key_env.as_deref(), uc.api_key.clone()).unwrap_or_default();
+    // SuperGrok OAuth: bearer from auth.toml (key "xai"); activate/switch
+    // refreshes via XaiOAuth::resolve_access_token before catalog snapshot.
+    let api_key = match uc.auth {
+        neenee_core::ChannelAuth::XaiOAuth => neenee_auth::AuthStore::load()
+            .get(neenee_auth::AUTH_PROVIDER_ID)
+            .map(|tokens| tokens.access.clone())
+            .unwrap_or_default(),
+        neenee_core::ChannelAuth::ApiKey => {
+            env_or_config(uc.api_key_env.as_deref(), uc.api_key.clone()).unwrap_or_default()
+        }
+    };
     let model = uc
         .model
         .clone()
@@ -553,10 +563,22 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 key_ready: entry.key_ready(),
                 favorite: config.favorites.iter().any(|fav| fav == &entry.id),
                 last_used_ms: usage.last_used_ms(&entry.id),
+                auth: provider_auth(config, &entry.id),
             }
         })
         .collect();
     ProviderPickerSnapshot { default_id, rows }
+}
+
+/// Auth mode of a user provider's default channel (`ApiKey` when unknown).
+fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth {
+    config
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.channels.get(p.default_channel.min(p.channels.len().saturating_sub(1))))
+        .map(|ch| ch.auth)
+        .unwrap_or_default()
 }
 
 /// Map a channel's transport to the `(protocol_wire_id, base_url)` pair the TUI

@@ -71,6 +71,23 @@ pub enum AgentRequest {
         api_key: String,
         user_agent: Option<String>,
         models: Vec<String>,
+        /// How the seeded channels authenticate. Default (`ApiKey`) keeps the
+        /// historical behavior; `XaiOAuth` marks SuperGrok channels whose live
+        /// access token is resolved from `auth.toml`.
+        auth: crate::ChannelAuth,
+    },
+    /// Connect (authenticate) an OAuth provider — currently xAI SuperGrok. Runs
+    /// the browser-loopback or device-code flow, persists tokens to `auth.toml`,
+    /// then activates `id`. Progress streams via [`AgentResponse::ConnectStatus`].
+    ConnectProvider {
+        id: String,
+        method: crate::LoginMethod,
+    },
+    /// Run xAI SuperGrok OAuth **before** a provider instance exists
+    /// ("+ Add provider → xAI OAuth"). Persists tokens and streams
+    /// [`AgentResponse::ConnectStatus`]; the TUI then prompts for instance name.
+    AuthorizeOAuth {
+        method: crate::LoginMethod,
     },
     /// Edit a user-defined provider's metadata in place (display name, protocol,
     /// base URL, API key) without touching its model list — every channel keeps
@@ -266,6 +283,8 @@ pub enum AgentResponse {
         provider: String,
         model: String,
     },
+    /// Progress of an OAuth connect/authorize flow (xAI SuperGrok).
+    ConnectStatus(ConnectStatus),
     /// Full session-context snapshot (model + tools + permissions + skills +
     /// mcp) for the session modal. Sent in reply to [`AgentRequest::QuerySessionContext`]
     /// and re-sent after any mutation handled by the harness
@@ -562,6 +581,30 @@ pub struct ProviderPickerRow {
     /// Unix epoch milliseconds of the last activation. `None` if the provider
     /// has never been activated, which the picker sorts as "oldest".
     pub last_used_ms: Option<u64>,
+    /// How the default channel authenticates. Surfaced so the TUI can route an
+    /// OAuth provider with no stored token to the connect flow rather than the
+    /// API-key editor.
+    #[serde(default)]
+    pub auth: crate::ChannelAuth,
+}
+
+/// Progress / outcome of an OAuth connect flow (xAI SuperGrok).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ConnectStatus {
+    /// User must complete authorization out-of-band. `url` is the authorize /
+    /// verification URL; `user_code` is set for device-code (empty for browser).
+    Pending {
+        provider: String,
+        url: String,
+        user_code: String,
+        message: String,
+    },
+    /// Authorization succeeded; tokens persisted (and provider activated when
+    /// this followed [`AgentRequest::ConnectProvider`]).
+    Done { provider: String },
+    /// Authorization failed or was denied.
+    Failed { provider: String, message: String },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

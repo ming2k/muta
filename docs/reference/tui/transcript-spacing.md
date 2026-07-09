@@ -53,9 +53,11 @@ own shape:
 
 - user message panel text padding: `USER_MESSAGE_TEXT_GAP_COLS`,
   `USER_MESSAGE_RIGHT_PAD_COLS`;
-- expanded tool-step body top padding: `TOOL_STEP_BODY_TOP_GAP_ROWS`;
 - reasoning body/block padding: `REASONING_TRACE_BODY_TOP_GAP_ROWS`,
   `REASONING_TRACE_BLOCK_GAP_ROWS`;
+- tool-step body indent: `TOOL_STEP_BODY_INDENT_COLS`
+  (`TOOL_STEP_BODY_TOP_GAP_ROWS` exists but is pinned to 0 — see the tool-step
+  special case below);
 - block-level code/math band geometry: `BLOCK_SURFACE_H_INSET`,
   `CODE_BAND_*`, `MATH_MARKER_GAP_COLS`.
 
@@ -67,7 +69,12 @@ first. A named token explains intent; a bare `2usize` does not.
 Tool steps deliberately support a compact log shape:
 
 - collapsed adjacent tool steps stack flush with no blank row;
-- an expanded body gets a top gap from its own header;
+- an expanded body sits directly under its header — grouping is carried by the
+  body indent (`TOOL_STEP_BODY_INDENT_COLS`) alone, with **no** top blank row
+  (`TOOL_STEP_BODY_TOP_GAP_ROWS` is pinned to 0). A blank row would be a
+  panel/card affordance that competes with the indent (the row says "two
+  blocks", the indent says "one block's content"); the flat log shape wants the
+  indent to own the grouping;
 - there is no dedicated tool-step bottom-gap token because the layout's
   message-level separator supplies the trailing row.
 

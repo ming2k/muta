@@ -155,6 +155,10 @@ pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
 /// the OpenAI-compatible API, one key). Each id exists in the model registry.
 pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
 
+/// xAI Grok models over OpenAI-compatible chat completions (SuperGrok OAuth or
+/// `XAI_API_KEY`).
+pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
+
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
 /// frontier chat lineup — the GPT-5.x family; `gpt-5.5` (the flagship) is the
@@ -411,6 +415,11 @@ mod build_tests {
             )
             .chain(
                 crate::OPENAI_BUILTIN_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::XAI_BUILTIN_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAiCompat)),
             )

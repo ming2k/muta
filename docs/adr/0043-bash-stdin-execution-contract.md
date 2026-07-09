@@ -45,6 +45,23 @@ A six-layer **execution contract** makes every shell step non-interactive by
 construction, with control-sequence output normalized, and a human-input
 escape hatch for the one legitimate interactive case (sudo/gpg passwords).
 
+### Layer 0 — child isolated from the controlling terminal
+
+Spawn every child with `.process_group(0)` (Unix), which calls
+`setpgid(0, 0)` between fork and exec so the child lands in its own process
+group, off neenee's session. The TUI runs in raw mode + alt screen on the
+*real* terminal; a plain `sh -c` child otherwise inherits our controlling
+tty, and any program that opens `/dev/tty` (`pinentry-curses`, `whiptail`,
+`dialog`, `sudo`'s password prompt, `clear`/`reset`, ncurses tools pulled in
+transitively by `git`/`apt`/…) would write raw escape sequences *straight* to
+our alternate screen, bypassing the retained grid + diff renderer and
+scrambling the layout. In its own process group (with non-tty stdout/stderr
+pipes) such a program either errors out fast (ENXIO on `/dev/tty`) or blocks
+until the idle watchdog (L2) kills it with a remedy footer — instead of
+taking over the screen. This is the structural fix for both "bash output
+scrambles the layout" and "pinentry-type prompts aren't intercepted": those
+programs never reach our terminal at all.
+
 ### Layer 1 — stdin closed by default (hard floor)
 
 Spawn with `.stdin(Stdio::null())` unless a declared source provides input.
@@ -63,19 +80,29 @@ keep producing and reset the idle deadline; only a blocked command trips it.
 
 ### Layer 3 — interactive classifier (advisory)
 
-`is_interactive_command(command)` matches the leading program token against
-known-interactive binaries (`sudo`/`su`/`passwd`/`visudo`/`pinentry*`, bare
-`gpg`, editors, pagers, live monitors). This is **advisory**: correctness
-rests on Layers 1+2 (the hard floor catches anything the classifier misses),
-so the classifier only makes failure *faster* and the error *more specific*.
-`gpg --batch` / `gpg --passphrase*` is treated as non-interactive.
+`is_interactive_command(command)` scans **every** program token in the command
+(splitting on whitespace *and* shell separators `|`, `&`, `;`, parens) against
+known-interactive binaries (`sudo`/`su`/`passwd`/`visudo`/`adduser`/`useradd`/
+`pinentry*`, full-screen dialog/TUI tools `whiptail`/`dialog`, bare `gpg`,
+editors, pagers, live monitors). Scanning the whole command — not just the
+leading token — catches an interactive binary reached indirectly via a
+pipeline (`echo pw | sudo -S x`), a command list (`cd a && gpg …`), or a
+wrapper (`git commit -S` → pinentry). This is **advisory**: correctness rests
+on Layers 0+1+2 (the isolation + hard floor catch anything the classifier
+misses), so the classifier only makes failure *faster* and the error *more
+specific*. `gpg --batch` / `gpg --passphrase*` is treated as non-interactive.
+A sibling `is_secret_command(command)` (same scan) decides whether the inline
+input panel masks the operator's typing (true for `sudo`/`gpg`/`passwd`/…).
 
 ### Layer 4 — `\r`-aware capture
 
 `normalize_carriage_returns(line)` resolves carriage-return / backspace
 terminal semantics CI-log-viewer style: `\r` returns the caret to column 0
 (without erasing), so the following text overwrites in place; `\b` steps one
-column back; stray control bytes (BEL/FF/VT) are dropped; `\t` is preserved.
+column back; stray control bytes (BEL/FF/VT) are dropped; `\t` is **expanded
+to spaces** at the next 8-column tab stop (raw tabs report width 0 to
+`unicode_width`, so keeping them would desync the wrapper's column math from
+the grid and let the `code_bg` band drift past the terminal's right edge).
 Applied at capture so neither the model-facing text nor the renderer ever
 sees raw `\r`. The renderer's former `rsplit` approximation now delegates to
 the same function, so both paths agree.

@@ -76,8 +76,9 @@ pub use neenee_core::{
     SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, ThreadPursuit, TokenUsage,
     Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion,
     UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes,
-    estimate_tokens, is_context_overflow, is_interactive_command, parse_retryable_error,
-    prune_tool_results, public_error_message, retryable_error, truncate_utf8,
+    estimate_tokens, is_context_overflow, is_interactive_command, is_secret_command,
+    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
+    truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from

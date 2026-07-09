@@ -259,6 +259,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                 api_key,
                 user_agent,
                 models,
+                auth,
             } => {
                 crate::handlers_provider::add(
                     &mut config,
@@ -273,8 +274,24 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     api_key,
                     user_agent,
                     models,
+                    auth,
                 )
                 .await;
+            }
+            AgentRequest::ConnectProvider { id, method } => {
+                crate::handlers_provider::connect(
+                    &config,
+                    &agent,
+                    &provider_for_task,
+                    &resp_tx,
+                    &mut provider_usage,
+                    id,
+                    method,
+                )
+                .await;
+            }
+            AgentRequest::AuthorizeOAuth { method } => {
+                crate::handlers_provider::authorize(&resp_tx, method).await;
             }
             AgentRequest::EditProvider {
                 id,

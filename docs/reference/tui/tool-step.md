@@ -49,7 +49,7 @@ session.
 
 | Tool | Renderer | Notes |
 |------|----------|-------|
-| `bash` | `draw_bash_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. |
+| `bash` | `draw_bash_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. Long output is **middle-folded** (see [Long output folding](#long-output-folding)). |
 | `list_dir`, `glob` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
 | `grep` | `draw_grep_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
 | `edit_file`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
@@ -79,6 +79,31 @@ summary line is:
 [ADR-0008](../../adr/0008-single-breathing-anchor.md), the activity bar is the
 single breathing anchor, so the parent summary carries a steady accent while
 running — no luminance sweep.)
+
+### Long output folding
+
+An expanded `bash` step can emit hundreds of stdout/stderr lines, which would
+bury the trailing "events" — the `exit N` line, the `[output truncated]`
+marker, and the themed termination footer (timeout / blocked / cancelled) —
+far below the fold. To keep those events visible, the structured `Shell`
+output is **middle-folded** when it exceeds `BASH_FOLD_HEAD_ROWS +
+BASH_FOLD_TAIL_ROWS + 1` logical lines (default 7):
+
+- a head of the first 3 output lines (full, selectable),
+- one dim `⋯ N lines hidden` summary row (not selectable),
+- a tail of the last 3 output lines (full, selectable), then
+- the `exit N` / `[output truncated]` / termination footers, always visible.
+
+Short output (≤ 7 lines) renders verbatim, so folding only kicks in when it
+actually saves a row. This is a pure rendering convenience: it does **not** add
+a third disclosure state (the binary Collapsed/Expanded model is unchanged), so
+flush-stack spacing and the `user_pinned` invariant are unaffected. Selection
+still works on the visible head and tail — `byte_offset` advances past the
+hidden middle so the tail rows anchor at their true source positions, exactly
+as the unfolded path would; hidden rows are neither painted nor selectable.
+Only the live structured `Shell` path folds; the legacy flat-`content` fallback
+(used by restored sessions without a structured payload) renders verbatim,
+since it inlines its markers (`Exit N`, `STDOUT:`, …) at arbitrary positions.
 
 ## Inline disclosure
 

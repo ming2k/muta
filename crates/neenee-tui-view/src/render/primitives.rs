@@ -130,6 +130,7 @@ pub(super) fn modal_spec(modal: Modal) -> Option<ModalSpec> {
         // Provider-template chooser: a short list of templates (label +
         // description) plus the footer.
         Modal::ProviderTemplate => fixed(64, 46),
+        Modal::OauthPending => fixed(64, 36),
         // Custom-provider editor: tall enough for the form rows plus the
         // type-to-filter suggestion dropdown below them.
         Modal::CustomProvider => fixed(66, 66),
@@ -695,6 +696,7 @@ mod tests {
             Modal::Question,
             Modal::ModelEditor,
             Modal::ProviderTemplate,
+            Modal::OauthPending,
             Modal::CustomProvider,
             Modal::Help,
             Modal::Sessions,

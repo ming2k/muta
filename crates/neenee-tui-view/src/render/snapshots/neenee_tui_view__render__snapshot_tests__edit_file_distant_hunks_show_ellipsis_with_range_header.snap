@@ -1,9 +1,8 @@
 ---
-source: crates/neenee-code/src/tui/render/snapshot_tests.rs
+source: crates/neenee-tui-view/src/render/snapshot_tests.rs
 expression: "render_grid(&m, 80, 40)"
 ---
 - Edit a.rs +2 -2
-
    1  1  line  1
    2  2  line  2
    3   - CHANGE
@@ -23,19 +22,18 @@ expression: "render_grid(&m, 80, 40)"
 backgrounds:
 A=#070808  B=#111312  C=#201414  D=#402828  E=#121F16  F=#2A4030  .=reset
 0: A80
-1: A80
+1: B80
 2: B80
-3: B80
-4: C9 D6 C65
-5: E9 F6 E65
+3: C9 D6 C65
+4: E9 F6 E65
+5: B80
 6: B80
 7: B80
 8: B80
 9: B80
 10: B80
 11: B80
-12: B80
-13: C9 D6 C65
-14: E9 F6 E65
+12: C9 D6 C65
+13: E9 F6 E65
+14: B80
 15: B80
-16: B80

@@ -199,6 +199,8 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         // Anthropic — Claude family over the `/messages` API (configurable base
         // URL; defaults to the official endpoint).
         "anthropic" => ("Anthropic", "Claude models"),
+        // xAI Grok — OpenAI-compatible chat completions; SuperGrok OAuth or API key.
+        "xai" => ("xAI", "Grok models (SuperGrok / API key)"),
         _ => return None,
     };
     Some((name, description))

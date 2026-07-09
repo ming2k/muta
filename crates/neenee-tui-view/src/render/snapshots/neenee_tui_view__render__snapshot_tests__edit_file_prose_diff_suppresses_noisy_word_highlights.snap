@@ -1,9 +1,8 @@
 ---
-source: crates/neenee-code/src/tui/render/snapshot_tests.rs
+source: crates/neenee-tui-view/src/render/snapshot_tests.rs
 expression: "render_grid(&m, 100, 30)"
 ---
 - Edit docs/explanation/tui.md +1 -1
-
    1   - Because the frame is a pure function of state, anything that changes state — a streamed tok
          en, a permission request, a mouse drag — shows up on the very next frame with no manual inv
          alidation.
@@ -13,9 +12,8 @@ expression: "render_grid(&m, 100, 30)"
 backgrounds:
 A=#070808  B=#201414  C=#121F16  .=reset
 0: A100
-1: A100
+1: B100
 2: B100
 3: B100
-4: B100
+4: C100
 5: C100
-6: C100

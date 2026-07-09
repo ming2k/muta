@@ -669,7 +669,6 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux-sys",
 ]
@@ -677,7 +676,6 @@ dependencies = [
 [[package]]
 name = "flux-sys"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -686,7 +684,6 @@ dependencies = [
 [[package]]
 name = "flux-text"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux",
  "flux-text-sys",
@@ -695,7 +692,6 @@ dependencies = [
 [[package]]
 name = "flux-text-layout"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux-sys",
  "flux-text",
@@ -705,7 +701,6 @@ dependencies = [
 [[package]]
 name = "flux-text-sys"
 version = "0.1.1"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1283,7 +1278,6 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 [[package]]
 name = "iris"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "iris-sys",
  "lens",
@@ -1293,7 +1287,6 @@ dependencies = [
 [[package]]
 name = "iris-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1418,7 +1411,6 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "lens"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux",
  "lens-sys",
@@ -1427,7 +1419,6 @@ dependencies = [
 [[package]]
 name = "lens-sys"
 version = "0.1.0"
-source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1675,6 +1666,22 @@ dependencies = [
  "neenee-core",
  "reqwest",
  "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "neenee-auth"
+version = "0.18.0"
+dependencies = [
+ "base64",
+ "neenee-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]

@@ -146,6 +146,9 @@ pub const EFFORT_OPENAI_GPT: &[Effort] = &[
     Effort::Xhigh,
 ];
 
+/// xAI Grok effort ladder (`none` / `low` / `medium` / `high`).
+pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medium, Effort::High];
+
 #[cfg(test)]
 mod tests {
     use super::*;

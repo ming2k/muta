@@ -38,10 +38,12 @@ pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, Tool
 pub mod tool_output;
 pub use tool_output::{
     PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream, is_interactive_command,
+    is_secret_command,
 };
 
 pub mod capability;
 pub mod catalog;
+pub mod channelauth;
 pub mod effort;
 pub use effort::{
     EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
@@ -74,14 +76,15 @@ pub use capability::{
     ScopeTarget, Tool, VariantSelection, empty_variant_selection,
 };
 pub use catalog::{Channel, ProviderEntry, Transport};
+pub use channelauth::{ChannelAuth, LoginMethod};
 pub use doomguardconfig::DoomGuardConfig;
 pub use dynamic::DynamicCatalog;
 pub use envoy::{EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
-    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, EnvoyEvent, HarnessSnapshot,
-    InputReply, InputRequest, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
-    ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RoundEvent,
+    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus, EnvoyEvent,
+    HarnessSnapshot, InputReply, InputRequest, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity,
+    NoticeSource, NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest,
+    PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RoundEvent,
     SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
     UserQuestionReply, UserQuestionRequest,
 };

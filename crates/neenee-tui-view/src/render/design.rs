@@ -27,17 +27,26 @@ pub(super) const MESSAGE_GAP_ROWS: usize = 1;
 /// row and one bottom transition row.
 pub(super) const USER_MESSAGE_TRANSITION_ROWS: usize = 1;
 
-/// Breathing room around an expanded tool step's body. The gap belongs to the
-/// *body*, not the step boundary: collapsed tool steps stack flush (no blank
-/// row between adjacent headers — see `draw_transcript`'s
-/// `collapsed_tool_into_tool_step` suppression), so a batch of parallel /
-/// sequential tool calls reads as one compact log block. Only an expanded body
-/// is padded — `TOOL_STEP_BODY_TOP_GAP_ROWS` rows above it (separating it from
-/// its own header) and one `MESSAGE_GAP_ROWS` row below it (separating it from
-/// the next step's header). There is no dedicated bottom-gap token: the
-/// message-level separator supplies that single trailing row, so an extra
-/// trailing gap here would double it.
-pub(super) const TOOL_STEP_BODY_TOP_GAP_ROWS: usize = 1;
+/// Vertical gap between an expanded tool step's header and its own body. Held
+/// to **0**: a tool step is a flat *log entry* (no band, no Tool/Arguments/
+/// Result labels — see `draw_tool_step`), so the body's grouping under its
+/// header is carried by a **single** signal — the indent
+/// (`TOOL_STEP_BODY_INDENT_COLS`). A blank row here would be a *panel/card*
+/// affordance left over from the old banded shape; it competes with the indent
+/// rather than reinforcing it (the row says "two separate blocks", the indent
+/// says "this is the header's content"). Removing it lets the indent own the
+/// grouping and keeps an expanded step as tight as a collapsed batch.
+///
+/// The token is kept at 0 rather than deleted so the decision is *visible* in
+/// code: the absence of a top gap is a deliberate choice, not an oversight,
+/// and the one place that would want to re-introduce it (`draw_tool_step`)
+/// reads the named token.
+///
+/// The bottom of the body is still closed by the layout's `MESSAGE_GAP_ROWS`
+/// separator (no dedicated bottom-gap token — an extra one would double it),
+/// and a collapsed batch stays flush via `draw_transcript`'s
+/// `collapsed_tool_into_tool_step` suppression.
+pub(super) const TOOL_STEP_BODY_TOP_GAP_ROWS: usize = 0;
 pub(super) const TOOL_STEP_SECTION_GAP_ROWS: usize = 1;
 pub(super) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS;
 
@@ -158,6 +167,23 @@ pub(super) const CODE_BAND_GUTTER_GAP: usize = 1;
 /// Minimum width of the line-number column so single-digit files align
 /// cleanly. Grows to fit the highest displayed line number in either band.
 pub(super) const CODE_BAND_GUTTER_MIN_WIDTH: usize = 2;
+
+// ── Bash output middle-folding ───────────────────────────────────────────
+// An expanded bash step can emit hundreds of stdout/stderr lines, burying the
+// trailing "events" — the `exit N` line, the `[output truncated]` marker, and
+// the termination footer (timeout / blocked / cancelled) — far below the fold.
+// Folding collapses the verbose middle into a single `⋯ N lines hidden` row,
+// keeping a head of leading context and a tail of trailing context plus every
+// event footer always visible. Short output (≤ HEAD + TAIL + 1 logical lines)
+// renders verbatim, so folding only kicks in when it actually saves a row.
+// This is a pure rendering convenience — the binary Disclosure
+// (Collapsed/Expanded) and the persisted `expanded` field are untouched, so
+// flush-stack spacing and the `user_pinned` invariant are unaffected.
+
+/// Leading output lines kept visible above a folded bash middle.
+pub(super) const BASH_FOLD_HEAD_ROWS: usize = 3;
+/// Trailing output lines kept visible below a folded bash middle.
+pub(super) const BASH_FOLD_TAIL_ROWS: usize = 3;
 
 // ── Left-bar panels (panel_block family) ─────────────────────────────────
 // `panel_block` is a borderless solid-bg panel with a single thick colored

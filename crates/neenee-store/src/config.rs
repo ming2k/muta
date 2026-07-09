@@ -9,9 +9,13 @@
 use crate::fsutil;
 use crate::paths;
 use neenee_core::{
-    CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, SkillsConfig,
+    ChannelAuth, CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, SkillsConfig,
     VariantSelection, WebSearchConfig,
 };
+
+/// Re-export so server/TUI can use the config-layer path without depending on
+/// core's auth module name directly for `AddProvider`.
+pub use neenee_core::ChannelAuth as ConfigChannelAuth;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -183,6 +187,13 @@ pub struct UserChannelConfig {
     /// `User-Agent` header (OpenAI-compatible only).
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// How this channel authenticates. The default (`ApiKey`) keeps the
+    /// existing behavior: the bearer comes from `api_key_env` / `api_key`.
+    /// `XaiOAuth` instead resolves a live SuperGrok access token from
+    /// `auth.toml` (refreshing it on demand) — the `api_key`/`api_key_env`
+    /// fields are ignored. See `neenee_auth` and ADR-0052.
+    #[serde(default)]
+    pub auth: ChannelAuth,
     /// Reasoning `effort` for an OpenAI or Anthropic channel — one of
     /// `"none"`/`"minimal"`/`"low"`/`"medium"`/`"high"`/`"xhigh"`/`"max"` —
     /// clamped at request time to the resolved model's supported levels.

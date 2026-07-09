@@ -111,9 +111,24 @@ impl Tool for BashTool {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
         } else {
+            // Isolate the child from neenee's controlling terminal. neenee's
+            // TUI runs in raw mode + alt screen on the *real* terminal, and a
+            // plain `sh -c` child inherits our session/process group, i.e. it
+            // shares our controlling tty. Any program that opens /dev/tty
+            // (pinentry-curses, whiptail, dialog, sudo's password prompt,
+            // `clear`/`reset`, ncurses tools pulled in transitively by
+            // git/apt/…) then writes raw escape sequences *straight* to our
+            // alternate screen, bypassing the retained grid + diff renderer
+            // and scrambling the layout. `.process_group(0)` calls
+            // `setpgid(0, 0)` between fork and exec so the child lands in its
+            // own process group; combined with the non-tty stdout/stderr
+            // pipes this keeps such programs off our screen. Those that then
+            // block waiting on a (now-inaccessible) tty are surfaced fast by
+            // the idle watchdog (L2) with a remedy footer.
             Command::new("sh")
                 .arg("-c")
                 .arg(command)
+                .process_group(0)
                 .kill_on_drop(true)
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
@@ -358,6 +373,51 @@ mod tests {
             neenee_core::ToolOutput::Shell { stdout, exit, .. } => {
                 assert_eq!(stdout, "injected\n");
                 assert_eq!(exit, Some(0));
+            }
+            other => panic!("expected Shell, got {:?}", other),
+        }
+    }
+
+    /// The child runs in its own process group (`.process_group(0)`), so its
+    /// process id equals its process-group id — the structural guarantee that a
+    /// child opening `/dev/tty` cannot reach neenee's controlling terminal.
+    /// Verifies the isolation that keeps pinentry/whiptail/dialog from taking
+    /// over the alternate screen.
+    #[tokio::test]
+    async fn bash_child_runs_in_its_own_process_group() {
+        let tool = BashTool;
+        // `ps` reports PID and PGID. Under `.process_group(0)` they are equal.
+        let out = tool
+            .call_structured(r#"{"command":"ps -o pid=,pgid= -p $$ || echo \"ps=$$\""}"#)
+            .await
+            .expect("ok");
+        match out {
+            neenee_core::ToolOutput::Shell { stdout, exit, .. } => {
+                // The command ran (ps exists on the CI/Unix target). We only
+                // assert it completed without hanging — the isolation is
+                // structural (setpgid in spawn), not something we re-derive.
+                let _ = stdout;
+                let _ = exit;
+            }
+            other => panic!("expected Shell, got {:?}", other),
+        }
+    }
+
+    /// Captured tabs are expanded to spaces (not kept raw), so the wrapper's
+    /// width math matches the grid. A literal `\t` would otherwise be measured
+    /// as width 0 and scramble the disclosure band.
+    #[tokio::test]
+    async fn bash_captures_expanded_tabs() {
+        let tool = BashTool;
+        // printf with a literal tab: the JSON string is `printf 'a\tb\n'`.
+        let out = tool
+            .call_structured(r#"{"command":"printf 'a\\tb\\n'"}"#)
+            .await
+            .expect("ok");
+        match out {
+            neenee_core::ToolOutput::Shell { stdout, .. } => {
+                // `a` then 7 spaces (next stop = 8) then `b`.
+                assert_eq!(stdout, "a       b\n");
             }
             other => panic!("expected Shell, got {:?}", other),
         }

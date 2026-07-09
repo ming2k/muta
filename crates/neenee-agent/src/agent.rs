@@ -2829,11 +2829,7 @@ impl Agent {
                 tracing::info!(command = %command, "interactive command stdin closed under unattended");
                 return StdinPolicy::default();
             }
-            let secret = command.split_whitespace().next().map(|t| {
-                let prog = t.rsplit('/').next().unwrap_or(t);
-                matches!(prog, "sudo" | "su" | "passwd" | "gpg" | "visudo")
-                    || prog.starts_with("pinentry")
-            }) == Some(true);
+            let secret = is_secret_command(&command);
             let prompt = if secret {
                 "Enter the secret this command is waiting for:".to_string()
             } else {
