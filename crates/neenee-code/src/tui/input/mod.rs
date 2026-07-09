@@ -56,6 +56,10 @@ pub struct InputContext {
     /// list" instead of "close the modal", and gates the stage-1-only `*`/`e`
     /// shortcuts. Mirrors `App::picker_provider.is_some()`.
     pub picker_in_models_stage: bool,
+    /// Whether the active modal is showing its in-modal keybindings page
+    /// (`App::modal_keymap_open`). When true, `?` / Esc toggle or dismiss the
+    /// page instead of acting on the underlying list, and Enter is inert.
+    pub modal_keymap_open: bool,
     /// Focused field index of the provider editor, or `None` when that modal is
     /// not open. Every visible field borrows the composer line (Name / Base URL /
     /// Token as plain text, Model as a live filter), so printable keys always edit
@@ -118,6 +122,29 @@ fn edits_input_field(
 /// paste paths (Ctrl+V, bracketed paste) route into this field.
 fn question_other_field(context: &InputContext) -> bool {
     context.active_modal == super::Modal::Question && context.question_other_highlighted
+}
+
+/// Whether the active modal supports the in-modal keybindings page (`?`). These
+/// are the centered list/info modals whose footer may collapse under width
+/// pressure. Entry modals holding precious input (editor, custom provider,
+/// oauth), decision modals (question, permission), and Help (already a
+/// keybindings surface) are excluded.
+fn supports_keymap_page(modal: super::Modal) -> bool {
+    matches!(
+        modal,
+        super::Modal::Provider
+            | super::Modal::Sessions
+            | super::Modal::HistorySearch
+            | super::Modal::Tools
+            | super::Modal::Mcp
+            | super::Modal::Skills
+            | super::Modal::Permissions
+            | super::Modal::Config
+            | super::Modal::ConfigNudge
+            | super::Modal::ConfigLayout
+            | super::Modal::Activity
+            | super::Modal::TokenReport
+    )
 }
 
 /// Result of processing an input event.
@@ -279,6 +306,10 @@ pub enum InputAction {
     DeleteSelectedSession,
     /// Close any modal.
     CloseModal,
+    /// Toggle the in-modal keybindings page (`?` while a collapsible modal is
+    /// open). Not a nested modal — the same `active_modal` stays open and the
+    /// body is swapped for the full keymap. Esc / a second `?` closes it.
+    ToggleModalKeymap,
     /// Scroll up.
     ScrollUp,
     /// Scroll down.
@@ -935,6 +966,15 @@ pub fn process_event(
 
             match key.code {
                 KeyCode::Esc => {
+                    // In-modal keymap page: Esc closes the page first, never
+                    // the underlying modal. A second Esc then follows the
+                    // normal modal dismiss path.
+                    if context.modal_keymap_open
+                        && context.active_modal != super::Modal::None
+                        && context.active_modal != super::Modal::Help
+                    {
+                        return InputAction::ToggleModalKeymap;
+                    }
                     if context.active_modal == super::Modal::Permission {
                         if context.permission_confirm_always {
                             InputAction::PermissionBack
@@ -1079,91 +1119,98 @@ pub fn process_event(
                     insert_newline(input, cursor_position, context.active_modal);
                     InputAction::None
                 }
-                KeyCode::Enter => match context.active_modal {
-                    super::Modal::Provider => InputAction::ProviderPickerActivate,
-                    super::Modal::ModelEditor => InputAction::SubmitModelEditor,
-                    super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
-                    super::Modal::OauthPending => InputAction::None,
-                    super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
-                    super::Modal::HistorySearch => InputAction::HistoryInsert,
-                    super::Modal::Sessions => InputAction::OpenSelectedSession,
-                    super::Modal::Permission => InputAction::PermissionSubmit,
-                    super::Modal::Question => InputAction::QuestionSubmit,
-                    super::Modal::InputInjection => InputAction::InputSubmit,
-                    super::Modal::Help => InputAction::CloseModal,
-                    super::Modal::Tools => InputAction::CloseModal,
-                    super::Modal::Mcp => InputAction::CloseModal,
-                    super::Modal::Skills => InputAction::SkillsToggleDetail,
-                    super::Modal::Permissions => InputAction::CloseModal,
-                    super::Modal::Config => InputAction::ConfigActivate,
-                    super::Modal::ConfigNudge => InputAction::ConfigNudgeToggle,
-                    super::Modal::ConfigLayout => InputAction::ConfigLayoutApply,
-                    super::Modal::Activity => InputAction::CloseModal,
-                    super::Modal::TokenReport => InputAction::TokenReportActivate,
-                    super::Modal::None => {
-                        if context.has_focused_target {
-                            return InputAction::ActivateFocusedTarget;
-                        }
-                        // Slash-only: pressing Enter on a unique prefix
-                        // auto-accepts the first suggestion rather than
-                        // sending `/go` as a (rejected) command. Path
-                        // mentions skip this so Enter still sends the message.
-                        if context.completion_kind == super::CompletionKind::Slash
-                            && context.suggestion_count > 0
-                            && context.suggestion_index.is_none()
-                            && !context.has_exact_suggestion
-                        {
-                            return InputAction::CommitSuggestion("0".to_string());
-                        }
-                        // If a completion menu is open and the user has
-                        // highlighted an item (via ↑/↓ or Tab cycling),
-                        // Enter accepts that item rather than sending the
-                        // partial input. Applies to both slash commands and
-                        // `@path` mentions. An explicit highlight is a
-                        // stronger signal than the raw text in the box, so
-                        // this wins over the exact-match slash fast path
-                        // below.
-                        if let Some(i) = context.suggestion_index
-                            && context.completion_kind != super::CompletionKind::None
-                            && context.suggestion_count > 0
-                        {
-                            return InputAction::CommitSuggestion(i.to_string());
-                        }
-                        let text = std::mem::take(input);
-                        *cursor_position = 0;
-                        if text.starts_with('/') {
-                            // Match on the trimmed text so a slash command
-                            // typed with a trailing space (e.g. the user
-                            // typed `/provider ` themselves) still hits the
-                            // exact-match arm instead of silently no-op'ing.
-                            match text.trim() {
-                                "/provider" => InputAction::OpenProvider,
-                                "/permissions" => InputAction::OpenPermissions,
-                                "/tools" => InputAction::OpenTools,
-                                "/mcp" => InputAction::OpenMcp,
-                                "/skills" => InputAction::OpenSkills,
-                                "/config" => InputAction::OpenConfig,
-                                "/exit" => InputAction::Quit,
-                                _ => InputAction::SendSlash(text),
+                KeyCode::Enter => {
+                    // While the in-modal keymap page is open, Enter is inert
+                    // (Esc / `?` close it) — never activate the hidden list row.
+                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
+                        return InputAction::ToggleModalKeymap;
+                    }
+                    match context.active_modal {
+                        super::Modal::Provider => InputAction::ProviderPickerActivate,
+                        super::Modal::ModelEditor => InputAction::SubmitModelEditor,
+                        super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
+                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
+                        super::Modal::HistorySearch => InputAction::HistoryInsert,
+                        super::Modal::Sessions => InputAction::OpenSelectedSession,
+                        super::Modal::Permission => InputAction::PermissionSubmit,
+                        super::Modal::Question => InputAction::QuestionSubmit,
+                        super::Modal::InputInjection => InputAction::InputSubmit,
+                        super::Modal::Help => InputAction::CloseModal,
+                        super::Modal::Tools => InputAction::CloseModal,
+                        super::Modal::Mcp => InputAction::CloseModal,
+                        super::Modal::Skills => InputAction::SkillsToggleDetail,
+                        super::Modal::Permissions => InputAction::CloseModal,
+                        super::Modal::Config => InputAction::ConfigActivate,
+                        super::Modal::ConfigNudge => InputAction::ConfigNudgeToggle,
+                        super::Modal::ConfigLayout => InputAction::ConfigLayoutApply,
+                        super::Modal::Activity => InputAction::CloseModal,
+                        super::Modal::TokenReport => InputAction::TokenReportActivate,
+                        super::Modal::None => {
+                            if context.has_focused_target {
+                                return InputAction::ActivateFocusedTarget;
                             }
-                        } else if let Some(rest) = text.strip_prefix('!') {
-                            // `!<command>` runs the rest directly through the
-                            // bash tool, bypassing the LLM. Leading whitespace
-                            // after the bang is tolerated so `! ls` matches
-                            // the shell convention. A bare `!` is a no-op.
-                            let command = rest.trim_start().to_string();
-                            if command.is_empty() {
-                                InputAction::None
+                            // Slash-only: pressing Enter on a unique prefix
+                            // auto-accepts the first suggestion rather than
+                            // sending `/go` as a (rejected) command. Path
+                            // mentions skip this so Enter still sends the message.
+                            if context.completion_kind == super::CompletionKind::Slash
+                                && context.suggestion_count > 0
+                                && context.suggestion_index.is_none()
+                                && !context.has_exact_suggestion
+                            {
+                                return InputAction::CommitSuggestion("0".to_string());
+                            }
+                            // If a completion menu is open and the user has
+                            // highlighted an item (via ↑/↓ or Tab cycling),
+                            // Enter accepts that item rather than sending the
+                            // partial input. Applies to both slash commands and
+                            // `@path` mentions. An explicit highlight is a
+                            // stronger signal than the raw text in the box, so
+                            // this wins over the exact-match slash fast path
+                            // below.
+                            if let Some(i) = context.suggestion_index
+                                && context.completion_kind != super::CompletionKind::None
+                                && context.suggestion_count > 0
+                            {
+                                return InputAction::CommitSuggestion(i.to_string());
+                            }
+                            let text = std::mem::take(input);
+                            *cursor_position = 0;
+                            if text.starts_with('/') {
+                                // Match on the trimmed text so a slash command
+                                // typed with a trailing space (e.g. the user
+                                // typed `/provider ` themselves) still hits the
+                                // exact-match arm instead of silently no-op'ing.
+                                match text.trim() {
+                                    "/provider" => InputAction::OpenProvider,
+                                    "/permissions" => InputAction::OpenPermissions,
+                                    "/tools" => InputAction::OpenTools,
+                                    "/mcp" => InputAction::OpenMcp,
+                                    "/skills" => InputAction::OpenSkills,
+                                    "/config" => InputAction::OpenConfig,
+                                    "/exit" => InputAction::Quit,
+                                    _ => InputAction::SendSlash(text),
+                                }
+                            } else if let Some(rest) = text.strip_prefix('!') {
+                                // `!<command>` runs the rest directly through the
+                                // bash tool, bypassing the LLM. Leading whitespace
+                                // after the bang is tolerated so `! ls` matches
+                                // the shell convention. A bare `!` is a no-op.
+                                let command = rest.trim_start().to_string();
+                                if command.is_empty() {
+                                    InputAction::None
+                                } else {
+                                    InputAction::SendShell(command)
+                                }
+                            } else if !text.is_empty() {
+                                InputAction::SendChat(text)
                             } else {
-                                InputAction::SendShell(command)
+                                InputAction::None
                             }
-                        } else if !text.is_empty() {
-                            InputAction::SendChat(text)
-                        } else {
-                            InputAction::None
                         }
                     }
-                },
+                }
                 KeyCode::Tab => {
                     if context.active_modal == super::Modal::None
                         && context.completion_kind != super::CompletionKind::None
@@ -1432,6 +1479,28 @@ pub fn process_event(
                     // Kitty protocol (see the Ctrl+H note above).
                     if context.active_modal == super::Modal::None && c == '?' && input.is_empty() {
                         return InputAction::OpenHelp;
+                    }
+                    // In-modal keymap page: `?` toggles the page on collapsible
+                    // list modals (Provider / Sessions / History / …). Not
+                    // offered while a free-text search field is active, so a
+                    // typed `?` in a filter still inserts. Help itself has no
+                    // nested keymap. While the page is open, `?` closes it.
+                    if c == '?'
+                        && context.active_modal != super::Modal::None
+                        && supports_keymap_page(context.active_modal)
+                        && !edits_input_field(
+                            context.active_modal,
+                            context.history_searching,
+                            context.model_searching,
+                            context.custom_text_field_focused(),
+                        )
+                    {
+                        return InputAction::ToggleModalKeymap;
+                    }
+                    // While the keymap page is open, swallow other list-action
+                    // keys so they do not act on the hidden list.
+                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
+                        return InputAction::None;
                     }
                     // Sibling envoy navigation works in both zones (it is a
                     // envoy view feature, not a typing-navigation thing)
@@ -1761,116 +1830,131 @@ pub fn process_event(
                 {
                     InputAction::FocusNextTarget
                 }
-                KeyCode::Up => match context.active_modal {
-                    super::Modal::Provider => InputAction::ModalUp,
-                    super::Modal::HistorySearch => InputAction::ModalUp,
-                    super::Modal::Sessions => InputAction::ModalUp,
-                    super::Modal::Question => InputAction::QuestionUp,
-                    super::Modal::Permission => {
-                        // Browse zone: walk transcript targets. Compose zone:
-                        // scroll the expanded details, otherwise fall through
-                        // to a transcript scroll so the history stays readable
-                        // even while a prompt is pending.
-                        if context.has_focused_target {
-                            InputAction::FocusPrevTarget
-                        } else if context.permission_show_details {
-                            InputAction::PermissionDetailsUp
-                        } else {
-                            InputAction::ScrollUp
+                KeyCode::Up => {
+                    // While the in-modal keymap page is open, ↑/↓ scroll it.
+                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
+                        return InputAction::ScrollUp;
+                    }
+                    match context.active_modal {
+                        super::Modal::Provider => InputAction::ModalUp,
+                        super::Modal::HistorySearch => InputAction::ModalUp,
+                        super::Modal::Sessions => InputAction::ModalUp,
+                        super::Modal::Question => InputAction::QuestionUp,
+                        super::Modal::Permission => {
+                            // Browse zone: walk transcript targets. Compose zone:
+                            // scroll the expanded details, otherwise fall through
+                            // to a transcript scroll so the history stays readable
+                            // even while a prompt is pending.
+                            if context.has_focused_target {
+                                InputAction::FocusPrevTarget
+                            } else if context.permission_show_details {
+                                InputAction::PermissionDetailsUp
+                            } else {
+                                InputAction::ScrollUp
+                            }
                         }
-                    }
-                    super::Modal::Activity => InputAction::ScrollUp,
-                    super::Modal::Tools => InputAction::SessionSelect { forward: false },
-                    super::Modal::Mcp => InputAction::SessionSelect { forward: false },
-                    super::Modal::Skills => InputAction::SessionSelect { forward: false },
-                    super::Modal::Permissions => InputAction::ModalUp,
-                    super::Modal::Config => InputAction::ModalUp,
-                    super::Modal::ConfigNudge => InputAction::ModalUp,
-                    super::Modal::ConfigLayout => InputAction::ModalUp,
-                    super::Modal::ProviderTemplate => {
-                        InputAction::MoveProviderTemplate { forward: false }
-                    }
-                    super::Modal::OauthPending => InputAction::None,
-                    super::Modal::CustomProvider => {
-                        InputAction::MoveCustomSuggestion { forward: false }
-                    }
-                    super::Modal::ModelEditor | super::Modal::InputInjection => InputAction::None,
-                    super::Modal::Help => InputAction::ScrollUp,
-                    super::Modal::TokenReport => InputAction::ModalUp,
-                    super::Modal::None => {
-                        if context.has_focused_target {
-                            InputAction::FocusPrevTarget
-                        } else if context.completion_kind != super::CompletionKind::None
-                            && context.suggestion_count > 0
-                        {
-                            InputAction::SuggestPrev
-                        } else if context.has_queued {
-                            // A queued message is waiting to ship; ↑ recalls
-                            // the most-recently-queued one into the input for
-                            // editing instead of walking input history. Once
-                            // the queue drains, ↑ resumes its normal role.
-                            InputAction::RecallQueued
-                        } else if cursor_line_up(input, cursor_position) {
-                            // Multi-line draft: ↑ first walks the caret to the
-                            // previous line (preserving the column). Only when
-                            // the caret is already on the first line does ↑
-                            // hand off to input-history navigation below.
+                        super::Modal::Activity => InputAction::ScrollUp,
+                        super::Modal::Tools => InputAction::SessionSelect { forward: false },
+                        super::Modal::Mcp => InputAction::SessionSelect { forward: false },
+                        super::Modal::Skills => InputAction::SessionSelect { forward: false },
+                        super::Modal::Permissions => InputAction::ModalUp,
+                        super::Modal::Config => InputAction::ModalUp,
+                        super::Modal::ConfigNudge => InputAction::ModalUp,
+                        super::Modal::ConfigLayout => InputAction::ModalUp,
+                        super::Modal::ProviderTemplate => {
+                            InputAction::MoveProviderTemplate { forward: false }
+                        }
+                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::CustomProvider => {
+                            InputAction::MoveCustomSuggestion { forward: false }
+                        }
+                        super::Modal::ModelEditor | super::Modal::InputInjection => {
                             InputAction::None
-                        } else {
-                            InputAction::HistoryPrev
+                        }
+                        super::Modal::Help => InputAction::ScrollUp,
+                        super::Modal::TokenReport => InputAction::ModalUp,
+                        super::Modal::None => {
+                            if context.has_focused_target {
+                                InputAction::FocusPrevTarget
+                            } else if context.completion_kind != super::CompletionKind::None
+                                && context.suggestion_count > 0
+                            {
+                                InputAction::SuggestPrev
+                            } else if context.has_queued {
+                                // A queued message is waiting to ship; ↑ recalls
+                                // the most-recently-queued one into the input for
+                                // editing instead of walking input history. Once
+                                // the queue drains, ↑ resumes its normal role.
+                                InputAction::RecallQueued
+                            } else if cursor_line_up(input, cursor_position) {
+                                // Multi-line draft: ↑ first walks the caret to the
+                                // previous line (preserving the column). Only when
+                                // the caret is already on the first line does ↑
+                                // hand off to input-history navigation below.
+                                InputAction::None
+                            } else {
+                                InputAction::HistoryPrev
+                            }
                         }
                     }
-                },
-                KeyCode::Down => match context.active_modal {
-                    super::Modal::Provider => InputAction::ModalDown,
-                    super::Modal::HistorySearch => InputAction::ModalDown,
-                    super::Modal::Sessions => InputAction::ModalDown,
-                    super::Modal::Question => InputAction::QuestionDown,
-                    super::Modal::Permission => {
-                        if context.has_focused_target {
-                            InputAction::FocusNextTarget
-                        } else if context.permission_show_details {
-                            InputAction::PermissionDetailsDown
-                        } else {
-                            InputAction::ScrollDown
+                }
+                KeyCode::Down => {
+                    if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
+                        return InputAction::ScrollDown;
+                    }
+                    match context.active_modal {
+                        super::Modal::Provider => InputAction::ModalDown,
+                        super::Modal::HistorySearch => InputAction::ModalDown,
+                        super::Modal::Sessions => InputAction::ModalDown,
+                        super::Modal::Question => InputAction::QuestionDown,
+                        super::Modal::Permission => {
+                            if context.has_focused_target {
+                                InputAction::FocusNextTarget
+                            } else if context.permission_show_details {
+                                InputAction::PermissionDetailsDown
+                            } else {
+                                InputAction::ScrollDown
+                            }
                         }
-                    }
-                    super::Modal::Activity => InputAction::ScrollDown,
-                    super::Modal::Tools => InputAction::SessionSelect { forward: true },
-                    super::Modal::Mcp => InputAction::SessionSelect { forward: true },
-                    super::Modal::Skills => InputAction::SessionSelect { forward: true },
-                    super::Modal::Permissions => InputAction::ModalDown,
-                    super::Modal::Config => InputAction::ModalDown,
-                    super::Modal::ConfigNudge => InputAction::ModalDown,
-                    super::Modal::ConfigLayout => InputAction::ModalDown,
-                    super::Modal::ProviderTemplate => {
-                        InputAction::MoveProviderTemplate { forward: true }
-                    }
-                    super::Modal::OauthPending => InputAction::None,
-                    super::Modal::CustomProvider => {
-                        InputAction::MoveCustomSuggestion { forward: true }
-                    }
-                    super::Modal::ModelEditor | super::Modal::InputInjection => InputAction::None,
-                    super::Modal::Help => InputAction::ScrollDown,
-                    super::Modal::TokenReport => InputAction::ModalDown,
-                    super::Modal::None => {
-                        if context.has_focused_target {
-                            InputAction::FocusNextTarget
-                        } else if context.completion_kind != super::CompletionKind::None
-                            && context.suggestion_count > 0
-                        {
-                            InputAction::SuggestNext
-                        } else if cursor_line_down(input, cursor_position) {
-                            // Multi-line draft: ↓ first walks the caret to the
-                            // next line (preserving the column). Only when the
-                            // caret is already on the last line does ↓ hand
-                            // off to input-history navigation below.
+                        super::Modal::Activity => InputAction::ScrollDown,
+                        super::Modal::Tools => InputAction::SessionSelect { forward: true },
+                        super::Modal::Mcp => InputAction::SessionSelect { forward: true },
+                        super::Modal::Skills => InputAction::SessionSelect { forward: true },
+                        super::Modal::Permissions => InputAction::ModalDown,
+                        super::Modal::Config => InputAction::ModalDown,
+                        super::Modal::ConfigNudge => InputAction::ModalDown,
+                        super::Modal::ConfigLayout => InputAction::ModalDown,
+                        super::Modal::ProviderTemplate => {
+                            InputAction::MoveProviderTemplate { forward: true }
+                        }
+                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::CustomProvider => {
+                            InputAction::MoveCustomSuggestion { forward: true }
+                        }
+                        super::Modal::ModelEditor | super::Modal::InputInjection => {
                             InputAction::None
-                        } else {
-                            InputAction::HistoryNext
+                        }
+                        super::Modal::Help => InputAction::ScrollDown,
+                        super::Modal::TokenReport => InputAction::ModalDown,
+                        super::Modal::None => {
+                            if context.has_focused_target {
+                                InputAction::FocusNextTarget
+                            } else if context.completion_kind != super::CompletionKind::None
+                                && context.suggestion_count > 0
+                            {
+                                InputAction::SuggestNext
+                            } else if cursor_line_down(input, cursor_position) {
+                                // Multi-line draft: ↓ first walks the caret to the
+                                // next line (preserving the column). Only when the
+                                // caret is already on the last line does ↓ hand
+                                // off to input-history navigation below.
+                                InputAction::None
+                            } else {
+                                InputAction::HistoryNext
+                            }
                         }
                     }
-                },
+                }
                 KeyCode::PageUp
                     if matches!(
                         context.active_modal,
@@ -2002,6 +2086,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2049,6 +2134,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2173,6 +2259,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2215,6 +2302,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2256,6 +2344,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2294,6 +2383,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2332,6 +2422,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2374,6 +2465,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2416,6 +2508,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2453,6 +2546,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2531,6 +2625,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2569,6 +2664,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2603,6 +2699,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2637,6 +2734,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2673,6 +2771,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: true,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2708,6 +2807,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2745,6 +2845,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: true,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2782,6 +2883,7 @@ mod tests {
                 history_searching: false,
                 model_searching: true,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2815,6 +2917,7 @@ mod tests {
             history_searching: false,
             model_searching: false,
             picker_in_models_stage: false,
+            modal_keymap_open: false,
             editor_field: None,
             custom_provider_field: None,
             question_other_highlighted: false,
@@ -2867,6 +2970,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2897,6 +3001,7 @@ mod tests {
             history_searching: false,
             model_searching: false,
             picker_in_models_stage: false,
+            modal_keymap_open: false,
             editor_field: None,
             custom_provider_field: None,
             question_other_highlighted: false,
@@ -2938,6 +3043,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -2970,6 +3076,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -3002,6 +3109,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -3218,6 +3326,7 @@ mod tests {
                 history_searching: modal == crate::tui::Modal::HistorySearch,
                 model_searching: modal == crate::tui::Modal::Provider,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -3377,6 +3486,7 @@ mod tests {
                     history_searching: false,
                     model_searching: false,
                     picker_in_models_stage: false,
+                    modal_keymap_open: false,
                     editor_field: None,
                     custom_provider_field: None,
                     question_other_highlighted: false,
@@ -4042,6 +4152,7 @@ mod tests {
                 history_searching: true,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4127,6 +4238,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4248,6 +4360,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4281,6 +4394,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4318,6 +4432,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4374,6 +4489,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4415,6 +4531,7 @@ mod tests {
                 history_searching: modal == crate::tui::Modal::HistorySearch,
                 model_searching: modal == crate::tui::Modal::Provider,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
@@ -4543,6 +4660,7 @@ mod tests {
                 history_searching: false,
                 model_searching: false,
                 picker_in_models_stage: false,
+                modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,

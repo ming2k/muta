@@ -801,6 +801,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
         help_scroll: 0,
+        modal_keymap_open: false,
         pending_permission: None,
         pending_input: None,
         question: None,

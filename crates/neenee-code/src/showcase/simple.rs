@@ -114,6 +114,7 @@ pub fn provider() -> io::Result<()> {
                     &mut scroll,
                     true,
                     s.search,
+                    false,
                     &theme,
                 );
             });
@@ -264,6 +265,7 @@ pub fn history() -> io::Result<()> {
                     true,
                     false,
                     true,
+                    false,
                     &theme,
                 );
             });
@@ -356,7 +358,7 @@ pub fn sessions() -> io::Result<()> {
             );
             let hint = " ↑↓ navigate · Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                draw_sessions_modal(f, &s.sessions, index, &theme);
+                draw_sessions_modal(f, &s.sessions, index, false, &theme);
             });
         },
         |s, key| -> ShowAction {

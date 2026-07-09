@@ -10,20 +10,51 @@ use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer,
+    FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
+    keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
+    render_modal_footer, render_modal_footer_with_more,
 };
 
 /// Draw the sessions picker: each row shows the session overview plus its
 /// creation and last-interaction times. Enter opens the selected session.
+/// When `keymap_open` is true the body is replaced by the full keybindings list.
 pub fn draw_sessions_modal(
     frame: &mut Frame,
     sessions: &[neenee_core::SessionOverview],
     selected: usize,
+    keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::Sessions).expect("sessions modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    // Destructive delete: custom band 70 so it outlives plain secondaries
+    // (it is a one-key destructive action the user must be able to find).
+    let footer_hints: [FooterHint; 3] = [
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::primary("Enter", "open"),
+        FooterHint::always("Esc", "close"),
+    ];
+    let extra: [FooterHintWithBand; 1] = [FooterHint::with_band("d", "delete", 70)];
+
+    if keymap_open {
+        modal_header(frame, f.header, "Sessions · keybindings", theme);
+        let body = keymap_body_lines(&footer_hints, &extra, theme);
+        render_body(
+            frame,
+            f.body,
+            body,
+            &mut 0,
+            None,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
+        }
+        return area;
+    }
 
     modal_header(frame, f.header, "Sessions", theme);
 
@@ -85,17 +116,7 @@ pub fn draw_sessions_modal(
     );
 
     if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::primary("Enter", "open"),
-                FooterHint::secondary("d", "delete"),
-                FooterHint::always("Esc", "close"),
-            ],
-            theme,
-        );
+        render_modal_footer_with_more(frame, fo, &footer_hints, &extra, theme);
     }
     area
 }

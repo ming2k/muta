@@ -341,6 +341,11 @@ pub struct App {
     /// reachable — the renderer used to take a throwaway `&mut 0`, leaving the
     /// modal unscrollable.
     pub help_scroll: usize,
+    /// Whether the active modal is showing its in-modal keybindings page
+    /// (toggled by `?` when the footer has collapsed). Not a nested modal —
+    /// the same `active_modal` stays open and the body is swapped for the
+    /// full keymap. Cleared on modal close / stage change / Esc.
+    pub modal_keymap_open: bool,
     pub pending_permission: Option<PermissionRequest>,
     /// The pending interactive-input request (L3.5 β) from an interactive
     /// `bash` command, or `None`. Set when a `RoundEvent::InputRequest` arrives;
@@ -1123,6 +1128,7 @@ impl App {
         self.modal_index = 0;
         self.history_search = false;
         self.history_preview = false;
+        self.modal_keymap_open = false;
     }
 
     /// Tear down the model picker's borrowed state: hand the parked composer
@@ -1140,6 +1146,7 @@ impl App {
         self.picker_provider = None;
         self.model_scroll = 0;
         self.model_modal_follow = true;
+        self.modal_keymap_open = false;
     }
 
     /// Open the provider-template chooser — the "＋ Add provider" entry point.

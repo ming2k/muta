@@ -272,6 +272,10 @@ pub struct Agent {
     /// does, and a model-supplied `stdin` is threaded as
     /// [`StdinPolicy::Prefilled`].
     allow_model_stdin: Arc<std::sync::atomic::AtomicBool>,
+    /// Command-aware safety policy for `bash`. This sits above the ordinary
+    /// permission broker so broad approvals such as `bash *` cannot silently
+    /// authorize destructive commands like `git reset --hard`.
+    bash_policy: std::sync::RwLock<crate::bash_policy::BashPolicy>,
     /// Registered review dimensions evaluated by the on-demand diagnostic
     /// envoy (`/review`). Defaults to [`crate::default_reviews`] (looping);
     /// empty on envoys (which have no `/review` path).
@@ -543,6 +547,7 @@ impl Agent {
                 neenee_core::DoomGuardConfig::default(),
             )),
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
             reviews: crate::default_reviews(),
             operation_scope: std::sync::Mutex::new(neenee_core::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
@@ -739,6 +744,17 @@ impl Agent {
     pub fn set_allow_model_stdin(&self, enabled: bool) {
         self.allow_model_stdin
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Replace the command-aware bash safety policy from `[bash_policy]` config.
+    /// Built-in dangerous-command rules remain compiled into the policy; config
+    /// only supplies toggles and user-defined overrides/additions.
+    pub fn set_bash_policy(&self, config: &neenee_store::config::BashPolicyConfig) {
+        let policy = crate::bash_policy::BashPolicy::from_config(config);
+        for error in policy.invalid_rules() {
+            tracing::warn!(error = %error, "ignoring invalid bash policy rule");
+        }
+        *self.bash_policy.write().unwrap_or_else(|e| e.into_inner()) = policy;
     }
 
     /// Whether the model may supply stdin for a `bash` call. Read at the
@@ -2789,6 +2805,101 @@ impl Agent {
         }
     }
 
+    /// Enforce the command-aware safety layer for `bash` before the ordinary
+    /// permission broker. A broad cached permission such as `bash *` therefore
+    /// cannot silently authorize commands the policy marks as destructive.
+    ///
+    /// Returns `Some(output)` when execution must stop, or `None` when the
+    /// command may continue to the normal permission/stdin/spawn path.
+    async fn check_bash_policy(
+        &self,
+        command: &str,
+        arguments: &str,
+        event_tx: &mpsc::UnboundedSender<AgentEvent>,
+    ) -> Option<ToolOutput> {
+        let policy = self
+            .bash_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let decision = policy.evaluate(command)?;
+        match decision.action {
+            crate::bash_policy::BashPolicyAction::Allow => None,
+            crate::bash_policy::BashPolicyAction::Deny => {
+                tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
+                Some(ToolOutput::Error {
+                    message: format!("[bash policy] Blocked dangerous command: {command}"),
+                    detail: Some(format!(
+                        "Rule: {}{}\nReason: {}\nThis command was not executed.",
+                        decision.name,
+                        if decision.builtin { " (built-in)" } else { "" },
+                        decision.reason,
+                    )),
+                })
+            }
+            crate::bash_policy::BashPolicyAction::Confirm => {
+                if self.get_unattended() {
+                    return match policy.unattended_confirm_action() {
+                        crate::bash_policy::BashPolicyAction::Allow => {
+                            tracing::warn!(
+                                command = %command,
+                                rule = %decision.name,
+                                "bash policy confirmation bypassed by unattended_confirm=allow"
+                            );
+                            None
+                        }
+                        _ => Some(ToolOutput::Error {
+                            message: format!(
+                                "[bash policy] Dangerous command requires confirmation but session is unattended: {command}"
+                            ),
+                            detail: Some(format!(
+                                "Rule: {}{}\nReason: {}\nThis command was not executed.",
+                                decision.name,
+                                if decision.builtin { " (built-in)" } else { "" },
+                                decision.reason,
+                            )),
+                        }),
+                    };
+                }
+
+                let request = PermissionRequest {
+                    id: format!("permission_{}", uuid::Uuid::new_v4()),
+                    tool: "bash".to_string(),
+                    label: "Dangerous bash command".to_string(),
+                    description: format!(
+                        "Bash policy requires one-off confirmation before running this command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry does not bypass this safety check.",
+                        decision.name,
+                        if decision.builtin { " (built-in)" } else { "" },
+                        decision.reason,
+                    ),
+                    arguments: arguments.to_string(),
+                    scope: command.to_string(),
+                };
+                let receiver = self.permissions.park_request(request.id.clone());
+                tracing::info!(command = %command, rule = %decision.name, "bash policy confirmation requested");
+                let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
+                self.fire_permission_request_hooks(&request).await;
+
+                match receiver.await.unwrap_or(PermissionDecision::Reject) {
+                    PermissionDecision::Once | PermissionDecision::Always => {
+                        // Deliberately do not persist `Always`: a dangerous-command
+                        // confirmation is sharper than ordinary tool permission and
+                        // must stay one-off unless the user writes an explicit
+                        // `[bash_policy.rules] action = "allow"` override.
+                        tracing::info!(command = %command, "bash policy confirmation granted once");
+                        None
+                    }
+                    PermissionDecision::Reject => {
+                        tracing::warn!(command = %command, "bash policy confirmation rejected");
+                        Some(ToolOutput::PermissionDenied {
+                            tool: "bash".to_string(),
+                        })
+                    }
+                }
+            }
+        }
+    }
+
     /// Three-way stdin policy for a `bash` call (L3 + L3.5). See the decision
     /// block in [`Self::execute_tool`] for the contract. `arguments` is the
     /// raw JSON tool arguments.
@@ -2942,6 +3053,15 @@ impl Agent {
                     call.name, target
                 ));
             }
+        }
+
+        if call.name == "bash"
+            && let neenee_core::ScopeTarget::Command(command) = &target
+            && let Some(output) = self
+                .check_bash_policy(command, &call.arguments, event_tx)
+                .await
+        {
+            return output;
         }
 
         if call.name == "ask_user" {

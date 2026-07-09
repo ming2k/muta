@@ -6,7 +6,7 @@ use crate::modal::Modal;
 
 use super::super::Theme;
 use super::super::primitives::SCROLL_EDGE_MARGIN;
-use super::footer::FooterHint;
+use super::footer::{FooterHint, FooterHintWithBand};
 use super::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use super::options::{ChoiceTone, choice_style};
 use super::scroll::ScrollBody;
@@ -47,6 +47,11 @@ pub(in crate::render) struct SelectableListPage<'a> {
     pub has_items: bool,
     pub item_footer_hints: &'a [FooterHint],
     pub empty_footer_hints: &'a [FooterHint],
+    /// Custom-band extra hints (e.g. a destructive `d` at band 70), shown after
+    /// `item_footer_hints` / `empty_footer_hints`. Empty for most list modals.
+    pub extra_footer_hints: &'a [FooterHintWithBand],
+    /// When true, the body is replaced by the full keymap page (in-modal `?`).
+    pub keymap_open: bool,
 }
 
 pub(in crate::render) fn draw_selectable_list_page(
@@ -54,7 +59,7 @@ pub(in crate::render) fn draw_selectable_list_page(
     page: SelectableListPage<'_>,
     theme: &Theme,
 ) -> Rect {
-    let follow = if page.has_items && page.follow_selection {
+    let follow = if page.has_items && page.follow_selection && !page.keymap_open {
         page.selected_line
     } else {
         None
@@ -78,6 +83,12 @@ pub(in crate::render) fn draw_selectable_list_page(
                 wrap: false,
             },
             footer_hints,
+            extra_footer_hints: page.extra_footer_hints,
+            keymap_open: page.keymap_open,
+            // List modals support in-modal `?` expand, so surface `? more`
+            // when the footer has collapsed. Empty-list pages have no keymap
+            // wiring, so suppress it there.
+            show_more: page.has_items,
         },
         theme,
     )

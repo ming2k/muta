@@ -15,8 +15,9 @@ use crate::modal::Modal;
 use crate::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer,
+    FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
+    keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
+    render_modal_footer, render_modal_footer_with_more,
 };
 
 /// Draw the **two-stage** provider/model picker. Mirrors the input-history
@@ -55,6 +56,7 @@ pub fn draw_models_modal(
     scroll: &mut usize,
     follow_selection: bool,
     search: bool,
+    keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::Provider).expect("model picker modal has fixed geometry");
@@ -68,6 +70,134 @@ pub fn draw_models_modal(
     };
 
     let header_rect = f.header;
+
+    // Build the footer hint set for the active stage/mode. The destructive
+    // `D delete` (stage 1) and `d remove` (stage 2 custom) use custom band 70
+    // so they survive width collapse longer than plain secondaries — they are
+    // one-key destructive actions the user must be able to find.
+    let stage2_custom_settings = stage2_custom
+        && models
+            .get(modal_index)
+            .is_some_and(|model| model.protocol == "anthropic");
+    let stage2_custom_browse: Vec<FooterHint> = if stage2_custom {
+        let mut hints = vec![
+            FooterHint::navigation("↑↓", "navigate"),
+            FooterHint::secondary("/", "search"),
+            FooterHint::primary("Enter", "activate"),
+        ];
+        if stage2_custom_settings {
+            hints.push(FooterHint::secondary("e", "settings"));
+        }
+        hints.push(FooterHint::always("Esc", "back"));
+        hints
+    } else {
+        vec![
+            FooterHint::navigation("↑↓", "navigate"),
+            FooterHint::secondary("/", "search"),
+            FooterHint::primary("Enter", "activate"),
+            FooterHint::always("Esc", "back"),
+        ]
+    };
+    // `d remove` for stage-2 custom providers — custom band 70.
+    let stage2_custom_extra: Vec<FooterHintWithBand> = if stage2_custom {
+        vec![FooterHintWithBand {
+            key: "d",
+            label: "remove",
+            rank: 70,
+        }]
+    } else {
+        vec![]
+    };
+    let stage1_browse: [FooterHint; 6] = [
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::secondary("/", "search"),
+        FooterHint::primary("Enter", "select"),
+        FooterHint::secondary("*", "favorite"),
+        FooterHint::secondary("e", "edit"),
+        FooterHint::always("Esc", "close"),
+    ];
+    // `D delete` for stage 1 — custom band 70.
+    let stage1_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
+        key: "D",
+        label: "delete",
+        rank: 70,
+    }];
+    let stage1_search: [FooterHint; 4] = [
+        FooterHint::secondary("type", "filter"),
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::primary("Enter", "select"),
+        FooterHint::always("Esc", "clear search"),
+    ];
+    let stage2_search: [FooterHint; 4] = [
+        FooterHint::secondary("type", "filter"),
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::primary("Enter", "activate"),
+        FooterHint::always("Esc", "clear search"),
+    ];
+    let stage2_builtin_browse: [FooterHint; 4] = [
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::secondary("/", "search"),
+        FooterHint::primary("Enter", "activate"),
+        FooterHint::always("Esc", "back"),
+    ];
+
+    // Resolve the active (hints, extra) pair for the current stage/mode.
+    enum Mode<'a> {
+        Stage1Browse,
+        Stage1Search,
+        Stage2Browse {
+            custom_hints: &'a [FooterHint],
+            extra: &'a [FooterHintWithBand],
+        },
+        Stage2Search,
+    }
+    let mode = match (picker_provider.is_some(), search) {
+        (true, true) => Mode::Stage2Search,
+        (true, false) if stage2_custom => Mode::Stage2Browse {
+            custom_hints: &stage2_custom_browse,
+            extra: &stage2_custom_extra,
+        },
+        (true, false) => Mode::Stage2Browse {
+            custom_hints: &stage2_builtin_browse,
+            extra: &[],
+        },
+        (false, true) => Mode::Stage1Search,
+        (false, false) => Mode::Stage1Browse,
+    };
+    let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = match &mode {
+        Mode::Stage1Browse => (&stage1_browse, &stage1_extra),
+        Mode::Stage1Search => (&stage1_search, &[]),
+        Mode::Stage2Browse {
+            custom_hints,
+            extra,
+        } => (custom_hints, extra),
+        Mode::Stage2Search => (&stage2_search, &[]),
+    };
+
+    if keymap_open {
+        modal_header(
+            frame,
+            header_rect,
+            &format!("{title_text} · keybindings"),
+            theme,
+        );
+        let body = keymap_body_lines(hints, extra, theme);
+        render_body(
+            frame,
+            f.body,
+            body,
+            scroll,
+            None,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
+        }
+        return area;
+    }
+
     modal_header(frame, header_rect, &title_text, theme);
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
@@ -116,59 +246,7 @@ pub fn draw_models_modal(
     );
 
     if let Some(fo) = f.footer {
-        // Stage-2 browse on a custom provider exposes `d` to remove the
-        // highlighted model (built-in model lists are curated, so no remove).
-        let stage2_custom_settings = stage2_custom
-            && models
-                .get(modal_index)
-                .is_some_and(|model| model.protocol == "anthropic");
-        let stage2_custom_browse: Vec<FooterHint> = if stage2_custom {
-            let mut hints = vec![
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::secondary("/", "search"),
-                FooterHint::primary("Enter", "activate"),
-            ];
-            if stage2_custom_settings {
-                hints.push(FooterHint::secondary("e", "settings"));
-            }
-            hints.push(FooterHint::secondary("d", "remove"));
-            hints.push(FooterHint::always("Esc", "back"));
-            hints
-        } else {
-            vec![
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::secondary("/", "search"),
-                FooterHint::primary("Enter", "activate"),
-                FooterHint::always("Esc", "back"),
-            ]
-        };
-        let hints: &[FooterHint] = match (picker_provider.is_some(), search) {
-            // Stage 2 (model sub-list): Esc returns to the provider list.
-            (true, true) => &[
-                FooterHint::secondary("type", "filter"),
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::primary("Enter", "activate"),
-                FooterHint::always("Esc", "clear search"),
-            ],
-            (true, false) => &stage2_custom_browse,
-            // Stage 1 (provider list): Enter opens/activates, Esc closes.
-            (false, true) => &[
-                FooterHint::secondary("type", "filter"),
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::primary("Enter", "select"),
-                FooterHint::always("Esc", "clear search"),
-            ],
-            (false, false) => &[
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::secondary("/", "search"),
-                FooterHint::primary("Enter", "select"),
-                FooterHint::secondary("*", "favorite"),
-                FooterHint::secondary("e", "edit"),
-                FooterHint::secondary("D", "delete"),
-                FooterHint::always("Esc", "close"),
-            ],
-        };
-        render_modal_footer(frame, fo, hints, theme);
+        render_modal_footer_with_more(frame, fo, hints, extra, theme);
     }
 
     // The real terminal caret only exists in search mode — browse mode has no

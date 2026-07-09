@@ -15,7 +15,7 @@ expression: film
 
              anyhow                                    ▼
 
-          ↑↓ · wheel/Pg · Enter · 1-9 · Esc
+          ↑↓ navigate · Enter submit · Esc cancel
 
 === down → highlight 'thiserror' (selected, no marker) ===
 
@@ -29,7 +29,7 @@ expression: film
                Simple
              thiserror                                 ▼
 
-          ↑↓ · wheel/Pg · Enter · 1-9 · Esc
+          ↑↓ navigate · Enter submit · Esc cancel
 
 === '3' → jump to 'Other' (now the live selection) ===
 
@@ -43,4 +43,4 @@ expression: film
                Structured
              Other
 
-          ↑↓ · wheel/Pg · Enter · 1-9 · Esc
+          ↑↓ navigate · Enter submit · Esc cancel

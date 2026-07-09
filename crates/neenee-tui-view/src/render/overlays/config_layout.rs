@@ -163,6 +163,9 @@ pub fn draw_config_layout_modal(
                 FooterHint::primary("Enter/Space", "apply"),
                 FooterHint::always("Esc", "back"),
             ],
+            extra_footer_hints: &[],
+            keymap_open: false,
+            show_more: false,
         },
         theme,
     )

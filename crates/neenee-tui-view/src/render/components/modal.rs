@@ -10,7 +10,10 @@ use super::super::primitives::{
     HeaderPart, content_modal_area, modal_area, modal_chrome_rows, modal_frame, modal_header,
     modal_header_parts, modal_spec,
 };
-use super::footer::{FooterHint, render_modal_footer};
+use super::footer::{
+    FooterHint, FooterHintWithBand, keymap_body_lines, keymap_page_footer_hints,
+    render_modal_footer, render_modal_footer_with_more,
+};
 use super::scroll::ScrollBody;
 
 #[derive(Clone, Copy)]
@@ -40,6 +43,16 @@ pub(in crate::render) struct ModalPage<'a> {
     pub header: ModalHeader<'a>,
     pub body: ScrollBody<'a>,
     pub footer_hints: &'a [FooterHint],
+    /// Custom-band extra hints (e.g. `D delete` at band 70), shown after
+    /// `footer_hints` and dropped/collapsed with them. Empty for most modals.
+    pub extra_footer_hints: &'a [FooterHintWithBand],
+    /// When true, the body is replaced by the full keymap page for
+    /// `footer_hints` + `extra_footer_hints`, and the footer becomes
+    /// `↑↓ scroll · Esc back` (in-modal `?` expand — not a nested modal).
+    pub keymap_open: bool,
+    /// When true, a collapsed footer appends `? more` (list modals that wire
+    /// in-modal keymap expand). Help / pure info pages leave this false.
+    pub show_more: bool,
 }
 
 pub(in crate::render) fn modal_body_width(frame: &Frame, modal: Modal) -> usize {
@@ -57,6 +70,10 @@ pub(in crate::render) fn modal_body_width(frame: &Frame, modal: Modal) -> usize 
 /// body, and footer hints. Callers still own business-specific body construction
 /// and input state, but they no longer need to repeat the frame/header/body/
 /// footer ceremony for each simple overlay.
+///
+/// When [`ModalPage::keymap_open`] is true the body is replaced by a full
+/// keybindings list derived from the footer hints (in-modal `?` expand — not a
+/// nested modal).
 pub(in crate::render) fn draw_modal_page(
     frame: &mut Frame,
     page: ModalPage<'_>,
@@ -68,22 +85,60 @@ pub(in crate::render) fn draw_modal_page(
         }
         ModalPageSize::Content => {
             let spec = modal_spec(page.modal).expect("content modal page has geometry");
-            let desired = page.body.lines.len() as u16 + modal_chrome_rows(spec);
+            let desired = if page.keymap_open {
+                // Keymap page: one title + blank + one row per hint.
+                (page.footer_hints.len() + page.extra_footer_hints.len()) as u16
+                    + 2
+                    + modal_chrome_rows(spec)
+            } else {
+                page.body.lines.len() as u16 + modal_chrome_rows(spec)
+            };
             content_modal_area(frame, page.modal, desired)
                 .expect("content modal page has content geometry")
         }
     };
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    match page.header {
-        ModalHeader::Title(title) => modal_header(frame, f.header, title, theme),
-        ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
-    }
-
-    page.body.render(frame, f.body, theme);
-
-    if let Some(footer) = f.footer {
-        render_modal_footer(frame, footer, page.footer_hints, theme);
+    if page.keymap_open {
+        // Title gets a " · keybindings" suffix when the page is open.
+        match page.header {
+            ModalHeader::Title(title) => {
+                modal_header(frame, f.header, &format!("{title} · keybindings"), theme);
+            }
+            ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
+        }
+        let lines = keymap_body_lines(page.footer_hints, page.extra_footer_hints, theme);
+        ScrollBody {
+            lines,
+            scroll: page.body.scroll,
+            follow: None,
+            edge_margin: page.body.edge_margin,
+            wrap: false,
+        }
+        .render(frame, f.body, theme);
+        if let Some(footer) = f.footer {
+            // No recursive `? more` while already on the keymap page.
+            render_modal_footer(frame, footer, &keymap_page_footer_hints(), theme);
+        }
+    } else {
+        match page.header {
+            ModalHeader::Title(title) => modal_header(frame, f.header, title, theme),
+            ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
+        }
+        page.body.render(frame, f.body, theme);
+        if let Some(footer) = f.footer {
+            if page.show_more || !page.extra_footer_hints.is_empty() {
+                render_modal_footer_with_more(
+                    frame,
+                    footer,
+                    page.footer_hints,
+                    page.extra_footer_hints,
+                    theme,
+                );
+            } else {
+                render_modal_footer(frame, footer, page.footer_hints, theme);
+            }
+        }
     }
 
     area

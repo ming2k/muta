@@ -130,6 +130,108 @@ pub struct PermissionConfig {
     pub allow: Vec<PermissionRuleConfig>,
 }
 
+/// Safety policy for model-issued `bash` commands. Built-in dangerous-command
+/// rules are compiled into the agent so the config only contains user choices:
+/// toggles and project-local overrides/additions.
+///
+/// ```toml
+/// [bash_policy]
+/// enabled = true
+/// unattended_confirm = "deny"
+///
+/// [[bash_policy.rules]]
+/// name = "deny git reset hard"
+/// match = "regex"
+/// pattern = '(?i)\bgit\s+reset\s+--hard\b'
+/// action = "deny"
+/// reason = "This project never allows git reset --hard from the agent."
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BashPolicyConfig {
+    /// Master switch for the bash policy guard. Defaults to `true` so dangerous
+    /// built-in commands are protected even when the user has broadly allowed
+    /// the `bash` tool.
+    pub enabled: bool,
+    /// What to do with a `confirm` decision while unattended/no-human mode is
+    /// active. Defaults to `deny`.
+    pub unattended_confirm: BashPolicyUnattendedAction,
+    /// Whether an explicit user `allow` rule may override a compiled-in `deny`
+    /// rule. Defaults to `false`; user `allow` rules can still override
+    /// compiled-in `confirm` rules.
+    pub allow_user_override_builtin_deny: bool,
+    /// Project/user-defined rules. Evaluated before built-in `confirm` rules,
+    /// but built-in `deny` rules remain a hard floor unless
+    /// `allow_user_override_builtin_deny` is set.
+    pub rules: Vec<BashPolicyRuleConfig>,
+}
+
+impl Default for BashPolicyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            unattended_confirm: BashPolicyUnattendedAction::Deny,
+            allow_user_override_builtin_deny: false,
+            rules: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BashPolicyUnattendedAction {
+    /// Refuse commands that require confirmation when no human is reachable.
+    #[default]
+    Deny,
+    /// Allow confirmation-gated commands to proceed unattended. Useful only for
+    /// highly controlled automation; not recommended for normal agent use.
+    Allow,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BashPolicyRuleConfig {
+    /// Human-readable rule name shown in policy decisions.
+    pub name: String,
+    /// Matcher type. TOML uses `match = "regex"`; `matcher` is accepted as an
+    /// alias for callers that avoid the keyword-like field name.
+    #[serde(rename = "match", alias = "matcher")]
+    pub matcher: BashPolicyMatcherConfig,
+    /// Pattern consumed by the selected matcher.
+    pub pattern: String,
+    /// Decision to apply when this rule matches.
+    pub action: BashPolicyActionConfig,
+    /// Optional user-facing explanation.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BashPolicyMatcherConfig {
+    /// Rust `regex` matched against the full shell command string.
+    #[default]
+    Regex,
+    /// Case-sensitive substring match against the full command string.
+    Contains,
+    /// Case-sensitive prefix match after trimming leading whitespace.
+    StartsWith,
+    /// Match the leading program name (after leading env assignments), e.g.
+    /// `git`, `cargo`, `kubectl`.
+    Program,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BashPolicyActionConfig {
+    /// Let the command proceed to the normal permission broker.
+    Allow,
+    /// Require a one-off human confirmation, ignoring any broad `bash *` allow.
+    Confirm,
+    /// Refuse the command before spawning a shell.
+    #[default]
+    Deny,
+}
+
 /// One declarative permission rule from `[permissions]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRuleConfig {
@@ -408,6 +510,11 @@ pub struct Config {
     /// `permissions.json`; these config rules are re-applied on every start.
     #[serde(default)]
     pub permissions: PermissionConfig,
+    /// Bash command safety policy (`[bash_policy]` table). Built-in dangerous
+    /// command rules are compiled into the agent; this config supplies only
+    /// user overrides/additional rules and guard toggles.
+    #[serde(default)]
+    pub bash_policy: BashPolicyConfig,
     /// Web tool configuration (`[websearch]` table): search backend, proxy, timeout.
     #[serde(default)]
     pub websearch: WebSearchConfig,
@@ -591,6 +698,7 @@ impl Default for Config {
             providers: Vec::new(),
             skills: SkillsConfig::default(),
             permissions: PermissionConfig::default(),
+            bash_policy: BashPolicyConfig::default(),
             websearch: WebSearchConfig::default(),
             tui: TuiConfig::default(),
             principal: PrincipalConfig::default(),

@@ -757,6 +757,7 @@ mod tests {
                 &mut 0,
                 true,
                 false,
+                false,
                 &theme,
             );
             let history_roster: Vec<String> = vec!["a".to_string()];
@@ -774,6 +775,7 @@ mod tests {
                 true,
                 false,
                 true,
+                false,
                 &theme,
             );
             draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
@@ -833,6 +835,7 @@ mod tests {
                     },
                 ],
                 0,
+                false,
                 &theme,
             );
             let question_request = UserQuestionRequest {
@@ -2266,6 +2269,7 @@ mod tests {
                     true,
                     false,
                     true,
+                    false,
                     &theme,
                 );
             });
@@ -2289,6 +2293,7 @@ mod tests {
                 true,
                 false,
                 true,
+                false,
                 &theme,
             );
         });
@@ -2328,6 +2333,7 @@ mod tests {
                 true,
                 false,
                 false, // browse mode
+                false,
                 &theme,
             );
         });
@@ -2368,6 +2374,7 @@ mod tests {
                 true,
                 false,
                 true,
+                false,
                 &theme,
             );
         });
@@ -2391,6 +2398,7 @@ mod tests {
                 true,
                 true,
                 true,
+                false,
                 &theme,
             );
         });

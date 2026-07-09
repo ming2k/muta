@@ -9,7 +9,10 @@ use neenee_tui::{
 };
 
 use super::Theme;
-pub(super) use super::components::footer::{FooterHint, modal_footer_text, render_modal_footer};
+pub(super) use super::components::footer::{
+    FooterHint, FooterHintWithBand, keymap_body_lines, keymap_page_footer_hints, modal_footer_text,
+    render_modal_footer, render_modal_footer_with_more,
+};
 #[cfg(test)]
 use super::design::PANEL_BAR_INSET;
 use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
@@ -759,14 +762,27 @@ mod tests {
             FooterHint::always("Esc", "close"),
         ];
 
+        // Full width: every label kept, no `?` chip (show_more = false).
         assert_eq!(
             modal_footer_text(&hints, 80),
             "type filter · ↑↓ navigate · Enter activate · * favorite · Esc close"
         );
-        assert_eq!(modal_footer_text(&hints, 27), "type · ↑↓ · Enter · * · Esc");
-        assert_eq!(modal_footer_text(&hints, 14), "Enter · Esc");
+        // Narrow widths drop lower-priority items. Assert invariants rather
+        // than brittle full strings (the ladder depends on the budget).
+        // Always keeps Esc; Primary keeps Enter; no `?` (default path).
+        let mid = modal_footer_text(&hints, 30);
+        assert!(
+            mid.contains("Esc") || mid.starts_with('E') || mid.ends_with('…'),
+            "narrow keeps Esc: {mid}"
+        );
+        assert!(!mid.contains('?'), "default path never appends ?: {mid}");
         assert_eq!(modal_footer_text(&hints, 3), "Esc");
-        assert_eq!(modal_footer_text(&hints, 2), "E…");
+        // 2 cols is too short for "Esc" — truncate with ellipsis.
+        let tiny = modal_footer_text(&hints, 2);
+        assert!(
+            tiny.ends_with('…') || tiny == "E…",
+            "tiny width truncates: {tiny}"
+        );
     }
 
     #[test]

@@ -1198,6 +1198,7 @@ pub(super) async fn run_app_loop(
                             &mut app.model_scroll,
                             app.model_modal_follow,
                             app.model_search,
+                            app.modal_keymap_open,
                             &app.theme,
                         ))
                     }
@@ -1215,6 +1216,7 @@ pub(super) async fn run_app_loop(
                             app.history_modal_follow,
                             app.history_preview,
                             app.history_search,
+                            app.modal_keymap_open,
                             &app.theme,
                         ))
                     }
@@ -1350,6 +1352,7 @@ pub(super) async fn run_app_loop(
                         &app.sessions_overview,
                         app.modal_index
                             .min(app.sessions_overview.len().saturating_sub(1)),
+                        app.modal_keymap_open,
                         &app.theme,
                     )),
                     Modal::TokenReport => {
@@ -1676,6 +1679,7 @@ pub(super) async fn run_app_loop(
                     history_searching: app.history_search,
                     model_searching: app.model_search,
                     picker_in_models_stage: app.picker_provider.is_some(),
+                    modal_keymap_open: app.modal_keymap_open,
                     custom_provider_field: (app.active_modal == Modal::CustomProvider)
                         .then_some(app.custom_field),
                     editor_field: (app.active_modal == Modal::ModelEditor)
@@ -2037,6 +2041,7 @@ pub(super) async fn run_app_loop(
                             Some(Act::Drill { row_idx, id }) => {
                                 app.picker_provider = Some(row_idx);
                                 app.model_search = false;
+                                app.modal_keymap_open = false;
                                 app.input.clear();
                                 app.set_cursor(0);
                                 app.model_scroll = 0;
@@ -2106,6 +2111,7 @@ pub(super) async fn run_app_loop(
                         && let Some(idx) = app.picker_provider.take()
                     {
                         app.model_search = false;
+                        app.modal_keymap_open = false;
                         app.input.clear();
                         app.set_cursor(0);
                         app.model_scroll = 0;
@@ -2288,6 +2294,7 @@ pub(super) async fn run_app_loop(
                     // builds the fuzzy query and re-ranks `models_filtered`.
                     if app.active_modal == Modal::Provider {
                         app.model_search = true;
+                        app.modal_keymap_open = false;
                         app.modal_index = 0;
                         app.model_scroll = 0;
                         app.model_modal_follow = true;
@@ -2299,6 +2306,7 @@ pub(super) async fn run_app_loop(
                     // `stashed_input` until the modal closes for real.
                     if app.active_modal == Modal::Provider {
                         app.model_search = false;
+                        app.modal_keymap_open = false;
                         app.input.clear();
                         app.set_cursor(0);
                         app.input_scroll = 0;
@@ -2554,6 +2562,7 @@ pub(super) async fn run_app_loop(
                     app.set_cursor(0);
                     app.input_scroll = 0;
                     app.active_modal = Modal::Provider;
+                    app.modal_keymap_open = false;
                     app.model_search = false;
                     app.picker_provider = None;
                     app.model_scroll = 0;
@@ -2585,6 +2594,7 @@ pub(super) async fn run_app_loop(
                     app.input_scroll = 0;
                     app.suggestion_index = None;
                     app.active_modal = Modal::HistorySearch;
+                    app.modal_keymap_open = false;
                     app.history_search = false;
                     // Browse rows are newest-first, so index 0 is the most-recent
                     // entry — focus the top so an immediate Enter re-inserts it.
@@ -2598,6 +2608,7 @@ pub(super) async fn run_app_loop(
                     // line is already empty (held in `stashed_input`); typing now
                     // builds the fuzzy query and re-ranks `history_rows`.
                     app.history_search = true;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.history_scroll = 0;
                     app.history_modal_follow = true;
@@ -2608,6 +2619,7 @@ pub(super) async fn run_app_loop(
                     // full browse list. The original draft stays parked in
                     // `stashed_input` until the modal closes for real.
                     app.history_search = false;
+                    app.modal_keymap_open = false;
                     app.input.clear();
                     app.set_cursor(0);
                     app.input_scroll = 0;
@@ -2662,6 +2674,7 @@ pub(super) async fn run_app_loop(
                 }
                 input::InputAction::OpenHelp => {
                     app.active_modal = Modal::Help;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.help_scroll = 0;
                 }
@@ -2672,6 +2685,7 @@ pub(super) async fn run_app_loop(
                     // rule list populates; `/permissions clear` still goes to
                     // the backend via SendSlash.
                     app.active_modal = Modal::Permissions;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.permissions_scroll = 0;
                     let _ = app.tx.send(AgentRequest::QuerySessionContext);
@@ -2681,6 +2695,7 @@ pub(super) async fn run_app_loop(
                     // (intercepted locally). It shares the session-context
                     // snapshot, so (re)kick a query so the list is fresh.
                     app.active_modal = Modal::Tools;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.session_scroll = 0;
                     app.session_modal_follow = true;
@@ -2691,6 +2706,7 @@ pub(super) async fn run_app_loop(
                     // locally). Shares the session-context snapshot, so kick a
                     // fresh query and let the modal populate from its `mcp` pane.
                     app.active_modal = Modal::Mcp;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.session_scroll = 0;
                     app.session_modal_follow = true;
@@ -2702,6 +2718,7 @@ pub(super) async fn run_app_loop(
                     // fresh query and let the modal populate from its `skills`
                     // pane. Detail expansions start collapsed.
                     app.active_modal = Modal::Skills;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.session_scroll = 0;
                     app.session_modal_follow = true;
@@ -2732,6 +2749,7 @@ pub(super) async fn run_app_loop(
                     // the configurable categories; selecting one drills into
                     // its sub-page.
                     app.active_modal = Modal::Config;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.config_scroll = 0;
                 }
@@ -2742,11 +2760,13 @@ pub(super) async fn run_app_loop(
                     match app.modal_index {
                         0 => {
                             app.active_modal = Modal::ConfigNudge;
+                            app.modal_keymap_open = false;
                             app.modal_index = 0;
                             app.config_scroll = 0;
                         }
                         1 => {
                             app.active_modal = Modal::ConfigLayout;
+                            app.modal_keymap_open = false;
                             app.modal_index = match app.transcript_layout {
                                 crate::tui::render::layout::Strategy::Default => 0,
                                 crate::tui::render::layout::Strategy::Legacy => 1,
@@ -2759,6 +2779,7 @@ pub(super) async fn run_app_loop(
                 input::InputAction::ConfigBack => {
                     // Return from a config sub-page to the config root.
                     app.active_modal = Modal::Config;
+                    app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.config_scroll = 0;
                 }
@@ -2960,11 +2981,40 @@ pub(super) async fn run_app_loop(
                             app.modal_index = 0;
                             return_to_picker = true;
                         }
+                        app.modal_keymap_open = false;
                         app.active_modal = if return_to_picker {
                             Modal::Provider
                         } else {
                             Modal::None
                         };
+                    }
+                }
+                input::InputAction::ToggleModalKeymap => {
+                    // In-modal `?` expand: swap the body for the full keymap
+                    // page (or close it). Not a nested modal.
+                    app.modal_keymap_open = !app.modal_keymap_open;
+                    // Reset the body scroll so the keymap starts at the top.
+                    match app.active_modal {
+                        Modal::Provider => {
+                            app.model_scroll = 0;
+                            app.model_modal_follow = true;
+                        }
+                        Modal::HistorySearch => {
+                            app.history_scroll = 0;
+                            app.history_modal_follow = true;
+                        }
+                        Modal::Help => app.help_scroll = 0,
+                        Modal::Activity => app.activity_scroll = 0,
+                        Modal::Permissions => app.permissions_scroll = 0,
+                        Modal::Tools | Modal::Mcp | Modal::Skills => {
+                            app.session_scroll = 0;
+                            app.session_modal_follow = true;
+                        }
+                        Modal::Config | Modal::ConfigNudge | Modal::ConfigLayout => {
+                            app.config_scroll = 0;
+                        }
+                        Modal::TokenReport => app.token_report_scroll = 0,
+                        _ => {}
                     }
                 }
                 input::InputAction::TokenReportActivate => {

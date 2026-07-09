@@ -92,6 +92,10 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
                 FooterHint::navigation("↑↓", "scroll"),
                 FooterHint::always("Esc", "close"),
             ],
+            extra_footer_hints: &[],
+            keymap_open: false,
+            // Help is already a keybindings surface — no recursive `? more`.
+            show_more: false,
         },
         theme,
     )

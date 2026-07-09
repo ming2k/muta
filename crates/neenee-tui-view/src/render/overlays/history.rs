@@ -9,8 +9,8 @@ use crate::layout::LayoutMap;
 use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, modal_area, modal_frame, render_body,
-    render_modal_footer,
+    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines, keymap_page_footer_hints,
+    modal_area, modal_frame, render_body, render_modal_footer, render_modal_footer_with_more,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -31,6 +31,8 @@ use unicode_width::UnicodeWidthStr;
 /// reverse-chronological list (no highlights), and there is no editable field /
 /// caret. In **search** mode (`true`) the header becomes a `› <query>` filter
 /// field with the real caret, and each row highlights the matched query chars.
+/// When `keymap_open` is true the body is replaced by the full keybindings list
+/// for the active mode (in-modal `?` expand).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_history_modal(
     frame: &mut Frame,
@@ -44,10 +46,72 @@ pub fn draw_history_modal(
     follow_selection: bool,
     preview: bool,
     search: bool,
+    keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::HistorySearch).expect("history modal has fixed geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    let preview_hints: [FooterHint; 4] = [
+        FooterHint::navigation("↑↓", "next entry"),
+        FooterHint::secondary("Tab", "list"),
+        FooterHint::primary("Enter", "insert"),
+        FooterHint::always("Esc", "close"),
+    ];
+    let search_hints: [FooterHint; 5] = [
+        FooterHint::secondary("type", "filter"),
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::secondary("Tab", "preview"),
+        FooterHint::primary("Enter", "insert"),
+        FooterHint::always("Esc", "back"),
+    ];
+    let browse_hints: [FooterHint; 5] = [
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::secondary("/", "search"),
+        FooterHint::secondary("Tab", "preview"),
+        FooterHint::primary("Enter", "insert"),
+        FooterHint::always("Esc", "close"),
+    ];
+    let hints: &[FooterHint] = if preview {
+        &preview_hints
+    } else if search {
+        &search_hints
+    } else {
+        &browse_hints
+    };
+
+    if keymap_open {
+        let header_rect = f.header;
+        if let Some(h) = header_rect {
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        "Input History",
+                        Style::default()
+                            .fg(theme.brand())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(" · keybindings", Style::default().fg(theme.muted())),
+                ])),
+                h,
+            );
+        }
+        let body = keymap_body_lines(hints, &[], theme);
+        render_body(
+            frame,
+            f.body,
+            body,
+            scroll,
+            None,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
+        }
+        return area;
+    }
 
     let header_rect = f.header;
     if let Some(h) = header_rect {
@@ -112,31 +176,7 @@ pub fn draw_history_modal(
     }
 
     if let Some(fo) = f.footer {
-        let hints: &[FooterHint] = if preview {
-            &[
-                FooterHint::navigation("↑↓", "next entry"),
-                FooterHint::secondary("Tab", "list"),
-                FooterHint::primary("Enter", "insert"),
-                FooterHint::always("Esc", "close"),
-            ]
-        } else if search {
-            &[
-                FooterHint::secondary("type", "filter"),
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::secondary("Tab", "preview"),
-                FooterHint::primary("Enter", "insert"),
-                FooterHint::always("Esc", "back"),
-            ]
-        } else {
-            &[
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::secondary("/", "search"),
-                FooterHint::secondary("Tab", "preview"),
-                FooterHint::primary("Enter", "insert"),
-                FooterHint::always("Esc", "close"),
-            ]
-        };
-        render_modal_footer(frame, fo, hints, theme);
+        render_modal_footer_with_more(frame, fo, hints, &[], theme);
     }
 
     // Place the real terminal caret in the filter field (the header row, after

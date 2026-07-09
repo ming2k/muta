@@ -1,5 +1,6 @@
 ---
 source: crates/neenee-code/src/tui/question_model.rs
+assertion_line: 1176
 expression: film
 ---
 === open: Question 1/2 ===
@@ -14,4 +15,4 @@ expression: film
              x
              Other
 
-          ↑↓ · wheel/Pg · Enter · 1-9 · Esc
+          ↑↓ navigate · Enter submit · Esc cancel

@@ -355,6 +355,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     agent.set_hard_stop_turns(config.principal.hard_stop_turns);
     agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);
+    agent.set_bash_policy(&config.bash_policy);
 
     // Lifecycle event hooks (ADR-0025): each `[[hooks]]` entry runs a shell
     // command at one lifecycle point (PreToolUse / PostToolUse / Stop / …).

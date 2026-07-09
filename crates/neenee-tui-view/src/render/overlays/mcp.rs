@@ -144,6 +144,8 @@ pub fn draw_mcp_modal(
                 FooterHint::always("Esc", "close"),
             ],
             empty_footer_hints: &[FooterHint::always("Esc", "close")],
+            extra_footer_hints: &[],
+            keymap_open: false,
         },
         theme,
     )

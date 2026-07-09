@@ -989,6 +989,7 @@ pub async fn run_tui(
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
         help_scroll: 0,
+        modal_keymap_open: false,
         pending_permission: None,
         pending_input: None,
         question: None,

@@ -127,6 +127,7 @@ const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 pub mod agent;
 pub use agent::{Agent, AgentIdentity};
 
+mod bash_policy;
 pub mod catalog;
 pub mod doom_guard;
 pub mod dynamic;

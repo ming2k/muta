@@ -995,7 +995,17 @@ impl Tool for RecordingTool {
         serde_json::json!({"type": "object"})
     }
     fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
-        if self.declares_target {
+        if self.name == "bash" {
+            let command = serde_json::from_str::<serde_json::Value>(arguments)
+                .ok()
+                .and_then(|v| {
+                    v.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| arguments.to_string());
+            neenee_core::ScopeTarget::Command(command)
+        } else if self.declares_target {
             // Pull a path from the args if present, else a fixed sentinel, so
             // the broker fires for the `write` variant.
             let path = serde_json::from_str::<serde_json::Value>(arguments)
@@ -1222,6 +1232,10 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         enabled: true,
         ..neenee_core::DoomGuardConfig::default()
     });
+    agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
+        tool: "bash".to_string(),
+        scope: "make test".to_string(),
+    }]);
 
     let mut messages = vec![Message::new(Role::User, "go")];
     let outcome = agent
@@ -1337,6 +1351,10 @@ async fn doom_guard_suppressed_when_disabled() {
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
+    agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
+        tool: "bash".to_string(),
+        scope: "make test".to_string(),
+    }]);
 
     let mut messages = vec![Message::new(Role::User, "go")];
     let _ = agent
@@ -1356,6 +1374,78 @@ async fn doom_guard_suppressed_when_disabled() {
             .any(|m| m.role == Role::Tool && m.content.contains("[loop guard]")),
         "disabled guard must not block"
     );
+}
+
+#[tokio::test]
+async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
+    let bash = RecordingTool::read("bash", "BASH-OUT");
+    let calls = bash.calls_handle();
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            tool_round(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            text_round("done"),
+        ])),
+        vec![Arc::new(bash)],
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
+        tool: "bash".to_string(),
+        scope: "git reset --hard".to_string(),
+    }]);
+    agent.set_unattended(true);
+
+    let mut messages = vec![Message::new(Role::User, "discard changes")];
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    assert_eq!(calls.lock().unwrap().len(), 0);
+    let tool_message = messages
+        .iter()
+        .find(|m| m.role == Role::Tool)
+        .expect("policy refusal should be recorded as the bash tool result");
+    assert!(tool_message.content.contains("[bash policy]"));
+    assert!(tool_message.content.contains("git reset --hard"));
+    assert!(outcome.unwrap().message.content.contains("done"));
+}
+
+#[tokio::test]
+async fn bash_policy_user_allow_overrides_builtin_confirm() {
+    let bash = RecordingTool::read("bash", "BASH-OUT");
+    let calls = bash.calls_handle();
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            tool_round(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            text_round("done"),
+        ])),
+        vec![Arc::new(bash)],
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
+        tool: "bash".to_string(),
+        scope: "git reset --hard".to_string(),
+    }]);
+    let mut config = neenee_store::config::BashPolicyConfig::default();
+    config
+        .rules
+        .push(neenee_store::config::BashPolicyRuleConfig {
+            name: "fixture allows reset".to_string(),
+            matcher: neenee_store::config::BashPolicyMatcherConfig::Contains,
+            pattern: "git reset --hard".to_string(),
+            action: neenee_store::config::BashPolicyActionConfig::Allow,
+            reason: None,
+        });
+    agent.set_bash_policy(&config);
+
+    let mut messages = vec![Message::new(Role::User, "discard changes")];
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(outcome.unwrap().message.content, "done");
 }
 
 #[tokio::test]

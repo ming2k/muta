@@ -156,6 +156,9 @@ pub fn draw_config_nudge_modal(
                 wrap: false,
             },
             footer_hints: hints,
+            extra_footer_hints: &[],
+            keymap_open: false,
+            show_more: false,
         },
         theme,
     )
