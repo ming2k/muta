@@ -77,10 +77,10 @@ pub async fn request_device_code_at(
             body: text,
         });
     }
-    let json: DeviceCodeResponse = serde_json::from_str(&text).map_err(|e| {
-        crate::AuthError::Decode(format!("device code response parse failed: {e}"))
-    })?;
-    if json.device_code.is_empty() || json.user_code.is_empty() || json.verification_uri.is_empty() {
+    let json: DeviceCodeResponse = serde_json::from_str(&text)
+        .map_err(|e| crate::AuthError::Decode(format!("device code response parse failed: {e}")))?;
+    if json.device_code.is_empty() || json.user_code.is_empty() || json.verification_uri.is_empty()
+    {
         return Err(crate::AuthError::Decode(
             "device code response missing device_code / user_code / verification_uri".to_string(),
         ));
@@ -110,7 +110,8 @@ where
     S: Fn(u64) -> Fut + Send + Sync,
     Fut: std::future::Future<Output = ()> + Send,
 {
-    let expires_ms = positive_seconds_to_ms(device.expires_in, DEVICE_CODE_DEFAULT_EXPIRES_MS) as i64;
+    let expires_ms =
+        positive_seconds_to_ms(device.expires_in, DEVICE_CODE_DEFAULT_EXPIRES_MS) as i64;
     let deadline = now() + expires_ms;
     let mut interval_ms = positive_seconds_to_ms(device.interval, DEVICE_CODE_DEFAULT_INTERVAL_MS)
         .max(DEVICE_CODE_MIN_INTERVAL_MS);

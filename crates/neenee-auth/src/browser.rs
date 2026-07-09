@@ -88,8 +88,7 @@ impl CallbackServer {
             && let _ = prior.tx.send(CallbackOutcome::Failed(
                 "superseded by a newer xAI authorize request".to_string(),
             ))
-        {
-        }
+        {}
         *guard = Some(Pending { state, tx });
         rx
     }
@@ -127,11 +126,17 @@ async fn serve_one(
         let (outcome, body) = match (error.as_deref(), code.as_deref(), state.as_deref()) {
             (Some(err), _, _) => {
                 let msg = error_description.unwrap_or_else(|| err.to_string());
-                (Some(CallbackOutcome::Failed(msg.clone())), page(&msg, false))
+                (
+                    Some(CallbackOutcome::Failed(msg.clone())),
+                    page(&msg, false),
+                )
             }
             (_, None, _) => {
                 let msg = "missing authorization code";
-                (Some(CallbackOutcome::Failed(msg.to_string())), page(msg, false))
+                (
+                    Some(CallbackOutcome::Failed(msg.to_string())),
+                    page(msg, false),
+                )
             }
             (_, Some(c), Some(s)) => {
                 if let Some(p) = guard.as_ref()
@@ -143,7 +148,9 @@ async fn serve_one(
                     )
                 } else {
                     (
-                        Some(CallbackOutcome::Failed("invalid state - potential CSRF".to_string())),
+                        Some(CallbackOutcome::Failed(
+                            "invalid state - potential CSRF".to_string(),
+                        )),
                         page("invalid state", false),
                     )
                 }
@@ -165,7 +172,8 @@ async fn serve_one(
             body
         )
     } else if pathname == "/cancel" {
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nLogin cancelled".to_string()
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nLogin cancelled"
+            .to_string()
     } else {
         "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot found".to_string()
     };

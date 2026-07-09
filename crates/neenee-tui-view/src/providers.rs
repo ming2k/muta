@@ -551,6 +551,7 @@ mod tests {
             key_ready: true,
             favorite: false,
             last_used_ms: None,
+            auth: Default::default(),
         }
     }
 

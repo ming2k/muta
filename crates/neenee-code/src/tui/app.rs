@@ -498,6 +498,14 @@ pub struct App {
     pub custom_url_hint: String,
     /// Template-specific user agent carried into newly-created channels.
     pub custom_user_agent: Option<String>,
+    /// How newly-created channels authenticate (from the selected template).
+    pub custom_auth: neenee_core::ChannelAuth,
+    /// True while "+ Add provider → xAI OAuth" browser flow is in flight.
+    pub awaiting_oauth_add: bool,
+    pub oauth_pending_message: String,
+    pub oauth_pending_url: String,
+    pub oauth_pending_user_code: String,
+    pub oauth_pending_error: Option<String>,
     /// Highlight index into the live suggestion list for the provider editor's
     /// Model **filter** field (type to filter, `↑/↓` to move, committed live).
     pub custom_suggest_index: usize,
@@ -1159,10 +1167,8 @@ impl App {
         };
     }
 
-    /// Open the provider editor seeded from `template` (create mode) on the Name
-    /// field. The composer line is borrowed for the focused Name field.
-    pub fn open_custom_provider_editor(&mut self, template: &ProviderTemplate) {
-        self.active_modal = Modal::CustomProvider;
+    /// Seed create-mode buffers from `template` without opening the editor.
+    pub fn seed_custom_provider_from_template(&mut self, template: &ProviderTemplate) {
         self.custom_edit_id = None;
         self.custom_fields = template.fields();
         self.custom_field = 0;
@@ -1170,23 +1176,68 @@ impl App {
         self.custom_models = template.models.iter().map(|m| m.to_string()).collect();
         self.custom_url_hint = template.url_hint.to_string();
         self.custom_user_agent = template.user_agent.map(str::to_string);
+        self.custom_auth = template.auth;
         self.custom_suggest_index = 0;
         self.custom_name.clear();
-        // A relay-specific template (e.g. Antigravity) pre-fills its concrete
-        // endpoint so the user only types a name and token; the generic
-        // templates leave the field empty (their `url_hint` is a placeholder).
         self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
-        // Default the (optional) Model field to the first candidate so the
-        // A template with a Model field submits a usable model even if left untouched.
         self.custom_model = self
             .custom_model_candidates()
             .first()
             .map(|m| m.to_string())
             .unwrap_or_default();
+    }
+
+    /// Open the provider editor seeded from `template` (create mode) on the Name
+    /// field. The composer line is borrowed for the focused Name field.
+    pub fn open_custom_provider_editor(&mut self, template: &ProviderTemplate) {
+        self.seed_custom_provider_from_template(template);
+        self.active_modal = Modal::CustomProvider;
         self.input.clear();
         self.set_cursor(0);
         self.picker_provider = None;
+    }
+
+    /// Open the OAuth waiting sheet and seed create buffers from `template`.
+    pub fn begin_oauth_add(&mut self, template: &ProviderTemplate) {
+        self.seed_custom_provider_from_template(template);
+        self.awaiting_oauth_add = true;
+        self.oauth_pending_message =
+            "Complete authorization in your browser (or open the link below).".to_string();
+        self.oauth_pending_url.clear();
+        self.oauth_pending_user_code.clear();
+        self.oauth_pending_error = None;
+        self.active_modal = Modal::OauthPending;
+        self.input.clear();
+        self.set_cursor(0);
+        self.picker_provider = None;
+    }
+
+    /// After SuperGrok OAuth succeeds: name-only editor (default "xAI").
+    pub fn open_oauth_instance_name_editor(&mut self) {
+        self.awaiting_oauth_add = false;
+        self.oauth_pending_url.clear();
+        self.oauth_pending_user_code.clear();
+        self.oauth_pending_message.clear();
+        self.oauth_pending_error = None;
+        self.active_modal = Modal::CustomProvider;
+        self.custom_fields = vec![CustomField::Name];
+        self.custom_field = 0;
+        self.custom_edit_id = None;
+        self.custom_name = "xAI".to_string();
+        self.input = "xAI".to_string();
+        self.set_cursor_end();
+        self.picker_provider = None;
+    }
+
+    /// Auth mode of a provider picker row (for OAuth re-connect routing).
+    pub fn provider_row_auth(&self, id: &str) -> neenee_core::ChannelAuth {
+        self.provider_picker
+            .rows
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.auth)
+            .unwrap_or_default()
     }
 
     /// Open the provider editor in **edit** mode for an existing user provider,
@@ -1208,6 +1259,7 @@ impl App {
         self.custom_models.clear();
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
+        self.custom_auth = neenee_core::ChannelAuth::ApiKey;
         self.custom_suggest_index = 0;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;

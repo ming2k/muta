@@ -72,7 +72,12 @@ pub(crate) fn form_headers() -> [(&'static str, &'static str); 2] {
 /// without it, accounts.x.ai rejects loopback OAuth from the reused Grok-CLI
 /// client. This is the single load-bearing detail that distinguishes a working
 /// SuperGrok login from a consent-screen 400.
-pub fn build_authorize_url(pkce: &PkceCodes, state: &str, nonce: &str, redirect_uri: &str) -> String {
+pub fn build_authorize_url(
+    pkce: &PkceCodes,
+    state: &str,
+    nonce: &str,
+    redirect_uri: &str,
+) -> String {
     let params = [
         ("response_type", "code"),
         ("client_id", CLIENT_ID),
@@ -160,9 +165,10 @@ async fn post_form(
     for (name, value) in form_headers() {
         req = req.header(name, value);
     }
-    let response = req.send().await.map_err(|e| {
-        crate::AuthError::Transport(format!("xAI token request failed: {e}"))
-    })?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| crate::AuthError::Transport(format!("xAI token request failed: {e}")))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -171,9 +177,8 @@ async fn post_form(
             body: text,
         });
     }
-    serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
-        crate::AuthError::Decode(format!("xAI token response parse failed: {e}"))
-    })
+    serde_json::from_str::<TokenResponse>(&text)
+        .map_err(|e| crate::AuthError::Decode(format!("xAI token response parse failed: {e}")))
 }
 
 /// Whether a stored access token is expiring within `skew_ms` of now. Two
@@ -212,8 +217,8 @@ pub fn jwt_exp_ms(token: &str) -> Option<i64> {
 }
 
 fn base64url_decode(input: &str) -> Option<Vec<u8>> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     // Tolerate either padded or unpadded input.
     let trimmed = input.trim_end_matches('=');
     let mut buf = String::from(trimmed);
@@ -226,8 +231,8 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     #[test]
     fn authorize_url_carries_plan_generic_and_pkce() {
@@ -276,11 +281,7 @@ mod tests {
         let payload = URL_SAFE_NO_PAD.encode(format!("{{\"exp\":{}}}", 2_000_000_000));
         let token = format!("h.{payload}.s");
         // now + skew past exp → expiring.
-        assert!(access_token_is_expiring(
-            Some(&token),
-            0,
-            2_000_000_000_000
-        ));
+        assert!(access_token_is_expiring(Some(&token), 0, 2_000_000_000_000));
         // now far before exp, generous skew → not expiring.
         assert!(!access_token_is_expiring(
             Some(&token),

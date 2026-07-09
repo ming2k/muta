@@ -847,6 +847,12 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
         custom_user_agent: None,
+        custom_auth: Default::default(),
+        awaiting_oauth_add: false,
+        oauth_pending_message: String::new(),
+        oauth_pending_url: String::new(),
+        oauth_pending_user_code: String::new(),
+        oauth_pending_error: None,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,
@@ -1033,6 +1039,7 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
         needs_model: true,
         default_url: None,
         user_agent: None,
+        auth: neenee_core::ChannelAuth::ApiKey,
     };
     app.open_custom_provider_editor(&free_model_template);
     // The default model is the first candidate of the template's (OpenAI) protocol.
@@ -1075,6 +1082,7 @@ fn picker_add_row_is_the_trailing_stage1_row() {
         key_ready: true,
         favorite: false,
         last_used_ms: None,
+        auth: Default::default(),
     };
     app.provider_picker = neenee_core::ProviderPickerSnapshot {
         default_id: "kimi-code".to_string(),

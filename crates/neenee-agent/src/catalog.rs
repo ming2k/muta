@@ -364,6 +364,7 @@ fn migrate_legacy_instance(
             user_agent: user_agent.map(str::to_string),
             effort: None,
             thinking: None,
+            auth: Default::default(),
         })
         .collect();
     let default_channel = active_model
@@ -417,6 +418,7 @@ fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
                 api_key: Some(api_key.clone()),
                 model: Some(model.id.to_string()),
                 base_url: Some(base_url.to_string()),
+                auth: Default::default(),
                 user_agent: None,
                 effort: None,
                 thinking: None,
@@ -576,7 +578,10 @@ fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth
         .providers
         .iter()
         .find(|p| p.id == provider_id)
-        .and_then(|p| p.channels.get(p.default_channel.min(p.channels.len().saturating_sub(1))))
+        .and_then(|p| {
+            p.channels
+                .get(p.default_channel.min(p.channels.len().saturating_sub(1)))
+        })
         .map(|ch| ch.auth)
         .unwrap_or_default()
 }

@@ -49,6 +49,7 @@ pub fn provider() -> io::Result<()> {
         key_ready: key,
         favorite: fav,
         last_used_ms: fav.then_some(1_700_000_000_000),
+        auth: Default::default(),
     };
     let picker = ProviderPickerSnapshot {
         default_id: "anthropic".into(),

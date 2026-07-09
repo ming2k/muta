@@ -5,8 +5,8 @@
 //! `rand::rngs::OsRng`-grade via [`uuid`]'s `Uuid::new_v4` plus a hex encoder,
 //! which pulls from the OS CSPRNG.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 /// The PKCE code verifier + matching S256 code challenge.
@@ -45,8 +45,7 @@ pub fn s256_challenge(verifier: &str) -> String {
 /// Length is caller-chosen; 64 chars gives ~384 bits of entropy.
 pub fn random_string(len: usize) -> String {
     // The legal PKCE verifier chars (RFC 7636 §4.1): unreserved from RFC 3986.
-    const CHARS: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
     // Pull 16 random bytes per Uuid and index into CHARS modulo its length.
     // 43 (min verifier) .. 128 (max verifier) is the legal range; 64 is safe.
     let mut out = String::with_capacity(len);

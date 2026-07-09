@@ -12,6 +12,8 @@
 //! [`token`]; the two login flows live in [`device`] and [`browser`]; the
 //! on-disk token store lives in [`store`].
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod browser;
 pub mod device;
 pub mod pkce;
@@ -23,7 +25,7 @@ pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
 pub use pkce::{PkceCodes, new_nonce, new_state};
 pub use store::{AuthStore, TokenSet};
 pub use token::{
-    ACCESS_TOKEN_REFRESH_SKEW_MS, AUTHORIZE_URL, AUTH_PROVIDER_ID, CLIENT_ID,
+    ACCESS_TOKEN_REFRESH_SKEW_MS, AUTH_PROVIDER_ID, AUTHORIZE_URL, CLIENT_ID,
     DEVICE_AUTHORIZATION_URL, DEVICE_CODE_GRANT_TYPE, SCOPE, TOKEN_URL, TokenResponse,
     access_token_is_expiring, build_authorize_url, exchange_code, jwt_exp_ms, refresh_access_token,
 };

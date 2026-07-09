@@ -692,6 +692,107 @@ fn suggestion_lines(
         .collect()
 }
 
+/// Draw the OAuth-in-progress sheet: instruction, URL, optional user code, status.
+pub fn draw_oauth_pending(
+    title: &str,
+    message: &str,
+    url: &str,
+    user_code: &str,
+    error: Option<&str>,
+    frame: &mut Frame,
+    theme: &Theme,
+) -> neenee_tui::Rect {
+    let area =
+        modal_area(frame, Modal::OauthPending).expect("oauth pending modal has fixed geometry");
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    if let Some(h) = f.header {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    title.to_string(),
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" · authorizing…", Style::default().fg(theme.muted())),
+            ])),
+            h,
+        );
+    }
+
+    let mut body: Vec<Line> = Vec::new();
+    if let Some(err) = error {
+        body.push(Line::from(Span::styled(
+            format!("✗ {err}"),
+            Style::default().fg(theme.err()),
+        )));
+        body.push(Line::from(""));
+        body.push(Line::from(Span::styled(
+            "Esc to go back and try again.",
+            Style::default().fg(theme.muted()),
+        )));
+    } else {
+        if !message.is_empty() {
+            body.push(Line::from(Span::styled(
+                message.to_string(),
+                Style::default().fg(theme.fg()),
+            )));
+            body.push(Line::from(""));
+        }
+        if !url.is_empty() {
+            body.push(Line::from(Span::styled(
+                "Open this link if the browser did not open:",
+                Style::default().fg(theme.muted()),
+            )));
+            body.push(Line::from(Span::styled(
+                url.to_string(),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::UNDERLINED),
+            )));
+            body.push(Line::from(""));
+        } else {
+            body.push(Line::from(Span::styled(
+                "Starting authorization…",
+                Style::default().fg(theme.muted()),
+            )));
+            body.push(Line::from(""));
+        }
+        if !user_code.is_empty() {
+            body.push(Line::from(vec![
+                Span::styled("Code: ", Style::default().fg(theme.muted())),
+                Span::styled(
+                    user_code.to_string(),
+                    Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            body.push(Line::from(""));
+        }
+        body.push(Line::from(Span::styled(
+            "Waiting for authorization…",
+            Style::default().fg(theme.muted()),
+        )));
+    }
+
+    let mut scroll = 0usize;
+    render_body(
+        frame,
+        f.body,
+        body,
+        &mut scroll,
+        None,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
+
+    if let Some(fo) = f.footer {
+        render_modal_footer(frame, fo, &[FooterHint::always("Esc", "cancel")], theme);
+    }
+    area
+}
+
 /// Draw the provider-template chooser: a short list of curated templates (Custom
 /// Anthropic relay / OpenAI / Gemini). Each row is a label + a muted
 /// one-line description; `↑/↓` move the highlight and Enter opens the editor.

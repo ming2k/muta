@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **xAI OAuth (SuperGrok) provider.** "+ Add provider" offers **xAI OAuth**.
+  Selecting it opens a pending modal, starts browser OAuth (loopback PKCE on
+  `127.0.0.1:56121`), shows the authorize URL, and after success prompts for
+  an instance name. Grok models (`grok-4.5` / `4.20` / `4.3` / `build-0.1`)
+  over `https://api.x.ai/v1/chat/completions`. Tokens in `auth.toml` under
+  `xai`. Backed by `neenee-auth` (mirrors opencode). See ADR-0052.
+
 ## [0.18.0] - 2026-07-09
 
 ### Added

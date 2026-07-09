@@ -106,6 +106,8 @@ pub(super) struct UiRuntime {
     /// Sessions picker rows + a one-shot request to open the picker modal.
     pub sessions_overview: Arc<Mutex<Vec<SessionOverview>>>,
     pub open_sessions: Arc<AtomicBool>,
+    /// Live OAuth-add UI updates from the response listener.
+    pub oauth_add_signal: Arc<Mutex<Option<OauthAddSignal>>>,
     /// Latest session-context snapshot for the Tools / Mcp / Skills /
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Each manager renders a lightweight placeholder
@@ -152,6 +154,19 @@ pub(super) struct UiRuntime {
 pub(super) enum SideViewSignal {
     Opened { side_id: String },
     Closed,
+}
+
+/// Progress of the "+ Add provider → OAuth" browser flow.
+pub(super) enum OauthAddSignal {
+    Pending {
+        url: String,
+        user_code: String,
+        message: String,
+    },
+    Done,
+    Failed {
+        message: String,
+    },
 }
 
 /// A user message unsent by a Phase-1 interrupt (the turn was cancelled before
@@ -577,6 +592,34 @@ pub(super) async fn run_app_loop(
             {
                 app.active_modal = Modal::Sessions;
                 app.modal_index = 0;
+            }
+            if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
+                match sig {
+                    OauthAddSignal::Pending {
+                        url,
+                        user_code,
+                        message,
+                    } => {
+                        if app.awaiting_oauth_add {
+                            app.oauth_pending_url = url;
+                            app.oauth_pending_user_code = user_code;
+                            app.oauth_pending_message = message;
+                            app.oauth_pending_error = None;
+                            app.active_modal = Modal::OauthPending;
+                        }
+                    }
+                    OauthAddSignal::Done => {
+                        if app.awaiting_oauth_add {
+                            app.open_oauth_instance_name_editor();
+                        }
+                    }
+                    OauthAddSignal::Failed { message } => {
+                        if app.awaiting_oauth_add {
+                            app.oauth_pending_error = Some(message);
+                            app.active_modal = Modal::OauthPending;
+                        }
+                    }
+                }
             }
         }
 
@@ -1246,6 +1289,15 @@ pub(super) async fn run_app_loop(
                         f,
                         &app.theme,
                         &mut app.template_scroll,
+                    )),
+                    Modal::OauthPending => Some(render::draw_oauth_pending(
+                        "xAI OAuth",
+                        &app.oauth_pending_message,
+                        &app.oauth_pending_url,
+                        &app.oauth_pending_user_code,
+                        app.oauth_pending_error.as_deref(),
+                        f,
+                        &app.theme,
                     )),
                     Modal::CustomProvider => {
                         let editing = app.custom_is_editing();
@@ -2016,6 +2068,15 @@ pub(super) async fn run_app_loop(
                                     });
                                     app.restore_model_draft();
                                     app.active_modal = Modal::None;
+                                } else if app.provider_row_auth(&id)
+                                    == neenee_core::ChannelAuth::XaiOAuth
+                                {
+                                    let _ = app.tx.send(AgentRequest::ConnectProvider {
+                                        id,
+                                        method: neenee_core::LoginMethod::Browser,
+                                    });
+                                    app.restore_model_draft();
+                                    app.active_modal = Modal::None;
                                 } else {
                                     // No key configured: open the key editor
                                     // prefilled with this model so the user can enter
@@ -2074,12 +2135,28 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::SelectProviderTemplate => {
-                    // Open the editor seeded from the highlighted template.
                     if app.active_modal == Modal::ProviderTemplate
                         && let Some(template) =
                             crate::tui::PROVIDER_TEMPLATES.get(app.template_choice)
                     {
-                        app.open_custom_provider_editor(template);
+                        if template.oauth_first() {
+                            app.begin_oauth_add(template);
+                            let _ = app.tx.send(AgentRequest::AuthorizeOAuth {
+                                method: neenee_core::LoginMethod::Browser,
+                            });
+                        } else {
+                            app.open_custom_provider_editor(template);
+                        }
+                    }
+                }
+                input::InputAction::CancelOauthPending => {
+                    if app.active_modal == Modal::OauthPending {
+                        app.awaiting_oauth_add = false;
+                        app.oauth_pending_url.clear();
+                        app.oauth_pending_user_code.clear();
+                        app.oauth_pending_message.clear();
+                        app.oauth_pending_error = None;
+                        app.open_provider_template_chooser();
                     }
                 }
                 input::InputAction::CancelProviderTemplate => {
@@ -2195,6 +2272,7 @@ pub(super) async fn run_app_loop(
                                     api_key,
                                     user_agent: app.custom_user_agent.clone(),
                                     models,
+                                    auth: app.custom_auth,
                                 });
                                 app.input = std::mem::take(&mut app.stashed_input);
                                 app.set_cursor_end();
@@ -3522,6 +3600,7 @@ pub(super) async fn run_app_loop(
                     | Modal::Question
                     | Modal::ModelEditor
                     | Modal::ProviderTemplate
+                    | Modal::OauthPending
                     | Modal::CustomProvider
                     | Modal::InputInjection
                     | Modal::Tools
@@ -3592,6 +3671,7 @@ pub(super) async fn run_app_loop(
                     | Modal::Question
                     | Modal::ModelEditor
                     | Modal::ProviderTemplate
+                    | Modal::OauthPending
                     | Modal::CustomProvider
                     | Modal::InputInjection
                     | Modal::Tools

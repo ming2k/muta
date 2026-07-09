@@ -738,7 +738,8 @@ async fn run_xai_oauth(
                     provider: label.to_string(),
                     url: login.url.clone(),
                     user_code: String::new(),
-                    message: "Complete authorization in your browser (or open the link below).".to_string(),
+                    message: "Complete authorization in your browser (or open the link below)."
+                        .to_string(),
                 },
             ));
             login

@@ -180,6 +180,8 @@ pub enum InputAction {
     SelectProviderTemplate,
     /// Cancel the provider-template chooser and return to the provider picker.
     CancelProviderTemplate,
+    /// Cancel the OAuth pending sheet (back to the template chooser).
+    CancelOauthPending,
     /// Remove the highlighted model from a custom provider's stage-2 list (`d`).
     ProviderPickerRemoveModel,
     /// Delete the entire highlighted custom provider from the stage-1 list
@@ -951,6 +953,8 @@ pub fn process_event(
                         // Esc cancels the template chooser back to the provider
                         // picker it was opened from.
                         InputAction::CancelProviderTemplate
+                    } else if context.active_modal == super::Modal::OauthPending {
+                        InputAction::CancelOauthPending
                     } else if context.active_modal == super::Modal::CustomProvider {
                         // Esc cancels the custom-provider editor and returns to the
                         // provider picker it was opened from.
@@ -1079,6 +1083,7 @@ pub fn process_event(
                     super::Modal::Provider => InputAction::ProviderPickerActivate,
                     super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                     super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
+                    super::Modal::OauthPending => InputAction::None,
                     super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
                     super::Modal::HistorySearch => InputAction::HistoryInsert,
                     super::Modal::Sessions => InputAction::OpenSelectedSession,
@@ -1785,6 +1790,7 @@ pub fn process_event(
                     super::Modal::ProviderTemplate => {
                         InputAction::MoveProviderTemplate { forward: false }
                     }
+                    super::Modal::OauthPending => InputAction::None,
                     super::Modal::CustomProvider => {
                         InputAction::MoveCustomSuggestion { forward: false }
                     }
@@ -1840,6 +1846,7 @@ pub fn process_event(
                     super::Modal::ProviderTemplate => {
                         InputAction::MoveProviderTemplate { forward: true }
                     }
+                    super::Modal::OauthPending => InputAction::None,
                     super::Modal::CustomProvider => {
                         InputAction::MoveCustomSuggestion { forward: true }
                     }

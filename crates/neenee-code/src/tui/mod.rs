@@ -178,6 +178,8 @@ pub async fn run_tui(
     let sessions_overview_clone = sessions_overview.clone();
     let open_sessions = Arc::new(AtomicBool::new(false));
     let open_sessions_clone = open_sessions.clone();
+    let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
+    let oauth_add_signal_clone = oauth_add_signal.clone();
     // Latest session-context snapshot for the Tools / Mcp / Skills /
     // Permissions managers (model / tools / permissions / skills / mcp).
     // Refreshed whenever a manager opens (the event loop sends
@@ -843,6 +845,55 @@ pub async fn run_tui(
                     *cp_clone.lock().await = provider;
                     *cm_clone.lock().await = model;
                 }
+                AgentResponse::ConnectStatus(status) => {
+                    let mut msgs = messages_clone.write().await;
+                    match status {
+                        neenee_core::ConnectStatus::Pending {
+                            url,
+                            user_code,
+                            message,
+                            ..
+                        } => {
+                            if !url.is_empty() {
+                                let _ = webbrowser::open(&url);
+                            }
+                            *oauth_add_signal_clone.lock().await =
+                                Some(event_loop::OauthAddSignal::Pending {
+                                    url: url.clone(),
+                                    user_code: user_code.clone(),
+                                    message: message.clone(),
+                                });
+                            let body = if user_code.is_empty() {
+                                format!("{message}\n  Open: {url}\n  Waiting for authorization…")
+                            } else {
+                                format!(
+                                    "{message}\n  Open: {url}\n  Code: {user_code}\n  Waiting for authorization…"
+                                )
+                            };
+                            push_local_notice(&mut msgs, NoticeSeverity::Info, body);
+                        }
+                        neenee_core::ConnectStatus::Done { provider } => {
+                            *oauth_add_signal_clone.lock().await =
+                                Some(event_loop::OauthAddSignal::Done);
+                            push_local_notice(
+                                &mut msgs,
+                                NoticeSeverity::Info,
+                                format!("{provider} authorized."),
+                            );
+                        }
+                        neenee_core::ConnectStatus::Failed { provider, message } => {
+                            *oauth_add_signal_clone.lock().await =
+                                Some(event_loop::OauthAddSignal::Failed {
+                                    message: message.clone(),
+                                });
+                            push_local_notice(
+                                &mut msgs,
+                                NoticeSeverity::Error,
+                                format!("{provider} connect failed: {message}"),
+                            );
+                        }
+                    }
+                }
                 AgentResponse::Error(msg) => {
                     let mut msgs = messages_clone.write().await;
                     push_local_notice(&mut msgs, NoticeSeverity::Error, msg);
@@ -986,6 +1037,12 @@ pub async fn run_tui(
         custom_models: Vec::new(),
         custom_url_hint: String::new(),
         custom_user_agent: None,
+        custom_auth: neenee_core::ChannelAuth::ApiKey,
+        awaiting_oauth_add: false,
+        oauth_pending_message: String::new(),
+        oauth_pending_url: String::new(),
+        oauth_pending_user_code: String::new(),
+        oauth_pending_error: None,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,
@@ -1030,6 +1087,7 @@ pub async fn run_tui(
             provider_picker,
             sessions_overview,
             open_sessions,
+            oauth_add_signal,
             session_context,
             nudge_config,
             todos,

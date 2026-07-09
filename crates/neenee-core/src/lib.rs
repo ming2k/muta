@@ -82,11 +82,11 @@ pub use dynamic::DynamicCatalog;
 pub use envoy::{EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus, EnvoyEvent,
-    HarnessSnapshot, InputReply, InputRequest, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity,
-    NoticeSource, NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest,
-    PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RoundEvent,
-    SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
-    UserQuestionReply, UserQuestionRequest,
+    HarnessSnapshot, InputReply, InputRequest, McpServerInfo, ModelInfo, NoticeKind,
+    NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
+    PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
+    ProviderPickerSnapshot, RoundEvent, SessionContextSnapshot, SessionOverview, SkillInfo,
+    ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
