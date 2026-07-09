@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-09
+
 ### Added
+
+- **`neenee-editor` crate.** Added a headless UTF-8 text-editing core plus an
+  optics-backed GUI shell for a small code editor. The workspace member includes
+  buffer, selection, history, display-map, editor-controller, rendering, README,
+  and integration-test coverage; the pure-Rust core can be built and tested with
+  `--no-default-features`.
+
+- **Transcript spacing reference.** Added `docs/reference/tui/transcript-spacing.md`
+  to document the ownership contract for transcript gutters, inter-message gaps,
+  component-local padding, metadata strips, and tool-step spacing.
 
 - **`MetaStrip` render component.** The two-tone one-line metadata header —
   an info-tone bold anchor joined to muted ` · ` details — is now a single
@@ -1148,7 +1160,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/ming2k/neenee/releases/tag/v0.17.0
 [0.16.0]: https://github.com/ming2k/neenee/releases/tag/v0.16.0
 [0.15.0]: https://github.com/ming2k/neenee/releases/tag/v0.15.0
 [0.14.3]: https://github.com/ming2k/neenee/releases/tag/v0.14.3

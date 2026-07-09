@@ -63,7 +63,7 @@ gated or shipped.
 cargo fmt --all --check \
   -p neenee-core -p neenee-store -p neenee-providers -p neenee-tools \
   -p neenee-agent -p neenee-code -p neenee-server \
-  -p neenee-tui -p neenee-tui-view
+  -p neenee-tui -p neenee-tui-view -p neenee-editor
 
 # Clippy (clippy job).
 RUSTFLAGS="-D warnings" cargo clippy \
@@ -89,6 +89,12 @@ A failure here blocks the release. Fix the code, not the checklist.
 The common failure modes are documented in
 [Fixing common failures](#fixing-common-failures).
 
+The `neenee-editor` crate's default `gui` feature depends on the optics C
+libraries; in CI those must be provided by the pinned optics git dependencies
+and the runner image. If a local checkout uses `.cargo/config.toml` to point at
+`../optics`, make sure that sibling build is healthy before treating local GUI
+checks as release evidence.
+
 The `audit` and `deny` jobs run in CI only (they need the GitHub token
 and a network fetch of the advisory database). Glance at their result on
 the latest `main` CI run before tagging; a new advisory in a transitive
@@ -105,7 +111,7 @@ version across all crates, so a partial bump breaks the path-dependency
 graph.
 
 ```bash
-# Bump all 11 crate manifests from the old to the new version.
+# Bump all workspace crate manifests from the old to the new version.
 for f in crates/*/Cargo.toml; do
   sed -i 's/^version = "0.13.0"/version = "0.14.0"/' "$f"
 done
@@ -123,7 +129,7 @@ Verify all members moved together:
 
 ```bash
 grep -h '^version' crates/*/Cargo.toml | sort -u   # one line: 0.14.0
-git diff --stat Cargo.lock                          # 11 version bumps
+git diff --stat Cargo.lock                          # workspace version bumps
 ```
 
 ### 4. Finalize the changelog

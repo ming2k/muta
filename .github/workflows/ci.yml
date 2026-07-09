@@ -55,7 +55,8 @@ jobs:
             -p neenee-code \
             -p neenee-server \
             -p neenee-tui \
-            -p neenee-tui-view
+            -p neenee-tui-view \
+            -p neenee-editor
 
   clippy:
     name: Clippy
