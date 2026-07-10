@@ -67,10 +67,14 @@ pub fn message(output: &Value) -> Message {
                     if let Some(summary) = item["summary"].as_array() {
                         for part in summary {
                             if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                let cleaned = strip_reasoning_placeholder(text);
+                                if cleaned.trim().is_empty() {
+                                    continue;
+                                }
                                 if !reasoning.is_empty() {
                                     reasoning.push('\n');
                                 }
-                                reasoning.push_str(text);
+                                reasoning.push_str(&cleaned);
                             }
                         }
                     }
@@ -139,7 +143,17 @@ impl ResponsesStream {
             }
             "response.reasoning_summary_text.delta" => {
                 if let Some(delta) = value["delta"].as_str() {
-                    events.push(ProviderStreamEvent::ReasoningDelta(delta.to_string()));
+                    // The ChatGPT Responses backend emits an empty `<!-- -->`
+                    // HTML comment as the body placeholder for header-only
+                    // reasoning-summary parts (a part's full text is e.g.
+                    // `**Planning…**\n\n<!-- -->`). codex drops these
+                    // (`history_cell/messages.rs`); we strip them so the
+                    // reasoning trace stays clean. A delta that is only the
+                    // placeholder collapses to nothing and is skipped.
+                    let cleaned = strip_reasoning_placeholder(delta);
+                    if !cleaned.is_empty() {
+                        events.push(ProviderStreamEvent::ReasoningDelta(cleaned));
+                    }
                 }
             }
             "response.output_item.added" => {
@@ -223,6 +237,14 @@ impl ResponsesStream {
         let next = self.call_index.len();
         *self.call_index.entry(item_id.to_string()).or_insert(next)
     }
+}
+
+/// Strip the ChatGPT Responses backend's empty-body placeholder (`<!-- -->`)
+/// from a reasoning-summary fragment. The backend uses it to mark
+/// header-only summary parts (e.g. `**Planning…**\n\n<!-- -->`); codex drops
+/// it the same way.
+fn strip_reasoning_placeholder(s: &str) -> String {
+    s.replace("<!-- -->", "")
 }
 
 #[cfg(test)]
@@ -385,5 +407,34 @@ mod tests {
         assert!(ev.is_empty());
         // Garbage JSON is ignored too.
         assert!(s.parse("not json").is_empty());
+    }
+
+    #[test]
+    fn reasoning_summary_strips_html_comment_placeholder() {
+        let mut s = ResponsesStream::new();
+        // A header delta passes through.
+        let ev = s.parse(
+            r#"{"type":"response.reasoning_summary_text.delta","delta":"**Planning**\n\n"}"#,
+        );
+        assert!(matches!(
+            &ev[0],
+            ProviderStreamEvent::ReasoningDelta(t) if t.contains("Planning")
+        ));
+        // The empty-body placeholder delta is dropped entirely (no event).
+        let ev = s.parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"<!-- -->"}"#);
+        assert!(
+            ev.is_empty(),
+            "placeholder delta must be dropped; got {ev:?}"
+        );
+        // A delta combining text + placeholder keeps the text, drops the marker.
+        let ev =
+            s.parse(r#"{"type":"response.reasoning_summary_text.delta","delta":"done\n<!-- -->"}"#);
+        match &ev[0] {
+            ProviderStreamEvent::ReasoningDelta(t) => {
+                assert!(t.contains("done"));
+                assert!(!t.contains("<!-- -->"));
+            }
+            _ => panic!("expected reasoning delta"),
+        }
     }
 }

@@ -157,11 +157,14 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         body["tools"] = specs;
         body["tool_choice"] = json!("auto");
     }
-    // Reasoning: GPT-5 models always reason. Request summaries so the reasoning
-    // trace streams back (clean, unlike relay-reconstructed `reasoning_content`),
-    // and attach the effort override when the model exposes effort levels.
+    // Reasoning: GPT-5 models always reason. Request the most verbose summaries
+    // the backend offers (`detailed`) so the reasoning trace carries real
+    // detail — the raw chain-of-thought is never exposed (OpenAI encrypts it as
+    // `reasoning.encrypted_content`), so `detailed` is the ceiling. codex
+    // exposes the same lever (`model_reasoning_summary: detailed`). Attach the
+    // effort override when the model exposes effort levels.
     let mut reasoning = serde_json::Map::new();
-    reasoning.insert("summary".to_string(), json!("auto"));
+    reasoning.insert("summary".to_string(), json!("detailed"));
     if let Some(effort) = reasoning_effort
         && !model.effort_levels.is_empty()
     {
@@ -356,7 +359,9 @@ mod tests {
                 reasoning_effort: Some(Effort::Medium),
             },
         );
-        assert_eq!(body["reasoning"]["summary"], "auto");
+        // The most verbose summaries the backend offers — the raw chain of
+        // thought is never exposed, so `detailed` is the ceiling.
+        assert_eq!(body["reasoning"]["summary"], "detailed");
         assert_eq!(body["reasoning"]["effort"], "medium");
     }
 
