@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::{
     AnthropicMessagesProvider, GoogleProvider, NEENEE_USER_AGENT, OpenAiCompatProvider,
-    ThinkingConfig,
+    ResponsesProvider, ThinkingConfig,
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -159,6 +159,19 @@ pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4
 /// `XAI_API_KEY`).
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
+/// GPT-5.x models served over the ChatGPT subscription backend (the Codex
+/// Responses API). These are the models a ChatGPT Pro/Plus plan unlocks; the
+/// Responses transport routes them to `chatgpt.com/backend-api/codex/responses`.
+/// Each id exists in the model registry.
+pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+];
+
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
 /// frontier chat lineup — the GPT-5.6 tier-named family (`gpt-5.6-sol`, the
@@ -288,6 +301,15 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         protocol: "openai",
         models: XAI_BUILTIN_MODELS,
         discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "chatgpt-oauth",
+        // The Responses transport is the OpenAI wire family; discovery is
+        // disabled because the ChatGPT subscription backend does not expose a
+        // standard `GET /models` list, and the plan-unlocked set is fixed.
+        protocol: "openai",
+        models: CHATGPT_BUILTIN_MODELS,
+        discovery: false,
     },
     ProviderTemplateSpec {
         id: "kimi-code",
@@ -435,6 +457,23 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
                 base_url,
                 user_agent,
             )
+            .with_reasoning_effort(*effort)
+            .with_id(entry_id.to_string());
+            Arc::new(provider)
+        }
+        Transport::OpenAiResponses {
+            base_url,
+            user_agent,
+            effort,
+            account_id,
+        } => {
+            let provider = ResponsesProvider::new(
+                channel.api_key.clone(),
+                channel.model.clone(),
+                base_url,
+                account_id.clone(),
+            )
+            .with_user_agent(user_agent)
             .with_reasoning_effort(*effort)
             .with_id(entry_id.to_string());
             Arc::new(provider)
@@ -621,6 +660,11 @@ mod build_tests {
             )
             .chain(
                 crate::XAI_BUILTIN_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::CHATGPT_BUILTIN_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAiCompat)),
             )

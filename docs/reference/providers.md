@@ -121,7 +121,7 @@ not a provider decorator. Configuration:
 
 | Config key | Default | Hard maximum |
 |------------|---------|--------------|
-| `provider_retry_max_attempts` | `4` | `10` |
+| `provider_retry_max_attempts` | `6` | `10` |
 | `provider_retry_base_ms` | `1000` | — |
 | `provider_retry_max_ms` | `30000` | — |
 

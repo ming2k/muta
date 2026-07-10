@@ -26,7 +26,7 @@ mod versioned;
 // `render::TranscriptView` the event loop fills in each frame.
 pub(crate) use neenee_tui_view::{document, fuzzy, layout, providers, render, selection};
 
-pub(crate) use app::{App, CaretOwner};
+pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice};
 pub(crate) use neenee_tui_view::completion::CompletionKind;
 pub(crate) use neenee_tui_view::modal::{ActivityTab, Modal, Recess};
 pub(crate) use neenee_tui_view::providers::{
@@ -201,6 +201,11 @@ pub async fn run_tui(
     let open_sessions_clone = open_sessions.clone();
     let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
     let oauth_add_signal_clone = oauth_add_signal.clone();
+    // Mirror of `App::awaiting_oauth_add` so the response listener can tell the
+    // add-flow (URL shown in the modal) from a reconnect (URL shown in the
+    // transcript) and avoid duplicating the OAuth URL into the transcript.
+    let awaiting_oauth_add = Arc::new(AtomicBool::new(false));
+    let awaiting_oauth_add_clone = awaiting_oauth_add.clone();
     // Latest session-context snapshot for the Tools / Mcp / Skills /
     // Permissions managers (model / tools / permissions / skills / mcp).
     // Refreshed whenever a manager opens (the event loop sends
@@ -939,14 +944,23 @@ pub async fn run_tui(
                                     user_code: user_code.clone(),
                                     message: message.clone(),
                                 });
-                            let body = if user_code.is_empty() {
-                                format!("{message}\n  Open: {url}\n  Waiting for authorization…")
-                            } else {
-                                format!(
-                                    "{message}\n  Open: {url}\n  Code: {user_code}\n  Waiting for authorization…"
-                                )
-                            };
-                            push_local_notice(&mut msgs, NoticeSeverity::Info, body);
+                            // The add-flow surfaces the URL/code in the
+                            // OauthPending modal, so suppress the transcript
+                            // notice there to avoid duplicating the link. Only
+                            // the reconnect flow (no modal) gets the notice.
+                            let in_add_flow = awaiting_oauth_add_clone.load(Ordering::SeqCst);
+                            if !in_add_flow {
+                                let body = if user_code.is_empty() {
+                                    format!(
+                                        "{message}\n  Open: {url}\n  Waiting for authorization…"
+                                    )
+                                } else {
+                                    format!(
+                                        "{message}\n  Open: {url}\n  Code: {user_code}\n  Waiting for authorization…"
+                                    )
+                                };
+                                push_local_notice(&mut msgs, NoticeSeverity::Info, body);
+                            }
                         }
                         neenee_core::ConnectStatus::Done { provider } => {
                             *oauth_add_signal_clone.lock().await =
@@ -1134,6 +1148,9 @@ pub async fn run_tui(
         picker_provider: None,
         model_scroll: 0,
         model_modal_follow: true,
+        pending_provider_delete: None,
+        provider_delete_focus: ProviderDeleteChoice::default(),
+        provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
         theme: Theme::default(),
@@ -1166,6 +1183,7 @@ pub async fn run_tui(
             sessions_overview,
             open_sessions,
             oauth_add_signal,
+            awaiting_oauth_add,
             session_context,
             nudge_config,
             todos,

@@ -73,10 +73,31 @@ pub use ui_bridge::{CopyOutcome, UiBridge};
 /// crate that constructs agents) so both the TUI and a future web frontend
 /// share one identity. A frontend that wants a different persona can construct
 /// its own [`neenee_agent::AgentIdentity`] and pass it to the session builder.
-pub const NEENEE_NAME: &str = "neenee";
-pub const NEENEE_MISSION: &str = "an expert AI coding assistant with tool access";
+/// `neenee` is the **product's default instance name**, not "the principal's
+/// name" — it is a self-reference anchor the model uses in the system prompt
+/// (intro line, responding when called by name). The *role* ("code",
+/// "research", …) is carried by a [`neenee_agent::PrincipalProfile`]; the
+/// product name + mission live here on the identity. Private: only
+/// [`neenee_identity`] composes them, and embeddings thread the whole
+/// [`neenee_agent::AgentIdentity`] through a profile rather than naming these
+/// constants directly.
+const NEENEE_NAME: &str = "neenee";
+const NEENEE_MISSION: &str = "an expert AI coding assistant with tool access";
 
 /// The composed identity: name + mission, default tone (no persona override).
 pub fn neenee_identity() -> neenee_agent::AgentIdentity {
     neenee_agent::AgentIdentity::new(NEENEE_NAME, NEENEE_MISSION)
+}
+
+/// The built-in **coding principal** profile (ADR-0053): the declarative form
+/// of the role `neenee-code` historically assembled inline. The binary binds it
+/// via `agent.apply_principal_profile(&principal_code())` after construction.
+///
+/// Scope and operation boundary are unrestricted (a coding principal may use
+/// every capability and write anywhere in the workspace) and the runtime config
+/// is the default — the binary still overlays the live `[principal]` config
+/// table afterwards so per-installation knobs win. A future quant/research/ops
+/// principal is another [`neenee_agent::PrincipalProfile`] value.
+pub fn principal_code() -> neenee_agent::PrincipalProfile {
+    neenee_agent::PrincipalProfile::with_identity("code", neenee_identity())
 }

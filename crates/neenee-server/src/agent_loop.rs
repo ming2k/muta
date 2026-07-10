@@ -292,8 +292,8 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                 )
                 .await;
             }
-            AgentRequest::AuthorizeOAuth { method } => {
-                crate::handlers_provider::authorize(&resp_tx, method).await;
+            AgentRequest::AuthorizeOAuth { method, auth } => {
+                crate::handlers_provider::authorize(&resp_tx, method, auth).await;
             }
             AgentRequest::EditProvider {
                 id,

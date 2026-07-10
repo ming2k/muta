@@ -1,24 +1,18 @@
 //! The local-loopback OAuth callback server for the desktop browser flow.
 //!
-//! xAI rejects `redirect_uri`s that don't match the Grok-CLI client's
-//! registration, whose host:port pair is fixed at `127.0.0.1:56121`, so the
-//! server MUST bind exactly there. We accept only the registered callback path,
-//! validate PKCE `state` against the in-flight request, and surface a simple
-//! success/error HTML page.
+//! Each OAuth provider registers a fixed loopback `redirect_uri` (host:port:path
+//! triple) with its consent screen — xAI's Grok-CLI client pins
+//! `127.0.0.1:56121/callback`, OpenAI's Codex client pins
+//! `127.0.0.1:1455/auth/callback` — so [`CallbackServer::start_for`] binds the
+//! triple from the provider's [`OAuthConfig`]. We accept only the registered
+//! callback path, validate PKCE `state` against the in-flight request, and
+//! surface a simple success/error HTML page.
 
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::oneshot;
 
-/// The pinned loopback host/port (part of the Grok-CLI client registration).
-pub const OAUTH_HOST: &str = "127.0.0.1";
-pub const OAUTH_PORT: u16 = 56121;
-pub const OAUTH_REDIRECT_PATH: &str = "/callback";
-
-/// The exact `redirect_uri` registered with the Grok-CLI client.
-pub fn redirect_uri() -> String {
-    format!("http://{OAUTH_HOST}:{OAUTH_PORT}{OAUTH_REDIRECT_PATH}")
-}
+use crate::config::OAuthConfig;
 
 /// The result the callback server resolves (or rejects with) once xAI
 /// redirects back.
@@ -43,14 +37,19 @@ pub struct CallbackServer {
 }
 
 impl CallbackServer {
-    /// Bind `127.0.0.1:56121` and start accepting. Returns a server whose
-    /// [`wait_for_code`] resolves once xAI redirects back with a matching
-    /// `state`. Dropping the server stops accepting.
-    pub async fn start() -> Result<Self, std::io::Error> {
+    /// Bind the provider's registered loopback host:port and start accepting.
+    /// Returns a server whose [`wait_for_code`] resolves once the provider
+    /// redirects back with a matching `state`. Dropping the server stops
+    /// accepting.
+    pub async fn start_for(cfg: &OAuthConfig) -> Result<Self, std::io::Error> {
+        let host = cfg.oauth_host;
+        let port = cfg.oauth_port;
+        let path = cfg.oauth_path;
+        let label = cfg.provider_id;
         let pending = Arc::new(Mutex::new(None::<Pending>));
         let pending_for_task = Arc::clone(&pending);
 
-        let listener = tokio::net::TcpListener::bind((OAUTH_HOST, OAUTH_PORT)).await?;
+        let listener = tokio::net::TcpListener::bind((host, port)).await?;
         let handle = tokio::spawn(async move {
             loop {
                 // Accept errors (e.g. EMFILE) must not crash the agent; log and
@@ -58,14 +57,16 @@ impl CallbackServer {
                 let (stream, _) = match listener.accept().await {
                     Ok(pair) => pair,
                     Err(e) => {
-                        tracing::warn!(error = %e, "xai oauth callback accept failed");
+                        tracing::warn!(error = %e, "{label} oauth callback accept failed");
                         continue;
                     }
                 };
                 let pending = Arc::clone(&pending_for_task);
+                let path = path.to_string();
+                let label = label.to_string();
                 tokio::spawn(async move {
-                    if let Err(e) = serve_one(stream, pending).await {
-                        tracing::warn!(error = %e, "xai oauth callback serve failed");
+                    if let Err(e) = serve_one(stream, pending, &path, &label).await {
+                        tracing::warn!(error = %e, "{label} oauth callback serve failed");
                     }
                 });
             }
@@ -100,6 +101,8 @@ impl CallbackServer {
 async fn serve_one(
     mut stream: tokio::net::TcpStream,
     pending: Arc<Mutex<Option<Pending>>>,
+    redirect_path: &str,
+    label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -128,14 +131,14 @@ async fn serve_one(
                 let msg = error_description.unwrap_or_else(|| err.to_string());
                 (
                     Some(CallbackOutcome::Failed(msg.clone())),
-                    page(&msg, false),
+                    page(label, &msg, false),
                 )
             }
             (_, None, _) => {
                 let msg = "missing authorization code";
                 (
                     Some(CallbackOutcome::Failed(msg.to_string())),
-                    page(msg, false),
+                    page(label, msg, false),
                 )
             }
             (_, Some(c), Some(s)) => {
@@ -144,18 +147,22 @@ async fn serve_one(
                 {
                     (
                         Some(CallbackOutcome::Code(c.to_string())),
-                        page("Authorization complete. You may close this window.", true),
+                        page(
+                            label,
+                            "Authorization complete. You may close this window.",
+                            true,
+                        ),
                     )
                 } else {
                     (
                         Some(CallbackOutcome::Failed(
                             "invalid state - potential CSRF".to_string(),
                         )),
-                        page("invalid state", false),
+                        page(label, "invalid state", false),
                     )
                 }
             }
-            _ => (None, page("bad request", false)),
+            _ => (None, page(label, "bad request", false)),
         };
         if let Some(p) = guard.take()
             && let Some(outcome) = outcome
@@ -165,7 +172,7 @@ async fn serve_one(
         body
     };
 
-    let response = if pathname == OAUTH_REDIRECT_PATH {
+    let response = if pathname == redirect_path {
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
@@ -213,8 +220,12 @@ fn decode(s: &str) -> String {
     out
 }
 
-fn page(message: &str, ok: bool) -> String {
-    let title = if ok { "xAI login" } else { "xAI login failed" };
+fn page(label: &str, message: &str, ok: bool) -> String {
+    let title = if ok {
+        format!("{label} login")
+    } else {
+        format!("{label} login failed")
+    };
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
          <style>body{{font-family:system-ui,sans-serif;text-align:center;padding:3rem}}</style>\
@@ -235,10 +246,5 @@ mod tests {
             q.get("error_description").map(String::as_str),
             Some("bad request: denied")
         );
-    }
-
-    #[test]
-    fn redirect_uri_is_the_pinned_port() {
-        assert_eq!(redirect_uri(), "http://127.0.0.1:56121/callback");
     }
 }

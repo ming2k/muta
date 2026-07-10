@@ -6,7 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::token::{CLIENT_ID, DEVICE_CODE_GRANT_TYPE, SCOPE, TOKEN_URL};
+use crate::config::OAuthConfig;
+use crate::token::TokenResponse;
 
 /// Response from the device-authorization endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,22 +45,25 @@ const DEVICE_CODE_DEFAULT_EXPIRES_MS: u64 = 5 * 60 * 1000;
 /// Safety margin added to each sleep so we never wake exactly on the deadline.
 const OAUTH_POLLING_SAFETY_MARGIN_MS: i64 = 3_000;
 
-/// Request a device code from xAI. Prints nothing; the caller surfaces the
+/// Request a device code (RFC 8628). Prints nothing; the caller surfaces the
 /// `user_code` + `verification_uri` to the operator.
 pub async fn request_device_code(
     client: &reqwest::Client,
+    cfg: &OAuthConfig,
 ) -> Result<DeviceCodeResponse, crate::AuthError> {
-    request_device_code_at(client, crate::token::DEVICE_AUTHORIZATION_URL).await
+    request_device_code_at(client, cfg, cfg.device_authorization_url).await
 }
 
 /// Same as [`request_device_code`] but with an explicit endpoint (tests).
 pub async fn request_device_code_at(
     client: &reqwest::Client,
+    cfg: &OAuthConfig,
     endpoint: &str,
 ) -> Result<DeviceCodeResponse, crate::AuthError> {
     let body = format!(
-        "client_id={CLIENT_ID}&scope={}",
-        crate::token::percent_encode_form_value(SCOPE)
+        "client_id={}&scope={}",
+        cfg.client_id,
+        crate::token::percent_encode_form_value(cfg.scope)
     );
     let response = client
         .post(endpoint)
@@ -93,19 +97,21 @@ pub async fn request_device_code_at(
 /// `authorization_pending` → keep polling; `slow_down` → bump the interval.
 pub async fn poll_device_code(
     client: &reqwest::Client,
+    cfg: &OAuthConfig,
     device: &DeviceCodeResponse,
-) -> Result<crate::token::TokenResponse, crate::AuthError> {
-    poll_device_code_with(client, device, sleep_ms, now_ms).await
+) -> Result<TokenResponse, crate::AuthError> {
+    poll_device_code_with(client, cfg, device, sleep_ms, now_ms).await
 }
 
 /// Test-injectable variant of [`poll_device_code`] so unit tests can drive the
 /// `authorization_pending` / `slow_down` branches without real waits.
 pub async fn poll_device_code_with<S, Fut>(
     client: &reqwest::Client,
+    cfg: &OAuthConfig,
     device: &DeviceCodeResponse,
     sleep: S,
     now: impl Fn() -> i64 + Send + Sync,
-) -> Result<crate::token::TokenResponse, crate::AuthError>
+) -> Result<TokenResponse, crate::AuthError>
 where
     S: Fn(u64) -> Fut + Send + Sync,
     Fut: std::future::Future<Output = ()> + Send,
@@ -124,11 +130,13 @@ where
         }
 
         let body = format!(
-            "grant_type={DEVICE_CODE_GRANT_TYPE}&client_id={CLIENT_ID}&device_code={}",
+            "grant_type={}&client_id={}&device_code={}",
+            cfg.grant_type_device,
+            cfg.client_id,
             crate::token::percent_encode_form_value(&device.device_code)
         );
         let response = client
-            .post(TOKEN_URL)
+            .post(cfg.device_token_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Accept", "application/json")
             .body(body)
@@ -140,7 +148,7 @@ where
         let text = response.text().await.unwrap_or_default();
 
         if status.is_success() {
-            return serde_json::from_str::<crate::token::TokenResponse>(&text).map_err(|e| {
+            return serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
                 crate::AuthError::Decode(format!("device token response parse failed: {e}"))
             });
         }
@@ -161,12 +169,12 @@ where
             }
             Some("access_denied" | "authorization_denied") => {
                 return Err(crate::AuthError::DeviceCode(
-                    "xAI device authorization was denied".to_string(),
+                    "device authorization was denied".to_string(),
                 ));
             }
             Some("expired_token") => {
                 return Err(crate::AuthError::DeviceCode(
-                    "xAI device code expired - please re-run login".to_string(),
+                    "device code expired - please re-run login".to_string(),
                 ));
             }
             _ => {

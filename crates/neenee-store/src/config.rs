@@ -600,8 +600,17 @@ pub struct Config {
     pub compaction_prune: bool,
     /// Token budget of the most recent tool results protected from pruning.
     pub compaction_prune_protect_tokens: usize,
+    /// Maximum number of attempts for a single round when the provider returns a
+    /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
+    /// counts as the first attempt, so this is the *total* attempts, not extra
+    /// retries. Clamped to `[1, 10]` at the call site.
     pub provider_retry_max_attempts: usize,
+    /// Base delay (ms) for the bounded exponential backoff between retries:
+    /// `base_ms * 2^(attempt-1)`, capped by `provider_retry_max_ms`.
     pub provider_retry_base_ms: u64,
+    /// Hard cap (ms) on a single backoff delay, including the exponential growth.
+    /// A server-supplied `Retry-After`/`retry-after-ms` header still wins but is
+    /// itself capped at this value.
     pub provider_retry_max_ms: u64,
     // OpenAI
     pub openai_api_key: Option<String>,
@@ -851,7 +860,7 @@ impl Default for Config {
             compaction_summarize: true,
             compaction_prune: true,
             compaction_prune_protect_tokens: 6_000,
-            provider_retry_max_attempts: 4,
+            provider_retry_max_attempts: 6,
             provider_retry_base_ms: 1_000,
             provider_retry_max_ms: 30_000,
             openai_api_key: None,
@@ -1312,6 +1321,25 @@ mod tests {
                 && channel.api_key_env.is_none()
                 && channel.api_key.is_none()
         }));
+    }
+
+    #[test]
+    fn oauth_auth_modes_round_trip_through_toml() {
+        // Both OAuth auth modes (xAI SuperGrok, ChatGPT/Codex) must survive a
+        // TOML serialize → deserialize cycle so a configured channel stays an
+        // OAuth channel across restarts.
+        for auth in [ChannelAuth::XaiOAuth, ChannelAuth::ChatGptOAuth] {
+            let mut provider = configured_relay();
+            provider.channels[0].auth = auth;
+            let mut cfg = Config::default();
+            cfg.providers.push(provider);
+            let serialised = toml::to_string(&cfg).unwrap();
+            let reparsed: Config = toml::from_str(&serialised).unwrap();
+            assert_eq!(
+                reparsed.providers[0].channels[0].auth, auth,
+                "{auth:?} must round-trip through TOML"
+            );
+        }
     }
 
     #[test]

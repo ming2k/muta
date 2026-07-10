@@ -77,7 +77,7 @@ allow_model_stdin = false
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `default_provider` | `"kimi-code"` | Provider id activated at startup and after `/provider` reset |
-| `provider_retry_max_attempts` | `4` | Max retry attempts for a transient provider error within a turn |
+| `provider_retry_max_attempts` | `6` | Max retry attempts for a transient provider error within a turn |
 | `provider_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
 | `provider_retry_max_ms` | `30000` | Cap on the backoff delay, in milliseconds |
 

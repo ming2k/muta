@@ -103,6 +103,18 @@ pub struct ZoomFrame {
     pub saved_scroll: ScrollSnapshot,
 }
 
+/// Which button is focused in the provider-delete confirm overlay
+/// ([`App::pending_provider_delete`]). `Cancel` is the safe default — Enter
+/// dismisses without deleting; the user must move focus to `Delete` to destroy
+/// the provider. The derive places `Default` on the first variant (`Cancel`),
+/// matching the "safe-default" contract documented above.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProviderDeleteChoice {
+    #[default]
+    Cancel,
+    Delete,
+}
+
 pub struct App {
     pub input: String,
     /// Structured transcript messages (semantic document model).
@@ -175,6 +187,11 @@ pub struct App {
     /// the composer input and therefore must close through its own restore
     /// path (Provider / ModelEditor).
     pub modal_rect: Option<neenee_tui::Rect>,
+    /// Screen rect of the provider-delete confirm overlay panel
+    /// ([`App::pending_provider_delete`]), recorded each render so the
+    /// mouse branch can detect outside-click dismissal (a press outside the
+    /// panel cancels the staged deletion but leaves the provider picker open).
+    pub provider_delete_rect: Option<neenee_tui::Rect>,
     /// Content-line index of the sticky step's real summary. Used to re-anchor
     /// the scroll offset when the user collapses the pinned step so the summary
     /// lands at the top of the viewport instead of jumping to unrelated content.
@@ -562,6 +579,16 @@ pub struct App {
     /// When true, the model picker's body scroll follows the ↑/↓ selection
     /// cursor. Cleared on manual scroll (free browse), re-set on navigation.
     pub model_modal_follow: bool,
+    /// Pending provider-delete confirmation overlay. `Some(id)` means the
+    /// confirm dialog is open over the stage-1 provider list: the provider
+    /// `id` is staged for deletion and waits on the user's choice. Set when
+    /// `Shift+D` lands on a deletable custom provider; cleared on Cancel, Esc,
+    /// outside-click, and after a confirmed Delete dispatches the request.
+    pub pending_provider_delete: Option<String>,
+    /// Focused button in the provider-delete confirm overlay. Defaults to
+    /// [`ProviderDeleteChoice::Cancel`] (the safe choice) each time the overlay
+    /// opens; ←/→/Tab move between the two buttons.
+    pub provider_delete_focus: ProviderDeleteChoice,
     /// Lowercase provider name → whether a usable API key is configured.
     pub key_status: HashMap<String, bool>,
     /// Live model-picker snapshot (default id + per-model favorite / key-ready
@@ -636,6 +663,14 @@ impl App {
     /// either from raw fields.
     pub fn caret_owner(&self) -> CaretOwner {
         if self.active_modal != Modal::None {
+            // The provider-delete confirm overlay is a keyboard-only sub-layer
+            // (no text input): suppress the caret while it is open so the host
+            // IME does not anchor to the provider-search input behind the
+            // panel. Re-arms naturally when the overlay closes and ownership
+            // returns to the picker.
+            if self.pending_provider_delete.is_some() {
+                return CaretOwner::None;
+            }
             return if self.active_modal.owns_caret() {
                 CaretOwner::Modal
             } else if self.active_modal == Modal::Question
@@ -1232,7 +1267,8 @@ impl App {
         self.picker_provider = None;
     }
 
-    /// After SuperGrok OAuth succeeds: name-only editor (default "xAI").
+    /// After OAuth succeeds: name-only editor (default name derived from the
+    /// in-flight auth — "xAI" for SuperGrok, "ChatGPT" for the ChatGPT plan).
     pub fn open_oauth_instance_name_editor(&mut self) {
         self.awaiting_oauth_add = false;
         self.oauth_pending_url.clear();
@@ -1243,8 +1279,12 @@ impl App {
         self.custom_fields = vec![CustomField::Name];
         self.custom_field = 0;
         self.custom_edit_id = None;
-        self.custom_name = "xAI".to_string();
-        self.input = "xAI".to_string();
+        let default_name = match self.custom_auth {
+            neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
+            _ => "xAI",
+        };
+        self.custom_name = default_name.to_string();
+        self.input = default_name.to_string();
         self.set_cursor_end();
         self.picker_provider = None;
     }
@@ -1502,6 +1542,50 @@ impl App {
     /// stage 1.
     pub fn picker_on_add_row(&self) -> bool {
         self.picker_provider.is_none() && self.modal_index == self.providers_filtered().len()
+    }
+
+    /// Stage the highlighted custom provider for deletion: open the confirm
+    /// overlay ([`App::pending_provider_delete`]) over the stage-1 picker
+    /// without destroying anything yet. No-op for built-in providers, the
+    /// synthetic "＋ Add provider" row, or when an overlay is already open
+    /// (prevents re-staging). Driven by the `Shift+D` → `DeleteProvider` arm.
+    pub fn stage_provider_delete(&mut self) {
+        if self.active_modal != Modal::Provider
+            || self.pending_provider_delete.is_some()
+            || self.picker_on_add_row()
+            || self.picker_provider.is_some()
+        {
+            return;
+        }
+        let ranked = self.providers_filtered();
+        if let Some(row) = ranked.get(self.modal_index).or_else(|| ranked.first())
+            && !row.builtin
+        {
+            self.pending_provider_delete = Some(row.id.clone());
+            self.provider_delete_focus = ProviderDeleteChoice::default();
+        }
+    }
+
+    /// Confirm the staged deletion: dispatch `AgentRequest::DeleteProvider` for
+    /// the staged id and tear the overlay down. Returns `Some(request)` when a
+    /// deletion was staged (the harness applies it), `None` when the overlay
+    /// was not open. Driven by the overlay's Enter-on-Delete. Closing the
+    /// stage-2 view + decrementing `modal_index` mirrors the picker's other
+    /// removal paths so the cursor lands on a valid row once this row vanishes.
+    pub fn confirm_provider_delete(&mut self) -> Option<AgentRequest> {
+        let id = self.pending_provider_delete.take()?;
+        self.picker_provider = None;
+        self.modal_index = self.modal_index.saturating_sub(1);
+        self.provider_delete_focus = ProviderDeleteChoice::default();
+        Some(AgentRequest::DeleteProvider { id })
+    }
+
+    /// Cancel the staged deletion: drop the staged id and return keyboard
+    /// focus to the stage-1 provider list. The picker modal itself stays open.
+    /// Driven by the overlay's Esc / Ctrl+C / Enter-on-Cancel.
+    pub fn cancel_provider_delete(&mut self) {
+        self.pending_provider_delete = None;
+        self.provider_delete_focus = ProviderDeleteChoice::default();
     }
 
     /// Number of selectable rows in the Tools modal — the tool list, the

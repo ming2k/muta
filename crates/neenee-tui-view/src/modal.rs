@@ -40,9 +40,9 @@ pub enum Modal {
     /// `Enter` on a no-key model. Replaces the sequential ApiKey / Endpoint /
     /// ModelName modal chain.
     ModelEditor,
-    /// Provider-template chooser: a short list of curated templates (Custom
-    /// Anthropic relay / OpenAI / Gemini) shown when adding a provider.
-    /// Reached from the "＋ Add provider" row at the bottom of the picker's stage-1
+    /// Provider-template chooser: the "Providers / Add provider" child page of
+    /// the provider list. It retains the provider panel footprint and is reached
+    /// from the "＋ Add provider" row at the bottom of the picker's stage-1
     /// list. `↑/↓` move; `Enter` opens the [`Self::CustomProvider`] editor seeded
     /// from the chosen template; `Esc` returns to the picker. See
     /// `App::template_choice` and [`crate::providers::PROVIDER_TEMPLATES`].

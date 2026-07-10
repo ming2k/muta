@@ -167,7 +167,7 @@ pub async fn add(
     let api_key = (!trimmed_key.is_empty()).then(|| trimmed_key.to_string());
     // Pasted API key on an OAuth template → ordinary ApiKey auth.
     let auth = match (auth, api_key.is_some()) {
-        (neenee_core::ChannelAuth::XaiOAuth, true) => neenee_core::ChannelAuth::ApiKey,
+        (a, true) if a.is_oauth() => neenee_core::ChannelAuth::ApiKey,
         (other, _) => other,
     };
     let base_url = {
@@ -632,14 +632,30 @@ fn unique_provider_id(config: &Config, name: &str) -> String {
     unreachable!("unbounded suffix search must eventually find an id")
 }
 
-/// `AgentRequest::AuthorizeOAuth` — xAI SuperGrok OAuth before a provider
-/// instance exists. Persists tokens under `auth.toml` key `xai`.
+/// `AgentRequest::AuthorizeOAuth` — run an OAuth login before a provider
+/// instance exists ("+ Add provider → xAI OAuth / ChatGPT OAuth"). `auth`
+/// selects which provider's flow to run; tokens persist under that provider's
+/// `auth.toml` key (`xai` / `chatgpt`).
 pub async fn authorize(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     method: neenee_core::LoginMethod,
+    auth: neenee_core::ChannelAuth,
 ) {
-    let label = neenee_auth::AUTH_PROVIDER_ID.to_string();
-    if run_xai_oauth(resp_tx, &label, method).await {
+    let Some(cfg) = auth
+        .oauth_provider_id()
+        .and_then(neenee_auth::config_by_provider_id)
+        .copied()
+    else {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            neenee_core::ConnectStatus::Failed {
+                provider: "oauth".to_string(),
+                message: "not an OAuth provider".to_string(),
+            },
+        ));
+        return;
+    };
+    let label = cfg.provider_id.to_string();
+    if run_oauth(resp_tx, &label, method, cfg).await {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_core::ConnectStatus::Done { provider: label },
         ));
@@ -663,7 +679,11 @@ pub async fn connect(
         .find(|r| r.id == provider_id)
         .map(|r| r.auth)
         .unwrap_or_default();
-    if auth_mode != neenee_core::ChannelAuth::XaiOAuth {
+    let Some(cfg) = auth_mode
+        .oauth_provider_id()
+        .and_then(neenee_auth::config_by_provider_id)
+        .copied()
+    else {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_core::ConnectStatus::Failed {
                 provider: provider_id,
@@ -671,8 +691,8 @@ pub async fn connect(
             },
         ));
         return;
-    }
-    if !run_xai_oauth(resp_tx, &provider_id, method).await {
+    };
+    if !run_oauth(resp_tx, &provider_id, method, cfg).await {
         return;
     }
     let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -685,7 +705,7 @@ pub async fn connect(
         .into_iter()
         .find(|r| r.id == provider_id)
         .map(|r| r.model)
-        .unwrap_or_else(|| "grok-4.5".to_string());
+        .unwrap_or_else(|| "gpt-5.6-sol".to_string());
     activate(
         config,
         agent,
@@ -698,44 +718,86 @@ pub async fn connect(
     .await;
 }
 
-/// Shared xAI OAuth body: browser loopback (PKCE) or device-code.
-async fn run_xai_oauth(
+/// Shared OAuth body for any provider: browser loopback (PKCE) or device-code,
+/// parameterized by the provider's [`OAuthConfig`]. Persists the resulting token
+/// set (plus the ChatGPT account id, when present) under the provider's
+/// `auth.toml` key.
+async fn run_oauth(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     label: &str,
     method: neenee_core::LoginMethod,
+    cfg: neenee_auth::OAuthConfig,
 ) -> bool {
-    use neenee_auth::{AUTH_PROVIDER_ID, AuthStore, XaiOAuth};
+    use neenee_auth::{AuthStore, OAuth};
 
-    let oauth = XaiOAuth::new();
+    let oauth = OAuth::new(cfg);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let result = match method {
-        neenee_core::LoginMethod::Device => {
-            let device = match neenee_auth::request_device_code(oauth.client()).await {
-                Ok(d) => d,
-                Err(e) => {
-                    let msg = e.to_string();
-                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                        neenee_core::ConnectStatus::Failed {
-                            provider: label.to_string(),
-                            message: msg,
-                        },
-                    ));
-                    return false;
+        neenee_core::LoginMethod::Device => match cfg.device_flow {
+            neenee_auth::config::DeviceFlow::ChatGpt => {
+                let device =
+                    match neenee_auth::request_chatgpt_device_code(oauth.client(), &cfg).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                                neenee_core::ConnectStatus::Failed {
+                                    provider: label.to_string(),
+                                    message: msg,
+                                },
+                            ));
+                            return false;
+                        }
+                    };
+                let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                    neenee_core::ConnectStatus::Pending {
+                        provider: label.to_string(),
+                        url: device.user_url(&cfg),
+                        user_code: device.user_code.clone(),
+                        message: "Open the URL on any device and enter the code to authorize."
+                            .to_string(),
+                    },
+                ));
+                let polled =
+                    neenee_auth::poll_chatgpt_device_code(oauth.client(), &cfg, &device).await;
+                match polled {
+                    Ok(token) => {
+                        neenee_auth::exchange_chatgpt_device_code(oauth.client(), &cfg, &token)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                    Err(e) => Err(e.to_string()),
                 }
-            };
-            let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                neenee_core::ConnectStatus::Pending {
-                    provider: label.to_string(),
-                    url: device.user_url().to_string(),
-                    user_code: device.user_code.clone(),
-                    message: "Open the URL on any device and enter the code to authorize xAI (SuperGrok).".to_string(),
-                },
-            ));
-            neenee_auth::poll_device_code(oauth.client(), &device)
-                .await
-                .map_err(|e| e.to_string())
-        }
+            }
+            neenee_auth::config::DeviceFlow::Rfc8628 => {
+                let device = match neenee_auth::request_device_code(oauth.client(), &cfg).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                            neenee_core::ConnectStatus::Failed {
+                                provider: label.to_string(),
+                                message: msg,
+                            },
+                        ));
+                        return false;
+                    }
+                };
+                let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                    neenee_core::ConnectStatus::Pending {
+                        provider: label.to_string(),
+                        url: device.user_url().to_string(),
+                        user_code: device.user_code.clone(),
+                        message: "Open the URL on any device and enter the code to authorize."
+                            .to_string(),
+                    },
+                ));
+                neenee_auth::poll_device_code(oauth.client(), &cfg, &device)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+        },
         neenee_core::LoginMethod::Browser => {
             let login = match oauth.begin_browser_login().await {
                 Ok(l) => l,
@@ -779,13 +841,23 @@ async fn run_xai_oauth(
         }
     };
 
+    // Capture the ChatGPT account id from the id_token/access_token so the
+    // Responses transport can send the `ChatGPT-Account-Id` header. xAI tokens
+    // carry no such claim, so this is `None` for them.
+    let account_id = tokens
+        .id_token
+        .as_deref()
+        .or(Some(tokens.access_token.as_str()))
+        .and_then(neenee_auth::chatgpt_account_id);
+
     let set = neenee_auth::TokenSet {
         access: tokens.access_token,
         refresh: tokens.refresh_token.unwrap_or_default(),
         expires_ms: now_ms + (tokens.expires_in.unwrap_or(3600) as i64) * 1000,
+        account_id,
     };
     let mut store = AuthStore::load();
-    store.set(AUTH_PROVIDER_ID, set);
+    store.set(cfg.provider_id, set);
     if let Err(e) = store.save() {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_core::ConnectStatus::Failed {
@@ -798,35 +870,40 @@ async fn run_xai_oauth(
     true
 }
 
-async fn refresh_xai_oauth_if_needed(config: &Config, provider_id: &str) {
-    use neenee_auth::{AUTH_PROVIDER_ID, AuthStore, XaiOAuth};
+async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
+    use neenee_auth::{AuthStore, OAuth};
 
-    let is_oauth = config
+    // Resolve the channel's OAuth config (xAI or ChatGPT) from its auth mode.
+    let auth = config
         .providers
         .iter()
         .find(|p| p.id == provider_id)
         .and_then(|p| p.channels.first())
-        .is_some_and(|ch| ch.auth == neenee_core::ChannelAuth::XaiOAuth);
-    if !is_oauth {
+        .map(|ch| ch.auth);
+    let Some(cfg) = auth
+        .and_then(|a| a.oauth_provider_id())
+        .and_then(neenee_auth::config_by_provider_id)
+        .copied()
+    else {
         return;
-    }
-    let Some(stored) = AuthStore::load().get(AUTH_PROVIDER_ID).cloned() else {
+    };
+    let Some(stored) = AuthStore::load().get(cfg.provider_id).cloned() else {
         return;
     };
     if stored.access.is_empty() || stored.refresh.is_empty() {
         return;
     }
-    let oauth = XaiOAuth::new();
+    let oauth = OAuth::new(cfg);
     match oauth.resolve_access_token(stored).await {
         Ok((_access, tokens)) => {
             let mut store = AuthStore::load();
-            store.set(AUTH_PROVIDER_ID, tokens);
+            store.set(cfg.provider_id, tokens);
             let _ = store.save();
         }
         Err(e) => {
-            tracing::warn!(error = %e, "xAI OAuth: token refresh failed; clearing store");
+            tracing::warn!(error = %e, provider = %cfg.provider_id, "OAuth: token refresh failed; clearing store");
             let mut store = AuthStore::load();
-            store.remove(AUTH_PROVIDER_ID);
+            store.remove(cfg.provider_id);
             let _ = store.save();
         }
     }
@@ -845,7 +922,7 @@ async fn activate(
     provider_type: String,
     model: String,
 ) {
-    refresh_xai_oauth_if_needed(config, &provider_type).await;
+    refresh_oauth_if_needed(config, &provider_type).await;
 
     // For multi-model providers the explicit model selects the channel (and thus
     // the per-model transport); build_provider_for_model reads `default_model` as

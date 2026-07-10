@@ -90,11 +90,13 @@ pub enum AgentRequest {
         id: String,
         method: crate::LoginMethod,
     },
-    /// Run xAI SuperGrok OAuth **before** a provider instance exists
-    /// ("+ Add provider → xAI OAuth"). Persists tokens and streams
+    /// Run an OAuth login **before** a provider instance exists ("+ Add
+    /// provider → xAI OAuth / ChatGPT OAuth"). `auth` selects which OAuth
+    /// provider to authenticate against. Persists tokens and streams
     /// [`AgentResponse::ConnectStatus`]; the TUI then prompts for instance name.
     AuthorizeOAuth {
         method: crate::LoginMethod,
+        auth: crate::ChannelAuth,
     },
     /// Edit a user-defined provider's metadata in place (display name, protocol,
     /// base URL, API key) without touching its model list — every channel keeps

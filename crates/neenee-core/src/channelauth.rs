@@ -21,6 +21,30 @@ pub enum ChannelAuth {
     /// `neenee_auth`). Any user provider channel may set this; the catalog
     /// always reads the shared xAI token set.
     XaiOAuth,
+    /// ChatGPT/Codex subscription: resolve the live OAuth access token from
+    /// `auth.toml` (key `"chatgpt"`) and the `chatgpt_account_id`, then route
+    /// inference to the Responses backend
+    /// (`https://chatgpt.com/backend-api/codex/responses`). Refreshed at
+    /// activate/switch time.
+    ChatGptOAuth,
+}
+
+impl ChannelAuth {
+    /// Whether this variant resolves its bearer from the OAuth token store
+    /// rather than from an API key. Covers every subscription/OAuth provider.
+    pub fn is_oauth(self) -> bool {
+        matches!(self, ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth)
+    }
+
+    /// The `auth.toml` provider-id key for this OAuth variant, or `None` for
+    /// API-key channels. Used to load/refresh the shared token set.
+    pub fn oauth_provider_id(self) -> Option<&'static str> {
+        match self {
+            ChannelAuth::XaiOAuth => Some("xai"),
+            ChannelAuth::ChatGptOAuth => Some("chatgpt"),
+            ChannelAuth::ApiKey => None,
+        }
+    }
 }
 
 /// Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::

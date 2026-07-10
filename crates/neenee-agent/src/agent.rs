@@ -108,77 +108,11 @@ impl ScopedToolDisable {
 pub(crate) type RoundPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
-/// Who an [`Agent`] is and what it is for. This crate is identity-agnostic: it
-/// does not hardcode "neenee" or "coding". The embedding (the CLI, a future
-/// frontend) supplies the fields so the same engine can be repurposed as a
-/// different persona or for a different mission (research, ops, writing) by
-/// passing different values. Everything else in the system prompt (tone,
-/// todo/ask_user guidance) is mission-neutral and stays here.
-///
-/// The three fields compose the opening line:
-/// - [`AgentIdentity::name`] — what the agent is called ("neenee" for this
-///   project; swap to repurpose the engine under a different product).
-/// - [`AgentIdentity::mission`] — what the agent is for ("an expert AI coding
-///   assistant…" for this CLI; swap for research/ops/etc.).
-/// - [`AgentIdentity::persona`] — optional full-text override of the opening.
-///   When set, [`AgentIdentity::preamble`] returns it verbatim and ignores
-///   `name`/`mission`. Envoys use this to inject their role's full system
-///   prompt as the identity.
-///
-/// [`AgentIdentity::default`] yields empty fields (no preamble — the system
-/// prompt opens straight at the tone line); tests use it.
-#[derive(Debug, Clone, Default)]
-pub struct AgentIdentity {
-    /// What this agent is called, e.g. `"neenee"`. Empty means "unnamed".
-    pub name: String,
-    /// What this agent is for, e.g. `"an expert AI coding assistant with tool
-    /// access"`. Empty means "no mission framing".
-    pub mission: String,
-    /// Optional full-text identity override. When non-empty, `preamble`
-    /// returns this verbatim (used by envoys whose identity *is* their
-    /// role's full system prompt). None/empty → compose from name + mission.
-    pub persona: Option<String>,
-}
-
-impl AgentIdentity {
-    /// Build a structured identity from a name and a mission.
-    pub fn new(name: impl Into<String>, mission: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            mission: mission.into(),
-            persona: None,
-        }
-    }
-
-    /// Build an identity whose preamble is a full persona string, ignoring
-    /// name/mission composition. Used by envoys: their identity is the
-    /// role's complete system prompt.
-    pub fn from_persona(persona: impl Into<String>) -> Self {
-        Self {
-            name: String::new(),
-            mission: String::new(),
-            persona: Some(persona.into()),
-        }
-    }
-
-    /// Render the opening system-prompt sentence. A `persona` override returns
-    /// it verbatim; otherwise `"You are {name}, {mission}."` when both are set,
-    /// `"You are {name}."` / `"You are {mission}."` when one is set, and the
-    /// empty string when neither is (tests / identity-less agents).
-    pub fn preamble(&self) -> String {
-        if let Some(persona) = &self.persona
-            && !persona.is_empty()
-        {
-            return persona.clone();
-        }
-        match (self.name.is_empty(), self.mission.is_empty()) {
-            (true, true) => String::new(),
-            (false, true) => format!("You are {}.", self.name),
-            (true, false) => format!("You are {}.", self.mission),
-            (false, false) => format!("You are {}, {}.", self.name, self.mission),
-        }
-    }
-}
+// `AgentIdentity` now lives in `neenee-core` (`identity.rs`) as pure domain
+// vocabulary, alongside the role profiles. It is re-exported by name at the
+// crate root below and via `pub use neenee_core::*`, so all existing
+// `neenee_agent::AgentIdentity` / `crate::AgentIdentity` references keep
+// resolving unchanged.
 
 #[derive(Default)]
 struct AskUserState {
@@ -1061,6 +995,33 @@ impl Agent {
             .operation_scope
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = scope;
+    }
+
+    /// Apply a declarative principal profile (ADR-0053) — set every knob a
+    /// [`neenee_core::PrincipalProfile`] declares in one call. The
+    /// principal-side mirror of how `EnvoyTool` binds an
+    /// [`neenee_core::EnvoyProfile`].
+    ///
+    /// Sets: the capability scope ([`Self::set_agent_selection`]), the
+    /// write/command boundary ([`Self::set_operation_scope`]), and the runtime
+    /// execution knobs (`hard_stop` / doom guard / model-stdin /
+    /// attended flag). The profile's [`neenee_core::AgentIdentity`] is **not**
+    /// re-applied here — identity is immutable past construction (it feeds the
+    /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
+    /// `from_toolset`. A role whose identity should differ per instance composes
+    /// [`neenee_core::PrincipalProfile::with_identity`] before construction.
+    ///
+    /// Idempotent over defaults: a profile built with
+    /// [`neenee_core::PrincipalProfile::with_identity`] (no further narrowing)
+    /// reproduces the agent constructor's built-in values, so binding it is a
+    /// no-op for an already-default agent.
+    pub fn apply_principal_profile(&self, profile: &neenee_core::PrincipalProfile) {
+        self.set_agent_selection(profile.agent_selection.clone());
+        self.set_operation_scope(profile.operation_scope.clone());
+        self.set_hard_stop_turns(profile.config.hard_stop_turns);
+        self.set_doom_guard_config(profile.config.nudge);
+        self.set_allow_model_stdin(profile.config.allow_model_stdin);
+        self.set_unattended(profile.unattended);
     }
 
     /// Snapshot of this agent's operation boundary. Used by the `execute_tool`

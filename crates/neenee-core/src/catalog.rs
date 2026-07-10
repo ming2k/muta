@@ -67,6 +67,19 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
     },
+    /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
+    /// subscription backend (`chatgpt.com/backend-api/codex/responses`). Unlike
+    /// [`OpenAiCompat`](Self::OpenAiCompat) (chat completions), the Responses
+    /// API takes `instructions` + an `input` items array and streams
+    /// `response.*` events. `account_id` is sent as the `ChatGPT-Account-Id`
+    /// header (resolved from the OAuth `chatgpt_account_id` claim); `None` is
+    /// valid for single-account users.
+    OpenAiResponses {
+        base_url: String,
+        user_agent: String,
+        effort: Option<crate::Effort>,
+        account_id: Option<String>,
+    },
 }
 
 impl Transport {
@@ -78,7 +91,8 @@ impl Transport {
         match self {
             Transport::OpenAiCompat { .. }
             | Transport::Anthropic { .. }
-            | Transport::GeminiNative { .. } => true,
+            | Transport::GeminiNative { .. }
+            | Transport::OpenAiResponses { .. } => true,
         }
     }
 }

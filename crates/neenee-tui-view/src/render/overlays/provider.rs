@@ -871,9 +871,11 @@ pub fn draw_oauth_pending(
     area
 }
 
-/// Draw the provider-template chooser: a short list of curated templates (Custom
-/// Anthropic relay / OpenAI / Gemini). Each row is a label + a muted
-/// one-line description; `↑/↓` move the highlight and Enter opens the editor.
+/// Draw the provider-template chooser as the provider list's Add provider child
+/// page. It retains the parent panel geometry and uses a breadcrumb header so
+/// navigation does not look like a separate modal. Each row is a label + a
+/// muted one-line description; `↑/↓` move the highlight and Enter opens the
+/// editor.
 /// `scroll` is read AND written back so the offset stays consistent with the
 /// clamped body height; the highlighted template is followed on-screen so
 /// `↑/↓` navigation keeps it visible even when the list overflows the body.
@@ -884,26 +886,10 @@ pub fn draw_provider_template_chooser(
     scroll: &mut usize,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, Modal::ProviderTemplate)
-        .expect("provider template chooser modal has fixed geometry");
+        .expect("provider template chooser has provider-page geometry");
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "＋ Add provider",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" · {} templates · Esc back", PROVIDER_TEMPLATES.len()),
-                    Style::default().fg(theme.muted()),
-                ),
-            ])),
-            h,
-        );
-    }
+    modal_header(frame, f.header, "Providers / Add provider", theme);
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {

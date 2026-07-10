@@ -81,7 +81,7 @@ impl ProviderTemplate {
     /// The ordered, visible editor fields for this template (create mode).
     /// OAuth templates only ask for the instance name (auth already completed).
     pub fn fields(&self) -> Vec<CustomField> {
-        if self.auth == neenee_core::ChannelAuth::XaiOAuth {
+        if self.auth.is_oauth() {
             return vec![CustomField::Name];
         }
         let mut fields = vec![CustomField::Name];
@@ -98,7 +98,7 @@ impl ProviderTemplate {
 
     /// Whether selecting this template starts OAuth before the name editor.
     pub fn oauth_first(&self) -> bool {
-        self.auth == neenee_core::ChannelAuth::XaiOAuth
+        self.auth.is_oauth()
     }
 }
 
@@ -176,6 +176,21 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         default_url: Some("https://api.x.ai/v1/chat/completions"),
         user_agent: None,
         auth: neenee_core::ChannelAuth::XaiOAuth,
+    },
+    ProviderTemplate {
+        id: "chatgpt-oauth",
+        label: "ChatGPT (login)",
+        description: "GPT-5.x via ChatGPT Pro/Plus subscription (browser OAuth)",
+        protocol: "openai",
+        models: neenee_providers::CHATGPT_BUILTIN_MODELS,
+        // The Responses backend URL is fixed and pre-filled; the editor hides
+        // the Base URL field. Auth completes via OAuth before the name editor.
+        needs_url: false,
+        url_hint: "https://chatgpt.com/backend-api/codex/responses",
+        needs_model: false,
+        default_url: Some("https://chatgpt.com/backend-api/codex/responses"),
+        user_agent: None,
+        auth: neenee_core::ChannelAuth::ChatGptOAuth,
     },
     ProviderTemplate {
         id: "kimi-code",
@@ -706,6 +721,8 @@ mod tests {
             "Anthropic",
             "Google Gemini",
             "DeepSeek",
+            "xAI OAuth",
+            "ChatGPT (login)",
             "Kimi Code",
             "ZAI Code",
             "OpenCode Go",

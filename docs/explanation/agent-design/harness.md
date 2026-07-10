@@ -136,7 +136,7 @@ of a newer task.
 ## Provider retry
 
 Transient HTTP 408, 429, 5xx, connection, and timeout failures are retried up
-to `provider_retry_max_attempts` (default 4, hard maximum 10). Provider
+to `provider_retry_max_attempts` (default 6, hard maximum 10). Provider
 `Retry-After` or `retry-after-ms` headers take priority; otherwise the delay is
 bounded exponential backoff using `provider_retry_base_ms` and
 `provider_retry_max_ms`.

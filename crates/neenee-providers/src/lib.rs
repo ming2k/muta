@@ -21,11 +21,11 @@ pub use neenee_ai_sdk_anthropic::{
 };
 pub use neenee_ai_sdk_core::{Endpoint, NEENEE_USER_AGENT, TurnState};
 pub use neenee_ai_sdk_google::{GOOGLE_DEFAULT_BASE_URL, GoogleProvider};
-pub use neenee_ai_sdk_openai::OpenAiCompatProvider;
+pub use neenee_ai_sdk_openai::{OpenAiCompatProvider, ResponsesProvider};
 pub use registry::{
-    ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_SUB2API_MODELS, DEEPSEEK_BUILTIN_MODELS,
-    GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS, OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS,
-    OPENAI_SUB2API_MODELS, OPENCODE_GO_MODELS, OpenAiProviderSpec, PROVIDER_TEMPLATE_SPECS,
-    ProviderTemplateSpec, XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel,
-    openai_provider_spec, provider_template_spec,
+    ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_SUB2API_MODELS, CHATGPT_BUILTIN_MODELS,
+    DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS, OPENAI_BUILTIN_MODELS,
+    OPENAI_PROVIDER_SPECS, OPENAI_SUB2API_MODELS, OPENCODE_GO_MODELS, OpenAiProviderSpec,
+    PROVIDER_TEMPLATE_SPECS, ProviderTemplateSpec, XAI_BUILTIN_MODELS, ZAI_CODE_MODELS,
+    build_provider_for_channel, openai_provider_spec, provider_template_spec,
 };

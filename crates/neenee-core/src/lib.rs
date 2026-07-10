@@ -58,7 +58,9 @@ pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus, TodoToolContext};
 pub mod envoy;
+pub mod identity;
 pub mod pressure;
+pub mod principal;
 pub mod token_ledger;
 pub use token_ledger::{
     TokenRound, TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
@@ -91,6 +93,7 @@ pub use events::{
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
 };
+pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
 pub use pressure::{
@@ -98,6 +101,7 @@ pub use pressure::{
     PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens, estimate_tokens,
     prune_tool_results,
 };
+pub use principal::{PrincipalProfile, PrincipalRuntimeConfig};
 pub use prompt::{
     PromptChannel, PromptContext, PromptRegistry, PromptSection, ProviderPromptHints,
 };

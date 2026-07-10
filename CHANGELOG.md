@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Add provider now reads as a child page of Providers.** The template chooser
+  keeps the provider list's panel footprint and shows `Providers / Add provider`
+  in the header; `Esc` returns to the provider list as before.
+
 ### Fixed
 
 - **Provider discovery no longer erases relay credentials or endpoints.** Live

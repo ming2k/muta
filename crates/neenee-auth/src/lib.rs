@@ -1,33 +1,43 @@
-//! OAuth2 + PKCE authentication for providers that need it (xAI SuperGrok).
+//! OAuth2 + PKCE authentication for providers that need it.
 //!
-//! neenee's other providers authenticate with a static API key resolved from
-//! env → credentials.toml → inline config. SuperGrok subscriptions, however,
-//! authenticate via OAuth2: the user runs a login flow (browser loopback OAuth
-//! on a desktop, or RFC 8628 device-code on a headless box), and the harness
-//! thereafter refreshes the access token as it nears expiry. This crate owns
-//! that flow; the harness calls [`XaiOAuth::resolve_access_token`] at
-//! activate/switch time so the catalog snapshots a live bearer.
+//! neenee's API-key providers authenticate with a static key resolved from env
+//! → credentials.toml → inline config. Subscription providers — xAI SuperGrok
+//! and ChatGPT/Codex — authenticate via OAuth2: the user runs a login flow
+//! (browser loopback OAuth on a desktop, or a device-code flow on a headless
+//! box), and the harness thereafter refreshes the access token as it nears
+//! expiry. This crate owns that flow; the harness calls
+//! [`OAuth::resolve_access_token`] at activate/switch time so the catalog
+//! snapshots a live bearer.
 //!
-//! The xAI specifics (client id, endpoints, scopes, `plan=generic`) live in
-//! [`token`]; the two login flows live in [`device`] and [`browser`]; the
-//! on-disk token store lives in [`store`].
+//! Per-provider constants (client id, endpoints, scopes, redirect port) live on
+//! [`config::OAuthConfig`] (`config::XAI`, `config::CHATGPT`); the two login
+//! flows live in [`device`] (RFC 8628) / [`chatgpt_device`] (OpenAI JSON) and
+//! [`browser`]; the on-disk token store lives in [`store`].
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod browser;
+pub mod chatgpt_device;
+pub mod config;
 pub mod device;
 pub mod pkce;
 pub mod store;
 pub mod token;
 
-pub use browser::{CallbackOutcome, CallbackServer, redirect_uri};
+pub use browser::{CallbackOutcome, CallbackServer};
+pub use chatgpt_device::{
+    ChatGptDeviceCode, ChatGptDeviceToken, exchange_device_code as exchange_chatgpt_device_code,
+    poll_device_code as poll_chatgpt_device_code,
+    request_device_code as request_chatgpt_device_code,
+    verification_url as chatgpt_verification_url,
+};
+pub use config::{CHATGPT, OAuthConfig, XAI, config_by_provider_id};
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
 pub use pkce::{PkceCodes, new_nonce, new_state};
 pub use store::{AuthStore, TokenSet};
 pub use token::{
-    ACCESS_TOKEN_REFRESH_SKEW_MS, AUTH_PROVIDER_ID, AUTHORIZE_URL, CLIENT_ID,
-    DEVICE_AUTHORIZATION_URL, DEVICE_CODE_GRANT_TYPE, SCOPE, TOKEN_URL, TokenResponse,
-    access_token_is_expiring, build_authorize_url, exchange_code, jwt_exp_ms, refresh_access_token,
+    ACCESS_TOKEN_REFRESH_SKEW_MS, TokenResponse, access_token_is_expiring, build_authorize_url,
+    chatgpt_account_id, exchange_code, jwt_exp_ms, refresh_access_token,
 };
 
 use std::sync::{Arc, Mutex};
@@ -49,9 +59,9 @@ impl std::fmt::Display for AuthError {
         match self {
             AuthError::Transport(msg) => write!(f, "network error: {msg}"),
             AuthError::TokenEndpoint { status, body } => {
-                write!(f, "xAI token endpoint returned HTTP {status}: {body}")
+                write!(f, "token endpoint returned HTTP {status}: {body}")
             }
-            AuthError::Decode(msg) => write!(f, "could not parse xAI response: {msg}"),
+            AuthError::Decode(msg) => write!(f, "could not parse response: {msg}"),
             AuthError::DeviceCode(msg) => write!(f, "device authorization: {msg}"),
             AuthError::Cancelled => write!(f, "login was cancelled"),
             AuthError::Timeout => write!(f, "login timed out"),
@@ -64,20 +74,21 @@ impl std::error::Error for AuthError {}
 /// Which login flow to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginMethod {
-    /// Browser loopback OAuth (desktop). Binds `127.0.0.1:56121`, opens the
-    /// authorize URL, and waits for the callback.
+    /// Browser loopback OAuth (desktop). Binds the provider's registered
+    /// loopback port, opens the authorize URL, and waits for the callback.
     Browser,
-    /// RFC 8628 device-code (headless / VPS / SSH / Docker). Prints a
-    /// verification URL + user code and long-polls the token endpoint.
+    /// Device-code (headless / VPS / SSH / Docker). Prints a verification URL +
+    /// user code and long-polls the token endpoint.
     Device,
 }
 
-/// The high-level xAI OAuth entry point. Owns the HTTP client and a
-/// single-flight refresh guard so concurrent channel builds collapse onto one
-/// refresh HTTP call (xAI rotates the refresh_token, so replaying it on two
-/// concurrent fetches would burn one of them).
+/// The high-level OAuth entry point. Owns the provider [`OAuthConfig`], the
+/// HTTP client, and a single-flight refresh guard so concurrent channel builds
+/// collapse onto one refresh HTTP call (xAI rotates the refresh_token, so
+/// replaying it on two concurrent fetches would burn one of them).
 #[derive(Clone)]
-pub struct XaiOAuth {
+pub struct OAuth {
+    config: OAuthConfig,
     client: reqwest::Client,
     refresh_in_flight: Arc<RefreshSlot>,
 }
@@ -86,23 +97,33 @@ pub struct XaiOAuth {
 /// an inner mutex holding its result so concurrent waiters share one HTTP call.
 type RefreshSlot = Mutex<Option<Arc<tokio::sync::Mutex<Option<TokenSet>>>>>;
 
-impl Default for XaiOAuth {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl XaiOAuth {
-    /// Construct with a fresh HTTP client (rustls, no system certs needed).
-    pub fn new() -> Self {
+impl OAuth {
+    /// Construct for a specific provider config.
+    pub fn new(config: OAuthConfig) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(concat!("neenee/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
+            config,
             client,
             refresh_in_flight: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Convenience constructor for the xAI SuperGrok provider.
+    pub fn xai() -> Self {
+        Self::new(XAI)
+    }
+
+    /// Convenience constructor for the ChatGPT/Codex subscription provider.
+    pub fn chatgpt() -> Self {
+        Self::new(CHATGPT)
+    }
+
+    /// The provider config this OAuth instance authenticates against.
+    pub fn config(&self) -> &OAuthConfig {
+        &self.config
     }
 
     /// Borrow the HTTP client (the `login` CLI uses it for the device-code
@@ -111,8 +132,8 @@ impl XaiOAuth {
         &self.client
     }
 
-    /// Run a login flow and return the resulting token set. Does NOT persist;
-    /// the caller writes the [`TokenSet`] to [`AuthStore`].
+    /// Run a login flow and return the resulting token response. Does NOT
+    /// persist; the caller writes the [`TokenSet`] to [`AuthStore`].
     pub async fn login(&self, method: LoginMethod) -> Result<TokenResponse, AuthError> {
         match method {
             LoginMethod::Browser => self.login_browser().await,
@@ -121,25 +142,35 @@ impl XaiOAuth {
     }
 
     async fn login_device(&self) -> Result<TokenResponse, AuthError> {
-        let device = request_device_code(&self.client).await?;
-        poll_device_code(&self.client, &device).await
+        match self.config.device_flow {
+            config::DeviceFlow::Rfc8628 => {
+                let device = request_device_code(&self.client, &self.config).await?;
+                poll_device_code(&self.client, &self.config, &device).await
+            }
+            config::DeviceFlow::ChatGpt => {
+                let device = request_chatgpt_device_code(&self.client, &self.config).await?;
+                let token = poll_chatgpt_device_code(&self.client, &self.config, &device).await?;
+                exchange_chatgpt_device_code(&self.client, &self.config, &token).await
+            }
+        }
     }
 
     /// Start the browser loopback flow and return the authorize URL the caller
-    /// should open (or surface to the user). The companion
-    /// [`complete_browser_login`] waits for the callback and exchanges the code.
+    /// should open (or surface to the user). The companion [`BrowserLogin`]
+    /// waits for the callback and exchanges the code.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, AuthError> {
-        let server = CallbackServer::start()
+        let server = CallbackServer::start_for(&self.config)
             .await
             .map_err(|e| AuthError::Transport(format!("could not bind loopback server: {e}")))?;
         let pkce = PkceCodes::generate();
         let state = new_state();
         let nonce = new_nonce();
-        let redirect = redirect_uri();
-        let url = build_authorize_url(&pkce, &state, &nonce, &redirect);
-        tracing::info!(url = %url, "open this URL to authorize xAI");
+        let redirect = self.config.redirect_uri();
+        let url = build_authorize_url(&self.config, &pkce, &state, &nonce, &redirect);
+        tracing::info!(url = %url, provider = %self.config.provider_id, "open this URL to authorize");
         let rx = server.wait_for_code(state);
         Ok(BrowserLogin {
+            config: self.config,
             url,
             pkce,
             redirect,
@@ -158,6 +189,8 @@ impl XaiOAuth {
     /// refresh is single-flight: concurrent callers share one HTTP call and the
     /// rotated token set it produces. Returns the access token to send as a
     /// bearer, plus the (possibly updated) token set the caller should persist.
+    /// The `account_id` is carried through unchanged on refresh (OpenAI does
+    /// not rotate the account).
     pub async fn resolve_access_token(
         &self,
         stored: TokenSet,
@@ -190,17 +223,27 @@ impl XaiOAuth {
         if let Some(refreshed) = inner.as_ref() {
             return Ok((refreshed.access.clone(), refreshed.clone()));
         }
-        let refreshed = refresh_access_token(&self.client, &stored.refresh).await?;
+        let refreshed = refresh_access_token(&self.client, &self.config, &stored.refresh).await?;
         let new_refresh = refreshed
             .refresh_token
             .clone()
             .filter(|r| !r.is_empty())
             .unwrap_or_else(|| stored.refresh.clone());
         let expires_ms = now + (refreshed.expires_in.unwrap_or(3600) as i64) * 1000;
+        // Preserve the captured account id across refresh; OpenAI's refresh
+        // response is an opaque JWT without the chatgpt_account_id claim, so
+        // the value captured at login is the durable source of truth.
+        let account_id = refreshed
+            .id_token
+            .as_deref()
+            .or(Some(refreshed.access_token.as_str()))
+            .and_then(chatgpt_account_id)
+            .or(stored.account_id.clone());
         let tokens = TokenSet {
             access: refreshed.access_token.clone(),
             refresh: new_refresh,
             expires_ms,
+            account_id,
         };
         *inner = Some(tokens.clone());
         // Clear the single-flight slot so the next stale token starts a fresh
@@ -218,6 +261,7 @@ impl XaiOAuth {
 /// In-flight browser OAuth login: the authorize URL plus the state needed to
 /// finish the code exchange after the user consents.
 pub struct BrowserLogin {
+    config: OAuthConfig,
     /// Authorize URL the user (or `webbrowser::open`) should visit.
     pub url: String,
     pkce: PkceCodes,
@@ -236,7 +280,7 @@ impl BrowserLogin {
             .map_err(|_| AuthError::Cancelled)?;
         match outcome {
             CallbackOutcome::Code(code) => {
-                exchange_code(client, &code, &self.pkce, &self.redirect).await
+                exchange_code(client, &self.config, &code, &self.pkce, &self.redirect).await
             }
             CallbackOutcome::Failed(msg) => Err(AuthError::Transport(msg)),
         }

@@ -29,7 +29,7 @@ pub(crate) use neenee_server::{
 /// The identity constants + [`neenee_identity`] now live in `neenee-server`
 /// (the layer that constructs agents); this binary re-exports them.
 use neenee_server::{
-    neenee_identity,
+    neenee_identity, principal_code,
     startup::{BuiltinCmd, StartupMode, init_tracing, parse_args},
 };
 
@@ -374,11 +374,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // provider; re-seeded on provider/model switch.
     agent_setup::reseed_tool_variants(&agent, &config);
 
+    // Bind the declarative coding-principal profile (ADR-0053). Identity is
+    // supplied to the constructor above (immutable past build); this applies
+    // the profile's capability scope, operation boundary, runtime knobs, and
+    // attended flag in one call. The profile's values equal the constructor's
+    // defaults, so this is a no-op today — its purpose is to make the role
+    // declarative (a `const` the binary binds, mirroring envoy profiles) so
+    // future principals (quant/research/ops) are another profile, not a fork.
+    agent.apply_principal_profile(&principal_code());
+
     // Wire the `[principal]` config table: the opt-in hard-stop budget, the
     // model-supplied-stdin toggle, and the anti-anchoring nudge config. (Session
     // review is on-demand via `/review`, so it has no config to seed.) All
     // default to sensible values when the table is absent, so this is a no-op
-    // for the common case — the nudge config defaults to disabled.
+    // for the common case — the nudge config defaults to disabled. These run
+    // *after* the profile binding so per-installation config wins.
     agent.set_hard_stop_turns(config.principal.hard_stop_turns);
     agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);

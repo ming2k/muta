@@ -45,14 +45,15 @@ pub use empty_state::parse_logo;
 use markdown_table::{build_table_render, shrink_column_widths};
 pub(super) use message_body::draw_message_body;
 pub(super) use notice::draw_notice;
+pub use overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 pub use overlays::{
     ActivityModalView, CustomEditorView, draw_activity_modal, draw_armed_toast,
     draw_config_layout_modal, draw_config_modal, draw_config_nudge_modal, draw_copy_toast,
     draw_custom_provider_editor, draw_help_modal, draw_history_modal, draw_input_injection,
     draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
-    draw_permission_sheet, draw_permissions_manager, draw_provider_template_chooser,
-    draw_question_modal, draw_sessions_modal, draw_skills_modal, draw_token_report_modal,
-    draw_tools_modal,
+    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
+    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal,
 };
 pub use primitives::recess_backdrop;
 use primitives::viewport_rect;

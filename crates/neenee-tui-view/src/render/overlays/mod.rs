@@ -27,6 +27,7 @@ pub mod mcp;
 pub mod permission;
 pub mod permissions_manager;
 pub mod provider;
+pub mod provider_delete_confirm;
 pub mod session;
 pub mod skills;
 pub mod toast;
@@ -47,6 +48,7 @@ pub use provider::{
     CustomEditorView, draw_custom_provider_editor, draw_model_editor, draw_models_modal,
     draw_oauth_pending, draw_provider_template_chooser,
 };
+pub use provider_delete_confirm::{ProviderDeleteChoice, draw_provider_delete_confirm};
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
 pub use toast::{draw_armed_toast, draw_copy_toast};

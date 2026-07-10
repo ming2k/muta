@@ -37,7 +37,7 @@ use crate::tui::selection::{
 };
 use crate::tui::step_interaction::StepKind;
 use crate::tui::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate, Versioned};
-use crate::tui::{ActivityTab, App, CaretOwner, Modal, Recess};
+use crate::tui::{ActivityTab, App, CaretOwner, Modal, ProviderDeleteChoice, Recess};
 
 use neenee_core::AgentResponse;
 use tokio::sync::{Mutex, broadcast};
@@ -182,6 +182,10 @@ pub(super) struct UiRuntime {
     pub open_sessions: Arc<AtomicBool>,
     /// Live OAuth-add UI updates from the response listener.
     pub oauth_add_signal: Arc<Mutex<Option<OauthAddSignal>>>,
+    /// Mirror of `App::awaiting_oauth_add`, written by the loop each frame so
+    /// the response listener can suppress a duplicate transcript URL during an
+    /// add flow (the modal is the surface there).
+    pub awaiting_oauth_add: Arc<AtomicBool>,
     /// Latest session-context snapshot for the Tools / Mcp / Skills /
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Each manager renders a lightweight placeholder
@@ -250,6 +254,78 @@ pub(super) enum OauthAddSignal {
 pub(super) struct UnsentInput {
     pub prompt: String,
     pub images: Vec<neenee_core::ImagePart>,
+}
+
+/// Probe a raw input event against the provider-delete confirm overlay.
+///
+/// Returns `Some(action)` when the overlay is open (it owns every key in that
+/// state): ←/→/Tab/`h`/`l` move focus between Cancel (the default) and Delete,
+/// Enter activates the focused button, and Esc / Ctrl+C cancel. Returns `None`
+/// when the overlay is closed so the caller proceeds with normal
+/// [`input::process_event`] handling. The returned action — if any — is
+/// dispatched by the standard `match action` block; `DeleteProviderConfirm`
+/// and `DeleteProviderCancel` are the overlay-specific arms.
+fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
+    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+
+    if app.pending_provider_delete.is_none() || app.active_modal != Modal::Provider {
+        return None;
+    }
+
+    let Event::Key(k) = event else {
+        // Mouse and resize events do not drive the overlay's keyboard UI;
+        // outside-click dismissal is handled in the mouse branch instead.
+        // Still consume them so nothing reaches the composer behind the panel.
+        return Some(input::InputAction::None);
+    };
+
+    // Only act on Press (crossterm sends Release on some terminals); ignore
+    // repeats so a held key does not spam focus or fire Delete repeatedly.
+    if !matches!(k.kind, KeyEventKind::Press) {
+        return Some(input::InputAction::None);
+    }
+
+    // Any other key is swallowed so it never edits the composer / moves the
+    // provider list selection behind the panel.
+    match (k.modifiers, k.code) {
+        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+            Some(input::InputAction::DeleteProviderCancel)
+        }
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(input::InputAction::DeleteProviderCancel),
+        (KeyModifiers::NONE, KeyCode::Enter) => {
+            if app.provider_delete_focus == ProviderDeleteChoice::Delete {
+                Some(input::InputAction::DeleteProviderConfirm)
+            } else {
+                Some(input::InputAction::DeleteProviderCancel)
+            }
+        }
+        // Focus cycling between Cancel and Delete.
+        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Left)
+        | (KeyModifiers::CONTROL, KeyCode::Char('b'))
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('h')) => {
+            app.provider_delete_focus = ProviderDeleteChoice::Cancel;
+            Some(input::InputAction::None)
+        }
+        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Right)
+        | (KeyModifiers::CONTROL, KeyCode::Char('f'))
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('l')) => {
+            app.provider_delete_focus = ProviderDeleteChoice::Delete;
+            Some(input::InputAction::None)
+        }
+        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Tab)
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Down)
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Up) => {
+            // Tab/↑/↓ toggle the two buttons.
+            app.provider_delete_focus = match app.provider_delete_focus {
+                ProviderDeleteChoice::Cancel => ProviderDeleteChoice::Delete,
+                ProviderDeleteChoice::Delete => ProviderDeleteChoice::Cancel,
+            };
+            Some(input::InputAction::None)
+        }
+        // Any other key is swallowed so it never edits the composer / moves the
+        // provider list selection behind the panel.
+        _ => Some(input::InputAction::None),
+    }
 }
 
 async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
@@ -695,6 +771,11 @@ pub(super) async fn run_app_loop(
                     }
                 }
             }
+            // Mirror the add-flow flag so the response listener can suppress a
+            // duplicate transcript URL during an add (the modal owns it).
+            runtime
+                .awaiting_oauth_add
+                .store(app.awaiting_oauth_add, Ordering::SeqCst);
         }
 
         // Decrement toast timers
@@ -1387,15 +1468,22 @@ pub(super) async fn run_app_loop(
                         &app.theme,
                         &mut app.template_scroll,
                     )),
-                    Modal::OauthPending => Some(render::draw_oauth_pending(
-                        "xAI OAuth",
-                        &app.oauth_pending_message,
-                        &app.oauth_pending_url,
-                        &app.oauth_pending_user_code,
-                        app.oauth_pending_error.as_deref(),
-                        f,
-                        &app.theme,
-                    )),
+                    Modal::OauthPending => {
+                        let title: &'static str = match app.custom_auth {
+                            neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
+                            neenee_core::ChannelAuth::XaiOAuth => "xAI",
+                            neenee_core::ChannelAuth::ApiKey => "OAuth",
+                        };
+                        Some(render::draw_oauth_pending(
+                            title,
+                            &app.oauth_pending_message,
+                            &app.oauth_pending_url,
+                            &app.oauth_pending_user_code,
+                            app.oauth_pending_error.as_deref(),
+                            f,
+                            &app.theme,
+                        ))
+                    }
                     Modal::CustomProvider => {
                         let editing = app.custom_is_editing();
                         let title = if editing {
@@ -1556,6 +1644,38 @@ pub(super) async fn run_app_loop(
                     }
                     Modal::None => None,
                 };
+
+                // Provider-delete confirm overlay: a sub-layer painted *on top
+                // of* the stage-1 provider picker. Drawn after the picker so it
+                // overpaints its own dimmed backdrop + centered panel, leaving
+                // the list visible (dimmed) behind it. Only present while a
+                // deletion is staged from `Shift+D`.
+                if app.active_modal == Modal::Provider
+                    && let Some(ref pending_id) = app.pending_provider_delete
+                {
+                    let provider_name = app
+                        .provider_picker
+                        .rows
+                        .iter()
+                        .find(|r| &r.id == pending_id)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_else(|| pending_id.clone());
+                    app.provider_delete_rect = Some(render::draw_provider_delete_confirm(
+                        f,
+                        &provider_name,
+                        match app.provider_delete_focus {
+                            ProviderDeleteChoice::Cancel => {
+                                render::ProviderDeleteChoiceView::Cancel
+                            }
+                            ProviderDeleteChoice::Delete => {
+                                render::ProviderDeleteChoiceView::Delete
+                            }
+                        },
+                        &app.theme,
+                    ));
+                } else {
+                    app.provider_delete_rect = None;
+                }
 
                 // Copy toast
                 if app.copy_toast_until.is_some() {
@@ -1754,38 +1874,50 @@ pub(super) async fn run_app_loop(
             let modal_cmd_history = (!app.input.is_empty())
                 .then(|| app.input.clone())
                 .filter(|_| !app.input.starts_with('!') && matches!(app.active_modal, Modal::None));
-            let action = input::process_event(
-                event,
-                &mut app.input,
-                &mut app.cursor_position,
-                input::InputContext {
-                    active_modal: app.active_modal,
-                    is_responding: runtime.is_responding.load(Ordering::SeqCst),
-                    completion_kind,
-                    suggestion_count,
-                    has_exact_suggestion,
-                    suggestion_index: app.suggestion_index,
-                    permission_confirm_always: app.permission_confirm_always,
-                    permission_show_details: app.permission_show_details,
-                    in_envoy_view,
-                    in_side_view: app.in_side_view,
-                    has_focused_target: app.focused_target.is_some(),
-                    has_queued: !app.pending_dispatch.is_empty(),
-                    history_searching: app.history_search,
-                    model_searching: app.model_search,
-                    picker_in_models_stage: app.picker_provider.is_some(),
-                    modal_keymap_open: app.modal_keymap_open,
-                    custom_provider_field: (app.active_modal == Modal::CustomProvider)
-                        .then_some(app.custom_field),
-                    editor_field: (app.active_modal == Modal::ModelEditor)
-                        .then_some(app.editor_field),
-                    question_other_highlighted: app
-                        .question
-                        .as_ref()
-                        .is_some_and(|q| q.is_other_highlighted()),
-                },
-                &mut app.drag,
-            );
+            // The provider-delete confirm overlay is a sub-layer over the
+            // stage-1 provider picker: when it is open it owns every key, so
+            // probe the raw event before the general input mapper and skip
+            // `process_event` entirely (the latter would otherwise edit the
+            // composer or move the list selection behind the panel). The
+            // returned action flows through the normal `match action`
+            // dispatch below (`DeleteProviderConfirm` / `DeleteProviderCancel`
+            // are the overlay-specific arms).
+            let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
+                overlay_action
+            } else {
+                input::process_event(
+                    event,
+                    &mut app.input,
+                    &mut app.cursor_position,
+                    input::InputContext {
+                        active_modal: app.active_modal,
+                        is_responding: runtime.is_responding.load(Ordering::SeqCst),
+                        completion_kind,
+                        suggestion_count,
+                        has_exact_suggestion,
+                        suggestion_index: app.suggestion_index,
+                        permission_confirm_always: app.permission_confirm_always,
+                        permission_show_details: app.permission_show_details,
+                        in_envoy_view,
+                        in_side_view: app.in_side_view,
+                        has_focused_target: app.focused_target.is_some(),
+                        has_queued: !app.pending_dispatch.is_empty(),
+                        history_searching: app.history_search,
+                        model_searching: app.model_search,
+                        picker_in_models_stage: app.picker_provider.is_some(),
+                        modal_keymap_open: app.modal_keymap_open,
+                        custom_provider_field: (app.active_modal == Modal::CustomProvider)
+                            .then_some(app.custom_field),
+                        editor_field: (app.active_modal == Modal::ModelEditor)
+                            .then_some(app.editor_field),
+                        question_other_highlighted: app
+                            .question
+                            .as_ref()
+                            .is_some_and(|q| q.is_other_highlighted()),
+                    },
+                    &mut app.drag,
+                )
+            };
 
             // `process_event` mutates `cursor_position` in place (it cannot go
             // through `App::set_cursor`), so any keystroke that moved the caret
@@ -2168,9 +2300,7 @@ pub(super) async fn run_app_loop(
                                     });
                                     app.restore_model_draft();
                                     app.active_modal = Modal::None;
-                                } else if app.provider_row_auth(&id)
-                                    == neenee_core::ChannelAuth::XaiOAuth
-                                {
+                                } else if app.provider_row_auth(&id).is_oauth() {
                                     let _ = app.tx.send(AgentRequest::ConnectProvider {
                                         id,
                                         method: neenee_core::LoginMethod::Browser,
@@ -2244,6 +2374,7 @@ pub(super) async fn run_app_loop(
                             app.begin_oauth_add(template);
                             let _ = app.tx.send(AgentRequest::AuthorizeOAuth {
                                 method: neenee_core::LoginMethod::Browser,
+                                auth: template.auth,
                             });
                         } else {
                             app.open_custom_provider_editor(template);
@@ -2288,23 +2419,27 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::DeleteProvider => {
-                    // Stage-1 `Shift+D`: delete the entire highlighted custom
-                    // provider. Built-in providers and the synthetic "＋ Add
-                    // provider" row are ignored.
-                    if app.active_modal == Modal::Provider && !app.picker_on_add_row() {
-                        let ranked = app.providers_filtered();
-                        if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first())
-                            && !row.builtin
-                        {
-                            // Return to stage 1 (close any drilled-in stage-2
-                            // view) so the picker lands on a valid row.
-                            app.picker_provider = None;
-                            app.modal_index = app.modal_index.saturating_sub(1);
-                            let _ = app
-                                .tx
-                                .send(AgentRequest::DeleteProvider { id: row.id.clone() });
-                        }
+                    // Stage-1 `Shift+D`: stage the highlighted custom provider
+                    // for deletion and open the confirm overlay over the
+                    // picker (dimmed backdrop + centered panel). The actual
+                    // `AgentRequest::DeleteProvider` only fires once the user
+                    // confirms inside the overlay. Built-in providers and the
+                    // synthetic "＋ Add provider" row are ignored by the helper.
+                    app.stage_provider_delete();
+                }
+                input::InputAction::DeleteProviderConfirm => {
+                    // The confirm overlay's Enter-on-Delete: dispatch the
+                    // staged deletion and tear the overlay down.
+                    if let Some(req) = app.confirm_provider_delete() {
+                        let _ = app.tx.send(req);
                     }
+                }
+                input::InputAction::DeleteProviderCancel => {
+                    // Esc / Ctrl+C / Enter-on-Cancel inside the confirm
+                    // overlay: drop the staged provider id and return keyboard
+                    // focus to the stage-1 provider list. The picker modal
+                    // itself stays open.
+                    app.cancel_provider_delete();
                 }
                 input::InputAction::CancelCustomProvider => {
                     // Return to the provider picker (stage 1) the editor was
@@ -3986,7 +4121,25 @@ pub(super) async fn run_app_loop(
                     app.modal_index = 1;
                 }
                 input::InputAction::SelectionStart { x, y } => {
-                    if app.active_modal == Modal::Question {
+                    // Provider-delete confirm overlay owns clicks while open: a
+                    // press outside the panel cancels the staged deletion
+                    // (mirrors Esc) but leaves the provider picker open, and a
+                    // press inside is a no-op (the buttons are keyboard-only).
+                    // Either way the click is consumed so it never reaches the
+                    // picker or transcript behind the backdrop.
+                    if app.pending_provider_delete.is_some()
+                        && let Some(r) = app.provider_delete_rect
+                    {
+                        let inside =
+                            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height;
+                        if !inside {
+                            app.pending_provider_delete = None;
+                            app.provider_delete_focus = ProviderDeleteChoice::default();
+                        }
+                        app.selection = SelectionState::None;
+                        app.focused_target = None;
+                        app.drag.cancel();
+                    } else if app.active_modal == Modal::Question {
                         if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
                             && let Some(qm) = app.question.take()
                         {

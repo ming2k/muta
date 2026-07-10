@@ -936,6 +936,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         picker_provider: None,
         model_scroll: 0,
         model_modal_follow: true,
+        pending_provider_delete: None,
+        provider_delete_focus: crate::tui::ProviderDeleteChoice::default(),
+        provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
         theme: Theme::default(),
@@ -1167,6 +1170,135 @@ fn picker_add_row_is_the_trailing_stage1_row() {
     assert!(app.picker_on_add_row(), "last stage-1 row is the add row");
     app.modal_index = providers - 1;
     assert!(!app.picker_on_add_row());
+}
+
+/// `Shift+D` on a custom provider must STAGE the deletion (open the confirm
+/// overlay with default focus = Cancel) rather than deleting immediately. This
+/// is the core guarantee of the new confirm overlay: `stage_provider_delete`
+/// only mutates overlay state — it never enqueues an `AgentRequest` (that is
+/// `confirm_provider_delete`'s job).
+#[test]
+fn delete_provider_stages_overlay_without_deleting() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.active_modal = Modal::Provider;
+    app.picker_provider = None;
+    let custom = |id: &str| neenee_core::ProviderPickerRow {
+        id: id.to_string(),
+        name: id.to_string(),
+        model: "m".to_string(),
+        models: vec!["m".to_string()],
+        model_info: Vec::new(),
+        builtin: false,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        favorite: false,
+        last_used_ms: None,
+        auth: Default::default(),
+    };
+    app.provider_picker = neenee_core::ProviderPickerSnapshot {
+        default_id: "my-custom".to_string(),
+        rows: vec![custom("my-custom")],
+    };
+    app.modal_index = 0;
+
+    app.stage_provider_delete();
+
+    // The deletion is staged, not dispatched.
+    assert_eq!(
+        app.pending_provider_delete.as_deref(),
+        Some("my-custom"),
+        "Shift+D stages the provider id without deleting"
+    );
+    // Default focus is Cancel (the safe choice) so a reflexive Enter cancels.
+    assert_eq!(
+        app.provider_delete_focus,
+        crate::tui::ProviderDeleteChoice::Cancel,
+        "confirm overlay defaults to Cancel focus"
+    );
+}
+
+/// Built-in providers are not deletable: `Shift+D` on one is a no-op (the
+/// overlay must not open, nothing staged).
+#[test]
+fn delete_provider_ignores_builtin() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.active_modal = Modal::Provider;
+    app.picker_provider = None;
+    let builtin = |id: &str| neenee_core::ProviderPickerRow {
+        id: id.to_string(),
+        name: id.to_string(),
+        model: "m".to_string(),
+        models: vec!["m".to_string()],
+        model_info: Vec::new(),
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        favorite: false,
+        last_used_ms: None,
+        auth: Default::default(),
+    };
+    app.provider_picker = neenee_core::ProviderPickerSnapshot {
+        default_id: "kimi-code".to_string(),
+        rows: vec![builtin("kimi-code")],
+    };
+    app.modal_index = 0;
+
+    app.stage_provider_delete();
+
+    assert!(
+        app.pending_provider_delete.is_none(),
+        "built-in provider is never staged for deletion"
+    );
+}
+
+/// Confirming the overlay dispatches exactly one `DeleteProvider` request and
+/// tears the overlay down, so a stray second confirm cannot re-delete.
+#[test]
+fn confirm_provider_delete_dispatches_once_and_clears() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // Simulate the overlay already being open (staged from a prior Shift+D).
+    app.pending_provider_delete = Some("doomed".to_string());
+
+    let req = app
+        .confirm_provider_delete()
+        .expect("confirm dispatches when an id is staged");
+    assert!(
+        matches!(req, AgentRequest::DeleteProvider { ref id } if id == "doomed"),
+        "confirm dispatches a DeleteProvider request for the staged id"
+    );
+    // Overlay torn down: no staged id remains.
+    assert!(
+        app.pending_provider_delete.is_none(),
+        "confirm clears the staged id"
+    );
+    // A second confirm is a no-op (nothing left to delete).
+    assert!(
+        app.confirm_provider_delete().is_none(),
+        "second confirm is inert after the overlay closes"
+    );
+}
+
+/// Cancelling the overlay drops the staged id and resets focus to the safe
+/// default (Cancel), so reopening the overlay later starts fresh.
+#[test]
+fn cancel_provider_delete_clears_and_resets_focus() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_provider_delete = Some("doomed".to_string());
+    app.provider_delete_focus = crate::tui::ProviderDeleteChoice::Delete;
+
+    app.cancel_provider_delete();
+
+    assert!(
+        app.pending_provider_delete.is_none(),
+        "cancel clears the staged id"
+    );
+    assert_eq!(
+        app.provider_delete_focus,
+        crate::tui::ProviderDeleteChoice::Cancel,
+        "cancel resets focus to the safe default"
+    );
 }
 
 #[test]

@@ -125,7 +125,7 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub mod agent;
-pub use agent::{Agent, AgentIdentity};
+pub use agent::Agent;
 
 mod bash_policy;
 pub mod catalog;

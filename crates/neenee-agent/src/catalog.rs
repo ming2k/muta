@@ -33,6 +33,11 @@ pub fn default_provider_id(config: &Config) -> &str {
     &config.default_provider
 }
 
+/// The ChatGPT subscription backend (Codex Responses API). A ChatGPT OAuth
+/// channel routes here rather than to chat completions, sending the OAuth
+/// access token as a bearer plus the `ChatGPT-Account-Id` header.
+pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+
 /// Convert a user-defined channel config into a resolved [`Channel`].
 ///
 /// Resolution rules mirror the built-in path: an `api_key_env` value wins over
@@ -41,73 +46,105 @@ pub fn default_provider_id(config: &Config) -> &str {
 /// fields (`base_url`, `user_agent`) fall back to localhost defaults so a
 /// minimal entry still builds.
 fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Channel {
-    // SuperGrok OAuth: bearer from auth.toml (key "xai"); activate/switch
-    // refreshes via XaiOAuth::resolve_access_token before catalog snapshot.
-    let api_key = match uc.auth {
-        neenee_core::ChannelAuth::XaiOAuth => neenee_auth::AuthStore::load()
-            .get(neenee_auth::AUTH_PROVIDER_ID)
-            .map(|tokens| tokens.access.clone())
-            .unwrap_or_default(),
-        neenee_core::ChannelAuth::ApiKey => {
-            env_or_config(uc.api_key_env.as_deref(), uc.api_key.clone()).unwrap_or_default()
+    // OAuth channels resolve their bearer from auth.toml. ChatGPT also yields
+    // the chatgpt_account_id (carried on the Responses transport); xAI has none.
+    // Activate/switch refreshes the token first (handlers_provider).
+    let (api_key, account_id) = match uc.auth {
+        neenee_core::ChannelAuth::ChatGptOAuth => {
+            let store = neenee_auth::AuthStore::load();
+            let tokens = store.get("chatgpt");
+            (
+                tokens.map(|t| t.access.clone()).unwrap_or_default(),
+                tokens.and_then(|t| t.account_id.clone()),
+            )
         }
+        neenee_core::ChannelAuth::XaiOAuth => {
+            let store = neenee_auth::AuthStore::load();
+            (
+                store
+                    .get("xai")
+                    .map(|tokens| tokens.access.clone())
+                    .unwrap_or_default(),
+                None,
+            )
+        }
+        neenee_core::ChannelAuth::ApiKey => (
+            env_or_config(uc.api_key_env.as_deref(), uc.api_key.clone()).unwrap_or_default(),
+            None,
+        ),
     };
     let model = uc
         .model
         .clone()
         .unwrap_or_else(|| fallback_model.to_string());
-    let transport = match uc.transport {
-        UserTransport::GeminiNative => Transport::GeminiNative {
+    let transport = match uc.auth {
+        // ChatGPT OAuth always speaks the Responses transport, regardless of the
+        // stored `UserTransport`, with the bearer + account id resolved above.
+        neenee_core::ChannelAuth::ChatGptOAuth => Transport::OpenAiResponses {
             base_url: uc
                 .base_url
                 .clone()
-                .unwrap_or_else(|| "http://localhost:8080/v1beta".to_string()),
-            user_agent: uc
-                .user_agent
-                .clone()
-                .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
-        },
-        UserTransport::Anthropic => {
-            // ADR-0046: reasoning is opt-in. A custom Anthropic relay channel
-            // opts the model in to reasoning when the user has configured an
-            // effort or an explicit thinking value for it: thinking defaults ON
-            // (the recommended Claude mode) unless `thinking = false`, and a
-            // set effort is parsed into the typed `Effort`. An untouched
-            // channel (no effort, no thinking) stays off — same contract as a
-            // built-in model with no `[model_reasoning]` entry.
-            let effort = uc.effort.as_deref().and_then(Effort::parse);
-            let configured = effort.is_some() || uc.thinking.is_some();
-            let thinking = if configured {
-                Some(match uc.thinking {
-                    Some(false) => ThinkingMode::Off,
-                    _ => ThinkingMode::Adaptive,
-                })
-            } else {
-                None
-            };
-            Transport::Anthropic {
-                base_url: uc
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| "http://localhost:8080/v1/messages".to_string()),
-                user_agent: uc
-                    .user_agent
-                    .clone()
-                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
-                effort,
-                thinking,
-            }
-        }
-        UserTransport::OpenAiCompat => Transport::OpenAiCompat {
-            base_url: uc
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:8080/v1/chat/completions".to_string()),
+                .unwrap_or_else(|| CHATGPT_RESPONSES_URL.to_string()),
             user_agent: uc
                 .user_agent
                 .clone()
                 .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
             effort: uc.effort.as_deref().and_then(Effort::parse),
+            account_id,
+        },
+        _ => match uc.transport {
+            UserTransport::GeminiNative => Transport::GeminiNative {
+                base_url: uc
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8080/v1beta".to_string()),
+                user_agent: uc
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+            },
+            UserTransport::Anthropic => {
+                // ADR-0046: reasoning is opt-in. A custom Anthropic relay channel
+                // opts the model in to reasoning when the user has configured an
+                // effort or an explicit thinking value for it: thinking defaults ON
+                // (the recommended Claude mode) unless `thinking = false`, and a
+                // set effort is parsed into the typed `Effort`. An untouched
+                // channel (no effort, no thinking) stays off — same contract as a
+                // built-in model with no `[model_reasoning]` entry.
+                let effort = uc.effort.as_deref().and_then(Effort::parse);
+                let configured = effort.is_some() || uc.thinking.is_some();
+                let thinking = if configured {
+                    Some(match uc.thinking {
+                        Some(false) => ThinkingMode::Off,
+                        _ => ThinkingMode::Adaptive,
+                    })
+                } else {
+                    None
+                };
+                Transport::Anthropic {
+                    base_url: uc
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| "http://localhost:8080/v1/messages".to_string()),
+                    user_agent: uc
+                        .user_agent
+                        .clone()
+                        .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+                    effort,
+                    thinking,
+                }
+            }
+            UserTransport::OpenAiCompat => Transport::OpenAiCompat {
+                base_url: uc
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8080/v1/chat/completions".to_string()),
+                user_agent: uc
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+                effort: uc.effort.as_deref().and_then(Effort::parse),
+            },
         },
     };
     Channel {
@@ -896,6 +933,7 @@ fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth
 fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAiCompat { base_url, .. } => ("openai".to_string(), base_url.clone()),
+        Transport::OpenAiResponses { base_url, .. } => ("openai".to_string(), base_url.clone()),
         Transport::Anthropic { base_url, .. } => ("anthropic".to_string(), base_url.clone()),
         Transport::GeminiNative { base_url, .. } => ("gemini".to_string(), base_url.clone()),
     }
@@ -930,6 +968,21 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                     Effort::High
                 };
                 Some((*effort).unwrap_or(default).as_str().to_string())
+            };
+            ProviderModelInfo {
+                model: channel.model.clone(),
+                protocol: "openai".to_string(),
+                effort: effective,
+                thinking: None,
+                last_used_ms: None,
+            }
+        }
+        Transport::OpenAiResponses { effort, .. } => {
+            let model = neenee_core::model::resolve(&channel.model);
+            let effective = if model.effort_levels.is_empty() {
+                None
+            } else {
+                Some((*effort).unwrap_or(Effort::Medium).as_str().to_string())
             };
             ProviderModelInfo {
                 model: channel.model.clone(),

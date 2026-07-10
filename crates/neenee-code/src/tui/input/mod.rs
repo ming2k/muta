@@ -212,8 +212,17 @@ pub enum InputAction {
     /// Remove the highlighted model from a custom provider's stage-2 list (`d`).
     ProviderPickerRemoveModel,
     /// Delete the entire highlighted custom provider from the stage-1 list
-    /// (`Shift+D`). Built-in providers are ignored by the handler.
+    /// (`Shift+D`). Built-in providers are ignored by the handler. Opens the
+    /// provider-delete confirm overlay rather than deleting immediately.
     DeleteProvider,
+    /// Confirm the pending provider-delete: dispatch the staged
+    /// `AgentRequest::DeleteProvider` and close the confirm overlay. Only
+    /// produced by the confirm overlay's Enter when focus is on Delete.
+    DeleteProviderConfirm,
+    /// Cancel the provider-delete confirm overlay: drop the staged provider id
+    /// and return focus to the stage-1 provider list. Produced by Esc / Ctrl+C
+    /// / Enter-on-Cancel inside the confirm overlay.
+    DeleteProviderCancel,
     /// Interrupt current operation.
     Interrupt,
     /// Open models modal.

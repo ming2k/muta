@@ -126,13 +126,13 @@ pub(super) fn modal_spec(modal: Modal) -> Option<ModalSpec> {
     };
 
     Some(match modal {
-        Modal::Provider => fixed(72, 72),
+        // The template chooser is a child page of the provider list, so both
+        // states keep the same panel footprint while the header breadcrumb
+        // communicates the navigation depth.
+        Modal::Provider | Modal::ProviderTemplate => fixed(72, 72),
         Modal::HistorySearch => fixed(70, 72),
         Modal::Question => fixed(78, 70),
         Modal::ModelEditor => fixed(60, 30),
-        // Provider-template chooser: a short list of templates (label +
-        // description) plus the footer.
-        Modal::ProviderTemplate => fixed(64, 46),
         Modal::OauthPending => fixed(64, 36),
         // Custom-provider editor: tall enough for the form rows plus the
         // type-to-filter suggestion dropdown below them.

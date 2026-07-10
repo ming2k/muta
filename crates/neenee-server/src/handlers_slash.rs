@@ -20,7 +20,6 @@
 //! verbatim; not this refactor's job to fix.
 
 use neenee_agent::Agent;
-use neenee_agent::AgentIdentity;
 use neenee_agent::orchestration::{
     ContextProjectionSettings, PursuitContext, RoundInput, compact_round_history,
     emit_pursuit_updated, refresh_agent_pursuit, send_compaction, send_harness_state,
@@ -529,7 +528,7 @@ pub async fn dispatch(
                 provider_for_task,
                 (*skills_registry).clone(),
                 project_root_for_side,
-                AgentIdentity::new(crate::NEENEE_NAME, crate::NEENEE_MISSION),
+                crate::neenee_identity(),
             )
             .await
             {
