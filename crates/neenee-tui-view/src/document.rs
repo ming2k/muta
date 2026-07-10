@@ -85,6 +85,26 @@ pub enum MessageKind {
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
+    /// Transient provider-retry state rendered inline in the transcript.
+    ///
+    /// Unlike a notice, this message is updated in place for every failed
+    /// attempt and removed when the request succeeds or terminates. Keeping
+    /// the timing data structured lets the renderer derive a live countdown
+    /// (and then the current attempt's elapsed time) on every frame without
+    /// appending one line per retry.
+    ProviderRetry {
+        /// Upcoming provider attempt, including the initial request
+        /// (`2` means the first retry after attempt `1` failed).
+        attempt: usize,
+        /// Maximum provider attempts, including the initial request.
+        max_attempts: usize,
+        /// Most recent retryable provider error.
+        failure: String,
+        /// When the backoff countdown finishes and this attempt begins.
+        retry_at: std::time::Instant,
+        expanded: bool,
+        user_pinned: bool,
+    },
     /// A harness-level notice — errors, turn-pause signals, compaction
     /// summaries, provider switches, and other status lines that previously
     /// were smuggled through `Role::System` with hand-rolled `"Error: "`
@@ -276,6 +296,8 @@ fn context_token_weight(messages: &[TranscriptMessage]) -> i64 {
             MessageKind::Text => tokens += neenee_core::count_tokens(&m.raw),
             MessageKind::Notice { .. } => tokens += neenee_core::count_tokens(&m.raw),
             MessageKind::Thinking { content, .. } => tokens += neenee_core::count_tokens(content),
+            // Provider retries are transient UI state, never model context.
+            MessageKind::ProviderRetry { .. } => {}
             MessageKind::ToolStep {
                 arguments,
                 output,
@@ -1001,6 +1023,91 @@ impl TranscriptMessage {
 
     pub fn is_thinking(&self) -> bool {
         matches!(self.kind, MessageKind::Thinking { .. })
+    }
+
+    /// Whether this is the one live provider-retry disclosure.
+    pub fn is_provider_retry(&self) -> bool {
+        matches!(self.kind, MessageKind::ProviderRetry { .. })
+    }
+
+    /// Construct transient provider-retry state. Callers should update this
+    /// message in place via [`Self::update_provider_retry`] rather than append
+    /// another one for the next failed attempt.
+    pub fn provider_retry(
+        attempt: usize,
+        max_attempts: usize,
+        delay: std::time::Duration,
+        failure: impl Into<String>,
+    ) -> Self {
+        let failure = sanitize_text(&failure.into()).into_owned();
+        Self {
+            id: next_message_id(),
+            role: Role::System,
+            blocks: Vec::new(),
+            raw: failure.clone(),
+            kind: MessageKind::ProviderRetry {
+                attempt,
+                max_attempts,
+                failure,
+                retry_at: std::time::Instant::now() + delay,
+                expanded: false,
+                user_pinned: false,
+            },
+            delivery: DeliveryStatus::default(),
+            origin: UserMessageOrigin::Chat,
+            provider: None,
+            model: None,
+            turn: None,
+            sent_at_ms: None,
+        }
+    }
+
+    /// Refresh the existing retry disclosure for a later attempt while
+    /// preserving the user's expanded/collapsed choice.
+    pub fn update_provider_retry(
+        &mut self,
+        attempt: usize,
+        max_attempts: usize,
+        delay: std::time::Duration,
+        failure: impl Into<String>,
+    ) -> bool {
+        let failure = sanitize_text(&failure.into()).into_owned();
+        let MessageKind::ProviderRetry {
+            attempt: current_attempt,
+            max_attempts: current_max,
+            failure: current_failure,
+            retry_at,
+            ..
+        } = &mut self.kind
+        else {
+            return false;
+        };
+        *current_attempt = attempt;
+        *current_max = max_attempts;
+        *current_failure = failure.clone();
+        *retry_at = std::time::Instant::now() + delay;
+        self.raw = failure;
+        true
+    }
+
+    pub fn provider_retry_expanded(&self) -> Option<bool> {
+        match &self.kind {
+            MessageKind::ProviderRetry { expanded, .. } => Some(*expanded),
+            _ => None,
+        }
+    }
+
+    /// User-driven retry-detail disclosure change.
+    pub fn pin_provider_retry_expanded(&mut self, expanded: bool) {
+        if let MessageKind::ProviderRetry {
+            expanded: current,
+            user_pinned,
+            ..
+        } = &mut self.kind
+        {
+            *current = expanded;
+            *user_pinned = true;
+        }
     }
 
     /// Whether this message is a harness notice (error / turn-pause / status).
@@ -2824,5 +2931,36 @@ mod tests {
         let explicit_chat = TranscriptMessage::new(Role::User, "/etc is a path")
             .with_origin(UserMessageOrigin::Chat);
         assert_eq!(explicit_chat.origin, UserMessageOrigin::Chat);
+    }
+
+    #[test]
+    fn provider_retry_updates_in_place_and_preserves_disclosure() {
+        let mut retry = TranscriptMessage::provider_retry(
+            2,
+            4,
+            std::time::Duration::from_secs(3),
+            "first failure",
+        );
+        let id = retry.id;
+        retry.pin_provider_retry_expanded(true);
+
+        assert!(retry.update_provider_retry(
+            3,
+            4,
+            std::time::Duration::from_secs(1),
+            "second failure",
+        ));
+        assert_eq!(retry.id, id, "an update must retain transcript identity");
+        assert_eq!(retry.provider_retry_expanded(), Some(true));
+        assert_eq!(retry.raw, "second failure");
+        assert!(matches!(
+            retry.kind,
+            MessageKind::ProviderRetry {
+                attempt: 3,
+                max_attempts: 4,
+                ref failure,
+                ..
+            } if failure == "second failure"
+        ));
     }
 }

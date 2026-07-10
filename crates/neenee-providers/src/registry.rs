@@ -175,6 +175,43 @@ pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
     "gpt-5.4-mini",
 ];
 
+/// Text/chat models commonly served by OpenAI-compatible sub2api relays.
+///
+/// Keep stable aliases first. Dated snapshots and image/audio/realtime models
+/// are intentionally omitted; callers can still add a relay-specific model id.
+pub const OPENAI_SUB2API_MODELS: &[&str] = &[
+    // GPT-5.6 family (Sol/Terra/Luna) — OpenAI's tier-named flagship line.
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+    "gpt-5.2-chat-latest",
+    "gpt-5.2-pro",
+];
+
+/// Models served by Moonshot's Kimi Code endpoint.
+pub const KIMI_CODE_MODELS: &[&str] = &["kimi-k2.7-code"];
+
+/// Models served by Z.AI's coding-plan endpoint.
+pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.2"];
+
+/// Curated OpenAI-compatible models offered by the OpenCode Go template.
+pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
+
+/// Gemini-native models advertised by Antigravity sub2api relays.
+///
+/// The order is deliberate: callers use the first model as the initial active
+/// channel, while some relays reject the `-high` variant.
+pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
+    "gemini-3-flash",
+    "gemini-3.1-pro-low",
+    "gemini-3.1-pro-high",
+];
+
 impl OpenAiProviderSpec {
     /// Resolve the model to use: a pinned `fixed_model` always wins, otherwise
     /// the caller's override, otherwise the provider default.
@@ -430,6 +467,31 @@ mod build_tests {
                 crate::XAI_BUILTIN_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::OPENAI_SUB2API_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::KIMI_CODE_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::ZAI_CODE_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::OPENCODE_GO_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::ANTIGRAVITY_SUB2API_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::Gemini)),
             )
         {
             let model = neenee_core::model::resolve(id);

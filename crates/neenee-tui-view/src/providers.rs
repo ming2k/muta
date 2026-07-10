@@ -20,7 +20,9 @@ use crate::fuzzy;
 
 /// One editable field of the provider editor. The visible set is chosen by the
 /// active [`ProviderTemplate`] (create) or the edited provider's protocol (edit),
-/// rather than a fixed five-field form.
+/// rather than a fixed five-field form. Provider-owned model collections are
+/// imported from `neenee_providers`; this view layer only selects and renders
+/// those curated values.
 ///
 /// Reasoning (effort/thinking) is intentionally NOT a provider-editor field —
 /// ADR-0046 moved it to the per-model stage-2 `e` editor, so a provider is
@@ -93,25 +95,6 @@ impl ProviderTemplate {
         self.auth == neenee_core::ChannelAuth::XaiOAuth
     }
 }
-
-/// Text/chat models commonly served by OpenAI sub2api relays.
-///
-/// Keep stable aliases first. Dated snapshots and image/audio/realtime models
-/// are intentionally omitted from the create template; users can still add a
-/// relay-specific id from the provider's model list.
-pub const OPENAI_SUB2API_MODELS: &[&str] = &[
-    // GPT-5.6 family (Sol/Terra/Luna) — OpenAI's 2026 tier-named flagship line.
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex-spark",
-    "gpt-5.2",
-    "gpt-5.2-chat-latest",
-    "gpt-5.2-pro",
-];
 
 /// The provider templates offered when adding a provider, in display order.
 pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
@@ -187,7 +170,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "Kimi Code",
         description: "Moonshot Kimi coding-plan endpoint",
         protocol: "openai",
-        models: &["kimi-k2.7-code"],
+        models: neenee_providers::KIMI_CODE_MODELS,
         // Official endpoint: base URL is fixed and pre-filled, no field shown.
         needs_url: false,
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
@@ -200,7 +183,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "ZAI Code",
         description: "Z.AI coding-plan endpoint",
         protocol: "openai",
-        models: &["glm-5.2"],
+        models: neenee_providers::ZAI_CODE_MODELS,
         // Official endpoint: base URL is fixed and pre-filled, no field shown.
         needs_url: false,
         url_hint: "https://api.z.ai/api/coding/paas/v4/chat/completions",
@@ -213,7 +196,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "OpenCode Go",
         description: "opencode.ai relay — OpenAI chat-completions coding models",
         protocol: "openai",
-        models: &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"],
+        models: neenee_providers::OPENCODE_GO_MODELS,
         needs_url: true,
         url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
         needs_model: false,
@@ -237,7 +220,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "OpenAI (sub2api)",
         description: "OpenAI sub2api relay",
         protocol: "openai",
-        models: OPENAI_SUB2API_MODELS,
+        models: neenee_providers::OPENAI_SUB2API_MODELS,
         needs_url: true,
         url_hint: "https://relay.example.com/v1/chat/completions",
         needs_model: false,
@@ -263,11 +246,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         label: "Antigravity (sub2api)",
         description: "Antigravity sub2api relay",
         protocol: "gemini",
-        models: &[
-            "gemini-3-flash",
-            "gemini-3.1-pro-low",
-            "gemini-3.1-pro-high",
-        ],
+        models: neenee_providers::ANTIGRAVITY_SUB2API_MODELS,
         needs_url: true,
         url_hint: "https://relay.example.com/antigravity/v1beta",
         needs_model: false,
@@ -658,14 +637,7 @@ mod tests {
             .find(|t| t.label == "Antigravity (sub2api)")
             .expect("antigravity template offered in the chooser");
         assert_eq!(tmpl.protocol, "gemini");
-        assert_eq!(
-            tmpl.models,
-            &[
-                "gemini-3-flash",
-                "gemini-3.1-pro-low",
-                "gemini-3.1-pro-high"
-            ]
-        );
+        assert_eq!(tmpl.models, neenee_providers::ANTIGRAVITY_SUB2API_MODELS);
         assert_eq!(
             tmpl.default_url,
             Some("https://relay.example.com/antigravity/v1beta")
@@ -689,7 +661,7 @@ mod tests {
             .find(|t| t.label == "OpenAI (sub2api)")
             .expect("openai sub2api template offered in the chooser");
         assert_eq!(tmpl.protocol, "openai");
-        assert_eq!(tmpl.models, OPENAI_SUB2API_MODELS);
+        assert_eq!(tmpl.models, neenee_providers::OPENAI_SUB2API_MODELS);
         assert!(tmpl.needs_url, "relay URL is user-supplied");
         assert!(
             !tmpl.needs_model,

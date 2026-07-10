@@ -15,7 +15,8 @@
 use crate::tui::config::{TuiConfig, tool_default_expanded};
 use crate::tui::document::ToolStepStatus;
 use crate::tui::layout::{
-    InteractiveTarget, SemanticCursor, THINKING_BLOCK_IDX, TOOL_STEP_BLOCK_IDX,
+    InteractiveTarget, PROVIDER_RETRY_BLOCK_IDX, SemanticCursor, THINKING_BLOCK_IDX,
+    TOOL_STEP_BLOCK_IDX,
 };
 
 /// Which kind of step a pointer hit resolved to.
@@ -25,6 +26,8 @@ pub enum StepKind {
     ToolStep,
     /// A reasoning trace summary.
     Thinking,
+    /// The live provider-retry summary.
+    ProviderRetry,
 }
 
 impl StepKind {
@@ -33,6 +36,7 @@ impl StepKind {
         match self {
             StepKind::ToolStep => InteractiveTarget::tool_step(mi),
             StepKind::Thinking => InteractiveTarget::thinking(mi),
+            StepKind::ProviderRetry => InteractiveTarget::provider_retry(mi),
         }
     }
 }
@@ -48,6 +52,7 @@ pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
     let kind = match cursor.block_idx {
         TOOL_STEP_BLOCK_IDX => StepKind::ToolStep,
         THINKING_BLOCK_IDX => StepKind::Thinking,
+        PROVIDER_RETRY_BLOCK_IDX => StepKind::ProviderRetry,
         _ => return None,
     };
     Some((cursor.message_idx, kind))

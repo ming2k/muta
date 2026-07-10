@@ -300,13 +300,20 @@ pub async fn run_tui(
                     };
                     match event {
                         RoundEvent::Notice(notice) => {
-                            let mut msgs = buf.write().await;
-                            push_core_notice(&mut msgs, &notice);
+                            // Provider retry has a dedicated, self-refreshing
+                            // transcript disclosure driven by RetryScheduled.
+                            // Do not also degrade its toast into an appended
+                            // inline notice on every failed attempt.
+                            if notice.kind != neenee_core::NoticeKind::ProviderRetry {
+                                let mut msgs = buf.write().await;
+                                push_core_notice(&mut msgs, &notice);
+                            }
                         }
                         RoundEvent::Text(t) => {
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
                             msgs.push(
                                 TranscriptMessage::new(Role::Assistant, t)
                                     .with_attribution(provider, model),
@@ -333,6 +340,7 @@ pub async fn run_tui(
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
                             msgs.push(
                                 TranscriptMessage::new(Role::Assistant, "")
                                     .with_attribution(provider, model),
@@ -361,6 +369,7 @@ pub async fn run_tui(
                                 *activity_clone.lock().await = "finalizing response".to_string();
                             }
                             let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
                             if let Some(last) = msgs.last_mut() {
                                 last.raw = final_content;
                                 last.reparse();
@@ -384,6 +393,7 @@ pub async fn run_tui(
                             // so it can restore the composer for re-editing.
                             {
                                 let mut msgs = buf.write().await;
+                                clear_provider_retry(&mut msgs);
                                 if msgs.last().is_some_and(|m| m.role == Role::User) {
                                     msgs.pop();
                                 }
@@ -508,6 +518,7 @@ pub async fn run_tui(
                             let turn = *current_turn_clone.lock().await;
                             let sent_at_ms = event_loop::now_epoch_ms();
                             let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
                             // A tool step starts collapsed: there's no result to show
                             // yet. The lifecycle-aware default (see `step_interaction`)
                             // expands it on completion — Ok follows per-tool density,
@@ -770,6 +781,9 @@ pub async fn run_tui(
                                 .take()
                                 .map(|started| started.elapsed().as_millis() as u64);
                             let mut msgs = buf.write().await;
+                            if !running {
+                                clear_provider_retry(&mut msgs);
+                            }
                             finalize_streaming_reasoning(&mut msgs, duration_ms);
                         }
                         RoundEvent::PursuitUpdated(pursuit) => {
@@ -815,20 +829,22 @@ pub async fn run_tui(
                             delay_ms,
                             message,
                         } => {
+                            let mut msgs = buf.write().await;
+                            upsert_provider_retry(
+                                &mut msgs,
+                                attempt,
+                                max_attempts,
+                                delay_ms,
+                                message,
+                            );
                             if !routes_to_side {
-                                let seconds = delay_ms.div_ceil(1_000);
-                                *activity_clone.lock().await = format!(
-                                    "retry {}/{} in {}s · {}",
-                                    attempt,
-                                    max_attempts,
-                                    seconds,
-                                    event_loop::compact_retry_reason(&message)
-                                );
+                                *activity_clone.lock().await = "waiting to retry".to_string();
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
                         RoundEvent::Error(e) => {
                             let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
                             push_local_notice(&mut msgs, NoticeSeverity::Error, e);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
@@ -1213,6 +1229,36 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &neenee_core:
         notice_severity_from_core(notice.severity),
         notice.render_text(),
     ));
+}
+
+/// Create the live provider-retry disclosure, or refresh the existing one in
+/// place. There is deliberately at most one such message in a transcript.
+fn upsert_provider_retry(
+    messages: &mut Vec<TranscriptMessage>,
+    attempt: usize,
+    max_attempts: usize,
+    delay_ms: u64,
+    failure: String,
+) {
+    let delay = std::time::Duration::from_millis(delay_ms);
+    if let Some(existing) = messages
+        .iter_mut()
+        .rfind(|message| message.is_provider_retry())
+    {
+        existing.update_provider_retry(attempt, max_attempts, delay, failure);
+        return;
+    }
+    messages.push(TranscriptMessage::provider_retry(
+        attempt,
+        max_attempts,
+        delay,
+        failure,
+    ));
+}
+
+/// Retry state is a live UI component, not durable conversation history.
+fn clear_provider_retry(messages: &mut Vec<TranscriptMessage>) {
+    messages.retain(|message| !message.is_provider_retry());
 }
 
 fn push_local_notice(

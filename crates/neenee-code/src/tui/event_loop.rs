@@ -3433,6 +3433,15 @@ pub(super) async fn run_app_loop(
                                     app.selection = SelectionState::None;
                                 }
                             }
+                            InteractiveTargetKind::ProviderRetry => {
+                                let mut messages = runtime.messages.write().await;
+                                let toggled =
+                                    app.toggle_step_pinned(&mut messages, target.message_idx);
+                                drop(messages);
+                                if toggled {
+                                    app.selection = SelectionState::None;
+                                }
+                            }
                         }
                     }
                 }
@@ -4140,6 +4149,10 @@ pub(super) async fn run_app_loop(
                                         app.toggle_step_pinned(&mut messages, mi);
                                         drop(messages);
                                     }
+                                    StepKind::ProviderRetry => {
+                                        app.toggle_step_pinned(&mut messages, mi);
+                                        drop(messages);
+                                    }
                                 }
                                 app.selection = SelectionState::None;
                                 app.drag.cancel();
@@ -4295,17 +4308,6 @@ pub(super) async fn attribution(
     model: &Arc<Mutex<String>>,
 ) -> (String, String) {
     (provider.lock().await.clone(), model.lock().await.clone())
-}
-
-pub(super) fn compact_retry_reason(message: &str) -> String {
-    let first_line = message.lines().next().unwrap_or(message).trim();
-    let mut chars = first_line.chars();
-    let prefix = chars.by_ref().take(56).collect::<String>();
-    if chars.next().is_some() {
-        format!("{}...", prefix)
-    } else {
-        prefix
-    }
 }
 
 /// Resolve a mutable reference to the message at index `mi` within the

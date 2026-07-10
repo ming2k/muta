@@ -401,10 +401,28 @@ fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
         display_status("loop 2/8", "running command", true),
         "loop 2/8 · awaiting permission"
     );
+}
+
+#[test]
+fn provider_retry_updates_one_transcript_component() {
+    let mut messages = vec![TranscriptMessage::new(Role::User, "hello")];
+    upsert_provider_retry(&mut messages, 2, 4, 3_000, "first failure".into());
+    let retry = messages.last_mut().expect("retry component");
+    retry.pin_provider_retry_expanded(true);
+
+    upsert_provider_retry(&mut messages, 3, 4, 1_000, "second failure".into());
+
     assert_eq!(
-        event_loop::compact_retry_reason("rate limited\nfull response body"),
-        "rate limited"
+        messages
+            .iter()
+            .filter(|message| message.is_provider_retry())
+            .count(),
+        1,
+        "later failures must refresh the existing component"
     );
+    let retry = messages.last().expect("retry component");
+    assert_eq!(retry.raw, "second failure");
+    assert_eq!(retry.provider_retry_expanded(), Some(true));
 }
 
 /// Build a small conversation with two sibling envoy tasks, each with a

@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub const TOOL_STEP_BLOCK_IDX: usize = usize::MAX;
 pub const THINKING_BLOCK_IDX: usize = usize::MAX - 1;
+pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
 
 /// Identifies a specific position inside the document model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -46,6 +47,7 @@ pub struct InteractiveTarget {
 pub enum InteractiveTargetKind {
     ToolStep,
     Thinking,
+    ProviderRetry,
 }
 
 impl InteractiveTarget {
@@ -62,6 +64,14 @@ impl InteractiveTarget {
             message_idx,
             block_idx: THINKING_BLOCK_IDX,
             kind: InteractiveTargetKind::Thinking,
+        }
+    }
+
+    pub fn provider_retry(message_idx: usize) -> Self {
+        Self {
+            message_idx,
+            block_idx: PROVIDER_RETRY_BLOCK_IDX,
+            kind: InteractiveTargetKind::ProviderRetry,
         }
     }
 }
@@ -336,7 +346,12 @@ impl LayoutMap {
         let mut regions: Vec<&BlockRegion> = self
             .regions
             .iter()
-            .filter(|region| matches!(region.block_idx, TOOL_STEP_BLOCK_IDX | THINKING_BLOCK_IDX))
+            .filter(|region| {
+                matches!(
+                    region.block_idx,
+                    TOOL_STEP_BLOCK_IDX | THINKING_BLOCK_IDX | PROVIDER_RETRY_BLOCK_IDX
+                )
+            })
             .collect();
         regions.sort_by_key(|region| (region.rect.y, region.rect.x));
 
@@ -345,6 +360,7 @@ impl LayoutMap {
             let target = match region.block_idx {
                 TOOL_STEP_BLOCK_IDX => InteractiveTarget::tool_step(region.message_idx),
                 THINKING_BLOCK_IDX => InteractiveTarget::thinking(region.message_idx),
+                PROVIDER_RETRY_BLOCK_IDX => InteractiveTarget::provider_retry(region.message_idx),
                 _ => continue,
             };
             if !targets.contains(&target) {

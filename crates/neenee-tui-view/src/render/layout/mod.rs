@@ -320,16 +320,17 @@ impl<'a, 'f> Stream<'a, 'f> {
         let viewport_bottom = self.band.y + self.band.height;
 
         let body_before = self.content_lines;
-        let skippable = msg.is_notice()
-            || (!msg.is_envoy_task()
-                && if msg.is_tool_step() {
-                    !msg.tool_step_status()
-                        .is_some_and(|status| status.is_running())
-                } else if msg.is_thinking() {
-                    !msg.is_thinking_streaming()
-                } else {
-                    true
-                });
+        let skippable = !msg.is_provider_retry()
+            && (msg.is_notice()
+                || (!msg.is_envoy_task()
+                    && if msg.is_tool_step() {
+                        !msg.tool_step_status()
+                            .is_some_and(|status| status.is_running())
+                    } else if msg.is_thinking() {
+                        !msg.is_thinking_streaming()
+                    } else {
+                        true
+                    }));
         let cached_height = if skippable {
             self.height_cache.get(msg.id)
         } else {
@@ -345,6 +346,20 @@ impl<'a, 'f> Stream<'a, 'f> {
             if fully_above {
                 self.skip_rows -= h as usize;
             }
+        } else if msg.is_provider_retry() {
+            super::disclosure::draw_provider_retry(
+                self.frame,
+                self.band,
+                msg,
+                mi,
+                self.theme,
+                self.layout_map,
+                &mut self.skip_rows,
+                &mut self.current_y,
+                &mut self.content_lines,
+                self.hovered_step == Some(mi),
+                self.focused_target == Some(InteractiveTarget::provider_retry(mi)),
+            );
         } else if msg.is_notice() {
             super::draw_notice(
                 self.frame,
