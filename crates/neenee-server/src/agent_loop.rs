@@ -260,6 +260,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                 user_agent,
                 models,
                 auth,
+                template_id,
             } => {
                 crate::handlers_provider::add(
                     &mut config,
@@ -275,6 +276,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     user_agent,
                     models,
                     auth,
+                    template_id,
                 )
                 .await;
             }

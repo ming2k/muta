@@ -505,6 +505,12 @@ pub struct App {
     pub custom_user_agent: Option<String>,
     /// How newly-created channels authenticate (from the selected template).
     pub custom_auth: neenee_core::ChannelAuth,
+    /// Stable template id the active create flow was seeded from, or `None` in
+    /// edit mode / when no template is active. Sent as `AddProvider::template_id`
+    /// so the catalog can re-seed the instance from the template's current
+    /// models on later startups. `None` yields a pure-custom instance that is
+    /// never re-seeded.
+    pub custom_template_id: Option<String>,
     /// True while "+ Add provider → xAI OAuth" browser flow is in flight.
     pub awaiting_oauth_add: bool,
     pub oauth_pending_message: String,
@@ -1189,6 +1195,7 @@ impl App {
         self.custom_url_hint = template.url_hint.to_string();
         self.custom_user_agent = template.user_agent.map(str::to_string);
         self.custom_auth = template.auth;
+        self.custom_template_id = Some(template.id.to_string());
         self.custom_suggest_index = 0;
         self.custom_name.clear();
         self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
@@ -1272,6 +1279,10 @@ impl App {
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
         self.custom_auth = neenee_core::ChannelAuth::ApiKey;
+        // Edit mode never carries a template id: edits to an existing provider
+        // are sent as `EditProvider`, which ignores template_id anyway, and a
+        // stray id here must not leak into a later create flow.
+        self.custom_template_id = None;
         self.custom_suggest_index = 0;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;

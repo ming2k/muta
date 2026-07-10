@@ -40,6 +40,12 @@ pub enum CustomField {
 /// URL placeholder shows the expected endpoint shape. Modelled as *data* — one
 /// table entry per template — mirroring `neenee_providers::OPENAI_PROVIDER_SPECS`.
 pub struct ProviderTemplate {
+    /// Stable identifier shared with the matching entry in
+    /// `neenee_providers::PROVIDER_TEMPLATE_SPECS`. Persisted on the created
+    /// instance as `template_id` so the catalog can re-seed the instance from
+    /// this template's *current* model list on later startups. MUST match the
+    /// spec's `id` 1:1 and never change once shipped.
+    pub id: &'static str,
     /// List label, e.g. `"Custom Anthropic (Claude relay)"`.
     pub label: &'static str,
     /// One-line description shown under the label in the chooser.
@@ -99,6 +105,7 @@ impl ProviderTemplate {
 /// The provider templates offered when adding a provider, in display order.
 pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
+        id: "openai",
         label: "OpenAI",
         description: "OpenAI API — GPT-5.5 family",
         protocol: "openai",
@@ -116,6 +123,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "anthropic",
         label: "Anthropic",
         description: "Claude models over the Anthropic /messages API",
         protocol: "anthropic",
@@ -128,6 +136,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "google",
         label: "Google Gemini",
         description: "Native Gemini API — Google AI Studio or compatible relay",
         protocol: "gemini",
@@ -140,6 +149,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "deepseek",
         label: "DeepSeek",
         description: "DeepSeek V4 Flash + Pro over OpenAI chat completions",
         protocol: "openai",
@@ -155,6 +165,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "xai-oauth",
         label: "xAI OAuth",
         description: "Grok 4.x via SuperGrok subscription (browser OAuth)",
         protocol: "openai",
@@ -167,6 +178,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::XaiOAuth,
     },
     ProviderTemplate {
+        id: "kimi-code",
         label: "Kimi Code",
         description: "Moonshot Kimi coding-plan endpoint",
         protocol: "openai",
@@ -180,6 +192,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "zai-code",
         label: "ZAI Code",
         description: "Z.AI coding-plan endpoint",
         protocol: "openai",
@@ -193,6 +206,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "opencode-go",
         label: "OpenCode Go",
         description: "opencode.ai relay — OpenAI chat-completions coding models",
         protocol: "openai",
@@ -205,6 +219,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "anthropic-sub2api",
         label: "Anthropic (sub2api)",
         description: "Anthropic sub2api relay",
         protocol: "anthropic",
@@ -217,6 +232,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "openai-sub2api",
         label: "OpenAI (sub2api)",
         description: "OpenAI sub2api relay",
         protocol: "openai",
@@ -243,6 +259,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     // So the generally compatible models lead and `-high` sits last, still
     // selectable from stage 2 the moment the relay accepts it.
     ProviderTemplate {
+        id: "antigravity-sub2api",
         label: "Antigravity (sub2api)",
         description: "Antigravity sub2api relay",
         protocol: "gemini",
@@ -841,5 +858,37 @@ mod tests {
         let rows = provider_models_filtered_from(&snapshot, idx, "");
         let ids: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
         assert_eq!(ids, vec!["gpt-4o", "gpt-4o-mini"]);
+    }
+
+    #[test]
+    fn each_template_id_resolves_to_a_matching_spec() {
+        // The template `id` is the durable join key persisted on instances as
+        // `template_id`. Every UI template MUST resolve to a spec in
+        // PROVIDER_TEMPLATE_SPECS with the same id, protocol, and model list —
+        // otherwise the catalog's reconciliation could not re-seed an instance
+        // from its template. This test catches a divergence introduced by
+        // editing one table but not the other.
+        for t in PROVIDER_TEMPLATES {
+            let spec = neenee_providers::provider_template_spec(t.id)
+                .unwrap_or_else(|| panic!("template id {} has no matching spec", t.id));
+            assert_eq!(
+                spec.protocol, t.protocol,
+                "template {} protocol mismatch",
+                t.id
+            );
+            assert_eq!(
+                spec.models, t.models,
+                "template {} model list diverged from its spec",
+                t.id
+            );
+        }
+    }
+
+    #[test]
+    fn template_ids_are_unique() {
+        let mut ids: Vec<&str> = PROVIDER_TEMPLATES.iter().map(|t| t.id).collect();
+        ids.sort_unstable();
+        let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
+        assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
     }
 }

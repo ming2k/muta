@@ -75,6 +75,13 @@ pub enum AgentRequest {
         /// historical behavior; `XaiOAuth` marks SuperGrok channels whose live
         /// access token is resolved from `auth.toml`.
         auth: crate::ChannelAuth,
+        /// The stable template id this instance is created from, when it came
+        /// from a template. `None` for a pure-custom provider. When set to a
+        /// known template, the catalog re-seeds this instance's channels from
+        /// the template's current model list at startup, so a template edit
+        /// propagates to the instance. See
+        /// `neenee_agent::catalog::reconcile_provider_models`.
+        template_id: Option<String>,
     },
     /// Connect (authenticate) an OAuth provider — currently xAI SuperGrok. Runs
     /// the browser-loopback or device-code flow, persists tokens to `auth.toml`,

@@ -2361,6 +2361,7 @@ pub(super) async fn run_app_loop(
                                     user_agent: app.custom_user_agent.clone(),
                                     models,
                                     auth: app.custom_auth,
+                                    template_id: app.custom_template_id.take(),
                                 });
                                 app.input = std::mem::take(&mut app.stashed_input);
                                 app.set_cursor_end();

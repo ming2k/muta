@@ -1115,6 +1115,7 @@ pub async fn run_tui(
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: neenee_core::ChannelAuth::ApiKey,
+        custom_template_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),

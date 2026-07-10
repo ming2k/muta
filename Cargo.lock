@@ -1763,6 +1763,7 @@ dependencies = [
  "neenee-ai-sdk-google",
  "neenee-ai-sdk-openai",
  "neenee-core",
+ "reqwest",
  "serde_json",
  "tokio",
 ]

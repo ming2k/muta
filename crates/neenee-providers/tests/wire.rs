@@ -623,3 +623,186 @@ async fn fable5_always_on_thinking_ignores_off_override() {
     )
     .await;
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Live model-list discovery (list_models)
+// ═════════════════════════════════════════════════════════ Alternate */
+//
+// The in-module unit tests cover the pure parsers + endpoint derivation; these
+// wire tests stand up a localhost mock and drive the full GET → JSON → parse
+// path per protocol, asserting the exact headers/auth a chat request would send
+// and that the returned ids are sorted + de-duplicated.
+
+use neenee_providers::{DiscoveryProtocol, ModelDiscoveryRequest, ModelListError, list_models};
+
+#[tokio::test]
+async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
+    let mut server = Server::new_async().await;
+    let chat_url = format!("{}/v1/chat/completions", server.url());
+    // The mock must be on the derived /v1/models path.
+    let _mock = server
+        .mock("GET", "/v1/models")
+        // Auth matches the chat path: a bearer when a key is set.
+        .match_header("authorization", "Bearer sk-live")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":[
+                {"id":"zeta-last"},
+                {"id":"alpha-first"},
+                {"id":"alpha-first"},
+                {"id":"mid-model"}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &chat_url,
+        api_key: "sk-live",
+        user_agent: None,
+    };
+    let models = list_models(req).await.expect("discovery succeeds");
+    // Sorted + de-duplicated, regardless of the API's ordering or duplicates.
+    assert_eq!(models, vec!["alpha-first", "mid-model", "zeta-last"]);
+}
+
+#[tokio::test]
+async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
+    // A keyless relay sends NO Authorization header at all (mirrors the chat
+    // path); the mock rejects any request carrying one.
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"relay-only"}]}"#)
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: "",
+        user_agent: None,
+    };
+    let models = list_models(req).await.expect("keyless discovery succeeds");
+    assert_eq!(models, vec!["relay-only"]);
+}
+
+#[tokio::test]
+async fn anthropic_list_models_sends_api_key_and_version_headers() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        // Anthropic auth: x-api-key + the pinned anthropic-version header.
+        .match_header("x-api-key", "sk-ant")
+        .match_header(
+            "anthropic-version",
+            neenee_ai_sdk_anthropic::anthropic::request::ANTHROPIC_VERSION,
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":[
+                {"id":"claude-sonnet-5","display_name":"Sonnet"},
+                {"id":"claude-opus-4-8","display_name":"Opus"}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Anthropic,
+        base_url: &format!("{}/v1/messages", server.url()),
+        api_key: "sk-ant",
+        user_agent: None,
+    };
+    let models = list_models(req)
+        .await
+        .expect("anthropic discovery succeeds");
+    assert_eq!(models, vec!["claude-opus-4-8", "claude-sonnet-5"]);
+}
+
+#[tokio::test]
+async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1beta/models")
+        // Gemini auth: the key is a query param, never a header.
+        .match_query(Matcher::UrlEncoded(
+            "key".to_string(),
+            "gem-key".to_string(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"models":[
+                {"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]},
+                {"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Gemini,
+        base_url: &format!("{}/v1beta", server.url()),
+        api_key: "gem-key",
+        user_agent: None,
+    };
+    let models = list_models(req).await.expect("gemini discovery succeeds");
+    // The embedding-only model is filtered out.
+    assert_eq!(models, vec!["gemini-2.5-pro"]);
+}
+
+#[tokio::test]
+async fn list_models_returns_status_error_on_non_2xx() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .with_status(401)
+        .with_body(r#"{"error":"invalid_api_key"}"#)
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: "bad",
+        user_agent: None,
+    };
+    match list_models(req).await {
+        Err(ModelListError::Status(401, body)) => {
+            assert!(
+                body.contains("invalid_api_key"),
+                "body surfaces in error: {body}"
+            );
+        }
+        other => panic!("expected Status(401), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn list_models_returns_empty_error_when_data_array_is_empty() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[]}"#)
+        .create_async()
+        .await;
+
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: "k",
+        user_agent: None,
+    };
+    // An empty live list is reported as Empty (a failure), so the catalog
+    // keeps the snapshot rather than blanking the instance.
+    assert!(matches!(list_models(req).await, Err(ModelListError::Empty)));
+}

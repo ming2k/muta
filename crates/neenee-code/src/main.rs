@@ -97,6 +97,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         tracing::warn!(?error, "could not persist provider instance migration");
     }
+    // Re-seed template-sourced provider instances from their template's current
+    // model list, so a template edit (a model added in code, or one removed)
+    // propagates to every instance created from that template. Pure-custom
+    // instances (no `template_id`) are untouched. See ADR-0046 / the
+    // `reconcile_provider_models` doc comment for the exact semantics.
+    if catalog::reconcile_provider_models(&mut config)
+        && let Err(error) = config.save()
+    {
+        tracing::warn!(?error, "could not persist provider model reconciliation");
+    }
+
+    // Live model-list discovery for API-sourced instances. Runs in the
+    // BACKGROUND so slow/unreachable providers never delay the first frame:
+    // each instance already has the template's compiled-in snapshot from the
+    // reconcile above, and the live `GET /models` fetch only *improves* on it
+    // (a fetch failure leaves the snapshot untouched). The task re-loads the
+    // config from disk, applies `discover_provider_models`, and persists only
+    // when something actually changed — so the live list takes effect on the
+    // next session, the same pattern models.dev uses. See
+    // `discover_provider_models` for the per-instance rules.
+    tokio::spawn(async move {
+        let mut config = Config::load();
+        if catalog::discover_provider_models(&mut config).await
+            && let Err(error) = config.save()
+        {
+            tracing::warn!(?error, "live discovery: could not persist refreshed models");
+        }
+    });
 
     // Resolve the project root early: it feeds the per-project lock, the
     // session store, and the embedding index. CLI parsing happened at the top

@@ -13,6 +13,9 @@ neenee-ai-sdk-anthropic = { path = "../neenee-ai-sdk-anthropic" }
 neenee-ai-sdk-google = { path = "../neenee-ai-sdk-google" }
 async-trait = { workspace = true }
 futures = { workspace = true }
+# Live model-list discovery (`GET /v1/models` &c.) and its JSON parsing.
+reqwest = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # `wire` integration test exercises the full HTTP → SSE → parse path against a
@@ -20,7 +23,6 @@ futures = { workspace = true }
 # only call pure parser functions) cannot reach.
 mockito = "1"
 tokio = { workspace = true }
-serde_json = { workspace = true }
 
 [lints]
 workspace = true

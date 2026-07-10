@@ -247,6 +247,31 @@ fn default_scope() -> String {
     "*".to_string()
 }
 
+/// How an instance's model list is sourced. Only meaningful for instances
+/// created from a template (i.e. `template_id` is set): it chooses between
+/// mirroring the template's *compiled-in* model list or fetching the list
+/// *live* from the provider's `GET /models` endpoint at startup.
+///
+/// Priority when [`Api`](Self::Api): (1) live API query, falling back to (2)
+/// the template's compiled-in snapshot on any error (network failure, non-2xx,
+/// unparseable body, empty list). [`Fixed`](Self::Fixed) skips the network
+/// entirely and uses the snapshot — the only option for templates whose
+/// endpoints do not expose a models list (single-model membership platforms,
+/// runtime-derived lists).
+///
+/// [`Api`]: ModelSource::Api
+/// [`Fixed`]: ModelSource::Fixed
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelSource {
+    /// Fetch the model list live from the provider's API at startup. The
+    /// template's compiled-in model list is the fallback on any error.
+    Api,
+    /// Use the template's compiled-in model list; never hit the network. The
+    /// default for legacy configs that predate this field.
+    #[default]
+    Fixed,
+}
+
 /// `Provider` implementation the catalog builds. Mirrors the built-in
 /// `neenee_core::catalog::Transport` variants but stays a plain serializable
 /// enum so it round-trips through TOML.
@@ -326,6 +351,133 @@ pub struct UserProviderConfig {
     pub channels: Vec<UserChannelConfig>,
     #[serde(default)]
     pub default_channel: usize,
+    /// The stable template id this instance was created from, when applicable.
+    ///
+    /// When set to a known template, the catalog's model reconciliation re-seeds
+    /// this instance's channels from the template's *current* model list at
+    /// startup — so a template edit (new model added in code) automatically
+    /// flows into every instance created from it. `None` (the default) marks a
+    /// pure-custom instance whose channels are managed solely by the user and
+    /// are never re-seeded from a template. See
+    /// `neenee_agent::catalog::reconcile_provider_models`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
+    /// How this instance's model list is sourced, when created from a template.
+    ///
+    /// [`ModelSource::Api`] fetches the provider's `GET /models` list live at
+    /// startup (with the template's models as the fallback on any error);
+    /// [`ModelSource::Fixed`] mirrors the template's compiled-in list only. A
+    /// pure-custom instance (`template_id = None`) ignores this field — its
+    /// channels are user-managed. Defaults to [`ModelSource::Fixed`] for legacy
+    /// configs; the add-provider flow sets it from the template's `discovery`
+    /// capability when the user accepts the default.
+    ///
+    /// See `neenee_agent::catalog::reconcile_provider_models`.
+    #[serde(default)]
+    pub model_source: ModelSource,
+}
+
+impl UserProviderConfig {
+    /// Rebuild this instance's channels from `models`, mirroring the given
+    /// transport, so the instance "follows" a model list it did not author.
+    ///
+    /// This is the **pure domain operation** behind template reconciliation: it
+    /// knows only about channels, not about templates or providers — the calling
+    /// layer resolves a `template_id` to a model list + transport and hands them
+    /// in. Per-model reasoning knobs (`effort`/`thinking`) and `auth` are
+    /// preserved on a model that survives from the old set into the new one; a
+    /// newly added model starts with reasoning off. The shared
+    /// endpoint/key/user-agent are taken from the first surviving channel (so a
+    /// relay endpoint configured by the user survives a model refresh), falling
+    /// back to the given `transport` with no key.
+    ///
+    /// Returns `true` when the rebuilt channel set differs from the previous
+    /// one. When the channels already equal `models` exactly, this is a no-op
+    /// and returns `false`, so the calling layer can skip a disk write for
+    /// up-to-date instances.
+    pub fn reseed_channels_from_models(
+        &mut self,
+        models: &[&str],
+        transport: UserTransport,
+    ) -> bool {
+        // Map of model id → existing channel, for preserving per-model settings
+        // and for copy-from transport/endpoint/key defaults.
+        let existing: std::collections::HashMap<&str, &UserChannelConfig> = self
+            .channels
+            .iter()
+            .filter_map(|c| c.model.as_deref().map(|m| (m, c)))
+            .collect();
+
+        // Defaults copied from the first surviving channel that is also in the
+        // new set, so a relay endpoint/key configured by the user survives a
+        // model refresh. Falls back to the template transport + no key.
+        let copy_from = self
+            .channels
+            .first()
+            .filter(|c| c.model.as_deref().is_some_and(|m| models.contains(&m)));
+
+        // No-op fast path: the channel set already equals the target model list
+        // exactly, so there is nothing to reseed.
+        let already_matches = self.channels.len() == models.len()
+            && self
+                .channels
+                .iter()
+                .zip(models.iter())
+                .all(|(c, &m)| c.model.as_deref() == Some(m));
+        if already_matches {
+            return false;
+        }
+
+        let (base_transport, api_key, base_url, user_agent) = match copy_from {
+            Some(c) => (
+                c.transport,
+                c.api_key.clone(),
+                c.base_url.clone(),
+                c.user_agent.clone(),
+            ),
+            None => (transport, None, None, None),
+        };
+
+        let new_channels = models
+            .iter()
+            .map(|&model| {
+                // Preserve per-model reasoning + auth for a model that survives.
+                let (effort, thinking, auth) = existing
+                    .get(model)
+                    .map(|c| (c.effort.clone(), c.thinking, c.auth))
+                    .unwrap_or((None, None, ChannelAuth::ApiKey));
+                UserChannelConfig {
+                    label: model.to_string(),
+                    transport: base_transport,
+                    api_key_env: None,
+                    api_key: api_key.clone(),
+                    model: Some(model.to_string()),
+                    base_url: base_url.clone(),
+                    user_agent: user_agent.clone(),
+                    effort,
+                    thinking,
+                    auth,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.channels = new_channels;
+        // Keep the default-channel index in range; the active model pointer is
+        // managed by the caller's selection and not touched here.
+        if self.default_channel >= self.channels.len() {
+            self.default_channel = 0;
+        }
+        true
+    }
+
+    /// The instance's channel model ids in channel order, skipping any channel
+    /// that has no model id (a malformed entry the reseed will repair).
+    pub fn channel_models(&self) -> Vec<&str> {
+        self.channels
+            .iter()
+            .filter_map(|c| c.model.as_deref())
+            .collect()
+    }
 }
 
 /// The built-in provider ids whose API keys can live in [`Credentials`]. Each

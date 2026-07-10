@@ -152,6 +152,7 @@ pub async fn add(
     user_agent: Option<String>,
     models: Vec<String>,
     auth: neenee_core::ChannelAuth,
+    template_id: Option<String>,
 ) {
     use neenee_store::config::{UserChannelConfig, UserProviderConfig, UserTransport};
 
@@ -202,11 +203,27 @@ pub async fn add(
         return;
     }
     let active_model = channels[0].model.clone().unwrap_or_default();
+    // Stamp the template id so the catalog re-seeds this instance from the
+    // template's current models at startup. Only a known id is recorded; an
+    // unknown / blank value keeps the instance pure-custom (no tracking).
+    let resolved_template_id =
+        template_id.filter(|tid| neenee_providers::provider_template_spec(tid).is_some());
+    // A template-sourced instance adopts the template's default model source:
+    // Api (live `GET /models` discovery with snapshot fallback) where the
+    // template supports it, Fixed otherwise. A pure-custom instance ignores
+    // model_source, so the Fixed default is harmless.
+    let model_source = resolved_template_id
+        .as_deref()
+        .and_then(neenee_providers::provider_template_spec)
+        .map(catalog::default_model_source_for_spec)
+        .unwrap_or_default();
     let entry = UserProviderConfig {
         id: id.clone(),
         name: (!name.trim().is_empty()).then(|| name.trim().to_string()),
         channels,
         default_channel: 0,
+        template_id: resolved_template_id,
+        model_source,
     };
     config.providers.push(entry);
     config.default_provider = id.clone();

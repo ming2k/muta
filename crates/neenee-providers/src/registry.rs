@@ -212,6 +212,133 @@ pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
     "gemini-3.1-pro-high",
 ];
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Provider templates — the seed spec for a user-added provider instance
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// The reconciliation-relevant subset of an add-provider template.
+///
+/// A provider instance created from a template records the template's stable
+/// [`id`](ProviderTemplateSpec::id) on its `UserProviderConfig`. At startup the
+/// catalog re-seeds the instance's channels from the template's *current*
+/// `models`, so a template edit (new model added in code) propagates to every
+/// instance that was created from it — instances "mirror" their template's model
+/// set. This struct is the source of truth for that mapping; it intentionally
+/// lives in `neenee-providers` (where the model constants live) so the
+/// reconciliation layer in `neenee-agent` and the UI templates in
+/// `neenee-tui-view` both read one table. The UI-only fields (label /
+/// description / placeholders) are **not** duplicated here.
+pub struct ProviderTemplateSpec {
+    /// Stable identifier persisted on the instance (`template_id`). Never
+    /// reused and never renamed once shipped — it is the durable join key
+    /// between an instance and its template.
+    pub id: &'static str,
+    /// Wire protocol the template's channels speak: `"openai"` | `"anthropic"`
+    /// | `"gemini"`.
+    pub protocol: &'static str,
+    /// The model ids the template seeds, in display/activation order. This list
+    /// is the live source the catalog re-seeds from at startup.
+    pub models: &'static [&'static str],
+    /// Whether this template supports **live model-list discovery** — fetching
+    /// the provider's actual `GET /models` list at startup instead of mirroring
+    /// the compiled-in [`models`](Self::models) snapshot.
+    ///
+    /// When `true`, an instance created from this template defaults to
+    /// `ModelSource::Api` (live fetch, with `models` as the fallback on any
+    /// error). When `false`, the instance always uses the snapshot. A template
+    /// is marked `false` when its endpoint is a fixed single-model membership
+    /// platform (Kimi Code, Z.AI Code) or its model list is derived at runtime
+    /// (opencode-go), since those would regress under a live overwrite.
+    pub discovery: bool,
+}
+
+/// The single registry of provider templates offered when adding a provider.
+///
+/// Each entry's `id` MUST be unique. The set is the source of truth shared by
+/// the add-provider UI and the catalog's model reconciliation — a template id
+/// recorded on a user instance resolves back to its entry here.
+pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
+    ProviderTemplateSpec {
+        id: "openai",
+        protocol: "openai",
+        models: OPENAI_BUILTIN_MODELS,
+        discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "anthropic",
+        protocol: "anthropic",
+        models: ANTHROPIC_BUILTIN_MODELS,
+        discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "google",
+        protocol: "gemini",
+        models: GOOGLE_BUILTIN_MODELS,
+        discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "deepseek",
+        protocol: "openai",
+        models: DEEPSEEK_BUILTIN_MODELS,
+        discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "xai-oauth",
+        protocol: "openai",
+        models: XAI_BUILTIN_MODELS,
+        discovery: true,
+    },
+    ProviderTemplateSpec {
+        id: "kimi-code",
+        protocol: "openai",
+        // The Kimi Code platform pins a single fixed model id; a live /models
+        // call would either fail (the membership endpoint does not expose it)
+        // or return a divergent list, so discovery is disabled.
+        discovery: false,
+        models: KIMI_CODE_MODELS,
+    },
+    ProviderTemplateSpec {
+        id: "zai-code",
+        protocol: "openai",
+        // Same rationale as kimi-code: a single pinned membership-platform model.
+        discovery: false,
+        models: ZAI_CODE_MODELS,
+    },
+    ProviderTemplateSpec {
+        id: "opencode-go",
+        protocol: "openai",
+        // opencode-go's model list is derived at runtime from KNOWN_MODELS and
+        // spans multiple transports; a live overwrite would regress it.
+        discovery: false,
+        models: OPENCODE_GO_MODELS,
+    },
+    ProviderTemplateSpec {
+        id: "anthropic-sub2api",
+        protocol: "anthropic",
+        // A sub2api relay advertises whatever Claude models it forwards; live
+        // discovery surfaces the relay's actual set.
+        discovery: true,
+        models: ANTHROPIC_BUILTIN_MODELS,
+    },
+    ProviderTemplateSpec {
+        id: "openai-sub2api",
+        protocol: "openai",
+        discovery: true,
+        models: OPENAI_SUB2API_MODELS,
+    },
+    ProviderTemplateSpec {
+        id: "antigravity-sub2api",
+        protocol: "gemini",
+        discovery: true,
+        models: ANTIGRAVITY_SUB2API_MODELS,
+    },
+];
+
+/// Look up a template spec by its stable id. Exact match only.
+pub fn provider_template_spec(id: &str) -> Option<&'static ProviderTemplateSpec> {
+    PROVIDER_TEMPLATE_SPECS.iter().find(|spec| spec.id == id)
+}
+
 impl OpenAiProviderSpec {
     /// Resolve the model to use: a pinned `fixed_model` always wins, otherwise
     /// the caller's override, otherwise the provider default.
@@ -359,6 +486,34 @@ mod spec_tests {
         assert!(openai_provider_spec("deepseek-v4-pro").is_none());
         // Qwen was removed from the registry and must not resolve.
         assert!(openai_provider_spec("qwen").is_none());
+    }
+
+    #[test]
+    fn provider_template_specs_have_unique_nonempty_ids() {
+        // Template ids are the durable join key between an instance and its
+        // template, so they must be unique and non-empty.
+        let mut ids: Vec<&str> = PROVIDER_TEMPLATE_SPECS.iter().map(|spec| spec.id).collect();
+        ids.sort_unstable();
+        assert!(
+            ids.iter().all(|id| !id.is_empty()),
+            "template ids must be non-empty"
+        );
+        let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
+        assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
+    }
+
+    #[test]
+    fn provider_template_spec_resolves_each_known_id() {
+        // The reconciliation layer resolves an instance's template_id back to a
+        // spec here; every id in the table must round-trip.
+        for spec in PROVIDER_TEMPLATE_SPECS {
+            let resolved = provider_template_spec(spec.id).expect("id resolves");
+            assert_eq!(resolved.id, spec.id);
+            assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
+        }
+        // Unknown ids resolve to None (graceful: an unknown template_id leaves
+        // the instance untouched).
+        assert!(provider_template_spec("does-not-exist").is_none());
     }
 }
 

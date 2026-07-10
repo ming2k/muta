@@ -17,13 +17,13 @@ use neenee_core::{
 };
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, NEENEE_USER_AGENT,
-    OPENAI_BUILTIN_MODELS,
+    OPENAI_BUILTIN_MODELS, provider_template_spec,
 };
 use neenee_store::config::{Config, UserChannelConfig, UserProviderConfig, UserTransport};
 use neenee_store::provider_usage::ProviderUsage;
 
 #[cfg(test)]
-use neenee_providers::OPENAI_PROVIDER_SPECS;
+use neenee_providers::{OPENAI_PROVIDER_SPECS, OPENAI_SUB2API_MODELS, OPENCODE_GO_MODELS};
 
 /// The effective default provider id from `config.default_provider`.
 pub fn default_provider_id(config: &Config) -> &str {
@@ -216,6 +216,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         OPENAI_BUILTIN_MODELS,
         openai_key,
         legacy_model.as_deref(),
+        Some("openai"),
     );
     changed |= migrate_legacy_instance(
         config,
@@ -227,6 +228,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         GOOGLE_BUILTIN_MODELS,
         google_key,
         legacy_model.as_deref(),
+        Some("google"),
     );
     changed |= migrate_legacy_instance(
         config,
@@ -238,6 +240,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         &["kimi-k2.7-code"],
         kimi_key,
         legacy_model.as_deref(),
+        Some("kimi-code"),
     );
     changed |= migrate_legacy_instance(
         config,
@@ -249,6 +252,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         DEEPSEEK_BUILTIN_MODELS,
         deepseek_key,
         legacy_model.as_deref(),
+        Some("deepseek"),
     );
     changed |= migrate_legacy_instance(
         config,
@@ -260,6 +264,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         &["glm-5.2"],
         zai_key,
         legacy_model.as_deref(),
+        Some("zai-code"),
     );
     changed |= migrate_legacy_instance(
         config,
@@ -271,6 +276,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         ANTHROPIC_BUILTIN_MODELS,
         anthropic_key,
         legacy_model.as_deref(),
+        Some("anthropic"),
     );
 
     if let Some(key) = config
@@ -294,6 +300,15 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
                 name: Some("OpenCode Go".to_string()),
                 channels,
                 default_channel,
+                // The OpenCode Go seed derives its models from the KNOWN_MODELS
+                // table at runtime, so it is NOT a 1:1 mirror of the
+                // `opencode-go` template spec (which uses a fixed list). Leave
+                // it untracked so a template edit does not clobber the curated
+                // runtime-derived set.
+                template_id: None,
+                // A pure-custom (untracked) instance; model_source is ignored,
+                // so the Fixed default is harmless.
+                model_source: Default::default(),
             });
             changed = true;
         }
@@ -334,6 +349,220 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
     changed
 }
 
+/// Re-seed each template-sourced provider instance so its channels mirror the
+/// template's *current* model list, then conservatively stamp a `template_id`
+/// onto legacy instances that already match a template exactly.
+///
+/// A provider created from a template (`AddProvider` with a non-empty
+/// `template_id`) records which template it came from. This walks those
+/// instances and rebuilds the channel set from the template's live models, so a
+/// template edit — a model added in code, or one removed — propagates to every
+/// instance created from it. The semantics are a **pure mirror** of the
+/// template's model set: any model no longer in the template is dropped, and any
+/// new template model is added as a fresh channel. It deliberately does **not**
+/// keep user-added models that are not part of the template (that is the
+/// semantics the user opted into for template-sourced instances); a user who
+/// wants a divergent model set should start from a blank custom provider, which
+/// carries no `template_id` and is left untouched here.
+///
+/// This function is **thin glue**: it resolves a `template_id` to a model list
+/// plus transport (the bit that needs both `neenee-providers` and
+/// `neenee-store`), then delegates the actual channel rebuild to
+/// [`UserProviderConfig::reseed_channels_from_models`], which owns the
+/// channel-level invariants. ADR-0005 forbids `neenee-store` from depending on
+/// `neenee-providers`, so this resolution layer — and only it — lives in
+/// `neenee-agent`, the one crate that sees both.
+///
+/// The conservative backfill is a one-way bridge for instances created before
+/// `template_id` existed: if such an instance's current model set exactly equals
+/// a current template's model set (same ids, same order), it is stamped with
+/// that `template_id` and will track future template edits. An instance that has
+/// drifted from every template is left as pure-custom (no `template_id`) and is
+/// never re-seeded. Returns `true` when any instance was changed, so the caller
+/// can persist only when necessary.
+///
+/// This is the **synchronous, offline** pass: it mirrors every template-sourced
+/// instance against its template's compiled-in snapshot. Instances whose
+/// [`ModelSource`](UserProviderConfig::model_source) is `Api` additionally get a
+/// live `GET /models` fetch from [`discover_provider_models`] at startup — the
+/// snapshot this function writes is the fallback that the live fetch improves
+/// upon when it succeeds.
+pub fn reconcile_provider_models(config: &mut Config) -> bool {
+    let mut changed = false;
+
+    for provider in &mut config.providers {
+        // A known template_id → re-seed the channel set from it. An unknown id
+        // (template removed from the codebase) leaves the instance as-is: a
+        // dangling pointer must not blank out a working provider.
+        if let Some(tid) = provider.template_id.as_deref()
+            && let Some(spec) = provider_template_spec(tid)
+        {
+            changed |= provider
+                .reseed_channels_from_models(spec.models, transport_for_protocol(spec.protocol));
+            continue;
+        }
+
+        // Conservative backfill for legacy (pre-template_id) instances: if the
+        // instance's model set already matches a template exactly, stamp it so
+        // it starts tracking future edits. Anything that does not match stays a
+        // pure-custom instance.
+        if provider.template_id.is_none()
+            && let Some(spec) = matching_template(provider)
+        {
+            // Stamp the id (always a change), then re-seed. The reseed is a
+            // no-op when the set already matches exactly, so this only writes
+            // the new pointer without churning the channels.
+            provider.template_id = Some(spec.id.to_string());
+            // A legacy instance that exactly matches a template adopts the
+            // template's default model source (Api where discovery is
+            // supported, Fixed otherwise) so it starts benefiting from live
+            // discovery on the next startup.
+            provider.model_source = default_model_source_for_spec(spec);
+            changed = true;
+            provider
+                .reseed_channels_from_models(spec.models, transport_for_protocol(spec.protocol));
+        }
+    }
+
+    changed
+}
+
+/// Fetch live model lists for every template-sourced instance whose
+/// [`ModelSource`](UserProviderConfig::model_source) is `Api`.
+///
+/// The companion to [`reconcile_provider_models`] for the live-discovery path:
+/// where reconcile mirrors the template's *compiled-in* snapshot synchronously,
+/// this hits each provider's actual `GET /models` endpoint asynchronously and
+/// re-seeds the instance from the result. The snapshot reconcile must already
+/// have run (or run concurrently and lose to this) — it is the guaranteed
+/// fallback when a live fetch fails, so a flaky network or a misconfigured key
+/// never leaves the instance worse than the template baseline.
+///
+/// Per-instance semantics:
+/// - `template_id` resolves to a known template **and** `spec.discovery` is on
+///   **and** `model_source == Api` → fetch live, reseed on success, leave the
+///   snapshot alone on any error (logged at `warn`).
+/// - Otherwise → skipped. `Fixed` instances, discovery-disabled templates
+///   (Kimi Code, Z.AI Code, opencode-go), and pure-custom instances keep what
+///   the synchronous reconcile produced.
+///
+/// Returns `true` when any instance changed, so the caller can persist only
+/// when necessary. Best-effort: a per-instance failure never aborts the pass —
+/// the remaining instances are still fetched.
+pub async fn discover_provider_models(config: &mut Config) -> bool {
+    let mut changed = false;
+
+    for provider in &mut config.providers {
+        // Only template-sourced instances with discovery-enabled templates and
+        // an explicit Api model source participate in live discovery.
+        let Some(tid) = provider.template_id.as_deref() else {
+            continue;
+        };
+        let Some(spec) = provider_template_spec(tid) else {
+            continue;
+        };
+        if !spec.discovery || provider.model_source != neenee_store::config::ModelSource::Api {
+            continue;
+        }
+
+        // Build the discovery request from the instance's first channel — the
+        // channel's endpoint/key is what a chat request would actually use, so
+        // auth matches exactly. A channel-less instance cannot be discovered
+        // (and the snapshot reconcile has nothing to improve on either).
+        let Some(channel) = provider.channels.first() else {
+            continue;
+        };
+        let Some(base_url) = channel.base_url.as_deref() else {
+            tracing::debug!(
+                provider_id = %provider.id,
+                "skipping live discovery: channel has no base_url"
+            );
+            continue;
+        };
+        let api_key = channel.api_key.as_deref().unwrap_or("");
+        let user_agent = channel.user_agent.as_deref();
+        let protocol = neenee_providers::DiscoveryProtocol::from_template_protocol(spec.protocol);
+
+        let discovery_req = neenee_providers::ModelDiscoveryRequest {
+            protocol,
+            base_url,
+            api_key,
+            user_agent,
+        };
+
+        match neenee_providers::list_models(discovery_req).await {
+            Ok(models) => {
+                // Convert the live Vec<String> into the &[&str] reseed expects.
+                // Ownership is fine: `models` lives for the whole match arm.
+                let model_refs: Vec<&str> = models.iter().map(String::as_str).collect();
+                let reseated = provider.reseed_channels_from_models(
+                    &model_refs,
+                    transport_for_protocol(spec.protocol),
+                );
+                if reseated {
+                    tracing::info!(
+                        provider_id = %provider.id,
+                        model_count = models.len(),
+                        "live model discovery updated instance"
+                    );
+                    changed = true;
+                }
+            }
+            Err(error) => {
+                // The snapshot from the synchronous reconcile remains in place;
+                // the live fetch only ever improves on it, never regresses.
+                tracing::warn!(
+                    provider_id = %provider.id,
+                    error = %error,
+                    "live model discovery failed; keeping template snapshot"
+                );
+            }
+        }
+    }
+
+    changed
+}
+
+/// The default [`ModelSource`] a template-sourced instance adopts when its
+/// template supports live discovery. Maps `spec.discovery` to the model source:
+/// `Api` when the template advertises a fetchable `GET /models` endpoint,
+/// `Fixed` otherwise. Used by the add-provider flow and the legacy backfill so
+/// a fresh instance starts from the right source without the caller
+/// re-deriving the rule.
+pub fn default_model_source_for_spec(
+    spec: &neenee_providers::ProviderTemplateSpec,
+) -> neenee_store::config::ModelSource {
+    if spec.discovery {
+        neenee_store::config::ModelSource::Api
+    } else {
+        neenee_store::config::ModelSource::Fixed
+    }
+}
+
+/// The first template whose model set exactly equals the instance's current
+/// channel model set (same ids, same order). Used by the conservative backfill:
+/// a legacy instance that happens to already mirror a template gets stamped so
+/// it tracks that template's future edits.
+fn matching_template(
+    provider: &UserProviderConfig,
+) -> Option<&'static neenee_providers::ProviderTemplateSpec> {
+    let current = provider.channel_models();
+    neenee_providers::PROVIDER_TEMPLATE_SPECS
+        .iter()
+        .find(|spec| spec.models == current.as_slice())
+}
+
+/// Map a template wire protocol to its `UserTransport`. The template registry
+/// speaks in protocol strings ("openai"/"anthropic"/"gemini"); channels carry
+/// the richer `UserTransport` enum. This is the single bridge between the two.
+fn transport_for_protocol(protocol: &str) -> UserTransport {
+    match protocol {
+        "anthropic" => UserTransport::Anthropic,
+        "gemini" => UserTransport::GeminiNative,
+        _ => UserTransport::OpenAiCompat,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn migrate_legacy_instance(
     config: &mut Config,
@@ -345,6 +574,7 @@ fn migrate_legacy_instance(
     models: &[&str],
     api_key: Option<String>,
     active_model: Option<&str>,
+    template_id: Option<&str>,
 ) -> bool {
     let Some(api_key) = api_key.filter(|k| !k.trim().is_empty()) else {
         return false;
@@ -374,11 +604,26 @@ fn migrate_legacy_instance(
                 .position(|channel| channel.model.as_deref() == Some(model))
         })
         .unwrap_or(0);
+    // Stamp the template id so the migrated instance starts tracking the
+    // template's model list (a legacy key migration seeds exactly the template
+    // models, so the instance is a mirror of it). Only a known id is recorded.
+    let template_id = template_id
+        .filter(|tid| provider_template_spec(tid).is_some())
+        .map(str::to_string);
+    // A migrated template-sourced instance adopts the template's default model
+    // source (Api where the template supports discovery, Fixed otherwise).
+    let model_source = template_id
+        .as_deref()
+        .and_then(provider_template_spec)
+        .map(default_model_source_for_spec)
+        .unwrap_or_default();
     config.providers.push(UserProviderConfig {
         id: id.to_string(),
         name: Some(name.to_string()),
         channels,
         default_channel,
+        template_id,
+        model_source,
     });
     true
 }
@@ -700,6 +945,268 @@ mod tests {
         assert!(!entry.builtin);
     }
 
+    /// A provider instance created from a template, pre-stamped with its
+    /// `template_id`. Used to exercise model reconciliation without depending
+    /// on the live `PROVIDER_TEMPLATE_SPECS` model lists (which evolve).
+    fn template_instance(tid: &str, models: &[&str]) -> UserProviderConfig {
+        UserProviderConfig {
+            id: "test-instance".to_string(),
+            name: Some("Test".to_string()),
+            channels: models
+                .iter()
+                .map(|m| UserChannelConfig {
+                    label: m.to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key_env: None,
+                    api_key: Some("sk-test".to_string()),
+                    model: Some(m.to_string()),
+                    base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
+                    user_agent: None,
+                    effort: None,
+                    thinking: None,
+                    auth: Default::default(),
+                })
+                .collect(),
+            default_channel: 0,
+            template_id: Some(tid.to_string()),
+            model_source: Default::default(),
+        }
+    }
+
+    /// The exact current model ids a known template seeds — read from the live
+    /// registry so this test tracks template evolution rather than a snapshot.
+    fn current_template_models(tid: &str) -> Vec<String> {
+        provider_template_spec(tid)
+            .expect("known template id")
+            .models
+            .iter()
+            .map(|m| m.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn reconcile_noops_when_instance_already_mirrors_template() {
+        // An instance whose channels exactly equal the current template models
+        // must not be churned (no change reported, channels untouched).
+        let models = current_template_models("openai-sub2api");
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "relay".to_string(),
+            name: Some("Relay".to_string()),
+            channels: models
+                .iter()
+                .map(|m| UserChannelConfig {
+                    label: m.clone(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key_env: None,
+                    api_key: Some("sk".to_string()),
+                    model: Some(m.clone()),
+                    base_url: Some("https://relay.example.com".to_string()),
+                    user_agent: None,
+                    effort: None,
+                    thinking: None,
+                    auth: Default::default(),
+                })
+                .collect(),
+            default_channel: 0,
+            template_id: Some("openai-sub2api".to_string()),
+            model_source: Default::default(),
+        });
+        let before_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+
+        assert!(!reconcile_provider_models(&mut config));
+        let after_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(after_models, before_models);
+    }
+
+    #[test]
+    fn reconcile_drops_models_removed_from_template() {
+        // Start with the current template models plus one extra user-added
+        // model. After reconcile, the extra is gone — pure-mirror semantics.
+        let mut models = current_template_models("openai-sub2api");
+        models.push("stale-user-model".to_string());
+        let mut config = bare_config();
+        config.providers.push(template_instance("openai-sub2api", &{
+            let refs: Vec<&str> = models.iter().map(|s| s.as_str()).collect();
+            refs
+        }));
+
+        assert!(reconcile_provider_models(&mut config));
+        let got: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(got, current_template_models("openai-sub2api"));
+        assert!(
+            !got.iter().any(|m| m == "stale-user-model"),
+            "extra user model must be dropped on reconcile"
+        );
+    }
+
+    #[test]
+    fn reconcile_adds_new_models_introduced_by_template() {
+        // An instance seeded with a strict subset of the template models picks
+        // up the missing ones after reconcile — proving template edits propagate
+        // forward to existing instances.
+        let full = current_template_models("deepseek");
+        let subset: Vec<&str> = full.iter().take(1).map(|s| s.as_str()).collect();
+        let mut config = bare_config();
+        config
+            .providers
+            .push(template_instance("deepseek", &subset));
+
+        assert!(reconcile_provider_models(&mut config));
+        let got: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(got, full, "missing template models are added");
+        // The shared key configured on the surviving channel is copied onto the
+        // newly added channels so the instance keeps working.
+        assert!(
+            config.providers[0]
+                .channels
+                .iter()
+                .all(|c| c.api_key.as_deref() == Some("sk-test")),
+            "shared key is preserved across the reseed"
+        );
+    }
+
+    #[test]
+    fn reconcile_preserves_per_model_reasoning_for_surviving_models() {
+        // A model that survives the reseed keeps its effort/thinking knobs; a
+        // newly added model starts with reasoning off (ADR-0046).
+        let full = current_template_models("anthropic");
+        let kept: Vec<&str> = full.iter().take(1).map(|s| s.as_str()).collect();
+        let mut config = bare_config();
+        let mut inst = template_instance("anthropic", &kept);
+        inst.channels[0].transport = UserTransport::Anthropic;
+        inst.channels[0].effort = Some("high".to_string());
+        inst.channels[0].thinking = Some(true);
+        config.providers.push(inst);
+
+        assert!(reconcile_provider_models(&mut config));
+        let channels = &config.providers[0].channels;
+        let survived = channels
+            .iter()
+            .find(|c| c.model.as_deref() == Some(kept[0]))
+            .expect("surviving model present");
+        assert_eq!(survived.effort.as_deref(), Some("high"));
+        assert_eq!(survived.thinking, Some(true));
+        let added = channels
+            .iter()
+            .find(|c| c.model.as_deref() != Some(kept[0]))
+            .expect("a newly added model exists");
+        assert!(added.effort.is_none(), "new model starts with no effort");
+        assert!(
+            added.thinking.is_none(),
+            "new model starts with thinking off"
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_unknown_template_id_untouched() {
+        // A template_id that no longer resolves (template removed from the
+        // codebase) must NOT blank out a working instance — the dangling
+        // pointer is ignored so the provider keeps serving its models.
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "orphan".to_string(),
+            name: Some("Orphan".to_string()),
+            channels: vec![UserChannelConfig {
+                label: "only-model".to_string(),
+                transport: UserTransport::OpenAiCompat,
+                api_key_env: None,
+                api_key: Some("sk".to_string()),
+                model: Some("only-model".to_string()),
+                base_url: Some("https://x.example.com".to_string()),
+                user_agent: None,
+                effort: None,
+                thinking: None,
+                auth: Default::default(),
+            }],
+            default_channel: 0,
+            template_id: Some("removed-template".to_string()),
+            model_source: Default::default(),
+        });
+        let before_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+
+        assert!(!reconcile_provider_models(&mut config));
+        // Channels, model, key, and the (dangling) template_id are all
+        // unchanged — a dangling pointer must not blank a working provider.
+        let after_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(after_models, before_models);
+        assert_eq!(config.providers[0].channels.len(), 1);
+        assert_eq!(
+            config.providers[0].template_id.as_deref(),
+            Some("removed-template")
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_pure_custom_instance_untouched() {
+        // A pure-custom instance (no template_id) whose model set does NOT match
+        // any template is never re-seeded — user customizations are preserved.
+        let mut config = bare_config();
+        config
+            .providers
+            .push(template_instance("", &["alpha", "beta"]));
+        config.providers[0].template_id = None;
+        let before_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+
+        assert!(!reconcile_provider_models(&mut config));
+        // The user's custom models and keys are intact; no template_id stamped.
+        let after_models: Vec<String> = config.providers[0]
+            .channels
+            .iter()
+            .map(|c| c.model.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(after_models, before_models);
+        assert_eq!(config.providers[0].template_id, None);
+    }
+
+    #[test]
+    fn reconcile_backfills_template_id_for_legacy_matching_instance() {
+        // A pre-template_id instance whose model set exactly equals a current
+        // template gets stamped, so it will track future template edits. The
+        // stamp itself is the change.
+        let models = current_template_models("openai-sub2api");
+        let refs: Vec<&str> = models.iter().map(|s| s.as_str()).collect();
+        let mut inst = template_instance("", &refs);
+        inst.template_id = None;
+        let mut config = bare_config();
+        config.providers.push(inst);
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].template_id.as_deref(),
+            Some("openai-sub2api"),
+            "legacy matching instance is stamped"
+        );
+    }
+
     #[test]
     #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn catalog_contains_every_builtin_preset() {
@@ -824,6 +1331,7 @@ mod tests {
                     ..Default::default()
                 }],
                 default_channel: 0,
+                ..Default::default()
             });
 
         let picker = build_picker_state(&config, &ProviderUsage::default());
@@ -865,6 +1373,7 @@ mod tests {
                 },
             ],
             default_channel: 0,
+            ..Default::default()
         });
         config.default_provider = "relay".to_string();
 
@@ -1184,6 +1693,7 @@ mod tests {
                 },
             ],
             default_channel: 1,
+            ..Default::default()
         }];
         config
     }
@@ -1247,6 +1757,7 @@ mod tests {
                 },
             ],
             default_channel: 0,
+            ..Default::default()
         }];
 
         let picker = build_picker_state(&config, &ProviderUsage::default());
@@ -1310,6 +1821,7 @@ mod tests {
                 ..Default::default()
             }],
             default_channel: 0,
+            ..Default::default()
         }];
         let entries = build_catalog(&config);
         let entry = entries.iter().find(|e| e.id == "gemini").unwrap();
@@ -1422,5 +1934,214 @@ mod tests {
         assert_eq!(openai.model, "gpt-4o");
         // Llama no longer appears as a built-in provider.
         assert!(snapshot.rows.iter().all(|r| r.id != "llama"));
+    }
+
+    // ── live model discovery (discover_provider_models) ────────────────────
+
+    #[test]
+    fn default_model_source_maps_discovery_flag() {
+        // A discovery-enabled template → Api; a fixed-list template → Fixed.
+        let openai_spec = provider_template_spec("openai").expect("openai template");
+        assert_eq!(
+            default_model_source_for_spec(openai_spec),
+            neenee_store::config::ModelSource::Api
+        );
+        let opencode_spec = provider_template_spec("opencode-go").expect("opencode-go template");
+        assert_eq!(
+            default_model_source_for_spec(opencode_spec),
+            neenee_store::config::ModelSource::Fixed
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_skips_fixed_instances_without_hitting_network() {
+        // A Fixed template-sourced instance must be skipped entirely — the
+        // snapshot from reconcile is authoritative. Because discover returns
+        // `false` (no change) and never attempts a fetch, this also confirms
+        // the gating is correct.
+        let mut config = bare_config();
+        let mut instance = template_instance("openai-sub2api", OPENAI_SUB2API_MODELS);
+        instance.model_source = neenee_store::config::ModelSource::Fixed;
+        config.providers.push(instance);
+        let before: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let changed = discover_provider_models(&mut config).await;
+
+        assert!(!changed, "Fixed instance must not be discovered");
+        let after: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(after, before, "Fixed instance models untouched");
+    }
+
+    #[tokio::test]
+    async fn discover_falls_back_to_snapshot_when_fetch_fails() {
+        // An Api instance whose endpoint is unreachable (relay.example.com does
+        // not resolve within the request timeout) must keep the template
+        // snapshot — the live fetch only ever improves, never regresses.
+        let mut config = bare_config();
+        let mut instance = template_instance("openai-sub2api", OPENAI_SUB2API_MODELS);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        config.providers.push(instance);
+        let before: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let changed = discover_provider_models(&mut config).await;
+
+        assert!(
+            !changed,
+            "a failed fetch must not report a change (snapshot kept as-is)"
+        );
+        let after: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            after, before,
+            "snapshot must be preserved when the live fetch fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_skips_discovery_disabled_template_even_when_api() {
+        // opencode-go is discovery=false; even with model_source=Api it must be
+        // skipped (the template does not expose a usable /models endpoint).
+        let mut config = bare_config();
+        let mut instance = template_instance("opencode-go", OPENCODE_GO_MODELS);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        config.providers.push(instance);
+        let before: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let changed = discover_provider_models(&mut config).await;
+
+        assert!(!changed, "discovery-disabled template must be skipped");
+        let after: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(after, before);
+    }
+
+    #[tokio::test]
+    async fn discover_skips_pure_custom_instance() {
+        // A pure-custom instance (no template_id) must never be discovered.
+        let mut config = bare_config();
+        let mut instance = template_instance("openai-sub2api", OPENAI_SUB2API_MODELS);
+        instance.template_id = None;
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        config.providers.push(instance);
+        let before: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let changed = discover_provider_models(&mut config).await;
+
+        assert!(!changed, "pure-custom instance must not be discovered");
+        let after: Vec<String> = config.providers[0]
+            .channel_models()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn reconcile_backfill_sets_api_model_source_for_discovery_template() {
+        // A legacy instance that exactly matches a discovery-enabled template
+        // (openai-sub2api) gets stamped AND adopts model_source=Api, so it
+        // starts benefiting from live discovery on the next startup.
+        let models = current_template_models("openai-sub2api");
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "relay".to_string(),
+            name: Some("Relay".to_string()),
+            channels: models
+                .iter()
+                .map(|m| UserChannelConfig {
+                    label: m.clone(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key_env: None,
+                    api_key: Some("sk".to_string()),
+                    model: Some(m.clone()),
+                    base_url: Some("https://relay.example.com".to_string()),
+                    user_agent: None,
+                    effort: None,
+                    thinking: None,
+                    auth: Default::default(),
+                })
+                .collect(),
+            default_channel: 0,
+            template_id: None,
+            model_source: Default::default(),
+        });
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].template_id.as_deref(),
+            Some("openai-sub2api")
+        );
+        assert_eq!(
+            config.providers[0].model_source,
+            neenee_store::config::ModelSource::Api,
+            "backfilled discovery-template instance adopts Api source"
+        );
+    }
+
+    #[test]
+    fn reconcile_backfill_sets_fixed_model_source_for_nondiscovery_template() {
+        // A legacy instance that exactly matches a discovery-disabled template
+        // (kimi-code) gets stamped but keeps model_source=Fixed.
+        let models = current_template_models("kimi-code");
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "kimi".to_string(),
+            name: Some("Kimi".to_string()),
+            channels: models
+                .iter()
+                .map(|m| UserChannelConfig {
+                    label: m.clone(),
+                    transport: UserTransport::OpenAiCompat,
+                    api_key_env: None,
+                    api_key: Some("sk".to_string()),
+                    model: Some(m.clone()),
+                    base_url: Some("https://kimi.example.com".to_string()),
+                    user_agent: None,
+                    effort: None,
+                    thinking: None,
+                    auth: Default::default(),
+                })
+                .collect(),
+            default_channel: 0,
+            template_id: None,
+            model_source: Default::default(),
+        });
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].template_id.as_deref(),
+            Some("kimi-code")
+        );
+        assert_eq!(
+            config.providers[0].model_source,
+            neenee_store::config::ModelSource::Fixed,
+            "backfilled nondiscovery-template instance keeps Fixed source"
+        );
     }
 }

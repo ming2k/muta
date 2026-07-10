@@ -917,6 +917,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: Default::default(),
+        custom_template_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),
@@ -1099,6 +1100,7 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 fn custom_provider_model_filter_commits_and_offers_custom_id() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let free_model_template = crate::tui::providers::ProviderTemplate {
+        id: "openai",
         label: "OpenAI",
         description: "OpenAI relay with a free model id",
         protocol: "openai",
