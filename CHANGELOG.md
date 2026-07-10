@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-07-10
+
+### Fixed
+
+- **Release binaries for v0.19.0 were never published.** The v0.19.0 release
+  commit shipped a `Cargo.lock` in which the optics packages (`iris`, `flux`,
+  `flux-text`, and friends) were recorded as source-less path entries — a side
+  effect of regenerating the lock while the local, gitignored
+  `.cargo/config.toml` path-override was active. With that override absent (as
+  it is on CI runners and in release tarballs), every `cargo build --locked`
+  failed with `cannot update the lock file ... because --locked was passed`,
+  so all five release targets (linux x86_64/aarch64, linux musl, macOS
+  x86_64/aarch64) exited 101 and no artifacts were uploaded. This release
+  restores the git `source` lines and rebuilds the binaries. Added a CI guard
+  (`lockfile resolves (--locked)`) to prevent recurrence.
+
 ## [0.19.0] - 2026-07-10
 
 ### Added
