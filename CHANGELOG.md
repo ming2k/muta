@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-10
+
 ### Changed
 
 - **Add provider now reads as a child page of Providers.** The template chooser
@@ -1240,7 +1242,9 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/ming2k/neenee/releases/tag/v0.20.0
+[0.19.1]: https://github.com/ming2k/neenee/releases/tag/v0.19.1
 [0.19.0]: https://github.com/ming2k/neenee/releases/tag/v0.19.0
 [0.18.0]: https://github.com/ming2k/neenee/releases/tag/v0.18.0
 [0.17.0]: https://github.com/ming2k/neenee/releases/tag/v0.17.0

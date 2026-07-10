@@ -669,6 +669,7 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux-sys",
 ]
@@ -676,6 +677,7 @@ dependencies = [
 [[package]]
 name = "flux-sys"
 version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -684,6 +686,7 @@ dependencies = [
 [[package]]
 name = "flux-text"
 version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux",
  "flux-text-sys",
@@ -692,6 +695,7 @@ dependencies = [
 [[package]]
 name = "flux-text-layout"
 version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux-sys",
  "flux-text",
@@ -701,6 +705,7 @@ dependencies = [
 [[package]]
 name = "flux-text-sys"
 version = "0.1.1"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1278,6 +1283,7 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 [[package]]
 name = "iris"
 version = "0.1.0"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "iris-sys",
  "lens",
@@ -1287,6 +1293,7 @@ dependencies = [
 [[package]]
 name = "iris-sys"
 version = "0.1.0"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1411,6 +1418,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 [[package]]
 name = "lens"
 version = "0.1.0"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "flux",
  "lens-sys",
@@ -1419,6 +1427,7 @@ dependencies = [
 [[package]]
 name = "lens-sys"
 version = "0.1.0"
+source = "git+https://github.com/ming2k/optics.git?rev=0c9d4a2aa083f015addd7f012720015fc3f98de4#0c9d4a2aa083f015addd7f012720015fc3f98de4"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1591,7 +1600,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "neenee-agent"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1622,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-anthropic"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1635,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-core"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "futures",
  "httpdate",
@@ -1647,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-google"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1660,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-ai-sdk-openai"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1674,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-auth"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "base64",
  "neenee-store",
@@ -1690,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-code"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -1725,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-core"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1742,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-editor"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "flux",
  "flux-text",
@@ -1754,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-providers"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -1771,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-quant"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1786,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-quant-gui"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "iris",
  "neenee-core",
@@ -1797,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-server"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1823,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-store"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1848,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tools"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1874,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tui"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "bitflags",
  "crossterm",
@@ -1884,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tui-view"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "chrono",
  "insta",
