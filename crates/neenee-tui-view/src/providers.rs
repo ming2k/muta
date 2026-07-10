@@ -100,6 +100,10 @@ impl ProviderTemplate {
 /// are intentionally omitted from the create template; users can still add a
 /// relay-specific id from the provider's model list.
 pub const OPENAI_SUB2API_MODELS: &[&str] = &[
+    // GPT-5.6 family (Sol/Terra/Luna) — OpenAI's 2026 tier-named flagship line.
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",

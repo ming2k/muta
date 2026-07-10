@@ -161,11 +161,19 @@ pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
-/// frontier chat lineup — the GPT-5.x family; `gpt-5.5` (the flagship) is the
-/// default. The legacy `gpt-4o`/`gpt-4o-mini` ids stay registered for existing
+/// frontier chat lineup — the GPT-5.6 tier-named family (`gpt-5.6-sol`, the
+/// flagship, leads) plus the GPT-5.x family; `gpt-5.6-sol` is the default.
+/// The legacy `gpt-4o`/`gpt-4o-mini` ids stay registered for existing
 /// configs but are no longer seeded for the official provider. Each id exists
 /// in the model registry.
-pub const OPENAI_BUILTIN_MODELS: &[&str] = &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
+pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+];
 
 impl OpenAiProviderSpec {
     /// Resolve the model to use: a pinned `fixed_model` always wins, otherwise

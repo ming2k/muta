@@ -29,9 +29,13 @@ OpenAI relay. The OpenAI provider posts directly to the configured `Base URL`.
 Use the full `/chat/completions` endpoint.
 
 The `OpenAI (sub2api)` template seeds common OpenAI text models, including
-`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2`,
-`gpt-5.2-chat-latest`, and `gpt-5.2-pro`. If your relay advertises another
-chat model, open the provider's model list and use `＋ Add model`.
+the GPT-5.6 tier-named family (`gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna`), plus `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
+`gpt-5.3-codex-spark`, `gpt-5.2`, `gpt-5.2-chat-latest`, and `gpt-5.2-pro`.
+The `gpt-5.6` alias (routes to Sol) is also registered, so you can type it
+via `＋ Add model` if your relay exposes it. GPT-5.6 honors the `max`
+reasoning-effort level. If your relay advertises another chat model, open
+the provider's model list and use `＋ Add model`.
 
 ## Add an Anthropic sub2api relay
 

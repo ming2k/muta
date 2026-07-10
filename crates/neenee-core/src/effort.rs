@@ -146,6 +146,19 @@ pub const EFFORT_OPENAI_GPT: &[Effort] = &[
     Effort::Xhigh,
 ];
 
+/// GPT-5.6 (Sol/Terra/Luna) effort range. GPT-5.6 is the first OpenAI
+/// chat-completions family to expose the `max` reasoning-effort level.
+/// Earlier GPT-5.x (`EFFORT_OPENAI_GPT`) top out at `xhigh` and reject `max`.
+pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
+    Effort::None,
+    Effort::Minimal,
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+];
+
 /// xAI Grok effort ladder (`none` / `low` / `medium` / `high`).
 pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medium, Effort::High];
 

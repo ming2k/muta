@@ -263,6 +263,63 @@ pub const KNOWN_MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
+    // ── GPT-5.6 (OpenAI) ───────────────────────────────────────────────────
+    // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
+    // Sol (flagship) / Terra (balanced) / Luna (efficient, high-volume).
+    // `gpt-5.6` is an alias that routes to `gpt-5.6-sol`. All speak the
+    // standard OpenAI chat-completions API and reason via `reasoning_content`.
+    // GPT-5.6 honors the `max` effort level, so these carry the 5.6-specific
+    // effort set rather than the xhigh-capped `EFFORT_OPENAI_GPT`.
+    // OpenAI has not published the context window; use the GPT-5.5-class 1M
+    // window conservatively for all three tiers and the alias.
+    Model {
+        id: "gpt-5.6",
+        name: "GPT-5.6",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
     // API. All reason (surfaced via the `reasoning_content` stream) and take
@@ -853,6 +910,31 @@ mod tests {
         assert!(gpt.effort_levels.contains(&crate::effort::Effort::High));
         assert!(gpt.effort_levels.contains(&crate::effort::Effort::Xhigh));
         assert!(!gpt.effort_levels.contains(&crate::effort::Effort::Max));
+    }
+
+    #[test]
+    fn gpt_5_6_family_resolves_with_max_effort() {
+        // `gpt-5.6` is an alias routing to Sol, so it must resolve like Sol.
+        for id in ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            let m = resolve(id);
+            assert_eq!(m.format, WireFormat::OpenAiCompat, "{id} wire format");
+            assert_eq!(m.family, "gpt", "{id} family");
+            assert!(m.reasoning(), "{id} is a reasoning model");
+            assert!(m.tool_call, "{id} supports tool calls");
+            assert!(m.vision, "{id} is multimodal");
+            // GPT-5.6 is the first OpenAI family to honor `max`.
+            assert!(
+                m.effort_levels.contains(&crate::effort::Effort::Max),
+                "{id} must expose the max effort level"
+            );
+            assert!(
+                m.effort_levels.contains(&crate::effort::Effort::Xhigh),
+                "{id} must expose xhigh"
+            );
+        }
+        // Sanity: earlier GPT-5.x still does NOT carry max (confirms 5.6 differs).
+        let legacy = resolve("gpt-5.5");
+        assert!(!legacy.effort_levels.contains(&crate::effort::Effort::Max));
     }
 
     #[test]
