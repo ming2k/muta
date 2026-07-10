@@ -122,11 +122,10 @@ fn text_modal_commands_resolve_and_consume_composer() {
 
 #[test]
 fn keybinding_modals_are_not_text_commands() {
-    // Ctrl+R / Ctrl+P / F1 open modals via keybindings, not by typing a slash
+    // Ctrl+R / F1 open modals via keybindings, not by typing a slash
     // command, so they must NOT be flagged: they consume no composer text and
     // therefore have nothing to record in input history.
     assert!(!InputAction::OpenHistory.is_text_modal_command());
-    assert!(!InputAction::OpenCommands.is_text_modal_command());
     assert!(!InputAction::OpenHelp.is_text_modal_command());
     // `/exit` resolves to Quit — it is not a replayable input, so it is
     // deliberately excluded from the recorded set.

@@ -2745,15 +2745,6 @@ pub(super) async fn run_app_loop(
                     app.history_scroll = 0;
                     app.history_modal_follow = true;
                 }
-                input::InputAction::OpenCommands => {
-                    // Command palette: seed the input with "/" so the existing
-                    // slash-suggestion popup acts as a filterable palette.
-                    if !app.input.starts_with('/') {
-                        app.input = "/".to_string();
-                        app.set_cursor_end();
-                    }
-                    app.suggestion_index = None;
-                }
                 input::InputAction::OpenHelp => {
                     app.active_modal = Modal::Help;
                     app.modal_keymap_open = false;

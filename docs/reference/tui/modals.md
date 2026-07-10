@@ -367,7 +367,6 @@ screen](../../explanation/tui.md#key-collisions-under-tmux--screen).
 │ Help                                 │
 │                                      │
 │ General                              │  ← section header (fg bold)
-│ ctrl+p    command palette            │  ← key brand+bold, desc muted
 │ enter     send message               │
 │ …                                    │
 │                                      │

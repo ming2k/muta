@@ -221,8 +221,6 @@ pub enum InputAction {
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
-    /// Open the command palette (slash commands).
-    OpenCommands,
     /// Open the help / keybindings modal.
     OpenHelp,
     /// Open the permissions manager modal: a centered list of cached "always
@@ -1062,13 +1060,6 @@ pub fn process_event(
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if context.active_modal == super::Modal::None {
                         InputAction::OpenHistory
-                    } else {
-                        InputAction::None
-                    }
-                }
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if context.active_modal == super::Modal::None {
-                        InputAction::OpenCommands
                     } else {
                         InputAction::None
                     }

@@ -30,7 +30,6 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
 
     let body = vec![
         Line::from(section("General")),
-        row("ctrl+p", "command palette"),
         row("enter", "send message"),
         row("alt+enter", "insert newline (ctrl+j)"),
         row("esc", "interrupt (×2) / close"),

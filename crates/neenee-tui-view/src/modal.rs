@@ -10,7 +10,7 @@
 pub enum Modal {
     #[default]
     None,
-    /// Two-stage provider/model picker (`Ctrl+P` / `/model`). **Stage 1** is a
+    /// Two-stage provider/model picker (`Ctrl+M` / `/model`). **Stage 1** is a
     /// ranked *provider* list (`App::providers_filtered`); **stage 2**
     /// (`App::picker_provider` = `Some`) is the model sub-list for a
     /// drilled-into multi-model provider (`App::provider_models_filtered`).
