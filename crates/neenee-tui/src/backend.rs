@@ -114,6 +114,12 @@ pub struct Backend<W: Write> {
     /// Last cursor position we moved to. `None` until the first move, which
     /// means the next draw must always reposition.
     cur: Option<(u16, u16)>,
+    /// Last cursor **visibility** we set (`?25h`/`?25l`). `None` until the
+    /// first hide/show, which means the next one always emits — exactly like
+    /// `cur` for position. Tracking this lets us skip re-emitting the same
+    /// visibility sequence every frame, which on light, frequent incremental
+    /// redraws shows up as a caret flicker.
+    cursor_visible: Option<bool>,
     /// The style currently applied to the terminal (so we can skip redundant
     /// SGR sequences). Starts as the "unknown" default.
     style: Style,
@@ -132,6 +138,7 @@ impl<W: Write> Backend<W> {
             out,
             bce,
             cur: None,
+            cursor_visible: None,
             style: Style::RESET,
         }
     }
@@ -214,9 +221,12 @@ impl<W: Write> Backend<W> {
         Ok(())
     }
 
-    /// Hide the terminal cursor without changing the tracked position.
+    /// Hide the terminal cursor, deduped against the last visibility we set.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        self.out.queue(cursor::Hide)?;
+        if self.cursor_visible != Some(false) {
+            self.out.queue(cursor::Hide)?;
+            self.cursor_visible = Some(false);
+        }
         Ok(())
     }
 
@@ -227,14 +237,23 @@ impl<W: Write> Backend<W> {
     /// hiding keeps "no visible caret" states from inheriting the last diff
     /// write position, which can move during streaming transcript updates.
     pub fn hide_cursor_at(&mut self, x: u16, y: u16) -> io::Result<()> {
-        self.out.queue(cursor::Hide)?;
+        self.hide_cursor()?;
         self.move_to(x, y)
+    }
+
+    /// Show the terminal cursor, deduped against the last visibility we set.
+    pub fn show_cursor(&mut self) -> io::Result<()> {
+        if self.cursor_visible != Some(true) {
+            self.out.queue(cursor::Show)?;
+            self.cursor_visible = Some(true);
+        }
+        Ok(())
     }
 
     /// Show the terminal cursor at `(x, y)`, keeping the backend's cursor
     /// tracker in sync with the real terminal.
     pub fn show_cursor_at(&mut self, x: u16, y: u16) -> io::Result<()> {
-        self.out.queue(cursor::Show)?;
+        self.show_cursor()?;
         self.move_to(x, y)
     }
 
@@ -294,6 +313,12 @@ impl<W: Write> Backend<W> {
         self.out.queue(SetAttribute(Attribute::Reset))?;
         self.out.flush()?;
         self.cur = None;
+        // The terminal's cursor visibility is also outside our control on a
+        // resize/reattach (the real terminal may have been reset to its
+        // default-visible state), so forget what we last set. The next
+        // hide/show then re-emits, keeping us honest — same rationale as the
+        // SGR reset above.
+        self.cursor_visible = None;
         self.style = Style::RESET;
         Ok(())
     }
@@ -474,6 +499,80 @@ mod tests {
         assert!(
             s.contains("\x1b[3;4H"),
             "hidden cursor must be moved to row 3 col 4: {s:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_hide_does_not_reamit_visibility_sequence() {
+        // Regression for the post-incremental-sync flicker: a redraw that
+        // leaves the cursor hidden must not re-queue `?25l` every frame just
+        // because `Terminal::draw` parks the hidden caret each tick.
+        let mut buf = Vec::new();
+        {
+            let mut be = Backend::with_bce(&mut buf, Bce::Yes);
+            be.hide_cursor_at(3, 2).unwrap();
+            // Second frame, different parking coordinate — visibility is
+            // unchanged, so only the move may re-emit, never `?25l`.
+            be.hide_cursor_at(4, 5).unwrap();
+        }
+
+        let s = String::from_utf8(buf).unwrap();
+        let hide_count = s.matches("\x1b[?25l").count();
+        assert_eq!(hide_count, 1, "hide emitted once, got: {s:?}");
+        // Position tracking is independent and must still move to the new park.
+        assert!(
+            s.contains("\x1b[6;5H"),
+            "second park must move to row 6 col 5: {s:?}"
+        );
+    }
+
+    #[test]
+    fn show_hide_toggle_emits_only_on_transition() {
+        // Visibility dedup must emit on a real state change and stay silent
+        // otherwise — including the very first call (cursor_visible starts
+        // unknown, so it always fires, exactly like `cur` for position).
+        let mut buf = Vec::new();
+        {
+            let mut be = Backend::with_bce(&mut buf, Bce::Yes);
+            be.hide_cursor().unwrap(); // None -> Some(false): emit ?25l
+            be.hide_cursor().unwrap(); // Some(false): silent
+            be.show_cursor().unwrap(); // -> Some(true): emit ?25h
+            be.show_cursor().unwrap(); // Some(true): silent
+            be.hide_cursor().unwrap(); // -> Some(false): emit ?25l
+        }
+
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(
+            s.matches("\x1b[?25l").count(),
+            2,
+            "hide emitted on transitions only: {s:?}"
+        );
+        assert_eq!(
+            s.matches("\x1b[?25h").count(),
+            1,
+            "show emitted on transition only: {s:?}"
+        );
+    }
+
+    #[test]
+    fn invalidate_forces_next_visibility_to_reemit() {
+        // After a wholesale screen reset (alt-screen / resize), the terminal's
+        // real cursor visibility is outside our control, so `invalidate` must
+        // forget our tracked state and force the next hide/show to re-emit.
+        let mut buf = Vec::new();
+        {
+            let mut be = Backend::with_bce(&mut buf, Bce::Yes);
+            be.hide_cursor().unwrap(); // emit ?25l
+            be.hide_cursor().unwrap(); // silent
+            be.invalidate().unwrap();
+            be.hide_cursor().unwrap(); // must re-emit after invalidate
+        }
+
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(
+            s.matches("\x1b[?25l").count(),
+            2,
+            "invalidate resets visibility tracking: {s:?}"
         );
     }
 

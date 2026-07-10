@@ -208,8 +208,11 @@ impl<W: io::Write> Terminal<W> {
 
     /// Show the cursor.
     pub fn show_cursor(&mut self) -> io::Result<()> {
-        use crossterm::{QueueableCommand, cursor};
-        self.backend.writer().queue(cursor::Show)?;
+        // Route through the backend's visibility-dedup path so repeated calls
+        // don't re-emit `?25h` every frame (the same dedup `hide_cursor`
+        // already enjoys). `move_to`/position parking is the caller's job when
+        // an explicit coordinate is wanted; see `show_cursor_at`.
+        self.backend.show_cursor()?;
         self.backend.writer().flush()?;
         Ok(())
     }
