@@ -252,9 +252,10 @@ fn default_scope() -> String {
 /// mirroring the template's *compiled-in* model list or fetching the list
 /// *live* from the provider's `GET /models` endpoint at startup.
 ///
-/// Priority when [`Api`](Self::Api): (1) live API query, falling back to (2)
-/// the template's compiled-in snapshot on any error (network failure, non-2xx,
-/// unparseable body, empty list). [`Fixed`](Self::Fixed) skips the network
+/// With [`Api`](Self::Api), the persisted list is the intersection of the live
+/// API response and the client's protocol-compatible model registry. A fetch
+/// error or empty intersection keeps the last known valid subset (the initial
+/// value is the template snapshot). [`Fixed`](Self::Fixed) skips the network
 /// entirely and uses the snapshot — the only option for templates whose
 /// endpoints do not expose a models list (single-model membership platforms,
 /// runtime-derived lists).
@@ -263,8 +264,8 @@ fn default_scope() -> String {
 /// [`Fixed`]: ModelSource::Fixed
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelSource {
-    /// Fetch the model list live from the provider's API at startup. The
-    /// template's compiled-in model list is the fallback on any error.
+    /// Fetch availability from the provider's API at startup and keep only
+    /// client-supported models. The last valid subset survives fetch errors.
     Api,
     /// Use the template's compiled-in model list; never hit the network. The
     /// default for legacy configs that predate this field.
@@ -384,12 +385,13 @@ impl UserProviderConfig {
     /// This is the **pure domain operation** behind template reconciliation: it
     /// knows only about channels, not about templates or providers — the calling
     /// layer resolves a `template_id` to a model list + transport and hands them
-    /// in. Per-model reasoning knobs (`effort`/`thinking`) and `auth` are
-    /// preserved on a model that survives from the old set into the new one; a
-    /// newly added model starts with reasoning off. The shared
-    /// endpoint/key/user-agent are taken from the first surviving channel (so a
-    /// relay endpoint configured by the user survives a model refresh), falling
-    /// back to the given `transport` with no key.
+    /// in. Every surviving model keeps its complete channel configuration;
+    /// newly added models inherit the provider-scoped connection/auth settings
+    /// (`transport`, key/env, endpoint, user-agent, auth) from the first existing
+    /// channel while starting with reasoning off. This inheritance is
+    /// deliberately independent of model overlap: a live discovery result may
+    /// replace the whole model set, but must never erase the credentials or
+    /// endpoint needed to reach that same provider.
     ///
     /// Returns `true` when the rebuilt channel set differs from the previous
     /// one. When the channels already equal `models` exactly, this is a no-op
@@ -400,21 +402,33 @@ impl UserProviderConfig {
         models: &[&str],
         transport: UserTransport,
     ) -> bool {
-        // Map of model id → existing channel, for preserving per-model settings
-        // and for copy-from transport/endpoint/key defaults.
+        // A provider must always retain at least one channel. Callers normally
+        // reject empty discovery results themselves; this guard is the domain-
+        // layer backstop that prevents a future caller from blanking a working
+        // provider (and consequently deleting its persisted credentials).
+        if models.is_empty() {
+            return false;
+        }
+
+        // Map model id → existing channel so a surviving model keeps every
+        // setting, including per-model reasoning and any channel-specific
+        // overrides.
         let existing: std::collections::HashMap<&str, &UserChannelConfig> = self
             .channels
             .iter()
             .filter_map(|c| c.model.as_deref().map(|m| (m, c)))
             .collect();
 
-        // Defaults copied from the first surviving channel that is also in the
-        // new set, so a relay endpoint/key configured by the user survives a
-        // model refresh. Falls back to the template transport + no key.
-        let copy_from = self
+        // Connection/auth fields are provider-scoped in every template-created
+        // instance even though the storage schema repeats them per channel.
+        // Snapshot them unconditionally from the first channel: requiring that
+        // channel's model to survive caused a disjoint live model list to turn
+        // the key/base URL into None and the next save to erase the credential.
+        let shared = self.channels.first().cloned();
+        let previous_default_model = self
             .channels
-            .first()
-            .filter(|c| c.model.as_deref().is_some_and(|m| models.contains(&m)));
+            .get(self.default_channel)
+            .and_then(|channel| channel.model.clone());
 
         // No-op fast path: the channel set already equals the target model list
         // exactly, so there is nothing to reseed.
@@ -428,45 +442,54 @@ impl UserProviderConfig {
             return false;
         }
 
-        let (base_transport, api_key, base_url, user_agent) = match copy_from {
-            Some(c) => (
-                c.transport,
-                c.api_key.clone(),
-                c.base_url.clone(),
-                c.user_agent.clone(),
-            ),
-            None => (transport, None, None, None),
-        };
-
         let new_channels = models
             .iter()
             .map(|&model| {
-                // Preserve per-model reasoning + auth for a model that survives.
-                let (effort, thinking, auth) = existing
-                    .get(model)
-                    .map(|c| (c.effort.clone(), c.thinking, c.auth))
-                    .unwrap_or((None, None, ChannelAuth::ApiKey));
-                UserChannelConfig {
-                    label: model.to_string(),
-                    transport: base_transport,
-                    api_key_env: None,
-                    api_key: api_key.clone(),
-                    model: Some(model.to_string()),
-                    base_url: base_url.clone(),
-                    user_agent: user_agent.clone(),
-                    effort,
-                    thinking,
-                    auth,
+                if let Some(channel) = existing.get(model) {
+                    // Keep the whole surviving channel, not just reasoning:
+                    // this also respects any per-model endpoint/key override.
+                    let mut channel = (*channel).clone();
+                    channel.label = model.to_string();
+                    channel.model = Some(model.to_string());
+                    channel
+                } else {
+                    UserChannelConfig {
+                        label: model.to_string(),
+                        transport: shared
+                            .as_ref()
+                            .map(|channel| channel.transport)
+                            .unwrap_or(transport),
+                        api_key_env: shared
+                            .as_ref()
+                            .and_then(|channel| channel.api_key_env.clone()),
+                        api_key: shared.as_ref().and_then(|channel| channel.api_key.clone()),
+                        model: Some(model.to_string()),
+                        base_url: shared.as_ref().and_then(|channel| channel.base_url.clone()),
+                        user_agent: shared
+                            .as_ref()
+                            .and_then(|channel| channel.user_agent.clone()),
+                        effort: None,
+                        thinking: None,
+                        auth: shared
+                            .as_ref()
+                            .map(|channel| channel.auth)
+                            .unwrap_or(ChannelAuth::ApiKey),
+                    }
                 }
             })
             .collect::<Vec<_>>();
 
         self.channels = new_channels;
-        // Keep the default-channel index in range; the active model pointer is
-        // managed by the caller's selection and not touched here.
-        if self.default_channel >= self.channels.len() {
-            self.default_channel = 0;
-        }
+        // Preserve the selected channel by model across filtering/reordering.
+        // If that model disappeared, fall back to the first usable channel.
+        self.default_channel = previous_default_model
+            .as_deref()
+            .and_then(|model| {
+                self.channels
+                    .iter()
+                    .position(|channel| channel.model.as_deref() == Some(model))
+            })
+            .unwrap_or(0);
         true
     }
 
@@ -1223,6 +1246,86 @@ mod tests {
         );
     }
 
+    fn configured_relay() -> UserProviderConfig {
+        UserProviderConfig {
+            id: "relay".to_string(),
+            name: Some("Relay".to_string()),
+            channels: vec![UserChannelConfig {
+                label: "old-model".to_string(),
+                transport: UserTransport::OpenAiCompat,
+                api_key_env: Some("RELAY_API_KEY".to_string()),
+                api_key: Some("relay-secret".to_string()),
+                model: Some("old-model".to_string()),
+                base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
+                user_agent: Some("relay-client/1.0".to_string()),
+                effort: Some("high".to_string()),
+                thinking: Some(true),
+                auth: ChannelAuth::ApiKey,
+            }],
+            default_channel: 0,
+            template_id: Some("openai-sub2api".to_string()),
+            model_source: ModelSource::Api,
+        }
+    }
+
+    #[test]
+    fn reseed_with_disjoint_models_preserves_provider_settings() {
+        let mut provider = configured_relay();
+
+        assert!(provider.reseed_channels_from_models(
+            &["new-model-a", "new-model-b"],
+            UserTransport::OpenAiCompat,
+        ));
+
+        assert_eq!(
+            provider.channel_models(),
+            vec!["new-model-a", "new-model-b"]
+        );
+        for channel in &provider.channels {
+            assert_eq!(channel.transport, UserTransport::OpenAiCompat);
+            assert_eq!(channel.api_key_env.as_deref(), Some("RELAY_API_KEY"));
+            assert_eq!(channel.api_key.as_deref(), Some("relay-secret"));
+            assert_eq!(
+                channel.base_url.as_deref(),
+                Some("https://relay.example.com/v1/chat/completions")
+            );
+            assert_eq!(channel.user_agent.as_deref(), Some("relay-client/1.0"));
+            assert_eq!(channel.auth, ChannelAuth::ApiKey);
+            assert!(channel.effort.is_none(), "new model has no reasoning depth");
+            assert!(channel.thinking.is_none(), "new model has thinking off");
+        }
+    }
+
+    #[test]
+    fn reseed_with_disjoint_models_preserves_oauth_mode() {
+        let mut provider = configured_relay();
+        provider.channels[0].api_key_env = None;
+        provider.channels[0].api_key = None;
+        provider.channels[0].auth = ChannelAuth::XaiOAuth;
+
+        assert!(provider.reseed_channels_from_models(
+            &["new-model-a", "new-model-b"],
+            UserTransport::OpenAiCompat,
+        ));
+        assert!(provider.channels.iter().all(|channel| {
+            channel.auth == ChannelAuth::XaiOAuth
+                && channel.api_key_env.is_none()
+                && channel.api_key.is_none()
+        }));
+    }
+
+    #[test]
+    fn reseed_rejects_an_empty_model_set() {
+        let mut provider = configured_relay();
+        let before = provider.channels.clone();
+
+        assert!(!provider.reseed_channels_from_models(&[], UserTransport::OpenAiCompat));
+        assert_eq!(provider.channels.len(), before.len());
+        assert_eq!(provider.channels[0].model, before[0].model);
+        assert_eq!(provider.channels[0].api_key, before[0].api_key);
+        assert_eq!(provider.channels[0].base_url, before[0].base_url);
+    }
+
     /// Tests that mutate the process-wide paths override (`set_test_default`)
     /// and read/write the throwaway config/credentials files must serialise
     /// against each other so the parallel runner never observes another test's
@@ -1328,6 +1431,37 @@ mod tests {
         reloaded.save().unwrap();
         let reloaded2 = Config::load();
         assert_eq!(reloaded2.openai_api_key.as_deref(), Some("sk-openai"));
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn reseeded_provider_credentials_survive_save_and_load() {
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        let mut provider = configured_relay();
+        assert!(provider.reseed_channels_from_models(
+            &["new-model-a", "new-model-b"],
+            UserTransport::OpenAiCompat,
+        ));
+        let mut config = Config::default();
+        config.providers.push(provider);
+
+        config.save().unwrap();
+        let reloaded = Config::load();
+        let channels = &reloaded.providers[0].channels;
+        assert_eq!(channels.len(), 2);
+        assert!(channels.iter().all(|channel| {
+            channel.api_key.as_deref() == Some("relay-secret")
+                && channel.base_url.as_deref()
+                    == Some("https://relay.example.com/v1/chat/completions")
+                && channel.api_key_env.as_deref() == Some("RELAY_API_KEY")
+        }));
+
+        let credentials = std::fs::read_to_string(tmp.join("credentials.toml")).unwrap();
+        assert!(credentials.contains("new-model-a"));
+        assert!(credentials.contains("new-model-b"));
+        assert!(credentials.contains("relay-secret"));
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();

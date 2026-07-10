@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Provider discovery no longer erases relay credentials or endpoints.** Live
+  `/models` results are intersected with neenee's protocol-compatible model
+  registry, so unknown or unsupported ids never enter the picker. Refreshing a
+  model set preserves the provider's token, token environment variable, base
+  URL, user agent, authentication mode, and surviving per-model settings; an
+  empty intersection keeps the last valid list. API-discovered instances also
+  retain their persisted subset across startup instead of being reset to the
+  full template before the picker opens.
+
 ## [0.19.1] - 2026-07-10
 
 ### Fixed

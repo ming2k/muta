@@ -178,6 +178,25 @@ impl TokenSourceLedger {
         );
     }
 
+    /// The most recent *reported* round for a `(provider, model)`, if any.
+    ///
+    /// Used by the TUI context meter as the authoritative anchor: the
+    /// provider-reported `prompt_tokens` already measures the serialized
+    /// request size (system prompt + every prior turn + tool schemas + per-
+    /// message template overhead), which is more accurate than any local
+    /// estimate of the transcript. `completion_tokens` is included because the
+    /// assistant's last reply is now part of history.
+    pub fn last_reported_round(&self, provider: &str, model: &str) -> Option<TokenRound> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = entries.get(&key(provider, model))?;
+        entry
+            .rounds
+            .iter()
+            .rev()
+            .copied()
+            .find(|round| round.reported)
+    }
+
     /// A snapshot of the ledger suitable for rendering (owned, no lock held).
     pub fn snapshot(&self) -> TokenSourceReport {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
@@ -365,5 +384,53 @@ mod tests {
         assert_eq!(row.totals.completion_tokens, 200);
         assert_eq!(row.totals.reported_tokens, 1200);
         assert_eq!(row.totals.estimated_tokens, 50);
+    }
+
+    #[test]
+    fn last_reported_round_returns_most_recent_reported_for_key() {
+        // The context meter anchors on the newest reported round for the
+        // active (provider, model). Estimated rounds are skipped, other keys
+        // are ignored, and the most-recent reported round wins.
+        let ledger = TokenSourceLedger::new();
+        // Older reported round for the active key.
+        ledger.record_round(
+            "openai",
+            "gpt-4o",
+            TokenRound {
+                reported: true,
+                prompt_tokens: 500,
+                completion_tokens: 50,
+                total_tokens: 550,
+                ..Default::default()
+            },
+        );
+        // A stray estimated round for the active key must not be returned.
+        ledger.record("openai", "gpt-4o", 40, false);
+        // Noise in a different key.
+        ledger.record_reported("anthropic", "claude", 9999, 0, 0);
+
+        // Newest reported round for the active key.
+        ledger.record_round(
+            "openai",
+            "gpt-4o",
+            TokenRound {
+                reported: true,
+                prompt_tokens: 4000,
+                completion_tokens: 300,
+                total_tokens: 4300,
+                ..Default::default()
+            },
+        );
+
+        let last = ledger
+            .last_reported_round("openai", "gpt-4o")
+            .expect("a reported round exists for the key");
+        assert_eq!(last.prompt_tokens, 4000);
+        assert_eq!(last.completion_tokens, 300);
+        assert_eq!(last.total_tokens, 4300);
+
+        // Missing key / never-reported key -> None.
+        assert!(ledger.last_reported_round("openai", "gpt-5").is_none());
+        assert!(ledger.last_reported_round("mistral", "large").is_none());
     }
 }

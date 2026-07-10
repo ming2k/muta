@@ -19,8 +19,11 @@ use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, NEENEE_USER_AGENT,
     OPENAI_BUILTIN_MODELS, provider_template_spec,
 };
-use neenee_store::config::{Config, UserChannelConfig, UserProviderConfig, UserTransport};
+use neenee_store::config::{
+    Config, ModelSource, UserChannelConfig, UserProviderConfig, UserTransport,
+};
 use neenee_store::provider_usage::ProviderUsage;
+use std::collections::HashSet;
 
 #[cfg(test)]
 use neenee_providers::{OPENAI_PROVIDER_SPECS, OPENAI_SUB2API_MODELS, OPENCODE_GO_MODELS};
@@ -349,21 +352,18 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
     changed
 }
 
-/// Re-seed each template-sourced provider instance so its channels mirror the
-/// template's *current* model list, then conservatively stamp a `template_id`
-/// onto legacy instances that already match a template exactly.
+/// Reconcile each template-sourced provider instance with the models the client
+/// supports, then conservatively stamp a `template_id` onto legacy instances
+/// that already match a template exactly.
 ///
 /// A provider created from a template (`AddProvider` with a non-empty
 /// `template_id`) records which template it came from. This walks those
-/// instances and rebuilds the channel set from the template's live models, so a
-/// template edit — a model added in code, or one removed — propagates to every
-/// instance created from it. The semantics are a **pure mirror** of the
-/// template's model set: any model no longer in the template is dropped, and any
-/// new template model is added as a fresh channel. It deliberately does **not**
-/// keep user-added models that are not part of the template (that is the
-/// semantics the user opted into for template-sourced instances); a user who
-/// wants a divergent model set should start from a blank custom provider, which
-/// carries no `template_id` and is left untouched here.
+/// instances and validates their channel sets. [`ModelSource::Fixed`] instances
+/// mirror the template snapshot exactly. [`ModelSource::Api`] instances keep
+/// their last discovered subset as long as each id remains in the client model
+/// registry and supports the template's wire protocol; the asynchronous live
+/// pass may add or remove registered models based on provider availability.
+/// Pure-custom instances carry no `template_id` and are left untouched.
 ///
 /// This function is **thin glue**: it resolves a `template_id` to a model list
 /// plus transport (the bit that needs both `neenee-providers` and
@@ -381,24 +381,43 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
 /// never re-seeded. Returns `true` when any instance was changed, so the caller
 /// can persist only when necessary.
 ///
-/// This is the **synchronous, offline** pass: it mirrors every template-sourced
-/// instance against its template's compiled-in snapshot. Instances whose
+/// This is the **synchronous, offline** pass. Instances whose
 /// [`ModelSource`](UserProviderConfig::model_source) is `Api` additionally get a
-/// live `GET /models` fetch from [`discover_provider_models`] at startup — the
-/// snapshot this function writes is the fallback that the live fetch improves
-/// upon when it succeeds.
+/// live `GET /models` fetch from [`discover_provider_models`] at startup; the
+/// last valid persisted subset remains the fallback when that fetch fails.
 pub fn reconcile_provider_models(config: &mut Config) -> bool {
     let mut changed = false;
 
     for provider in &mut config.providers {
-        // A known template_id → re-seed the channel set from it. An unknown id
-        // (template removed from the codebase) leaves the instance as-is: a
-        // dangling pointer must not blank out a working provider.
+        // A known template_id → reconcile against the client-supported set.
+        // Fixed instances mirror the whole template. Api instances retain the
+        // last successfully discovered subset of KNOWN_MODELS compatible with
+        // the template protocol, while dropping unknown/incompatible ids.
+        // Re-expanding Api instances here would overwrite the persisted
+        // discovery result on every startup before the picker could display it.
         if let Some(tid) = provider.template_id.as_deref()
             && let Some(spec) = provider_template_spec(tid)
         {
+            let target_models = if provider.model_source == ModelSource::Api {
+                let current_models = provider
+                    .channel_models()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let known_models = supported_models_for_protocol(spec.protocol);
+                let supported = supported_model_intersection(&known_models, &current_models);
+                // A malformed/obsolete instance with no supported channels
+                // falls back to the snapshot rather than becoming unusable.
+                if supported.is_empty() {
+                    spec.models.to_vec()
+                } else {
+                    supported
+                }
+            } else {
+                spec.models.to_vec()
+            };
             changed |= provider
-                .reseed_channels_from_models(spec.models, transport_for_protocol(spec.protocol));
+                .reseed_channels_from_models(&target_models, transport_for_protocol(spec.protocol));
             continue;
         }
 
@@ -431,17 +450,19 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
 /// [`ModelSource`](UserProviderConfig::model_source) is `Api`.
 ///
 /// The companion to [`reconcile_provider_models`] for the live-discovery path:
-/// where reconcile mirrors the template's *compiled-in* snapshot synchronously,
-/// this hits each provider's actual `GET /models` endpoint asynchronously and
-/// re-seeds the instance from the result. The snapshot reconcile must already
-/// have run (or run concurrently and lose to this) — it is the guaranteed
-/// fallback when a live fetch fails, so a flaky network or a misconfigured key
-/// never leaves the instance worse than the template baseline.
+/// where reconcile validates the last known subset against the client model
+/// registry synchronously, this hits each provider's actual `GET /models`
+/// endpoint asynchronously and persists the intersection of those two sets.
+/// Provider-advertised models unknown to the client or incompatible with the
+/// template protocol are never materialized. The previous subset (or initial
+/// template snapshot) is kept when fetching fails or the intersection is
+/// empty, so a flaky network, a wrong endpoint, or an incompatible response
+/// cannot blank a provider.
 ///
 /// Per-instance semantics:
 /// - `template_id` resolves to a known template **and** `spec.discovery` is on
-///   **and** `model_source == Api` → fetch live, reseed on success, leave the
-///   snapshot alone on any error (logged at `warn`).
+///   **and** `model_source == Api` → fetch live, persist a non-empty supported
+///   intersection, and leave the previous valid set alone otherwise.
 /// - Otherwise → skipped. `Fixed` instances, discovery-disabled templates
 ///   (Kimi Code, Z.AI Code, opencode-go), and pure-custom instances keep what
 ///   the synchronous reconcile produced.
@@ -461,7 +482,7 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
         let Some(spec) = provider_template_spec(tid) else {
             continue;
         };
-        if !spec.discovery || provider.model_source != neenee_store::config::ModelSource::Api {
+        if !spec.discovery || provider.model_source != ModelSource::Api {
             continue;
         }
 
@@ -492,29 +513,38 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
 
         match neenee_providers::list_models(discovery_req).await {
             Ok(models) => {
-                // Convert the live Vec<String> into the &[&str] reseed expects.
-                // Ownership is fine: `models` lives for the whole match arm.
-                let model_refs: Vec<&str> = models.iter().map(String::as_str).collect();
-                let reseated = provider.reseed_channels_from_models(
-                    &model_refs,
-                    transport_for_protocol(spec.protocol),
-                );
+                // Only expose models both advertised by the provider and known
+                // to the client for this wire protocol. Preserve registry order
+                // so provider response ordering cannot churn the picker.
+                let known_models = supported_models_for_protocol(spec.protocol);
+                let supported = supported_model_intersection(&known_models, &models);
+                if supported.is_empty() {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        discovered_count = models.len(),
+                        "live model discovery had no supported intersection; keeping previous models"
+                    );
+                    continue;
+                }
+                let reseated = provider
+                    .reseed_channels_from_models(&supported, transport_for_protocol(spec.protocol));
                 if reseated {
                     tracing::info!(
                         provider_id = %provider.id,
-                        model_count = models.len(),
+                        discovered_count = models.len(),
+                        supported_count = supported.len(),
                         "live model discovery updated instance"
                     );
                     changed = true;
                 }
             }
             Err(error) => {
-                // The snapshot from the synchronous reconcile remains in place;
-                // the live fetch only ever improves on it, never regresses.
+                // The previous valid subset (or initial snapshot) remains in
+                // place; a failed fetch never regresses the provider.
                 tracing::warn!(
                     provider_id = %provider.id,
                     error = %error,
-                    "live model discovery failed; keeping template snapshot"
+                    "live model discovery failed; keeping previous models"
                 );
             }
         }
@@ -523,19 +553,48 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
     changed
 }
 
+/// Model ids known to the client and compatible with a provider protocol.
+fn supported_models_for_protocol(protocol: &str) -> Vec<&'static str> {
+    neenee_core::KNOWN_MODELS
+        .iter()
+        .filter(|model| {
+            matches!(
+                (protocol, model.format),
+                ("openai", WireFormat::OpenAiCompat)
+                    | ("anthropic", WireFormat::AnthropicCompat)
+                    | ("gemini", WireFormat::Gemini)
+            )
+        })
+        .map(|model| model.id)
+        .collect()
+}
+
+/// Return `supported ∩ available` in the client-registry order.
+///
+/// The provider response is only an availability signal; it is not trusted as
+/// a model registry. Restricting it to `KNOWN_MODELS` for the provider's wire
+/// protocol guarantees every picker channel has client-side metadata and
+/// request behavior.
+fn supported_model_intersection<'a>(supported: &[&'a str], available: &[String]) -> Vec<&'a str> {
+    let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
+    supported
+        .iter()
+        .copied()
+        .filter(|model| available.contains(model))
+        .collect()
+}
+
 /// The default [`ModelSource`] a template-sourced instance adopts when its
 /// template supports live discovery. Maps `spec.discovery` to the model source:
 /// `Api` when the template advertises a fetchable `GET /models` endpoint,
 /// `Fixed` otherwise. Used by the add-provider flow and the legacy backfill so
 /// a fresh instance starts from the right source without the caller
 /// re-deriving the rule.
-pub fn default_model_source_for_spec(
-    spec: &neenee_providers::ProviderTemplateSpec,
-) -> neenee_store::config::ModelSource {
+pub fn default_model_source_for_spec(spec: &neenee_providers::ProviderTemplateSpec) -> ModelSource {
     if spec.discovery {
-        neenee_store::config::ModelSource::Api
+        ModelSource::Api
     } else {
-        neenee_store::config::ModelSource::Fixed
+        ModelSource::Fixed
     }
 }
 
@@ -985,6 +1044,34 @@ mod tests {
     }
 
     #[test]
+    fn discovery_intersection_keeps_only_supported_models_in_registry_order() {
+        let supported = &["model-a", "model-b", "model-c"];
+        let available = vec![
+            "unknown-cloud-model".to_string(),
+            "model-c".to_string(),
+            "model-a".to_string(),
+        ];
+
+        assert_eq!(
+            supported_model_intersection(supported, &available),
+            vec!["model-a", "model-c"]
+        );
+        assert!(supported_model_intersection(supported, &["unknown".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn protocol_supported_models_come_from_the_client_registry() {
+        let openai = supported_models_for_protocol("openai");
+        assert!(openai.contains(&"gpt-4o"));
+        assert!(openai.contains(&"gpt-5.6"));
+        assert!(!openai.contains(&"claude-opus-4-8"));
+
+        let anthropic = supported_models_for_protocol("anthropic");
+        assert!(anthropic.contains(&"claude-opus-4-8"));
+        assert!(!anthropic.contains(&"gpt-4o"));
+    }
+
+    #[test]
     fn reconcile_noops_when_instance_already_mirrors_template() {
         // An instance whose channels exactly equal the current template models
         // must not be churned (no change reported, channels untouched).
@@ -1079,6 +1166,41 @@ mod tests {
                 .iter()
                 .all(|c| c.api_key.as_deref() == Some("sk-test")),
             "shared key is preserved across the reseed"
+        );
+    }
+
+    #[test]
+    fn reconcile_api_instance_keeps_last_discovered_supported_subset() {
+        let known = supported_models_for_protocol("openai");
+        let subset = [known[1], known[3]];
+        let mut instance = template_instance("openai-sub2api", &subset);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        assert!(
+            !reconcile_provider_models(&mut config),
+            "startup reconciliation must not expand a persisted Api subset"
+        );
+        assert_eq!(config.providers[0].channel_models(), subset);
+    }
+
+    #[test]
+    fn reconcile_api_instance_drops_unsupported_without_expanding_subset() {
+        let known = supported_models_for_protocol("openai");
+        let kept = known[2];
+        let mut instance = template_instance("openai-sub2api", &[kept, "removed-or-unknown-model"]);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(config.providers[0].channel_models(), vec![kept]);
+        let channel = &config.providers[0].channels[0];
+        assert_eq!(channel.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(
+            channel.base_url.as_deref(),
+            Some("https://relay.example.com/v1/chat/completions")
         );
     }
 
@@ -1951,6 +2073,95 @@ mod tests {
             default_model_source_for_spec(opencode_spec),
             neenee_store::config::ModelSource::Fixed
         );
+    }
+
+    #[tokio::test]
+    async fn discover_filters_to_supported_intersection_and_keeps_provider_settings() {
+        let spec = provider_template_spec("openai-sub2api").unwrap();
+        let kept_a = spec.models[1];
+        let kept_b = spec.models[4];
+        let known_outside_seed = "gpt-4o";
+        assert!(!spec.models.contains(&known_outside_seed));
+        let advertised = vec![
+            "cloud-only-model".to_string(),
+            kept_b.to_string(),
+            known_outside_seed.to_string(),
+            kept_a.to_string(),
+        ];
+        let expected = supported_model_intersection(
+            &supported_models_for_protocol(spec.protocol),
+            &advertised,
+        )
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let mut server = mockito::Server::new_async().await;
+        let body = format!(
+            r#"{{"data":[{{"id":"cloud-only-model"}},{{"id":"{kept_b}"}},{{"id":"{known_outside_seed}"}},{{"id":"{kept_a}"}}]}}"#
+        );
+        let _mock = server
+            .mock("GET", "/v1/models")
+            .match_header("authorization", "Bearer sk-test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let mut instance = template_instance("openai-sub2api", spec.models);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        let chat_url = format!("{}/v1/chat/completions", server.url());
+        for channel in &mut instance.channels {
+            channel.base_url = Some(chat_url.clone());
+            channel.api_key_env = Some("RELAY_API_KEY".to_string());
+            channel.user_agent = Some("relay-client/1.0".to_string());
+        }
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        assert!(discover_provider_models(&mut config).await);
+        assert_eq!(config.providers[0].channel_models(), expected);
+        assert!(config.providers[0].channels.iter().all(|channel| {
+            channel.api_key.as_deref() == Some("sk-test")
+                && channel.api_key_env.as_deref() == Some("RELAY_API_KEY")
+                && channel.base_url.as_deref() == Some(chat_url.as_str())
+                && channel.user_agent.as_deref() == Some("relay-client/1.0")
+        }));
+    }
+
+    #[tokio::test]
+    async fn discover_empty_supported_intersection_keeps_previous_provider() {
+        let spec = provider_template_spec("openai-sub2api").unwrap();
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/v1/models")
+            .match_header("authorization", "Bearer sk-test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"data":[{"id":"cloud-only-model"}]}"#)
+            .create_async()
+            .await;
+
+        let mut instance = template_instance("openai-sub2api", spec.models);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        let chat_url = format!("{}/v1/chat/completions", server.url());
+        for channel in &mut instance.channels {
+            channel.base_url = Some(chat_url.clone());
+        }
+        let before = instance
+            .channel_models()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        assert!(!discover_provider_models(&mut config).await);
+        assert_eq!(config.providers[0].channel_models(), before);
+        assert!(config.providers[0].channels.iter().all(|channel| {
+            channel.api_key.as_deref() == Some("sk-test")
+                && channel.base_url.as_deref() == Some(chat_url.as_str())
+        }));
     }
 
     #[tokio::test]

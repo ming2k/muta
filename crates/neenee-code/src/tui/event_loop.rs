@@ -1092,6 +1092,18 @@ pub(super) async fn run_app_loop(
                             };
                             if show { m.effort.as_deref() } else { None }
                         });
+                    // Authoritative context anchor for the meter: the most
+                    // recent provider-reported round's prompt+completion for
+                    // the active (provider, model). `None` before the first
+                    // response or for non-reporting providers, in which case
+                    // the bar falls back to the local transcript estimate.
+                    let hint_context_anchor = app
+                        .token_ledger
+                        .as_ref()
+                        .and_then(|ledger| {
+                            ledger.last_reported_round(&app.current_provider, &app.current_model)
+                        })
+                        .map(|round| round.prompt_tokens + round.completion_tokens);
                     app.hint_context_rect = render::draw_hint_bar(
                         f,
                         hint_rect,
@@ -1103,6 +1115,7 @@ pub(super) async fn run_app_loop(
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
                             unattended: app.unattended,
+                            last_reported_context: hint_context_anchor,
                         },
                         &app.theme,
                     );

@@ -1601,6 +1601,7 @@ dependencies = [
  "glob",
  "include_dir",
  "inventory",
+ "mockito",
  "neenee-auth",
  "neenee-core",
  "neenee-providers",

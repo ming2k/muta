@@ -220,10 +220,10 @@ pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
 ///
 /// A provider instance created from a template records the template's stable
 /// [`id`](ProviderTemplateSpec::id) on its `UserProviderConfig`. At startup the
-/// catalog re-seeds the instance's channels from the template's *current*
-/// `models`, so a template edit (new model added in code) propagates to every
-/// instance that was created from it — instances "mirror" their template's model
-/// set. This struct is the source of truth for that mapping; it intentionally
+/// catalog uses the template protocol and seed `models` to reconcile the
+/// instance. Fixed instances mirror the seed list; API-discovered instances
+/// retain only provider-advertised ids known to the client for that protocol.
+/// This struct is the source of truth for that mapping; it intentionally
 /// lives in `neenee-providers` (where the model constants live) so the
 /// reconciliation layer in `neenee-agent` and the UI templates in
 /// `neenee-tui-view` both read one table. The UI-only fields (label /
@@ -236,19 +236,20 @@ pub struct ProviderTemplateSpec {
     /// Wire protocol the template's channels speak: `"openai"` | `"anthropic"`
     /// | `"gemini"`.
     pub protocol: &'static str,
-    /// The model ids the template seeds, in display/activation order. This list
-    /// is the live source the catalog re-seeds from at startup.
+    /// The model ids the template initially seeds, in display/activation order.
+    /// Fixed instances continue to mirror this list.
     pub models: &'static [&'static str],
     /// Whether this template supports **live model-list discovery** — fetching
     /// the provider's actual `GET /models` list at startup instead of mirroring
     /// the compiled-in [`models`](Self::models) snapshot.
     ///
     /// When `true`, an instance created from this template defaults to
-    /// `ModelSource::Api` (live fetch, with `models` as the fallback on any
-    /// error). When `false`, the instance always uses the snapshot. A template
-    /// is marked `false` when its endpoint is a fixed single-model membership
-    /// platform (Kimi Code, Z.AI Code) or its model list is derived at runtime
-    /// (opencode-go), since those would regress under a live overwrite.
+    /// `ModelSource::Api` (live availability intersected with the client model
+    /// registry, retaining the last valid subset on error). When `false`, the
+    /// instance always uses the snapshot. A template is marked `false` when its
+    /// endpoint is a fixed single-model membership platform (Kimi Code, Z.AI
+    /// Code) or its model list is derived at runtime (opencode-go), since those
+    /// would regress under a live overwrite.
     pub discovery: bool,
 }
 

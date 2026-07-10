@@ -284,18 +284,39 @@ impl Block {
     }
 }
 
+/// Per-message overhead (tokens) the provider's chat template adds on top of
+/// the raw content: role markers, turn delimiters, etc. An OpenAI-chat-format
+/// approximation (Anthropic's template overhead differs slightly); kept as a
+/// tunable constant so the local fallback tracks the serialized request, not
+/// just the displayed text.
+const PER_MESSAGE_OVERHEAD: i64 = 4;
+
 /// Total character count of the context a message stream occupies, used by the
-/// header's context-window indicator. `raw` is display state for tool steps
-/// (a short summary when collapsed), so tool-step bulk is measured directly
-/// from `arguments` + `output` + nested children; thinking text uses `content`;
-/// plain-text messages use `raw`.
+/// hint bar's context-window meter as a *fallback* when no provider usage is
+/// available. This estimates the **serialized** request content — what the
+/// model actually sees — not the displayed transcript:
+///
+/// - `Thinking` (reasoning) is **excluded**: it is never sent to providers.
+/// - `Notice` is **excluded**: harness-only status, never model context.
+/// - `ProviderRetry` is excluded: transient UI state.
+/// - Each contributing message also accrues [`PER_MESSAGE_OVERHEAD`] to model
+///   the chat-template tokens (role markers, turn boundaries) the provider
+///   adds on top of the content — the old estimator omitted this entirely.
+///
+/// When the provider reports real usage it is preferred (see
+/// [`HintBarView::last_reported_context`](crate::render::chrome::HintBarView));
+/// this function is only the pre-first-turn / non-reporting fallback.
 fn context_token_weight(messages: &[TranscriptMessage]) -> i64 {
     let mut tokens: i64 = 0;
     for m in messages {
+        let mut msg_tokens: i64 = 0;
         match &m.kind {
-            MessageKind::Text => tokens += neenee_core::count_tokens(&m.raw),
-            MessageKind::Notice { .. } => tokens += neenee_core::count_tokens(&m.raw),
-            MessageKind::Thinking { content, .. } => tokens += neenee_core::count_tokens(content),
+            MessageKind::Text => msg_tokens += neenee_core::count_tokens(&m.raw),
+            // Harness-only status, never sent to the model.
+            MessageKind::Notice { .. } => {}
+            // Reasoning content is never serialized to providers, so it is
+            // excluded to avoid inflating the meter.
+            MessageKind::Thinking { .. } => {}
             // Provider retries are transient UI state, never model context.
             MessageKind::ProviderRetry { .. } => {}
             MessageKind::ToolStep {
@@ -304,12 +325,18 @@ fn context_token_weight(messages: &[TranscriptMessage]) -> i64 {
                 children,
                 ..
             } => {
-                tokens += neenee_core::count_tokens(arguments);
+                msg_tokens += neenee_core::count_tokens(arguments);
                 if let Some(o) = output {
-                    tokens += neenee_core::count_tokens(o);
+                    msg_tokens += neenee_core::count_tokens(o);
                 }
-                tokens += context_token_weight(children);
+                msg_tokens += context_token_weight(children);
             }
+        }
+        // Only charge the per-message template overhead for messages that
+        // actually contribute serialized content (skips in-flight tool steps
+        // with empty arguments/output and all the excluded kinds).
+        if msg_tokens > 0 {
+            tokens += msg_tokens + PER_MESSAGE_OVERHEAD;
         }
     }
     tokens
@@ -318,13 +345,10 @@ fn context_token_weight(messages: &[TranscriptMessage]) -> i64 {
 /// Token estimate for the active context, using `neenee_core`'s char-class
 /// estimator ([`neenee_core::count_tokens`]). This accounts for CJK glyphs,
 /// code punctuation, and other Unicode — so the on-screen indicator tracks
-/// reality for mixed Chinese + code conversations instead of the old flat
-/// `bytes / 4` heuristic.
-///
-/// Note: this counts the *displayed* transcript, which includes `Thinking`
-/// (reasoning) content. The runtime decision layer (`estimate_tokens`)
-/// excludes reasoning because it is never sent to providers. The display
-/// figure is therefore an intentional upper bound, not a bug.
+/// reality for mixed Chinese + code conversations instead of a flat
+/// `bytes / 4` heuristic. See [`context_token_weight`] for what is and isn't
+/// counted; this is the fallback used only when no provider usage is
+/// available.
 pub fn estimate_context_tokens(messages: &[TranscriptMessage]) -> usize {
     context_token_weight(messages).max(1) as usize
 }

@@ -12,10 +12,10 @@
 //! The catalog reconciliation layer decides which instances use live
 //! discovery via a `ModelSource` flag on `UserProviderConfig` (see
 //! `neenee-store::config` and `neenee_agent::catalog::reconcile_provider_models`).
-//! There the priority is explicit: **(1)** live API query when `ModelSource::Api`,
-//! falling back to **(2)** the template's compiled-in snapshot on any error
-//! (network failure, non-2xx, unparseable body, empty list). `ModelSource::Fixed`
-//! skips the network entirely and uses the snapshot.
+//! For `ModelSource::Api`, the catalog intersects the live result with its
+//! protocol-compatible model registry and retains the last valid subset on an
+//! error or empty intersection. `ModelSource::Fixed` skips the network entirely
+//! and uses the template snapshot.
 //!
 //! ## Protocol details
 //!

@@ -5,6 +5,13 @@ compatible HTTP surface and gives you a token plus a relay URL. neenee's
 provider editor creates a named provider instance, stores the token, and seeds
 the model list from the selected template.
 
+For templates with live model discovery, neenee queries the relay's `/models`
+endpoint at startup and keeps only ids that are also present in neenee's model
+registry for that wire protocol. Unknown or incompatible ids are hidden. A
+failed request or an empty intersection keeps the last valid model list.
+Discovery never replaces the provider's token, token environment variable,
+base URL, user agent, or authentication mode.
+
 For the provider schema and field meanings, see
 [How to add a provider](add-a-provider.md) and
 [Providers](../reference/providers.md).
