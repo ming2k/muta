@@ -776,10 +776,10 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
     );
 }
 
-/// The default layout gives a stamped tool round one leading gap at the top of
-/// the transcript, a one-line round header, then one gap before the first step.
+/// The round header is the group's visual separator, so it sits directly above
+/// the first component and owns no leading/trailing blank row.
 #[test]
-fn default_round_header_has_single_gap_above_and_below() {
+fn default_round_header_is_flush_with_first_tool() {
     let step = tool_step_structured(
         "read_text",
         r#"{"path":"a.rs"}"#,
@@ -806,14 +806,124 @@ fn default_round_header_has_single_gap_above_and_below() {
         .position(|row| row.contains("Read ") && row.contains('+'))
         .expect("tool header must render");
 
-    assert!(
-        round_idx > 0 && rows[round_idx - 1].trim().is_empty(),
-        "round header should have one blank leading row at the top of the transcript stream:\n{grid}"
+    assert_eq!(
+        round_idx, 1,
+        "round header should only inherit the viewport's one top-margin row:\n{grid}"
     );
     assert_eq!(
         tool_idx - round_idx,
+        1,
+        "round header and first tool should be flush:\n{grid}"
+    );
+}
+
+/// Optional thinking does not alter round geometry: every component stamped
+/// with the same round is rendered as one flush vertical stack.
+#[test]
+fn same_round_thinking_and_parallel_tools_have_no_vertical_gap() {
+    let mut thinking = TranscriptMessage::thinking("inspect the files").with_turn(7);
+    thinking.set_thinking_duration(10);
+    let first = tool_step_structured(
+        "read_text",
+        r#"{"path":"a.rs"}"#,
+        neenee_core::ToolOutput::Code {
+            lang: None,
+            text: "a".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(7);
+    let second = tool_step_structured(
+        "read_text",
+        r#"{"path":"b.rs"}"#,
+        neenee_core::ToolOutput::Code {
+            lang: None,
+            text: "b".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(7);
+
+    let grid = render_transcript_grid(&[thinking, first, second], 72, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let round_idx = rows
+        .iter()
+        .position(|row| row.contains("◆ round 7"))
+        .expect("round header must render");
+    let thinking_idx = rows
+        .iter()
+        .position(|row| row.contains("Thinking ·"))
+        .expect("thinking summary must render");
+    let tool_idx: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
+        .map(|(index, _)| index)
+        .collect();
+
+    assert_eq!(
+        thinking_idx,
+        round_idx + 1,
+        "header → thinking must be flush:\n{grid}"
+    );
+    assert_eq!(
+        tool_idx,
+        vec![thinking_idx + 1, thinking_idx + 2],
+        "thinking and same-round tools must be flush:\n{grid}"
+    );
+}
+
+/// A round boundary, unlike a component boundary inside a round, keeps the
+/// standard single separator row.
+#[test]
+fn different_tool_rounds_have_one_vertical_gap() {
+    let make_step = |turn: u64| {
+        tool_step_structured(
+            "read_text",
+            format!(r#"{{"path":"{turn}.rs"}}"#).as_str(),
+            neenee_core::ToolOutput::Code {
+                lang: None,
+                text: turn.to_string(),
+                start_line: 1,
+                prefix: None,
+                suffix: None,
+            },
+            false,
+        )
+        .with_turn(turn)
+    };
+    let grid = render_transcript_grid(&[make_step(1), make_step(2)], 72, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let round_rows: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains("◆ round"))
+        .map(|(index, _)| index)
+        .collect();
+    let tool_rows: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
+        .map(|(index, _)| index)
+        .collect();
+
+    assert_eq!(round_rows.len(), 2, "expected two round headers:\n{grid}");
+    assert_eq!(tool_rows.len(), 2, "expected two tool headers:\n{grid}");
+    assert_eq!(
+        round_rows[1] - tool_rows[0],
         2,
-        "round header should have one blank row below it before the first step:\n{grid}"
+        "rounds need exactly one blank separator row:\n{grid}"
+    );
+    assert_eq!(
+        tool_rows[1] - round_rows[1],
+        1,
+        "round header → tool must stay flush:\n{grid}"
     );
 }
 

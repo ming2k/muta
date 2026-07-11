@@ -434,14 +434,14 @@ pub struct TranscriptMessage {
     pub provider: Option<String>,
     /// Model id that produced this message, companion to [`TranscriptMessage::provider`].
     pub model: Option<String>,
-    /// The tool-round this assistant-side message belongs to (1-indexed,
+    /// The model-request round this assistant-side message belongs to (1-indexed,
     /// stamped from the harness's `TurnStarted` counter). User messages may
     /// also carry the visible chat-round number stamped at send time. The
-    /// renderer uses assistant-side stamps to insert round-boundary separators
-    /// between adjacent collapsed tool steps that belong to different rounds,
-    /// so two tool-only rounds never read as one batch. `None` (the default,
-    /// and for restored sessions that predate the stamp) means "round unknown"
-    /// — the renderer then preserves the legacy same-round flush stack.
+    /// renderer uses assistant-side stamps to keep every component in one
+    /// model request flush while inserting a separator at round boundaries.
+    /// `None` (the default, and for restored sessions that predate the stamp)
+    /// means "round unknown"; collapsed tool batches retain a compatibility
+    /// flush-stack fallback.
     pub turn: Option<u64>,
     /// Wall-clock send time for transcript headers, in Unix epoch milliseconds.
     /// Restored messages use the persisted millisecond value when available and
@@ -504,7 +504,8 @@ impl TranscriptMessage {
         self
     }
 
-    /// Stamp the tool round this message belongs to (see [`TranscriptMessage::turn`]).
+    /// Stamp the model-request round this message belongs to (see
+    /// [`TranscriptMessage::turn`]).
     pub fn with_turn(mut self, round: u64) -> Self {
         self.turn = Some(round);
         self

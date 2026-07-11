@@ -259,6 +259,10 @@ pub async fn run_tui(
         // listener routes per-turn events; the loop reads the already-routed
         // `side_messages` buffer.
         let mut listener_side_id: Option<String> = None;
+        // Per-session model-request round. The primary and `/btw` side
+        // sessions can stream concurrently, so a single global counter cannot
+        // reliably stamp transcript components for semantic spacing.
+        let mut turns_by_session = HashMap::<String, u64>::new();
         while let Some(resp) = rx.recv().await {
             // Stage 3/4: any handled response can change shared state the loop
             // renders from, so signal a redraw. High-frequency stream deltas
@@ -319,10 +323,10 @@ pub async fn run_tui(
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
-                            msgs.push(
-                                TranscriptMessage::new(Role::Assistant, t)
-                                    .with_attribution(provider, model),
-                            );
+                            let mut message = TranscriptMessage::new(Role::Assistant, t)
+                                .with_attribution(provider, model);
+                            message.turn = turns_by_session.get(&session_id).copied();
+                            msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
                                 activity_clone.lock().await.clear();
@@ -335,10 +339,12 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::TurnStarted { turn } => {
+                            let turn = turn as u64 + 1;
+                            turns_by_session.insert(session_id.clone(), turn);
                             if !routes_to_side {
                                 // 1-indexed for display: tool_round 0 is the turn
                                 // first model request, shown as `round 1`.
-                                *current_turn_clone.lock().await = turn as u64 + 1;
+                                *current_turn_clone.lock().await = turn;
                             }
                         }
                         RoundEvent::StreamStart => {
@@ -346,10 +352,10 @@ pub async fn run_tui(
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
-                            msgs.push(
-                                TranscriptMessage::new(Role::Assistant, "")
-                                    .with_attribution(provider, model),
-                            );
+                            let mut message = TranscriptMessage::new(Role::Assistant, "")
+                                .with_attribution(provider, model);
+                            message.turn = turns_by_session.get(&session_id).copied();
+                            msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
                                 *activity_clone.lock().await = "responding".to_string();
@@ -476,6 +482,7 @@ pub async fn run_tui(
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
                                 let mut thinking = TranscriptMessage::thinking(delta.clone())
                                     .with_attribution(provider, model);
+                                thinking.turn = turns_by_session.get(&session_id).copied();
                                 // A reasoning trace's default disclosure honors the
                                 // `[tui.default_expanded] thinking` config (collapsed by
                                 // default). On completion the transition leaves it as-is
@@ -542,11 +549,11 @@ pub async fn run_tui(
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
-                            // Stamp the current tool round so the renderer can
-                            // separate adjacent collapsed tool steps that
-                            // belong to different rounds (`TurnStarted` has
-                            // already bumped this counter for the round).
-                            let turn = *current_turn_clone.lock().await;
+                            // Stamp the current model-request round so this step
+                            // stays flush with every sibling component;
+                            // `TurnStarted` has already populated the session
+                            // map for this round.
+                            let turn = turns_by_session.get(&session_id).copied();
                             let sent_at_ms = event_loop::now_epoch_ms();
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
@@ -554,10 +561,10 @@ pub async fn run_tui(
                             // yet. The lifecycle-aware default (see `step_interaction`)
                             // expands it on completion — Ok follows per-tool density,
                             // Failed/Denied force-expand to surface the error.
-                            let message = TranscriptMessage::tool_step(id, name, arguments)
+                            let mut message = TranscriptMessage::tool_step(id, name, arguments)
                                 .with_attribution(provider, model)
-                                .with_turn(turn)
                                 .with_sent_at_ms(sent_at_ms);
+                            message.turn = turn;
                             msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
@@ -609,6 +616,7 @@ pub async fn run_tui(
                                 let mut message =
                                     TranscriptMessage::tool_step(id.clone(), name.clone(), "{}")
                                         .with_attribution(provider, model);
+                                message.turn = turns_by_session.get(&session_id).copied();
                                 message.finish_tool_step(&id, output, structured, duration_ms);
                                 if let Some(status) = message.tool_step_status() {
                                     let default = step_interaction::default_tool_expanded(
@@ -643,6 +651,7 @@ pub async fn run_tui(
                                 // the user still sees the call was abandoned.
                                 let mut message =
                                     TranscriptMessage::tool_step(id.clone(), "tool", "{}");
+                                message.turn = turns_by_session.get(&session_id).copied();
                                 message.cancel_tool_step(&id);
                                 message.set_tool_step_expanded(false);
                                 msgs.push(message);

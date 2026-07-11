@@ -19,8 +19,8 @@ pub(super) const STEP_MIN_WIDTH: usize = 8;
 /// prose-like body content inside that band.
 pub(super) const TOOL_STEP_BODY_INDENT_COLS: usize = 2;
 
-/// One blank row inserted between transcript items unless a component already
-/// provides its own separator.
+/// One blank row inserted at semantic transcript/round boundaries. Components
+/// within the same known model-request round use zero rows.
 pub(super) const MESSAGE_GAP_ROWS: usize = 1;
 
 /// Vertical chrome rows around a sent user message panel: one top transition
@@ -42,19 +42,18 @@ pub(super) const USER_MESSAGE_TRANSITION_ROWS: usize = 1;
 /// and the one place that would want to re-introduce it (`draw_tool_step`)
 /// reads the named token.
 ///
-/// The bottom of the body is still closed by the layout's `MESSAGE_GAP_ROWS`
-/// separator (no dedicated bottom-gap token — an extra one would double it),
-/// and a collapsed batch stays flush via `draw_transcript`'s
-/// `collapsed_tool_into_tool_step` suppression.
+/// The layout closes the body only when the next component crosses a semantic
+/// round/message boundary. There is no dedicated bottom-gap token: an extra
+/// one would break the flush same-round stack.
 pub(super) const TOOL_STEP_BODY_TOP_GAP_ROWS: usize = 0;
 pub(super) const TOOL_STEP_SECTION_GAP_ROWS: usize = 1;
 pub(super) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS;
 
 /// Breathing room inside expanded reasoning traces. These stay independent
 /// from tool-step spacing because reasoning is prose-like, not a panel.
-/// There is no bottom-gap token: the message-level separator
-/// (`MESSAGE_GAP_ROWS`) already supplies the single blank row between a trace
-/// and the next component, so an extra trailing gap would double it.
+/// There is no bottom-gap token: the layout resolves the following semantic
+/// boundary, using zero rows inside the same round and `MESSAGE_GAP_ROWS`
+/// otherwise.
 pub(super) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 1;
 pub(super) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 

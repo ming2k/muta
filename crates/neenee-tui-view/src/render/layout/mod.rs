@@ -21,7 +21,8 @@
 //!
 //! # Strategies
 //! - [`layout_default::Default`] — each tool round is grouped under a labelled
-//!   header (`◆ round N · model · K calls`). The default.
+//!   header (`◆ round N · model`) and uses semantic boundary spacing. The
+//!   default.
 //! - [`legacy::Legacy`] — the original flush-stack behavior, preserved
 //!   verbatim.
 //!
@@ -45,7 +46,7 @@ use crate::render::design::MESSAGE_GAP_ROWS;
 /// Which layout strategy to use for the transcript message stream.
 ///
 /// Selectable via `[tui] transcript_layout` in `config.toml`; the default is
-/// [`Strategy::Default`], which reproduces the original renderer exactly.
+/// [`Strategy::Default`], which groups stamped model-request rounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Strategy {
     #[default]
@@ -174,35 +175,19 @@ pub fn build_virtual_index(
             }
             Strategy::Default => {
                 let message = &messages[index];
-                if message.is_tool_step()
-                    && message.turn.is_some()
-                    && default_group_start(messages, index)
-                {
-                    let end = default_group_end(messages, index);
-                    // First group owns the one leading blank row. For all later
-                    // groups the prior non-group/group chunk already emitted
-                    // the separating gap, matching `layout_default::Default`.
-                    let mut height = if index == 0 { MESSAGE_GAP_ROWS } else { 0 };
-                    height += 1 + MESSAGE_GAP_ROWS; // header + gap below header
-                    for message in &messages[index..end] {
+                let mut height = default_gap_before(messages, index);
+                if let Some(end) = default_group_end(messages, index) {
+                    height += 1; // round header; it sits flush with its first child
+                    for (offset, message) in messages[index..end].iter().enumerate() {
+                        if offset > 0 {
+                            height += default_boundary_gap(&messages[index + offset - 1], message);
+                        }
                         height += cached_height(cache, message)?;
                     }
-                    height += MESSAGE_GAP_ROWS;
                     index = end;
                     height
                 } else {
-                    let mut height = cached_height(cache, message)?;
-                    let next = messages.get(index + 1);
-                    let next_is_tool_step =
-                        next.is_some_and(|next| next.is_tool_step() || next.is_envoy_task());
-                    let collapsed_tool_into_tool_step = message.is_tool_step()
-                        && message.tool_step_expanded() == Some(false)
-                        && next_is_tool_step;
-                    if !collapsed_tool_into_tool_step
-                        && (message.role == neenee_core::Role::User || next.is_some())
-                    {
-                        height += MESSAGE_GAP_ROWS;
-                    }
+                    height += cached_height(cache, message)?;
                     index += 1;
                     height
                 }
@@ -229,31 +214,88 @@ fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usi
     cache.get(message.id).map(usize::from)
 }
 
+/// Whether a message participates in an assistant model-request group. A group
+/// is only promoted to a visible round band when its run contains a tool-like
+/// step; final prose-only responses retain the ordinary transcript shape.
+fn is_round_component(message: &TranscriptMessage) -> bool {
+    message.is_tool_step()
+        || message.is_envoy_task()
+        || message.is_thinking()
+        || (message.role == neenee_core::Role::Assistant && !message.is_provider_retry())
+}
+
+fn is_tool_like(message: &TranscriptMessage) -> bool {
+    message.is_tool_step() || message.is_envoy_task()
+}
+
 fn default_group_start(messages: &[TranscriptMessage], index: usize) -> bool {
+    let message = &messages[index];
+    if message.turn.is_none() || !is_round_component(message) {
+        return false;
+    }
     if index == 0 {
         return true;
     }
     let previous = &messages[index - 1];
-    previous.role == neenee_core::Role::User
-        || previous.is_notice()
-        || previous.turn != messages[index].turn
+    !is_round_component(previous) || previous.turn != message.turn
 }
 
-fn default_group_end(messages: &[TranscriptMessage], start: usize) -> usize {
+/// Return the exclusive end of the round group beginning at `start`.
+///
+/// Thinking can be the first component in a tool-producing model request, so
+/// group discovery starts from any stamped assistant component and looks
+/// forward for a tool-like step. This makes the presence or absence of optional
+/// thinking content irrelevant to the group's outer geometry.
+pub(super) fn default_group_end(messages: &[TranscriptMessage], start: usize) -> Option<usize> {
+    if !default_group_start(messages, start) {
+        return None;
+    }
     let turn = messages[start].turn;
     let mut end = start;
     while end < messages.len() {
         let message = &messages[end];
-        if message.role == neenee_core::Role::User
-            || message.is_notice()
-            || message.turn != turn
-            || !(message.is_tool_step() || message.is_envoy_task() || message.is_thinking())
-        {
+        if message.turn != turn || !is_round_component(message) {
             break;
         }
         end += 1;
     }
-    end
+    messages[start..end].iter().any(is_tool_like).then_some(end)
+}
+
+/// Resolve exactly one blank-row decision for a pair of adjacent transcript
+/// components. Every component in the same known model-request round forms one
+/// flush stack; component kind and disclosure state do not affect outer
+/// spacing. Unknown legacy tool steps retain the former collapsed-stack
+/// fallback because old sessions have no structural stamp.
+pub(super) fn default_boundary_gap(
+    previous: &TranscriptMessage,
+    next: &TranscriptMessage,
+) -> usize {
+    let known_same_round = is_round_component(previous)
+        && is_round_component(next)
+        && previous.turn.is_some()
+        && previous.turn == next.turn;
+    let legacy_collapsed_tool_batch = previous.turn.is_none()
+        && next.turn.is_none()
+        && previous.is_tool_step()
+        && previous.tool_step_expanded() == Some(false)
+        && is_tool_like(next);
+
+    if known_same_round || legacy_collapsed_tool_batch {
+        0
+    } else {
+        MESSAGE_GAP_ROWS
+    }
+}
+
+/// Boundary space is owned by the following item/chunk. This removes leading
+/// and trailing transcript whitespace and lets the renderer and virtual height
+/// index consume the same rule without double-counting group margins.
+pub(super) fn default_gap_before(messages: &[TranscriptMessage], index: usize) -> usize {
+    index
+        .checked_sub(1)
+        .map(|previous| default_boundary_gap(&messages[previous], &messages[index]))
+        .unwrap_or(0)
 }
 
 /// The shared render context handed to a layout. Owns the mutable scroll/Y
@@ -479,4 +521,24 @@ impl<'a, 'f> Stream<'a, 'f> {
 /// `last_shown_attribution` populated for `draw_transcript`'s post-processing.
 pub trait TranscriptLayout {
     fn run(&mut self, stream: &mut Stream<'_, '_>);
+}
+
+#[cfg(test)]
+mod tests {
+    use neenee_core::Role;
+
+    use super::*;
+
+    #[test]
+    fn default_spacing_depends_on_round_not_component_or_disclosure_kind() {
+        let thinking = TranscriptMessage::thinking("reasoning").with_turn(4);
+        let mut tool = TranscriptMessage::tool_step("call", "read_text", "{}").with_turn(4);
+        tool.set_tool_step_expanded(true);
+        let text = TranscriptMessage::new(Role::Assistant, "answer").with_turn(4);
+        let next_round = TranscriptMessage::new(Role::Assistant, "next").with_turn(5);
+
+        assert_eq!(default_boundary_gap(&thinking, &tool), 0);
+        assert_eq!(default_boundary_gap(&tool, &text), 0);
+        assert_eq!(default_boundary_gap(&text, &next_round), MESSAGE_GAP_ROWS);
+    }
 }

@@ -2053,14 +2053,10 @@ pub fn draw_tool_step(
             }
         }
 
-        // No trailing bottom gap here: spacing is owned by the body, not the
-        // step boundary. The message-level separator (`MESSAGE_GAP_ROWS`)
-        // supplies the single blank row that closes this step's expanded body
-        // against the next component — but it is suppressed when this step is
-        // collapsed and the next is also a tool step (see `draw_transcript`),
-        // so a collapsed batch stays flush. Adding another gap here would
-        // double the separator when expanded and break the flush stack when
-        // collapsed.
+        // No trailing bottom gap here: the layout resolves the semantic
+        // boundary to the next component. It supplies zero rows inside the
+        // same round and one standard row outside it, independent of this
+        // step's disclosure state.
     }
 
     if expanded {
@@ -2382,10 +2378,9 @@ pub fn draw_reasoning_trace(
                 }
             }
         }
-        // No trailing bottom gap here: the message-level separator
-        // (`MESSAGE_GAP_ROWS`) already provides a single blank row between
-        // this trace and the next component. Adding another would double the
-        // gap when expanded, diverging from the collapsed layout.
+        // No trailing bottom gap here: the layout resolves the semantic
+        // boundary to the next component (flush inside one round, one standard
+        // row outside it).
     }
 
     if expanded {

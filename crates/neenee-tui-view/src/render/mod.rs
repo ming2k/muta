@@ -1163,8 +1163,8 @@ mod tests {
             .collect::<Vec<_>>();
         let mut cache = HeightCache::default();
         cache.prepare(80);
-        // Four-line bodies plus a one-row gap after every message except the
-        // last: chunks begin at 0, 5, 10, and 15.
+        // Four-line bodies plus one boundary row owned by each following
+        // message: chunks begin at 0, 4, 9, and 14.
         for message in &messages {
             cache.set(message.id, 4);
         }
@@ -1174,9 +1174,33 @@ mod tests {
             .expect("all message heights are cached");
         assert_eq!(window.message_start, 1);
         assert_eq!(window.message_end, 2);
-        assert_eq!(window.prefix_lines, 5);
-        assert_eq!(window.skip_rows, 1);
+        assert_eq!(window.prefix_lines, 4);
+        assert_eq!(window.skip_rows, 2);
         assert_eq!(window.total_lines, 19);
+    }
+
+    #[test]
+    fn virtual_index_uses_flush_same_round_geometry() {
+        let mut thinking = TranscriptMessage::thinking("reasoning").with_turn(3);
+        thinking.set_thinking_duration(1);
+        let first = TranscriptMessage::tool_step("a", "read_text", r#"{"path":"a"}"#).with_turn(3);
+        let second = TranscriptMessage::tool_step("b", "read_text", r#"{"path":"b"}"#).with_turn(3);
+        let messages = vec![thinking, first, second];
+        let mut cache = HeightCache::default();
+        cache.prepare(80);
+        for message in &messages {
+            cache.set(message.id, 2);
+        }
+
+        let window = cache
+            .virtual_window(&messages, crate::render::layout::Strategy::Default, 0, 20)
+            .expect("all message heights are cached");
+        assert_eq!(window.message_start, 0);
+        assert_eq!(window.message_end, 3);
+        assert_eq!(
+            window.total_lines, 7,
+            "one header + three flush 2-row bodies"
+        );
     }
 
     #[test]

@@ -113,6 +113,25 @@ fn restored_assistant_tool_step_uses_message_timestamp_for_round_header() {
     let restored = transcript_messages_from_core(vec![assistant], &config::TuiConfig::default());
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].sent_at_ms, Some(1_700_000_002_000));
+    assert_eq!(restored[0].turn, Some(1));
+}
+
+#[test]
+fn restored_assistant_components_share_their_model_round() {
+    let mut assistant = Message::new(Role::Assistant, "continue");
+    assistant.reasoning_content = Some("inspect first".to_string());
+    assistant.tool_calls = Some(vec![ToolCall {
+        id: "call".to_string(),
+        name: "read_text".to_string(),
+        arguments: r#"{"path":"README.md"}"#.to_string(),
+    }]);
+
+    let restored = transcript_messages_from_core(vec![assistant], &config::TuiConfig::default());
+    assert_eq!(restored.len(), 3);
+    assert!(restored[0].is_thinking());
+    assert!(restored[1].is_tool_step());
+    assert_eq!(restored[2].role, Role::Assistant);
+    assert!(restored.iter().all(|message| message.turn == Some(1)));
 }
 
 #[test]
@@ -223,6 +242,7 @@ fn restored_reasoning_is_not_shown_as_running() {
     assert_eq!(restored.len(), 1);
     let thinking = &restored[0];
     assert!(thinking.is_thinking());
+    assert_eq!(thinking.turn, Some(1));
     // A finished reasoning block must not be rendered with a live spinner.
     assert!(
         thinking.thinking_summary().unwrap().contains("0ms"),

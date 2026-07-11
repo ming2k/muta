@@ -41,6 +41,11 @@ Layout strategies own the space between transcript items:
 - `Stream::message_gap()` inserts the standard `MESSAGE_GAP_ROWS` blank row.
 - `Stream::gap(n)` is the escape hatch for non-standard layout chrome.
 - These helpers update `content_lines`, `skip_rows`, and `current_y` together.
+- The default layout resolves each component boundary once. Components with
+  the same known `turn` stamp render flush with zero blank rows; a new turn,
+  user message, or notice gets one `MESSAGE_GAP_ROWS` separator.
+- A round header sits flush with the first component in its round. It does not
+  reserve its own top or bottom margin.
 
 Do not add a component-local trailing blank row just to separate from the next
 message. That usually double-counts spacing and can also make scroll accounting
@@ -68,18 +73,21 @@ first. A named token explains intent; a bare `2usize` does not.
 
 Tool steps deliberately support a compact log shape:
 
-- collapsed adjacent tool steps stack flush with no blank row;
+- tool steps in the same known round stack flush regardless of whether they
+  are collapsed or expanded;
+- old restored steps without a round stamp retain the collapsed-adjacency
+  fallback;
 - an expanded body sits directly under its header — grouping is carried by the
   body indent (`TOOL_STEP_BODY_INDENT_COLS`) alone, with **no** top blank row
   (`TOOL_STEP_BODY_TOP_GAP_ROWS` is pinned to 0). A blank row would be a
   panel/card affordance that competes with the indent (the row says "two
   blocks", the indent says "one block's content"); the flat log shape wants the
   indent to own the grouping;
-- there is no dedicated tool-step bottom-gap token because the layout's
-  message-level separator supplies the trailing row.
+- there is no dedicated tool-step bottom-gap token. The layout inserts a row
+  only at a semantic round/message boundary.
 
 This prevents expanded steps from gaining double bottom spacing while keeping a
-batch of collapsed tool calls visually tight.
+whole model-request round visually tight.
 
 ## Tests
 

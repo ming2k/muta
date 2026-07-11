@@ -101,11 +101,10 @@ pub(super) fn transcript_messages_from_core(
     config: &TuiConfig,
 ) -> Vec<TranscriptMessage> {
     let mut restored = Vec::new();
-    // Tool-round counter for restored assistant turns. Each `Role::Assistant`
-    // message is one model request = one round, so the counter increments per
-    // assistant message and stamps its tool steps — mirroring the live path's
-    // `TurnStarted`-driven stamp so resumed sessions get the same round-
-    // boundary separators between adjacent tool-only rounds.
+    // Model-request counter for restored assistant turns. Each
+    // `Role::Assistant` message is one round, so the counter increments per
+    // assistant message and stamps its thinking, tools, and text — mirroring
+    // the live `TurnStarted` path so restored spacing has identical boundaries.
     let mut restored_round: u64 = 0;
     // Index of every still-unfinished tool step, queued per tool name. A tool
     // result pairs with the *earliest* unfinished step of the same name (live
@@ -152,6 +151,7 @@ pub(super) fn transcript_messages_from_core(
                 let mut thinking = TranscriptMessage::thinking(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();
+                thinking.turn = Some(restored_round);
                 thinking.set_thinking_duration(0);
                 // Honor the configured default expand state for reasoning
                 // traces so resumed sessions match live behavior.
@@ -206,8 +206,11 @@ pub(super) fn transcript_messages_from_core(
                 }
             }
         }
-        if let Some(message) = transcript_message_from_core(message) {
-            restored.push(message);
+        if let Some(mut transcript_message) = transcript_message_from_core(message) {
+            if transcript_message.role == Role::Assistant {
+                transcript_message.turn = Some(restored_round);
+            }
+            restored.push(transcript_message);
         }
     }
     restored
