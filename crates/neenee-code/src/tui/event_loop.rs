@@ -2121,11 +2121,17 @@ pub(super) async fn run_app_loop(
                     // WebSocket listener to the running session). Intercept
                     // it here rather than routing through agent_loop.
                     if cmd == "/serve" || cmd.starts_with("/serve ") {
-                        let port: u16 = cmd
-                            .split_whitespace()
-                            .nth(1)
-                            .and_then(|p| p.parse().ok())
-                            .unwrap_or(0);
+                        let tokens = cmd.split_whitespace().collect::<Vec<_>>();
+                        let mut port: u16 = 0;
+                        let mut expose_public = false;
+                        // Parse `/serve [port] [--public]` in any order.
+                        for arg in &tokens[1..] {
+                            if *arg == "--public" {
+                                expose_public = true;
+                            } else if let Ok(p) = arg.parse::<u16>() {
+                                port = p;
+                            }
+                        }
                         let mut tap = app.serve_tap.lock().await;
                         if tap.is_some() {
                             // `/serve` with no arg while active = stop.
@@ -2145,7 +2151,7 @@ pub(super) async fn run_app_loop(
                                 runtime.messages.write().await.push(
                                     TranscriptMessage::new(
                                         Role::Assistant,
-                                        "Serve already active. Use /serve (no port) to stop."
+                                        "Serve already active. Use /serve (no args) to stop."
                                             .to_string(),
                                     )
                                     .with_origin(UserMessageOrigin::Slash),
@@ -2154,23 +2160,46 @@ pub(super) async fn run_app_loop(
                         } else {
                             let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
                             *tap = Some(bc_tx.clone());
-                            let (port_rx, cancel_token) = neenee_server::serve::start_server(
+                            // Local (loopback, no token) is the default; `--public`
+                            // binds all interfaces and forces a bearer token that
+                            // the client must send as `Authorization: Bearer <t>`.
+                            let expose = if expose_public {
+                                neenee_server::serve::ServeExpose::Public
+                            } else {
+                                neenee_server::serve::ServeExpose::Local
+                            };
+                            let opts = neenee_server::serve::ServeOptions {
                                 port,
+                                expose,
+                                token: None,
+                            };
+                            let handle = neenee_server::serve::start_server(
+                                opts,
                                 app.tx.clone(),
                                 bc_tx,
                                 session.clone(),
                             );
                             // Stash the cancel token so `/serve` (stop) can
                             // shut the listener down.
-                            app.serve_cancel = Some(cancel_token);
+                            app.serve_cancel = Some(handle.cancel);
                             // Wait for the listener to report the actual bound
                             // port (resolves port=0 to the OS-assigned value).
-                            let actual_port = port_rx.await.unwrap_or(port);
-                            let msg = format!(
-                                "Serve mode started on port {}. \
-                                 Open ws://localhost:{} in a WebSocket client.",
-                                actual_port, actual_port,
-                            );
+                            let actual_port = handle.port.await.unwrap_or(port);
+                            let msg = if let Some(token) = &handle.token {
+                                format!(
+                                    "Serve mode started on port {} (public). \
+                                     Connect with `Authorization: Bearer {token}` — \
+                                     ws://localhost:{}",
+                                    actual_port, actual_port,
+                                )
+                            } else {
+                                format!(
+                                    "Serve mode started on port {} (loopback only). \
+                                     Open ws://localhost:{} in a WebSocket client. \
+                                     Add `--public` to expose on all interfaces.",
+                                    actual_port, actual_port,
+                                )
+                            };
                             runtime.messages.write().await.push(
                                 TranscriptMessage::new(Role::Assistant, msg)
                                     .with_origin(UserMessageOrigin::Slash),

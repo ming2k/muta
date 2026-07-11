@@ -16,36 +16,72 @@ hot-attach transport. Its machine-readable contract is
 
 This contract describes `crates/neenee-server/src/serve.rs` as it exists now:
 
-- `/serve [port]` starts a listener attached to the **currently running TUI
-  session**.
-- It binds `0.0.0.0`, and accepts WebSocket upgrades at `/` (the handshake path
-  is not restricted in the current implementation).
+- `/serve [port] [--public]` starts a listener attached to the **currently
+  running TUI session**.
+- **Default (loopback):** binds `127.0.0.1` and requires no token — a local
+  co-process is trusted. This is what a bare `/serve [port]` does.
+- **`--public`:** binds `0.0.0.0` (all interfaces) and **requires a bearer
+  token**. The WebSocket handshake must carry `Authorization: Bearer <token>`,
+  else it is rejected with HTTP 401 before any session data is exchanged. The
+  TUI generates a random 32-char hex token and prints it so you can hand it to
+  a remote client. A public port is never started without a token.
 - Omitting `port` asks the OS for a free port; the TUI prints the selected port.
 - Invoking `/serve` again with no argument stops accepting new connections.
-- There is no authentication, TLS, origin check, version negotiation,
-  subprotocol, HTTP endpoint, or standalone daemon yet.
+- There is no TLS, origin check, version negotiation, subprotocol, or HTTP
+  endpoint yet. For a public listener without TLS, front it with a TLS-terminating
+  reverse proxy (e.g. `wss://` via nginx/Caddy) — the bearer token alone protects
+  the handshake but not the wire from eavesdropping.
 - Multiple clients may attach. Every client can send requests into the same
   agent request queue and receives the broadcast response stream.
 - A slow client may lose broadcast events; the server logs the lag and
   continues. Reconnect to obtain a fresh transcript snapshot.
 
-Because the listener binds all interfaces and has no authentication, use it on
-a trusted local network only. Prefer firewalling the selected port or tunneling
-it through SSH. Do not expose it directly to the public internet.
+### Security model
+
+| Mode | Bind | Auth | Use |
+|------|------|------|-----|
+| default (loopback) | `127.0.0.1` | none | local co-process on the same machine |
+| `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
+
+Because the default binds loopback, a casual `/serve` exposes nothing beyond
+this machine. Exposure is an explicit opt-in that cannot happen without a token.
+See ADR-0054 for the rationale.
 
 ## Start and connect
 
-From a running `neenee-code` TUI:
+From a running `neenee-code` TUI, default loopback (no auth):
 
 ```text
 /serve 8765
 ```
 
-Then connect from a browser or Node client:
+For a remote client, expose on all interfaces with a mandatory token:
+
+```text
+/serve 8765 --public
+```
+
+The TUI prints the generated token, e.g. `a1b2c3d4e5f6...`. Connect a client:
+
+- **Loopback (no token):** connect to `ws://127.0.0.1:8765/` directly.
+- **Public (token required):** set the `Authorization: Bearer <token>` header on
+  the WebSocket handshake. Browsers cannot set that header on `new WebSocket()`
+  directly; use a client that can, or pass the token as a query string
+  `?token=<token>` (not yet implemented — for now use a non-browser client or a
+  proxy that injects the header).
+
+Node client with a token:
+
+```js
+const WebSocket = require("ws");
+const socket = new WebSocket("ws://host:8765/", {
+  headers: { Authorization: "Bearer a1b2c3d4e5f6..." },
+});
+```
+
+Then send requests and receive responses:
 
 ```ts
-const socket = new WebSocket("ws://127.0.0.1:8765/");
-
 socket.addEventListener("open", () => {
   socket.send(JSON.stringify({
     type: "Request",
@@ -261,8 +297,11 @@ A production frontend should:
    the next connection starts with a fresh `History` snapshot.
 7. Do not assume one request maps to one response. This is an asynchronous,
    multiplexed event protocol.
-8. Do not send secrets until transport authentication/TLS exists, especially
-   when connected over a non-loopback network.
+8. On a `--public` listener, send the bearer token on the handshake. Loopback
+   connections need no token; treat any token you do hold as a secret — it
+   grants full session access. For a public listener without TLS, front it with
+   a TLS-terminating reverse proxy; the bearer token protects the handshake but
+   not the wire from eavesdropping.
 
 ## Contract maintenance
 
@@ -276,4 +315,5 @@ The Rust serde types remain the runtime source of truth:
 Any wire-visible change to those types must update
 `docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and the
 server contract tests. The AsyncAPI file can be opened in AsyncAPI Studio or
-validated with the AsyncAPI CLI.
+validated with the AsyncAPI CLI. The bind/auth model is specified by
+`ServeOptions` / `ServeExpose` / `ServeHandle` in `serve.rs` (see ADR-0054).

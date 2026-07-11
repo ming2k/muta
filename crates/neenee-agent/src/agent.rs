@@ -1086,6 +1086,15 @@ impl Agent {
             .unwrap_or_else(|_| neenee_core::OperationScope::unrestricted())
     }
 
+    /// The identity this agent was constructed with (name + mission, or a
+    /// persona override). Immutable past construction; feeds the system-prompt
+    /// preamble. Lets an embedding reuse the primary's identity (e.g. a
+    /// `/btw` side session) instead of recomposing it, so the server layer
+    /// never hardcodes a product identity.
+    pub fn identity(&self) -> &AgentIdentity {
+        &self.identity
+    }
+
     pub fn get_pursuit(&self) -> Option<Pursuit> {
         self.pursuit_state.get()
     }

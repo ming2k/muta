@@ -27,8 +27,16 @@ async fn test_ws_round_trip() {
     let (req_tx, mut req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
 
-    // Start server on port 0 (OS-assigned)
-    let (port_rx, _cancel) = serve::start_server(0, req_tx, bc_tx.clone(), session.clone());
+    // Start server on port 0 (OS-assigned), loopback + no auth (the default).
+    let (port_rx, _cancel, _token) = {
+        let h = serve::start_server(
+            serve::ServeOptions::default(),
+            req_tx,
+            bc_tx.clone(),
+            session.clone(),
+        );
+        (h.port, h.cancel, h.token)
+    };
     let port = port_rx.await.unwrap();
     println!("Server started on port {}", port);
 

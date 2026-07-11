@@ -64,3 +64,4 @@ See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
 | [0051](0051-disposable-tool-results.md) | Disposable tool results: per-tool declaration for early pruning | Accepted |
 | [0052](0052-xai-supergrok-provider.md) | xAI (Grok / SuperGrok) provider | Accepted |
 | [0053](0053-declarative-principal-profile.md) | Declarative Principal profiles: a `PrincipalProfile` value mirroring `EnvoyProfile`, `Agent::apply_principal_profile`, and `principal_code()` in the server layer; `AgentIdentity` relocated to core as role vocabulary | Accepted |
+| [0054](0054-server-layer-followups.md) | Server-layer follow-ups: relocate identity (`principal_code`/`neenee_identity`) from server to the application layer; secure serve defaults (loopback by default, `--public` forces bearer token); `SlashCommandHandler` extension point for application-registered Rust slash commands | Accepted |

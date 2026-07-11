@@ -40,6 +40,16 @@
 //! (persistence), `neenee-providers` + `neenee-tools` (concrete impls the
 //! session assembles), and `neenee-core` (vocabulary). It does **not** depend
 //! on `neenee-code` — frontends depend on this crate, never the reverse.
+//!
+//! # Identity posture
+//!
+//! This crate is application-neutral: it holds no product name, mission, or
+//! principal profile. The embedding binary supplies an
+//! [`neenee_agent::AgentIdentity`] to `Agent::new` / `from_toolset` and binds
+//! a [`neenee_agent::PrincipalProfile`] via `apply_principal_profile`.
+//! `neenee-code` keeps the coding identity; a future `neenee-quant` binary
+//! brings its own. The `/btw` side-session reuses the primary agent's
+//! identity (`Agent::identity()`) rather than naming a product here.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
@@ -62,6 +72,7 @@ pub mod session_view;
 pub mod shared;
 pub mod shell;
 pub mod side;
+pub mod slash_handler;
 pub mod startup;
 pub mod ui_bridge;
 
@@ -69,35 +80,8 @@ pub use registry::{SessionHandle, SessionRegistry};
 pub use shared::SharedState;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 
-/// The default agent identity: name + mission. Lives in the server layer (the
-/// crate that constructs agents) so both the TUI and a future web frontend
-/// share one identity. A frontend that wants a different persona can construct
-/// its own [`neenee_agent::AgentIdentity`] and pass it to the session builder.
-/// `neenee` is the **product's default instance name**, not "the principal's
-/// name" — it is a self-reference anchor the model uses in the system prompt
-/// (intro line, responding when called by name). The *role* ("code",
-/// "research", …) is carried by a [`neenee_agent::PrincipalProfile`]; the
-/// product name + mission live here on the identity. Private: only
-/// [`neenee_identity`] composes them, and embeddings thread the whole
-/// [`neenee_agent::AgentIdentity`] through a profile rather than naming these
-/// constants directly.
-const NEENEE_NAME: &str = "neenee";
-const NEENEE_MISSION: &str = "an expert AI coding assistant with tool access";
-
-/// The composed identity: name + mission, default tone (no persona override).
-pub fn neenee_identity() -> neenee_agent::AgentIdentity {
-    neenee_agent::AgentIdentity::new(NEENEE_NAME, NEENEE_MISSION)
-}
-
-/// The built-in **coding principal** profile (ADR-0053): the declarative form
-/// of the role `neenee-code` historically assembled inline. The binary binds it
-/// via `agent.apply_principal_profile(&principal_code())` after construction.
-///
-/// Scope and operation boundary are unrestricted (a coding principal may use
-/// every capability and write anywhere in the workspace) and the runtime config
-/// is the default — the binary still overlays the live `[principal]` config
-/// table afterwards so per-installation knobs win. A future quant/research/ops
-/// principal is another [`neenee_agent::PrincipalProfile`] value.
-pub fn principal_code() -> neenee_agent::PrincipalProfile {
-    neenee_agent::PrincipalProfile::with_identity("code", neenee_identity())
-}
+// NOTE: identity (`NEENEE_NAME`/`NEENEE_MISSION`/`neenee_identity`/
+// `principal_code`) used to live here. It has moved to the application layer
+// (`neenee-code`'s `identity` module) so this crate stays application-neutral.
+// The `/btw` side session reuses the primary agent's identity via
+// `Agent::identity()` rather than naming a product here.

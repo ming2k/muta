@@ -8,6 +8,7 @@
 
 ## Architecture
 
+- [Crate layering](../explanation/crate-layering.md) — the workspace crate topology, each layer's responsibility, and the dependency DAG
 - [Persistence and the XDG layout](../explanation/persistence.md) — why every persistent path flows through the central `Dirs` layer and the four-category split
 - [Harness architecture](../explanation/agent-design/harness.md) — control plane, provider calls, pursuit state, autonomous loop
 - [Request flow](../explanation/request-flow.md) — HTTP transactions, SSE streaming, ReAct loop

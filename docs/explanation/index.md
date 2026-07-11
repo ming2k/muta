@@ -2,6 +2,12 @@
 
 Conceptual background and design rationale.
 
+## Architecture
+
+| Page | Purpose |
+|------|--------|
+| [Crate layering](crate-layering.md) | The workspace crate topology, each layer's responsibility, the dependency DAG, and how a request flows across layers |
+
 ## Storage and persistence
 
 How neenee decides where each file lives, why it follows the XDG Base

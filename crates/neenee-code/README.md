@@ -9,6 +9,10 @@ built-in tools (`neenee-tools`), the orchestration loop (`neenee-agent`), and
 the session transport (`neenee-server`), then renders the interactive interface
 via the in-house `neenee-tui` rendering engine (ADR-0038).
 
+The coding identity (`neenee_identity` / `principal_code`) lives in this
+crate's `src/identity.rs` — the application layer, not the server layer
+(ADR-0054). `neenee-server` is application-neutral and holds no product name.
+
 Run with:
 
 ```sh

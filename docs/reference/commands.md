@@ -35,8 +35,25 @@ Project and user-defined commands are covered under
 | `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program |
 
-`/provider` and `/exit` are handled entirely in the TUI; the rest
+`/provider`, `/exit`, and `/serve` are handled entirely in the TUI; the rest
 are dispatched by the agent backend.
+
+### `/serve`
+
+Hot-attach a WebSocket listener to the currently running session so a browser
+or other client can attach (ADR-0037 §7, ADR-0054). This is a pure frontend
+concern — it never reaches `agent_loop`. See the
+[Server WebSocket API](server-api.md) for the full protocol.
+
+| Form | Effect |
+|------|--------|
+| `/serve [port]` | Start a loopback-only (`127.0.0.1`) listener on `port` (OS picks one if omitted). No authentication. |
+| `/serve [port] --public` | Bind all interfaces (`0.0.0.0`). A bearer token is generated and printed; clients must send `Authorization: Bearer <token>` on the handshake. |
+| `/serve` (no arg, while active) | Stop accepting new connections. |
+
+The listener replays the full transcript to each new client on connect, then
+streams live `AgentResponse`s. Multiple clients may attach simultaneously and
+all share the same agent request queue.
 
 ## Subcommands
 

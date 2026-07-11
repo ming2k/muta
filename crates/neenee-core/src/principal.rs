@@ -58,8 +58,9 @@ pub struct PrincipalRuntimeConfig {
 ///
 /// A profile is a value the embedding binds after constructing the agent via
 /// [`crate::agent::Agent::apply_principal_profile`] (re-exported through the
-/// agent crate). The built-in coding principal lives in `neenee-server`
-/// (`principal_code`); a future quant/research/ops principal is another value.
+/// agent crate). The built-in coding principal lives in the application layer
+/// (`neenee-code`'s `identity` module, `principal_code()` — ADR-0054); a future
+/// quant/research/ops principal is another value.
 ///
 /// Unlike [`crate::EnvoyProfile`] (a `Copy` `const` of `&'static` slices), this
 /// owns `String`s / `Vec`s because [`AgentIdentity`] and [`OperationScope`] do.

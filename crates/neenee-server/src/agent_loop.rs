@@ -107,6 +107,12 @@ pub struct Harness {
     /// Installed into `agent` once at startup; the TUI reads it for the
     /// token-source report modal.
     pub token_ledger: Arc<neenee_core::TokenSourceLedger>,
+    /// Application-registered slash command handlers (the extension point for
+    /// commands that run Rust logic, e.g. a future `neenee-quant` binary's
+    /// `/backtest`). The dispatcher consults this in its unknown-built-in arm
+    /// before falling back to the markdown-template path. Empty for `neenee-code`
+    /// today; populated by embeddings that need it.
+    pub extra_commands: Arc<crate::slash_handler::SlashCommandRegistry>,
 }
 
 /// Run the agent background task to completion (i.e. until the TUI drops the
@@ -146,6 +152,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
         open_picker_on_start,
         ui,
         token_ledger,
+        extra_commands,
     } = h;
     // Hand the shared token-source ledger to the agent so each turn's token
     // usage (reported vs. estimated) is booked into it for the report modal.
@@ -507,6 +514,7 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
                     &project_root_for_side,
                     &startup,
                     &*ui,
+                    &extra_commands,
                 )
                 .await;
             }

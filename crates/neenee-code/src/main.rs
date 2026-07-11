@@ -15,6 +15,7 @@ use neenee_store::{
     session::{self, SessionStore},
 };
 use neenee_tools::commands::{CustomCommand, discover_commands};
+mod identity;
 #[cfg(debug_assertions)]
 mod showcase;
 mod tui;
@@ -28,12 +29,11 @@ pub(crate) use neenee_server::{
 /// Lives here (not in `neenee-agent`) so the engine stays identity-agnostic
 /// and a different frontend could reuse it as another agent.
 ///
-/// The identity constants + [`neenee_identity`] now live in `neenee-server`
-/// (the layer that constructs agents); this binary re-exports them.
-use neenee_server::{
-    neenee_identity, principal_code,
-    startup::{BuiltinCmd, StartupMode, init_tracing, parse_args},
-};
+/// The identity constants + [`neenee_identity`] + [`principal_code`] live in
+/// this binary's `identity` module (the application layer); the server crate
+/// is application-neutral and holds no product name or principal.
+use crate::identity::{neenee_identity, principal_code};
+use neenee_server::startup::{BuiltinCmd, StartupMode, init_tracing, parse_args};
 
 use pursuits::load_legacy_pursuit_from_config;
 
@@ -509,6 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         open_picker_on_start,
         ui: Arc::new(crate::tui::clipboard::TuiClipboard),
         token_ledger: token_ledger.clone(),
+        extra_commands: Arc::new(neenee_server::slash_handler::SlashCommandRegistry::new()),
     };
     tokio::spawn(agent_loop::run(req_rx, harness));
 

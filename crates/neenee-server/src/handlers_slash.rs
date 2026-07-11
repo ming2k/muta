@@ -51,6 +51,7 @@ use crate::pursuits::format_pursuit_status;
 use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
 use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
+use crate::slash_handler::{SlashCommandRegistry, SlashContext};
 use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
@@ -78,6 +79,7 @@ pub async fn dispatch(
     project_root_for_side: &std::path::Path,
     startup: &StartupMode,
     ui: &dyn crate::UiBridge,
+    extra_commands: &SlashCommandRegistry,
 ) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
@@ -528,7 +530,7 @@ pub async fn dispatch(
                 provider_for_task,
                 (*skills_registry).clone(),
                 project_root_for_side,
-                crate::neenee_identity(),
+                agent.identity().clone(),
             )
             .await
             {
@@ -1266,6 +1268,19 @@ pub async fn dispatch(
                         .join("\n")
                 )
             };
+            let extra_help = if extra_commands.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\nExtension commands:\n{}",
+                    extra_commands
+                        .list()
+                        .into_iter()
+                        .map(|(name, desc)| format!("/{name} — {desc}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            };
             let mut lines = vec!["Slash commands:".to_string()];
             for (name, desc) in BuiltinCmd::ALL {
                 lines.push(format!("{name:<13} — {desc}"));
@@ -1274,7 +1289,7 @@ pub async fn dispatch(
                 &session.id().await,
                 RoundEvent::Text(format!(
                     "{}
-{custom_help}",
+{custom_help}{extra_help}",
                     lines.join(
                         "
 "
@@ -1286,6 +1301,39 @@ pub async fn dispatch(
             let _ = resp_tx.send(AgentResponse::Exit);
         }
         None => {
+            // Application-registered Rust handlers (extension point): try the
+            // extra-commands registry before the markdown-template path. A
+            // handler that returns `true` fully handled it; `false` falls
+            // through to the markdown template / unknown-command path below.
+            let name_no_slash = parts[0].strip_prefix('/').unwrap_or(parts[0]);
+            if let Some(handler) = extra_commands.get(name_no_slash) {
+                let ctx = SlashContext {
+                    cmd: &cmd,
+                    parts: &parts,
+                    config,
+                    agent,
+                    resp_tx,
+                    session,
+                    ctt: ctt_clone,
+                    generation: generation_clone,
+                    side,
+                    active_view_side,
+                    base_tools: base_tools_for_side,
+                    provider_holder: provider_for_task,
+                    provider_usage,
+                    skills_registry: skills_registry_for_commands,
+                    commands: commands_for_task,
+                    embedding_store: embedding_store_for_commands,
+                    repeat_store: repeat_store_for_commands,
+                    req_tx: req_tx_for_commands,
+                    project_root: project_root_for_side,
+                    startup,
+                    ui,
+                };
+                if handler.handle(ctx).await {
+                    return;
+                }
+            }
             let (name, arguments) = split_custom_command(&cmd);
             let Some(command) = commands_for_task.get(name) else {
                 let _ = resp_tx.send(AgentResponse::Error(format!(
