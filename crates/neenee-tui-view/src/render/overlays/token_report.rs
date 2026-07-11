@@ -14,12 +14,11 @@ use neenee_tui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::common::placeholder;
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::design::MODAL_INNER_H_PADDING;
 use crate::render::primitives::{
-    FooterHint, content_modal_area, content_modal_probe, modal_chrome_rows, modal_frame,
-    modal_header, modal_spec, render_body, render_modal_footer,
+    ContentModalSpec, FooterHint, content_modal_area, content_modal_probe, modal_chrome_rows,
+    modal_frame, modal_header, render_body, render_modal_footer,
 };
 
 /// Draw the token bill (list) or, when `detail` is set, the per-model breakdown
@@ -34,8 +33,8 @@ pub fn draw_token_report_modal(
     theme: &Theme,
 ) -> neenee_tui::Rect {
     // Probe the content width so column layout adapts to the terminal.
-    let probe =
-        content_modal_probe(frame, Modal::TokenReport).expect("token-report modal has geometry");
+    let geometry = ContentModalSpec::TOKEN_REPORT;
+    let probe = content_modal_probe(frame, geometry);
     let body_width = (probe.width as usize)
         .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
         .max(1);
@@ -71,10 +70,8 @@ pub fn draw_token_report_modal(
     };
 
     // ── Size the panel to the content and paint it ──
-    let spec = modal_spec(Modal::TokenReport).expect("token-report modal has geometry");
-    let desired = body.len() as u16 + modal_chrome_rows(spec);
-    let area = content_modal_area(frame, Modal::TokenReport, desired)
-        .expect("token-report modal has geometry");
+    let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header(frame, f.header, title, theme);

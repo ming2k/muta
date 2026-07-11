@@ -2,13 +2,11 @@
 
 use neenee_tui::{Frame, Rect};
 
-use crate::modal::Modal;
-
 use super::super::Theme;
 use super::super::design::MODAL_INNER_H_PADDING;
 use super::super::primitives::{
-    HeaderPart, content_modal_area, modal_area, modal_chrome_rows, modal_frame, modal_header,
-    modal_header_parts, modal_spec,
+    ContentModalSpec, FixedModalSpec, HeaderPart, content_modal_area, content_modal_probe,
+    modal_area, modal_chrome_rows, modal_frame, modal_header, modal_header_parts,
 };
 use super::footer::{
     FooterHint, FooterHintWithBand, keymap_body_lines, keymap_page_footer_hints,
@@ -18,8 +16,8 @@ use super::scroll::ScrollBody;
 
 #[derive(Clone, Copy)]
 pub(in crate::render) enum ModalPageSize {
-    Fixed,
-    Content,
+    Fixed(FixedModalSpec),
+    Content(ContentModalSpec),
 }
 
 pub(in crate::render) enum ModalHeader<'a> {
@@ -38,7 +36,6 @@ impl<'a> ModalHeader<'a> {
 }
 
 pub(in crate::render) struct ModalPage<'a> {
-    pub modal: Modal,
     pub size: ModalPageSize,
     pub header: ModalHeader<'a>,
     pub body: ScrollBody<'a>,
@@ -55,10 +52,8 @@ pub(in crate::render) struct ModalPage<'a> {
     pub show_more: bool,
 }
 
-pub(in crate::render) fn modal_body_width(frame: &Frame, modal: Modal) -> usize {
-    let probe = super::super::primitives::content_modal_probe(frame, modal)
-        .or_else(|| super::super::primitives::modal_area(frame, modal))
-        .expect("modal has geometry");
+pub(in crate::render) fn modal_body_width(frame: &Frame, geometry: ContentModalSpec) -> usize {
+    let probe = content_modal_probe(frame, geometry);
     (probe.width as usize)
         .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
         .max(1)
@@ -80,11 +75,9 @@ pub(in crate::render) fn draw_modal_page(
     theme: &Theme,
 ) -> Rect {
     let area = match page.size {
-        ModalPageSize::Fixed => {
-            modal_area(frame, page.modal).expect("fixed modal page has fixed geometry")
-        }
-        ModalPageSize::Content => {
-            let spec = modal_spec(page.modal).expect("content modal page has geometry");
+        ModalPageSize::Fixed(geometry) => modal_area(frame, geometry),
+        ModalPageSize::Content(geometry) => {
+            let spec = geometry.modal_spec();
             let desired = if page.keymap_open {
                 // Keymap page: one title + blank + one row per hint.
                 (page.footer_hints.len() + page.extra_footer_hints.len()) as u16
@@ -93,8 +86,7 @@ pub(in crate::render) fn draw_modal_page(
             } else {
                 page.body.lines.len() as u16 + modal_chrome_rows(spec)
             };
-            content_modal_area(frame, page.modal, desired)
-                .expect("content modal page has content geometry")
+            content_modal_area(frame, geometry, desired)
         }
     };
     let f = modal_frame(frame, area, theme.panel(), true, true);

@@ -489,15 +489,14 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
     assert!(!rendered.contains("+ let x = 2;"));
 }
 
-// ── Tool-step batch spacing (ADR-0001, "spacing belongs to the body") ──
+// ── Tool-step batch spacing (ADR-0001, layout-owned boundaries) ──
 //
-// Collapsed tool steps stack flush — no blank row between adjacent headers —
-// so a batch of parallel/sequential tool calls reads as one compact log block.
-// Only an expanded body is padded: one row above (its own header) and one row
-// below (the next step's header). These tests render the full transcript
-// (`draw_transcript`, which owns the inter-message gap) so the suppression
-// logic itself is exercised — the single-step `render_grid` helper above only
-// draws one step and so cannot observe inter-step spacing.
+// Known same-round tool steps stack flush regardless of disclosure state. The
+// first tests also lock the compatibility behavior for legacy messages whose
+// round is unknown: adjacent collapsed headers remain compact, while an
+// expanded legacy body keeps one separator before the next header. These tests
+// render the full transcript (`draw_transcript`, which owns the boundary) so
+// the single-step `render_grid` helper cannot mask layout behavior.
 
 /// Render `steps` (already finalized tool-step messages) through the full
 /// transcript pipeline and return the painted grid as trimmed rows. Unlike
@@ -622,9 +621,9 @@ fn collapsed_tool_steps_stack_flush() {
     );
 }
 
-/// An expanded body sits flush against its own header (no top gap — the body
-/// indent owns the grouping) but keeps its trailing separator row before the
-/// next header; collapsed neighbours around it stay flush.
+/// For legacy messages without round stamps, an expanded body sits flush
+/// against its own header but retains one compatibility separator before the
+/// next header; collapsed neighbors remain flush.
 #[test]
 fn expanded_body_flush_to_header_neighbours_stay_flush() {
     let steps = vec![
@@ -647,7 +646,7 @@ fn expanded_body_flush_to_header_neighbours_stay_flush() {
                 pattern: "foo".into(),
                 lines: vec!["src/a.rs:10:1:foo".into(), "src/b.rs:5:1:foo".into()],
             },
-            true, // expanded — body sits flush under header, trailing sep row after
+            true, // expanded legacy step — compatibility separator follows
         ),
         tool_step_structured(
             "read_text",
@@ -659,7 +658,7 @@ fn expanded_body_flush_to_header_neighbours_stay_flush() {
                 prefix: None,
                 suffix: None,
             },
-            false, // collapsed — flush below the expanded body's trailing separator row
+            false, // collapsed legacy step — starts below that separator
         ),
     ];
     insta::assert_snapshot!(render_transcript_grid(&steps, 60, 16));
@@ -730,9 +729,9 @@ fn sent_user_header_has_one_metadata_separator() {
     );
 }
 
-/// Expanded reasoning traces own only their internal top/block gaps; they do
-/// not append a trailing bottom gap, because layout-level message spacing owns
-/// the gap before the following assistant text.
+/// Expanded reasoning traces keep block gaps but do not add a blank row before
+/// the first body line or append a trailing bottom gap. Layout-level spacing
+/// owns the boundary before the following assistant text.
 #[test]
 fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
     let mut reasoning = TranscriptMessage::thinking("first thought\n\nsecond thought").with_turn(1);
@@ -761,8 +760,8 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
 
     assert_eq!(
         first_idx - summary_idx,
-        2,
-        "reasoning body should start after one blank top-gap row:\n{grid}"
+        1,
+        "reasoning body should start directly below its summary:\n{grid}"
     );
     assert_eq!(
         second_idx - first_idx,
@@ -776,10 +775,10 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
     );
 }
 
-/// The round header is the group's visual separator, so it sits directly above
-/// the first component and owns no leading/trailing blank row.
+/// The round header labels the group and keeps one row before its first
+/// component.
 #[test]
-fn default_round_header_is_flush_with_first_tool() {
+fn default_round_header_has_one_gap_before_first_tool() {
     let step = tool_step_structured(
         "read_text",
         r#"{"path":"a.rs"}"#,
@@ -812,15 +811,15 @@ fn default_round_header_is_flush_with_first_tool() {
     );
     assert_eq!(
         tool_idx - round_idx,
-        1,
-        "round header and first tool should be flush:\n{grid}"
+        2,
+        "round header and first tool should have one blank row:\n{grid}"
     );
 }
 
-/// Optional thinking does not alter round geometry: every component stamped
-/// with the same round is rendered as one flush vertical stack.
+/// Thinking and the tool batch are separate visual segments, while parallel
+/// tools inside the batch stay flush.
 #[test]
-fn same_round_thinking_and_parallel_tools_have_no_vertical_gap() {
+fn same_round_segments_have_gaps_but_parallel_tools_stay_flush() {
     let mut thinking = TranscriptMessage::thinking("inspect the files").with_turn(7);
     thinking.set_thinking_duration(10);
     let first = tool_step_structured(
@@ -869,13 +868,13 @@ fn same_round_thinking_and_parallel_tools_have_no_vertical_gap() {
 
     assert_eq!(
         thinking_idx,
-        round_idx + 1,
-        "header → thinking must be flush:\n{grid}"
+        round_idx + 2,
+        "header → thinking needs one blank row:\n{grid}"
     );
     assert_eq!(
         tool_idx,
-        vec![thinking_idx + 1, thinking_idx + 2],
-        "thinking and same-round tools must be flush:\n{grid}"
+        vec![thinking_idx + 2, thinking_idx + 3],
+        "thinking → tools needs one row; parallel tools must be flush:\n{grid}"
     );
 }
 
@@ -922,8 +921,8 @@ fn different_tool_rounds_have_one_vertical_gap() {
     );
     assert_eq!(
         tool_rows[1] - round_rows[1],
-        1,
-        "round header → tool must stay flush:\n{grid}"
+        2,
+        "round header → tool needs one blank row:\n{grid}"
     );
 }
 

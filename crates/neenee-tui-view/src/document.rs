@@ -437,8 +437,8 @@ pub struct TranscriptMessage {
     /// The model-request round this assistant-side message belongs to (1-indexed,
     /// stamped from the harness's `TurnStarted` counter). User messages may
     /// also carry the visible chat-round number stamped at send time. The
-    /// renderer uses assistant-side stamps to keep every component in one
-    /// model request flush while inserting a separator at round boundaries.
+    /// renderer uses assistant-side stamps to identify compact tool batches
+    /// and insert separators between the other semantic component segments.
     /// `None` (the default, and for restored sessions that predate the stamp)
     /// means "round unknown"; collapsed tool batches retain a compatibility
     /// flush-stack fallback.
@@ -1604,7 +1604,7 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             while i < lines.len() {
                 let t = lines[i].trim_start();
                 if let Some(c) = parse_quote(t) {
-                    let hard = line_ends_hard(q_lines.last().unwrap());
+                    let hard = q_lines.last().is_some_and(|line| line_ends_hard(line));
                     q_hard.push(hard);
                     q_lines.push(c.to_string());
                     i += 1;
@@ -1747,7 +1747,9 @@ fn is_rule(s: &str) -> bool {
     if s.len() < 3 {
         return false;
     }
-    let c = s.chars().next().unwrap();
+    let Some(c) = s.chars().next() else {
+        return false;
+    };
     if c != '-' && c != '*' && c != '_' {
         return false;
     }

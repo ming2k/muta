@@ -41,7 +41,7 @@ use crate::selection::{CellDragInfo, SelectionState};
 use super::HeightCache;
 use super::disclosure::StickyStep;
 use super::theme::Theme;
-use crate::render::design::MESSAGE_GAP_ROWS;
+use crate::render::design::{MESSAGE_GAP_ROWS, ROUND_HEADER_BODY_GAP_ROWS};
 
 /// Which layout strategy to use for the transcript message stream.
 ///
@@ -177,7 +177,7 @@ pub fn build_virtual_index(
                 let message = &messages[index];
                 let mut height = default_gap_before(messages, index);
                 if let Some(end) = default_group_end(messages, index) {
-                    height += 1; // round header; it sits flush with its first child
+                    height += 1 + ROUND_HEADER_BODY_GAP_ROWS;
                     for (offset, message) in messages[index..end].iter().enumerate() {
                         if offset > 0 {
                             height += default_boundary_gap(&messages[index + offset - 1], message);
@@ -263,16 +263,17 @@ pub(super) fn default_group_end(messages: &[TranscriptMessage], start: usize) ->
 }
 
 /// Resolve exactly one blank-row decision for a pair of adjacent transcript
-/// components. Every component in the same known model-request round forms one
-/// flush stack; component kind and disclosure state do not affect outer
-/// spacing. Unknown legacy tool steps retain the former collapsed-stack
-/// fallback because old sessions have no structural stamp.
+/// components. A same-round tool batch is the only zero-gap relationship;
+/// thinking, prose, and tool batches remain distinct visual segments. Tool
+/// disclosure state never changes the boundary. Unknown legacy tool steps
+/// retain the former collapsed-stack fallback because old sessions have no
+/// structural stamp.
 pub(super) fn default_boundary_gap(
     previous: &TranscriptMessage,
     next: &TranscriptMessage,
 ) -> usize {
-    let known_same_round = is_round_component(previous)
-        && is_round_component(next)
+    let known_same_tool_batch = is_tool_like(previous)
+        && is_tool_like(next)
         && previous.turn.is_some()
         && previous.turn == next.turn;
     let legacy_collapsed_tool_batch = previous.turn.is_none()
@@ -281,7 +282,7 @@ pub(super) fn default_boundary_gap(
         && previous.tool_step_expanded() == Some(false)
         && is_tool_like(next);
 
-    if known_same_round || legacy_collapsed_tool_batch {
+    if known_same_tool_batch || legacy_collapsed_tool_batch {
         0
     } else {
         MESSAGE_GAP_ROWS
@@ -530,15 +531,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_spacing_depends_on_round_not_component_or_disclosure_kind() {
+    fn default_spacing_compacts_only_same_round_tool_batches() {
         let thinking = TranscriptMessage::thinking("reasoning").with_turn(4);
         let mut tool = TranscriptMessage::tool_step("call", "read_text", "{}").with_turn(4);
         tool.set_tool_step_expanded(true);
+        let next_tool = TranscriptMessage::tool_step("next", "grep", "{}").with_turn(4);
         let text = TranscriptMessage::new(Role::Assistant, "answer").with_turn(4);
         let next_round = TranscriptMessage::new(Role::Assistant, "next").with_turn(5);
 
-        assert_eq!(default_boundary_gap(&thinking, &tool), 0);
-        assert_eq!(default_boundary_gap(&tool, &text), 0);
+        assert_eq!(default_boundary_gap(&thinking, &tool), MESSAGE_GAP_ROWS);
+        assert_eq!(default_boundary_gap(&tool, &next_tool), 0);
+        assert_eq!(default_boundary_gap(&tool, &text), MESSAGE_GAP_ROWS);
         assert_eq!(default_boundary_gap(&text, &next_round), MESSAGE_GAP_ROWS);
     }
 }

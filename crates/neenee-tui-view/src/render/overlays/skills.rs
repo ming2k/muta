@@ -12,11 +12,10 @@ use neenee_tui::{
 };
 
 use super::common::{placeholder, selectable_row};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer,
+    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header,
+    render_body, render_modal_footer,
 };
 
 /// Draw the skills modal.
@@ -33,7 +32,7 @@ pub fn draw_skills_modal(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Skills).expect("skills modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::SKILLS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // ── Header ──

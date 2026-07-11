@@ -7,14 +7,13 @@ use neenee_tui::{
 use neenee_core::{PermissionRequest, UserQuestionRequest};
 
 use crate::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::options::{
     ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled,
 };
 use crate::render::primitives::{
-    FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame, panel_block, render_body,
-    render_modal_footer,
+    FixedModalSpec, FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame,
+    panel_block, render_body, render_modal_footer,
 };
 use crate::render::text_layout::wrap_text;
 use unicode_width::UnicodeWidthStr;
@@ -51,7 +50,7 @@ pub fn draw_question_modal(
     follow_highlight: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Question).expect("question modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::QUESTION);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let question = request.questions.get(current_question);

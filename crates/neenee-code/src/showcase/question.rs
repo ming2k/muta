@@ -181,9 +181,7 @@ pub fn run() -> io::Result<()> {
                     return ShowAction::Continue;
                 }
                 KeyCode::Char(' ') => QuestionAction::Toggle,
-                KeyCode::Char(c @ '1'..='9') => {
-                    QuestionAction::Select(c.to_digit(10).expect("digit") as usize)
-                }
+                KeyCode::Char(c @ '1'..='9') => QuestionAction::Select(c as usize - '0' as usize),
                 KeyCode::Backspace => QuestionAction::Backspace,
                 KeyCode::Enter => QuestionAction::Submit,
                 KeyCode::Esc => QuestionAction::Cancel,

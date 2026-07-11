@@ -103,17 +103,14 @@ pub(super) fn transcript_band_rect(area: Rect) -> Rect {
 /// truncated to the available width so the notice never overflows or wraps
 /// into the dimensions it is complaining about.
 fn draw_too_small_notice(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let title = Line::from(vec![Span::styled(
-        "Terminal too small",
-        Style::default().fg(theme.warn()),
-    )]);
-    let detail = Line::from(vec![Span::styled(
+    let title = Span::styled("Terminal too small", Style::default().fg(theme.warn()));
+    let detail = Span::styled(
         format!(
             "Please resize to at least {} × {}.",
             MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS
         ),
         Style::default().fg(theme.muted()),
-    )]);
+    );
 
     // Truncate each visible line to the available width so the notice never
     // overflows the very geometry it is complaining about. A degenerate 0-width
@@ -128,9 +125,9 @@ fn draw_too_small_notice(frame: &mut Frame, area: Rect, theme: &Theme) {
         Span::styled(kept, span.style)
     };
     let lines: Vec<Line> = vec![
-        Line::from(vec![truncate(title.spans.into_iter().next().unwrap())]),
+        Line::from(vec![truncate(title)]),
         Line::raw(""),
-        Line::from(vec![truncate(detail.spans.into_iter().next().unwrap())]),
+        Line::from(vec![truncate(detail)]),
     ];
 
     // Vertically center the block in whatever height is available.
@@ -1180,7 +1177,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_index_uses_flush_same_round_geometry() {
+    fn virtual_index_uses_segmented_same_round_geometry() {
         let mut thinking = TranscriptMessage::thinking("reasoning").with_turn(3);
         thinking.set_thinking_duration(1);
         let first = TranscriptMessage::tool_step("a", "read_text", r#"{"path":"a"}"#).with_turn(3);
@@ -1198,8 +1195,8 @@ mod tests {
         assert_eq!(window.message_start, 0);
         assert_eq!(window.message_end, 3);
         assert_eq!(
-            window.total_lines, 7,
-            "one header + three flush 2-row bodies"
+            window.total_lines, 9,
+            "header + header gap + thinking + segment gap + flush tool batch"
         );
     }
 

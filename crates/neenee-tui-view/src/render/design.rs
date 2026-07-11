@@ -19,9 +19,15 @@ pub(super) const STEP_MIN_WIDTH: usize = 8;
 /// prose-like body content inside that band.
 pub(super) const TOOL_STEP_BODY_INDENT_COLS: usize = 2;
 
-/// One blank row inserted at semantic transcript/round boundaries. Components
-/// within the same known model-request round use zero rows.
+/// One blank row inserted at semantic transcript, round, or component-segment
+/// boundaries. Consecutive tool-like components in one known round are the
+/// compact exception and use zero rows.
 pub(super) const MESSAGE_GAP_ROWS: usize = 1;
+
+/// Separation between a round metadata header and its first component. The
+/// header labels the group but is not part of the component stack, so one row
+/// preserves the hierarchy without giving every child its own top margin.
+pub(super) const ROUND_HEADER_BODY_GAP_ROWS: usize = 1;
 
 /// Vertical chrome rows around a sent user message panel: one top transition
 /// row and one bottom transition row.
@@ -44,17 +50,18 @@ pub(super) const USER_MESSAGE_TRANSITION_ROWS: usize = 1;
 ///
 /// The layout closes the body only when the next component crosses a semantic
 /// round/message boundary. There is no dedicated bottom-gap token: an extra
-/// one would break the flush same-round stack.
+/// one would break the flush same-round tool batch.
 pub(super) const TOOL_STEP_BODY_TOP_GAP_ROWS: usize = 0;
 pub(super) const TOOL_STEP_SECTION_GAP_ROWS: usize = 1;
 pub(super) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS;
 
-/// Breathing room inside expanded reasoning traces. These stay independent
-/// from tool-step spacing because reasoning is prose-like, not a panel.
+/// Spacing inside expanded reasoning traces. The first body line sits directly
+/// below the disclosure header; later reasoning blocks retain one row of
+/// separation. These stay independent from tool-step spacing because reasoning
+/// is prose-like, not a panel.
 /// There is no bottom-gap token: the layout resolves the following semantic
-/// boundary, using zero rows inside the same round and `MESSAGE_GAP_ROWS`
-/// otherwise.
-pub(super) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 1;
+/// component boundary.
+pub(super) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(super) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
 /// Hint bar: a single-line status strip pinned directly below the input box
@@ -177,7 +184,7 @@ pub(super) const CODE_BAND_GUTTER_MIN_WIDTH: usize = 2;
 // renders verbatim, so folding only kicks in when it actually saves a row.
 // This is a pure rendering convenience — the binary Disclosure
 // (Collapsed/Expanded) and the persisted `expanded` field are untouched, so
-// flush-stack spacing and the `user_pinned` invariant are unaffected.
+// tool-batch spacing and the `user_pinned` invariant are unaffected.
 
 /// Leading output lines kept visible above a folded bash middle.
 pub(super) const BASH_FOLD_HEAD_ROWS: usize = 3;

@@ -6,11 +6,11 @@ use neenee_tui::{
 
 use super::common::caret_column;
 use crate::layout::LayoutMap;
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines, keymap_page_footer_hints,
-    modal_area, modal_frame, render_body, render_modal_footer, render_modal_footer_with_more,
+    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines,
+    keymap_page_footer_hints, modal_area, modal_frame, render_body, render_modal_footer,
+    render_modal_footer_with_more,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -49,7 +49,7 @@ pub fn draw_history_modal(
     keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::HistorySearch).expect("history modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::HISTORY);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let preview_hints: [FooterHint; 4] = [

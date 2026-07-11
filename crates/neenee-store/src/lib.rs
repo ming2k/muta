@@ -24,6 +24,8 @@
 //! frontend's crate; this is what keeps the CLI self-contained today and
 //! a GUI reachable tomorrow.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod blobs;
 pub mod cache;
 pub mod config;

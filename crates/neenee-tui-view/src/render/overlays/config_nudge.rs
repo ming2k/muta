@@ -12,13 +12,14 @@ use neenee_tui::{
     Frame, Style, {Line, Span},
 };
 
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use crate::render::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::render::components::scroll::ScrollBody;
 use crate::render::design::MODAL_INNER_H_PADDING;
-use crate::render::primitives::{FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe};
+use crate::render::primitives::{
+    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe,
+};
 
 /// Row index of the `enabled` toggle in the field list. `Space` only toggles
 /// when this row is selected; the `window` row responds to `←`/`→` instead.
@@ -41,8 +42,7 @@ pub fn draw_config_nudge_modal(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let probe =
-        content_modal_probe(frame, Modal::ConfigNudge).expect("config nudge modal geometry");
+    let probe = content_modal_probe(frame, ContentModalSpec::CONFIG_NUDGE);
     let body_width = (probe.width as usize)
         .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
         .max(1);
@@ -145,8 +145,7 @@ pub fn draw_config_nudge_modal(
     draw_modal_page(
         frame,
         ModalPage {
-            modal: Modal::ConfigNudge,
-            size: ModalPageSize::Content,
+            size: ModalPageSize::Content(ContentModalSpec::CONFIG_NUDGE),
             header: ModalHeader::parts(&header),
             body: ScrollBody {
                 lines: body,

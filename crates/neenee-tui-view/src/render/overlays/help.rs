@@ -4,11 +4,10 @@ use neenee_tui::{
     Frame, Modifier, Span, {Line, Style},
 };
 
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use crate::render::components::scroll::ScrollBody;
-use crate::render::primitives::FooterHint;
+use crate::render::primitives::{FixedModalSpec, FooterHint};
 
 pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> neenee_tui::Rect {
     let key = |k: &str| {
@@ -77,8 +76,7 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
     draw_modal_page(
         frame,
         ModalPage {
-            modal: Modal::Help,
-            size: ModalPageSize::Fixed,
+            size: ModalPageSize::Fixed(FixedModalSpec::HELP),
             header: ModalHeader::title("Help"),
             body: ScrollBody {
                 lines: body,

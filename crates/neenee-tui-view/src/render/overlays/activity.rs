@@ -8,11 +8,10 @@ use neenee_tui::{
 };
 
 use super::common::todo_status_glyph_color;
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::design::{MODAL_BODY_LEADING_INDENT, MODAL_TITLE_META_GAP};
 use crate::render::primitives::{
-    FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FixedModalSpec, FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
 };
 use crate::render::text_layout::{indented_wrapped_lines, wrap_text};
 
@@ -69,7 +68,7 @@ pub fn draw_activity_modal(
         activity,
     } = view;
 
-    let area = modal_area(frame, Modal::Activity).expect("activity modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::ACTIVITY);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let muted = theme.muted();

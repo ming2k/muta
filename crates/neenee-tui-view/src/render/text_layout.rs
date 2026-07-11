@@ -732,8 +732,11 @@ fn wrap_impl(text: &str, max_width: usize, hidden_ranges: &[(usize, usize)]) -> 
         // Keep closing CJK punctuation with the preceding character. If it
         // would start the next line, move the preceding character with it.
         if current_width + g_width > max_width && !current_line.is_empty() {
-            let first_char = grapheme.chars().next().unwrap();
-            let last_char = current_line.chars().last().unwrap();
+            let (Some(first_char), Some(last_char)) =
+                (grapheme.chars().next(), current_line.chars().last())
+            else {
+                continue;
+            };
 
             let move_previous = prohibited_line_start(first_char) || prohibited_line_end(last_char);
 

@@ -14,11 +14,10 @@ use neenee_tui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::render::components::modal::{ModalHeader, modal_body_width};
-use crate::render::primitives::FooterHint;
+use crate::render::primitives::{ContentModalSpec, FooterHint};
 
 /// Draw the MCP manager modal: a centered, dismissable, selectable list of the
 /// configured MCP servers. Each row shows a status glyph, the server name, a
@@ -35,7 +34,7 @@ pub fn draw_mcp_modal(
 ) -> neenee_tui::Rect {
     // Width is independent of height: probe a full-height rect for the content
     // width, build the list, then size the panel to the content (clamped).
-    let body_width = modal_body_width(frame, Modal::Mcp);
+    let body_width = modal_body_width(frame, ContentModalSpec::MCP);
 
     let servers = session_context.map(|s| s.mcp.as_slice()).unwrap_or(&[]);
 
@@ -130,7 +129,7 @@ pub fn draw_mcp_modal(
     draw_selectable_list_page(
         frame,
         SelectableListPage {
-            modal: Modal::Mcp,
+            geometry: ContentModalSpec::MCP,
             header: ModalHeader::title("MCP servers"),
             lines: body,
             scroll,

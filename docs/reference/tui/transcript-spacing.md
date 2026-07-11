@@ -41,11 +41,18 @@ Layout strategies own the space between transcript items:
 - `Stream::message_gap()` inserts the standard `MESSAGE_GAP_ROWS` blank row.
 - `Stream::gap(n)` is the escape hatch for non-standard layout chrome.
 - These helpers update `content_lines`, `skip_rows`, and `current_y` together.
-- The default layout resolves each component boundary once. Components with
-  the same known `turn` stamp render flush with zero blank rows; a new turn,
-  user message, or notice gets one `MESSAGE_GAP_ROWS` separator.
-- A round header sits flush with the first component in its round. It does not
-  reserve its own top or bottom margin.
+- The default layout resolves each component boundary once using the matrix
+  below. Components never add an outer trailing row themselves.
+
+| Relationship | Blank rows | Token / rule |
+|--------------|------------|--------------|
+| Round header → first component | 1 | `ROUND_HEADER_BODY_GAP_ROWS` |
+| Thinking header → first expanded reasoning line | 0 | `REASONING_TRACE_BODY_TOP_GAP_ROWS` |
+| Thinking ↔ tool batch / assistant text | 1 | `MESSAGE_GAP_ROWS` |
+| Tool-like → tool-like in the same known round | 0 | Same-round batch rule |
+| Tool-like → assistant text | 1 | `MESSAGE_GAP_ROWS` |
+| Different rounds, user messages, or notices | 1 | `MESSAGE_GAP_ROWS` |
+| Adjacent collapsed legacy tools with no round stamp | 0 | Compatibility fallback |
 
 Do not add a component-local trailing blank row just to separate from the next
 message. That usually double-counts spacing and can also make scroll accounting
@@ -83,11 +90,11 @@ Tool steps deliberately support a compact log shape:
   panel/card affordance that competes with the indent (the row says "two
   blocks", the indent says "one block's content"); the flat log shape wants the
   indent to own the grouping;
-- there is no dedicated tool-step bottom-gap token. The layout inserts a row
-  only at a semantic round/message boundary.
+- there is no dedicated tool-step bottom-gap token. The layout resolves the
+  following component boundary from the matrix above.
 
 This prevents expanded steps from gaining double bottom spacing while keeping a
-whole model-request round visually tight.
+parallel tool batch visually tight.
 
 ## Tests
 

@@ -1,9 +1,9 @@
 [package]
 name = "neenee-code"
-version = "0.20.0"
-edition = "2024"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "neenee-code"
@@ -22,8 +22,8 @@ async-trait = { workspace = true }
 crossterm = { workspace = true }
 arboard = "3.6"
 dirs = { workspace = true }
-unicode-width = "0.2"
-similar = { version = "2", features = ["unicode"] }
+unicode-width = { workspace = true }
+similar = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
@@ -32,12 +32,15 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 chrono = { workspace = true }
 unicode-segmentation.workspace = true
 webbrowser = { version = "1.2", features = ["hardened"] }
 
 [dev-dependencies]
-insta = "1.48"
-tempfile = "3"
+insta = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

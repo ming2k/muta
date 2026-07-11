@@ -11,11 +11,10 @@ use unicode_width::UnicodeWidthStr;
 use crate::layout::LayoutMap;
 
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
-use crate::modal::Modal;
 use crate::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
+    FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
     keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
     render_modal_footer, render_modal_footer_with_more,
 };
@@ -59,7 +58,7 @@ pub fn draw_models_modal(
     keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Provider).expect("model picker modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // Breadcrumb-style title makes the two-stage picker explicit while keeping
@@ -579,8 +578,7 @@ pub fn draw_model_editor(
     thinking: Option<bool>,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area =
-        modal_area(frame, Modal::ModelEditor).expect("model editor modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::MODEL_EDITOR);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header(frame, f.header, &format!("Edit · {title}"), theme);
@@ -780,8 +778,7 @@ pub fn draw_oauth_pending(
     frame: &mut Frame,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area =
-        modal_area(frame, Modal::OauthPending).expect("oauth pending modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::OAUTH_PENDING);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     if let Some(h) = f.header {
@@ -885,8 +882,7 @@ pub fn draw_provider_template_chooser(
     theme: &Theme,
     scroll: &mut usize,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::ProviderTemplate)
-        .expect("provider template chooser has provider-page geometry");
+    let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header(frame, f.header, "Providers / Add provider", theme);
@@ -1010,8 +1006,7 @@ pub fn draw_custom_provider_editor(
         cursor_position,
     } = view;
 
-    let area = modal_area(frame, Modal::CustomProvider)
-        .expect("custom provider editor modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::CUSTOM_PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     const LABEL_W: usize = 9;

@@ -16,11 +16,10 @@ use neenee_tui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{placeholder, truncate_ellipsis};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::render::components::modal::{ModalHeader, modal_body_width};
-use crate::render::primitives::FooterHint;
+use crate::render::primitives::{ContentModalSpec, FooterHint};
 
 /// Draw the tools manager modal: a centered, dismissable, selectable list of
 /// the session's tools. Each row shows an enabled glyph, the tool name, its
@@ -39,7 +38,7 @@ pub fn draw_tools_modal(
     // Width is independent of height, so probe a full-height rect first to learn
     // the body's content width, then build the list, then size the panel to the
     // content (clamped) so there is no slab of dead space below it.
-    let body_width = modal_body_width(frame, Modal::Tools);
+    let body_width = modal_body_width(frame, ContentModalSpec::TOOLS);
 
     let tools = session_context.map(|s| s.tools.as_slice()).unwrap_or(&[]);
 
@@ -134,7 +133,7 @@ pub fn draw_tools_modal(
     draw_selectable_list_page(
         frame,
         SelectableListPage {
-            modal: Modal::Tools,
+            geometry: ContentModalSpec::TOOLS,
             header: ModalHeader::title("Tools"),
             lines: body,
             scroll,

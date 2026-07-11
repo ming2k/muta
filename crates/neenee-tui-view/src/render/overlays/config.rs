@@ -12,11 +12,10 @@ use neenee_tui::{
     Frame, Style, {Line, Span},
 };
 
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::render::components::modal::{ModalHeader, modal_body_width};
-use crate::render::primitives::FooterHint;
+use crate::render::primitives::{ContentModalSpec, FooterHint};
 
 /// One configurable category row in the config root modal.
 struct ConfigCategory {
@@ -52,7 +51,7 @@ pub fn draw_config_modal(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let body_width = modal_body_width(frame, Modal::Config);
+    let body_width = modal_body_width(frame, ContentModalSpec::CONFIG);
 
     let cats = categories();
 
@@ -99,7 +98,7 @@ pub fn draw_config_modal(
     draw_selectable_list_page(
         frame,
         SelectableListPage {
-            modal: Modal::Config,
+            geometry: ContentModalSpec::CONFIG,
             header: ModalHeader::title("Configuration"),
             lines: body,
             scroll,

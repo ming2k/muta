@@ -196,9 +196,9 @@ the transcript content above.
 
 ## Transcript viewport behavior
 
-- Messages render top-to-bottom with semantic boundary spacing. Components in
-  the same known model-request round are flush; different rounds and ordinary
-  message boundaries use `MESSAGE_GAP_ROWS = 1` row.
+- Messages render top-to-bottom with semantic boundary spacing. A round header,
+  thinking segment, tool batch, and assistant text are separated by one row;
+  tool-like siblings in the same known round are flush.
 - Auto-follow pins to the newest content while `follow_bottom` is set.
 - Scrolling up pauses follow; scrolling back to the bottom (or sending a
   message) re-engages it.
@@ -228,7 +228,10 @@ the transcript content above.
 | Step header text column | 4 (2 gutter + 2 after `+ `) | After `+ ` prefix |
 | Step body indent | 4 cols from transcript edge | `draw_tool_step`, `draw_reasoning_trace` |
 | Line-number gutter min width | 2 chars | `.max(2)` |
-| Message spacing | 0 rows inside one known round; 1 row at round/message boundaries | `MESSAGE_GAP_ROWS` |
+| Round header → first component | 1 row | `ROUND_HEADER_BODY_GAP_ROWS` |
+| Thinking header → expanded body | 0 rows | `REASONING_TRACE_BODY_TOP_GAP_ROWS` |
+| Same-round tool batch | 0 rows between tool-like siblings | Semantic boundary rule |
+| Other component boundaries | 1 row | `MESSAGE_GAP_ROWS` |
 | Mouse scroll step | 4 rows | `ScrollUp`/`Down` handler |
 | PageUp/PageDown step | `view_height - 1` | One line of overlap |
 

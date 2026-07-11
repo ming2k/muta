@@ -33,7 +33,6 @@ frame.
 
 ```text
   - Read crates/main.rs · 0ms
-
     1  fn main() {
     2      ...
 ```
@@ -42,6 +41,7 @@ frame.
 |-----------|-------|
 | Background | `app_bg`; tool steps use a `code_bg` block only for the content itself |
 | Body indent | 2 cols (transcript column 4) — left-aligned with the header text |
+| Header-to-body gap | 0 rows for tool and thinking steps |
 | Visibility | Rendered only when expanded |
 
 The 2-col body indent is what makes the body line up with the header text in

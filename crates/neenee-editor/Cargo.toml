@@ -1,9 +1,9 @@
 [package]
 name = "neenee-editor"
-version = "0.20.0"
-edition = "2024"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "neenee-editor"
@@ -29,12 +29,12 @@ gui = [
 # paint the document surface directly rather than through lens widgets.
 # These resolve to the local ../optics checkout via .cargo/config.toml's path
 # override; on CI they come from the pinned git rev / registry.
-iris = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4", optional = true }
+iris = { workspace = true, optional = true }
 flux = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4", optional = true }
 flux-text = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4", optional = true }
 flux-text-layout = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4", optional = true }
 
-unicode-segmentation = "1.12"
+unicode-segmentation = { workspace = true }
 
 [build-dependencies]
 # Re-discovers the optics link dirs to bake an rpath into the binary (see

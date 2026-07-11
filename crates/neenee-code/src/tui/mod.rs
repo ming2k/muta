@@ -550,7 +550,7 @@ pub async fn run_tui(
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             // Stamp the current model-request round so this step
-                            // stays flush with every sibling component;
+                            // joins its compact sibling tool batch;
                             // `TurnStarted` has already populated the session
                             // map for this round.
                             let turn = turns_by_session.get(&session_id).copied();

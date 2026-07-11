@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Transcript spacing now follows model-request rounds.** Thinking, assistant
-  text, and parallel tool calls from the same round render as one flush stack,
-  regardless of whether thinking is present or a tool is expanded. Different
-  rounds retain one separator row, and round headers no longer add a second
-  vertical margin. Live and restored assistant components now carry the same
-  round stamp, including concurrent side sessions.
+- **Transcript spacing now follows semantic segments within model-request
+  rounds.** Round headers, thinking, tool batches, and assistant text use one
+  separator row; parallel tool calls in the same round remain flush regardless
+  of disclosure state. Expanded thinking begins directly below its header with
+  no redundant first-line gap. Live and restored assistant components carry
+  the same round stamp, including concurrent side sessions.
 
 - **Context compaction again follows the active model's full window.** The
   undocumented 96k working-set ceiling and fixed 8k prompt reserve no longer

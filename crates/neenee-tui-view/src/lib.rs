@@ -29,6 +29,8 @@
 //! - [`completion`] — completion-menu data types (the matching logic stays in
 //!   the shell).
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod completion;
 pub mod document;
 pub mod fuzzy;

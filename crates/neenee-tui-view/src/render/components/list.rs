@@ -2,10 +2,8 @@
 
 use neenee_tui::{Color, Frame, Rect};
 
-use crate::modal::Modal;
-
 use super::super::Theme;
-use super::super::primitives::SCROLL_EDGE_MARGIN;
+use super::super::primitives::{ContentModalSpec, SCROLL_EDGE_MARGIN};
 use super::footer::{FooterHint, FooterHintWithBand};
 use super::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use super::options::{ChoiceTone, choice_style};
@@ -38,7 +36,7 @@ pub(in crate::render) fn row_style(selected: bool, theme: &Theme) -> RowStyle {
 }
 
 pub(in crate::render) struct SelectableListPage<'a> {
-    pub modal: Modal,
+    pub geometry: ContentModalSpec,
     pub header: ModalHeader<'a>,
     pub lines: Vec<neenee_tui::Line<'static>>,
     pub scroll: &'a mut usize,
@@ -72,8 +70,7 @@ pub(in crate::render) fn draw_selectable_list_page(
     draw_modal_page(
         frame,
         ModalPage {
-            modal: page.modal,
-            size: ModalPageSize::Content,
+            size: ModalPageSize::Content(page.geometry),
             header: page.header,
             body: ScrollBody {
                 lines: page.lines,

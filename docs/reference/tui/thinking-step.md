@@ -36,18 +36,19 @@ marker needs to change between streaming and finished.
 
 ```text
   - Thinking · 140 chars · 1.2s
-
     reasoning text in text_muted...
 ```
 
-A blank row separates the header from the body; consecutive text blocks are
-likewise blank-separated. Paragraph breaks inside a single block are already
+The first reasoning line sits directly below the header. Consecutive text
+blocks are blank-separated; paragraph breaks inside a single block are already
 preserved as empty rows by `wrap_text`.
 
 | Attribute | Value |
 |-----------|-------|
 | Background | `app_bg` (flat) |
 | Body indent | `TRANSCRIPT_BODY_PREFIX_COLS` (transcript column 4, left-aligned with the header text) |
+| Header-to-body gap | 0 rows (`REASONING_TRACE_BODY_TOP_GAP_ROWS`) |
+| Block gap | 1 row (`REASONING_TRACE_BLOCK_GAP_ROWS`) |
 | Body color | `text_muted` |
 | Body style | Plain wrapped text (no code gutter) |
 

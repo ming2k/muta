@@ -891,12 +891,8 @@ pub(super) async fn run_app_loop(
         // transcript message still carrying `DeliveryStatus::Queued`.
         if !runtime.is_responding.load(Ordering::SeqCst)
             && app.loop_status == "idle"
-            && !app.pending_dispatch.is_empty()
+            && let Some(dispatch) = app.pending_dispatch.pop_front()
         {
-            let dispatch = app
-                .pending_dispatch
-                .pop_front()
-                .expect("checked non-empty above");
             let sent_at_ms = now_epoch_ms();
             let round = runtime.round_count.lock().await.saturating_add(1);
             let mut messages = runtime.messages.write().await;

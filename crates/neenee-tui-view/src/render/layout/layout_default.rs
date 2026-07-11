@@ -54,9 +54,12 @@ impl TranscriptLayout for Default {
             // ── Detect the start of a round group ───────────────────────────
             // The group planner can start at optional thinking/assistant text,
             // then look forward for the tool step that makes this a tool round.
-            if let Some(group_end) = default_group_end(stream.messages, mi) {
+            if let (Some(group_end), Some(turn)) =
+                (default_group_end(stream.messages, mi), msg.turn)
+            {
                 stream.gap(default_gap_before(stream.messages, mi));
-                draw_round_header(stream, msg.turn.expect("group has a known turn"), msg);
+                draw_round_header(stream, turn, msg);
+                stream.gap(super::ROUND_HEADER_BODY_GAP_ROWS);
 
                 for gj in mi..group_end {
                     if gj > mi {
@@ -85,8 +88,8 @@ impl TranscriptLayout for Default {
 }
 
 /// Paint the round header row: `◆ round N · model · HH:MM`, info-tone bold
-/// anchor with muted metadata, no background band. The header itself is the
-/// visual separator and therefore sits flush with the group's first component.
+/// anchor with muted metadata, no background band. The caller inserts the
+/// standard header-to-body gap before the group's first component.
 fn draw_round_header(stream: &mut Stream<'_, '_>, round: u64, msg: &TranscriptMessage) {
     // Always account for one content line even when scrolled out of view, so
     // scroll height stays faithful to what a user scrolling back would see.

@@ -2054,9 +2054,8 @@ pub fn draw_tool_step(
         }
 
         // No trailing bottom gap here: the layout resolves the semantic
-        // boundary to the next component. It supplies zero rows inside the
-        // same round and one standard row outside it, independent of this
-        // step's disclosure state.
+        // boundary to the next component. Same-round tool siblings use zero
+        // rows; every other segment uses one, independent of disclosure state.
     }
 
     if expanded {
@@ -2379,8 +2378,7 @@ pub fn draw_reasoning_trace(
             }
         }
         // No trailing bottom gap here: the layout resolves the semantic
-        // boundary to the next component (flush inside one round, one standard
-        // row outside it).
+        // boundary to the next component segment.
     }
 
     if expanded {

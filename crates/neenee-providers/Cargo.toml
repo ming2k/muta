@@ -1,9 +1,9 @@
 [package]
 name = "neenee-providers"
-version = "0.20.0"
-edition = "2024"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 neenee-core = { path = "../neenee-core" }
@@ -21,7 +21,7 @@ serde_json = { workspace = true }
 # `wire` integration test exercises the full HTTP → SSE → parse path against a
 # localhost mock server, covering behaviour the in-module unit tests (which can
 # only call pure parser functions) cannot reach.
-mockito = "1"
+mockito = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

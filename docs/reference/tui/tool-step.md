@@ -27,15 +27,15 @@ collapsing is to keep noisy tool I/O out of the transcript until you ask for it.
 
 ## Expanded
 
-Flat on `app_bg`: a blank row, then the tool-specific content indented 2 cols
-(to align with the header text), then a blank row. There are **no** `Tool` /
-`Arguments` / `Result` labels and no surrounding `menu_bg` band — the content
-speaks for itself. Only the content block carries a `code_bg` so it reads as a
+Flat on `app_bg`: the tool-specific content begins directly below the header,
+indented 2 cols to align with the header text. There is no component-local
+bottom row; the transcript layout resolves the boundary to the next component.
+There are **no** `Tool` / `Arguments` / `Result` labels and no surrounding
+`menu_bg` band. Only the content block carries a `code_bg` so it reads as a
 distinct panel against the app background.
 
 ```text
   - Read crates/main.rs · 0ms
-
     1  fn main() {
     2      ...
 ```
@@ -97,7 +97,7 @@ BASH_FOLD_TAIL_ROWS + 1` logical lines (default 7):
 Short output (≤ 7 lines) renders verbatim, so folding only kicks in when it
 actually saves a row. This is a pure rendering convenience: it does **not** add
 a third disclosure state (the binary Collapsed/Expanded model is unchanged), so
-flush-stack spacing and the `user_pinned` invariant are unaffected. Selection
+tool-batch spacing and the `user_pinned` invariant are unaffected. Selection
 still works on the visible head and tail — `byte_offset` advances past the
 hidden middle so the tail rows anchor at their true source positions, exactly
 as the unfolded path would; hidden rows are neither painted nor selectable.

@@ -2,7 +2,7 @@
 //! chrome, and color arithmetic. Kept in one place so the per-component
 //! modules do not need to depend on each other for these primitives.
 
-use crate::modal::{Modal, Recess};
+use crate::modal::Recess;
 use neenee_tui::{
     Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
     {Block as RtBlock, Clear, Paragraph}, {Color, Span, Style},
@@ -101,120 +101,80 @@ fn even_width(mut rect: Rect) -> Rect {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum ModalHeight {
-    Percent(u16),
-    Content {
-        min_rows: u16,
-        max_viewport_percent: u16,
-    },
-}
-
-#[derive(Clone, Copy)]
 pub(super) struct ModalSpec {
     pub width_percent: u16,
-    pub height: ModalHeight,
     pub header: bool,
     pub footer: bool,
 }
 
-pub(super) fn modal_spec(modal: Modal) -> Option<ModalSpec> {
-    let fixed = |width_percent, height_percent| ModalSpec {
-        width_percent,
-        height: ModalHeight::Percent(height_percent),
-        header: true,
-        footer: true,
-    };
+/// Geometry for a modal whose height is a fixed percentage of the viewport.
+///
+/// Keeping this distinct from [`ContentModalSpec`] makes invalid combinations
+/// unrepresentable: a fixed renderer cannot accidentally request content
+/// sizing, and neither API needs to return `Option` for a structural invariant.
+#[derive(Clone, Copy)]
+pub(super) struct FixedModalSpec {
+    spec: ModalSpec,
+    height_percent: u16,
+}
 
-    Some(match modal {
-        // The template chooser is a child page of the provider list, so both
-        // states keep the same panel footprint while the header breadcrumb
-        // communicates the navigation depth.
-        Modal::Provider | Modal::ProviderTemplate => fixed(72, 72),
-        Modal::HistorySearch => fixed(70, 72),
-        Modal::Question => fixed(78, 70),
-        Modal::ModelEditor => fixed(60, 30),
-        Modal::OauthPending => fixed(64, 36),
-        // Custom-provider editor: tall enough for the form rows plus the
-        // type-to-filter suggestion dropdown below them.
-        Modal::CustomProvider => fixed(66, 66),
-        Modal::Help => fixed(58, 70),
-        Modal::Sessions => fixed(80, 64),
-        Modal::Permissions => fixed(64, 60),
-        // Skills modal: a fixed-size list with detail expansions. Matches the
-        // `centered_rect(64, 60)` the renderer uses so the recess backdrop dims
-        // exactly the panel region.
-        Modal::Skills => fixed(64, 60),
-        Modal::Activity => fixed(72, 70),
-        // Tools manager: a content-sized list, narrower than the multi-column
-        // surface (no MODEL/MCP/SKILLS table — just a flat tool list) and with a
-        // taller min so a handful of tools never shrinks it to a sliver.
-        Modal::Tools => ModalSpec {
-            width_percent: 64,
-            height: ModalHeight::Content {
-                min_rows: 11,
-                max_viewport_percent: 84,
+impl FixedModalSpec {
+    const fn new(width_percent: u16, height_percent: u16) -> Self {
+        Self {
+            spec: ModalSpec {
+                width_percent,
+                header: true,
+                footer: true,
             },
-            header: true,
-            footer: true,
-        },
-        // MCP manager: same content-sized flat list as the tools manager — one
-        // row per configured server.
-        Modal::Mcp => ModalSpec {
-            width_percent: 64,
-            height: ModalHeight::Content {
-                min_rows: 9,
-                max_viewport_percent: 84,
+            height_percent,
+        }
+    }
+
+    // The template chooser shares the provider list's footprint.
+    pub const PROVIDER: Self = Self::new(72, 72);
+    pub const HISTORY: Self = Self::new(70, 72);
+    pub const QUESTION: Self = Self::new(78, 70);
+    pub const MODEL_EDITOR: Self = Self::new(60, 30);
+    pub const OAUTH_PENDING: Self = Self::new(64, 36);
+    pub const CUSTOM_PROVIDER: Self = Self::new(66, 66);
+    pub const HELP: Self = Self::new(58, 70);
+    pub const SESSIONS: Self = Self::new(80, 64);
+    pub const PERMISSIONS: Self = Self::new(64, 60);
+    pub const SKILLS: Self = Self::new(64, 60);
+    pub const ACTIVITY: Self = Self::new(72, 70);
+}
+
+/// Geometry for a modal whose height follows its rendered content.
+#[derive(Clone, Copy)]
+pub(super) struct ContentModalSpec {
+    spec: ModalSpec,
+    min_rows: u16,
+    max_viewport_percent: u16,
+}
+
+impl ContentModalSpec {
+    const fn new(width_percent: u16, min_rows: u16, max_viewport_percent: u16) -> Self {
+        Self {
+            spec: ModalSpec {
+                width_percent,
+                header: true,
+                footer: true,
             },
-            header: true,
-            footer: true,
-        },
-        // Token-source report: a read-only table (provider/model × reported vs
-        // estimated). Content-sized so it fits a handful of rows compactly.
-        Modal::TokenReport => ModalSpec {
-            width_percent: 66,
-            height: ModalHeight::Content {
-                min_rows: 9,
-                max_viewport_percent: 80,
-            },
-            header: true,
-            footer: true,
-        },
-        // Config root: a short category list. Content-sized so a handful of
-        // rows never shrinks it to a sliver.
-        Modal::Config => ModalSpec {
-            width_percent: 62,
-            height: ModalHeight::Content {
-                min_rows: 8,
-                max_viewport_percent: 80,
-            },
-            header: true,
-            footer: true,
-        },
-        // Nudge sub-page: enabled toggle + 4 threshold rows + a description
-        // header line. Content-sized, slightly taller min so the description
-        // and all 5 rows fit without scrolling in the common case.
-        Modal::ConfigNudge => ModalSpec {
-            width_percent: 66,
-            height: ModalHeight::Content {
-                min_rows: 11,
-                max_viewport_percent: 84,
-            },
-            header: true,
-            footer: true,
-        },
-        // Layout sub-page: a short list of layout strategies (Round-band /
-        // Legacy) plus a description line each. Content-sized.
-        Modal::ConfigLayout => ModalSpec {
-            width_percent: 64,
-            height: ModalHeight::Content {
-                min_rows: 9,
-                max_viewport_percent: 80,
-            },
-            header: true,
-            footer: true,
-        },
-        Modal::None | Modal::Permission | Modal::InputInjection => return None,
-    })
+            min_rows,
+            max_viewport_percent,
+        }
+    }
+
+    pub const TOOLS: Self = Self::new(64, 11, 84);
+    pub const MCP: Self = Self::new(64, 9, 84);
+    pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
+    pub const CONFIG: Self = Self::new(62, 8, 80);
+    pub const CONFIG_NUDGE: Self = Self::new(66, 11, 84);
+    pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);
+
+    pub const fn modal_spec(self) -> ModalSpec {
+        self.spec
+    }
 }
 
 pub(super) fn modal_chrome_rows(spec: ModalSpec) -> u16 {
@@ -228,36 +188,27 @@ pub(super) fn modal_chrome_rows(spec: ModalSpec) -> u16 {
     rows
 }
 
-pub(super) fn modal_area(frame: &Frame, modal: Modal) -> Option<Rect> {
-    let spec = modal_spec(modal)?;
-    let ModalHeight::Percent(height_percent) = spec.height else {
-        return None;
-    };
-    Some(centered_rect(
-        spec.width_percent,
-        height_percent,
+pub(super) fn modal_area(frame: &Frame, geometry: FixedModalSpec) -> Rect {
+    centered_rect(
+        geometry.spec.width_percent,
+        geometry.height_percent,
         viewport_rect(frame),
-    ))
+    )
 }
 
-pub(super) fn content_modal_probe(frame: &Frame, modal: Modal) -> Option<Rect> {
-    let spec = modal_spec(modal)?;
-    Some(centered_rect(spec.width_percent, 100, viewport_rect(frame)))
+pub(super) fn content_modal_probe(frame: &Frame, geometry: ContentModalSpec) -> Rect {
+    centered_rect(geometry.spec.width_percent, 100, viewport_rect(frame))
 }
 
-pub(super) fn content_modal_area(frame: &Frame, modal: Modal, desired_rows: u16) -> Option<Rect> {
-    let spec = modal_spec(modal)?;
-    let ModalHeight::Content {
-        min_rows,
-        max_viewport_percent,
-    } = spec.height
-    else {
-        return None;
-    };
+pub(super) fn content_modal_area(
+    frame: &Frame,
+    geometry: ContentModalSpec,
+    desired_rows: u16,
+) -> Rect {
     let viewport = viewport_rect(frame);
-    let max_h = ((viewport.height as u32 * max_viewport_percent as u32) / 100) as u16;
-    let height = desired_rows.clamp(min_rows, max_h.max(min_rows));
-    Some(centered_rect_h(spec.width_percent, height, viewport))
+    let max_h = ((viewport.height as u32 * geometry.max_viewport_percent as u32) / 100) as u16;
+    let height = desired_rows.clamp(geometry.min_rows, max_h.max(geometry.min_rows));
+    centered_rect_h(geometry.spec.width_percent, height, viewport)
 }
 
 /// Recess the live surface behind a modal, per its [`Recess`] policy.
@@ -663,8 +614,6 @@ mod tests {
     //! `panel_inner` is the symmetric-inset contract for the left-bar-panel
     //! family. Lock its geometry directly so a long overlay line can never
     //! kiss the panel's right edge regardless of terminal width.
-    use crate::modal::Modal;
-
     use super::*;
     use neenee_tui::{Frame, Rect, Style};
 
@@ -692,28 +641,15 @@ mod tests {
     }
 
     #[test]
-    fn modal_specs_cover_runtime_centered_modals() {
-        for modal in [
-            Modal::Provider,
-            Modal::HistorySearch,
-            Modal::Question,
-            Modal::ModelEditor,
-            Modal::ProviderTemplate,
-            Modal::OauthPending,
-            Modal::CustomProvider,
-            Modal::Help,
-            Modal::Sessions,
-            Modal::Tools,
-            Modal::Mcp,
-            Modal::Permissions,
-            Modal::Skills,
-            Modal::Activity,
-        ] {
-            assert!(modal_spec(modal).is_some());
-        }
+    fn fixed_and_content_modal_specs_preserve_their_sizing_modes() {
+        let fixed = FixedModalSpec::PROVIDER;
+        assert_eq!(fixed.spec.width_percent, 72);
+        assert_eq!(fixed.height_percent, 72);
 
-        assert!(modal_spec(Modal::None).is_none());
-        assert!(modal_spec(Modal::Permission).is_none());
+        let content = ContentModalSpec::TOOLS;
+        assert_eq!(content.spec.width_percent, 64);
+        assert_eq!(content.min_rows, 11);
+        assert_eq!(content.max_viewport_percent, 84);
     }
 
     #[test]
@@ -842,7 +778,7 @@ mod tests {
         for &cols in &[79u16, 80, 81, 119, 120, 121, 200] {
             let mut grid = neenee_tui::Grid::new(cols, 50);
             let frame = Frame::new(&mut grid);
-            let area = modal_area(&frame, Modal::Help).expect("help modal has geometry");
+            let area = modal_area(&frame, FixedModalSpec::HELP);
             assert_eq!(
                 area.width % 2,
                 0,

@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 use crate::tui::start_tui;
 use neenee_agent::catalog;
 use neenee_agent::orchestration::{

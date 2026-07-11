@@ -8,11 +8,10 @@
 use neenee_tui::{Frame, Line};
 
 use super::common::{placeholder, selectable_row};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer,
+    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header,
+    render_body, render_modal_footer,
 };
 
 /// Draw the permissions manager modal: a centered, dismissable list of cached
@@ -26,7 +25,7 @@ pub fn draw_permissions_manager(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Permissions).expect("permissions modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::PERMISSIONS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // ── Header ──

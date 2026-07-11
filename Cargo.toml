@@ -20,6 +20,12 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.20.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
 # Shared external dependencies, pinned once here. Crates reference them with
 # `dep = { workspace = true }` (optionally adding features). Internal crates
 # stay as path dependencies in each member's Cargo.toml.
@@ -55,6 +61,18 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 crossterm = { version = "0.29", features = ["event-stream"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
+similar = { version = "2", features = ["unicode"] }
+
+# Shared diagnostics and test support used by more than one member.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+insta = "1.48"
+mockito = "1"
+tempfile = "3"
+
+# GUI members share one optics revision. Individual crates opt into it with
+# `optional = true` so headless workspace builds remain available.
+iris = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4" }
 
 # Workspace-wide lint policy (inherited by every member via `lints.workspace =
 # true`). `unwrap_used` / `expect_used` are *warnings*, not denies: keeping them

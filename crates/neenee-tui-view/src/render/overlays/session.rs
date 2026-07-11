@@ -6,11 +6,10 @@ use neenee_tui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::common::{one_line, relative_time_compact, truncate_ellipsis};
-use crate::modal::Modal;
 use crate::render::Theme;
 use crate::render::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::render::primitives::{
-    FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
+    FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
     keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
     render_modal_footer, render_modal_footer_with_more,
 };
@@ -25,7 +24,7 @@ pub fn draw_sessions_modal(
     keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
-    let area = modal_area(frame, Modal::Sessions).expect("sessions modal has fixed geometry");
+    let area = modal_area(frame, FixedModalSpec::SESSIONS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // Destructive delete: custom band 70 so it outlives plain secondaries

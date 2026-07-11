@@ -1,9 +1,9 @@
 [package]
 name = "neenee-core"
-version = "0.20.0"
-edition = "2024"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
