@@ -577,7 +577,8 @@ pub async fn dispatch(
         Some(BuiltinCmd::Compact) => {
             let mut current = session.model_window().await;
             let settings =
-                ContextProjectionSettings::from_config(config, active_context_window(agent));
+                ContextProjectionSettings::from_config(config, active_context_window(agent))
+                    .for_request(agent.estimate_next_request_tokens(&current));
             let _ = resp_tx.send(turn(
                 &session.id().await,
                 RoundEvent::Activity("compacting context".to_string()),

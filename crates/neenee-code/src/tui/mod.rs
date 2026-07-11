@@ -420,6 +420,32 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::StreamReasoningDelta(delta) => {
+                            // Hidden-chain models (GPT-5.x, `ReasoningSummary`)
+                            // surface only a reasoning summary, never their full
+                            // chain. Disclosing even that summary as a
+                            // `MessageKind::Thinking` message would leave a
+                            // phantom entry that layout counts (`is_thinking()`)
+                            // and selection math still see. Gate at message
+                            // creation — the canonical point — so such models
+                            // never produce a thinking message at all. The raw
+                            // summary text is intentionally dropped: it is not a
+                            // disclosed chain, and persisting it would resurrect
+                            // the phantom on restore (see `transcript.rs`).
+                            let hidden_chain = {
+                                let model_id = cm_clone.lock().await.clone();
+                                // `model_by_id` (not `resolve`) so unrecognized
+                                // ids default to disclosed — `resolve` falls
+                                // back to `ThinkingSupport::None` (chain not
+                                // disclosed), which would drop reasoning deltas
+                                // for local/user-defined models that reason.
+                                // Only known `ReasoningSummary` models are gated.
+                                !neenee_core::model_by_id(&model_id)
+                                    .map(|m| m.thinking.chain_disclosed())
+                                    .unwrap_or(true)
+                            };
+                            if hidden_chain {
+                                continue;
+                            }
                             // Reasoning traces do not have a `HeightCache`
                             // entry, so their high-frequency deltas can retain
                             // the ordinary text-message entries unchanged.
@@ -626,8 +652,9 @@ pub async fn run_tui(
                             // Live partial output from a running tool (e.g. bash
                             // stdout). Accumulate into the running step so it updates
                             // in place instead of freezing on a spinner.
-                            // Tool steps are not height-cached, so do not evict
-                            // the cached plain-text history for every stdout line.
+                            // Running tool steps are not height-cached, so do not
+                            // evict the cached plain-text history for every stdout
+                            // line.
                             let mut msgs = buf.write_streaming().await;
                             let applied = msgs
                                 .iter_mut()
@@ -734,7 +761,7 @@ pub async fn run_tui(
                                 &mut msgs,
                                 NoticeSeverity::Info,
                                 format!(
-                                    "Compacted {} messages: {} -> {} chars.",
+                                    "Compacted {} messages: {} -> {} bytes.",
                                     archived_messages, before_chars, after_chars
                                 ),
                             );

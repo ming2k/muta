@@ -255,10 +255,13 @@ pub async fn add(
 }
 
 /// `AgentRequest::EditProvider` — update a user-defined provider's metadata in
-/// place: display name, and every channel's transport/base-URL/key. Each
-/// channel's model id is preserved, so a multi-model custom provider keeps all
-/// its models. An empty `api_key` leaves the existing key untouched. Persists,
-/// then re-activates so the live provider picks up the new endpoint/key.
+/// place: display name, and every API-key channel's transport/base-URL/key.
+/// Each channel's model id is preserved, so a multi-model custom provider keeps
+/// all its models. OAuth channels (ChatGPT/Codex, xAI) are skipped: their
+/// base-URL/transport/token are owned by the auth flow and must not be
+/// overwritten, so only the name (and an API-key channel's fields) change. An
+/// empty `api_key` leaves the existing key untouched. Persists, then
+/// re-activates so the live provider picks up the new endpoint/key.
 #[allow(clippy::too_many_arguments)]
 pub async fn edit(
     config: &mut Config,
@@ -289,6 +292,15 @@ pub async fn edit(
         provider.name = Some(trimmed_name.to_string());
     }
     for channel in &mut provider.channels {
+        // An OAuth channel's endpoint and bearer are resolved by the auth flow
+        // (xAI `https://api.x.ai/...`, ChatGPT
+        // `https://chatgpt.com/backend-api/codex/...`); editing the provider
+        // must never clobber them. The editor hides Base URL/Token for OAuth,
+        // but the server guards too so a malformed/empty payload can't wipe
+        // them.
+        if channel.auth.is_oauth() {
+            continue;
+        }
         channel.transport = transport;
         channel.base_url = (!trimmed_url.is_empty()).then(|| trimmed_url.to_string());
         // An empty key keeps whatever the channel already had.

@@ -36,28 +36,19 @@ next one. When the window is unknown (local/unregistered models) a conservative
 
 ## How pressure is measured
 
-Thresholds are tokens; the live transcript must be measured in the same unit to
-compare against them. `effective_pressure_tokens`
-(`neenee-core/src/pressure.rs`) is the single policy for that, shared by both
-projection layers:
+Thresholds and pressure use the same token unit. Before a provider call, the
+agent estimates the complete request it is about to send: conversation history,
+the regenerated system prompt, newly injected skills, and the currently visible
+tool schemas. This avoids treating durable history as if it were the entire
+request.
 
-- A provider-reported `prompt_tokens` is *ground truth* for what the model
-  actually saw, so it is preferred when present. Since
-  [ADR-0044](../../adr/0044-layered-token-accounting.md) wired the `usage` object
-  through the streaming adapters, a provider that returns usage contributes an
-  authoritative count; see [Token accounting](token-accounting.md) for the full
-  priority chain.
-- Otherwise the local char-class estimator (`count_tokens`, which classifies
-  each Unicode scalar — CJK glyphs count ~1 token each, ASCII words ~0.25 —
-  replacing the old flat `chars ÷ 4`) is used.
-
-The bias is deliberately conservative: under-counting risks overflow (the
-expensive failure), while over-counting only prunes a little early. A provider
-that does not surface usage falls through to the estimator, and the
-`TokenSourceLedger` records those turns as *estimated* so the accuracy report
-modal can distinguish them. Centralising the booking in
-`Agent::book_turn_usage` keeps the reported-vs-estimated attribution in one
-place.
+The estimator classifies each Unicode scalar rather than using a flat byte
+ratio, so CJK text, prose, code, and JSON arguments receive different weights.
+Provider-reported usage remains the authoritative source for the context meter
+after a completed request, but it is not reused as the next request's pressure:
+the next system prompt, tool set, and history may differ. The unused fraction
+above the compaction threshold leaves room for wire framing and the next model
+completion.
 
 ## What compaction does
 
@@ -109,7 +100,7 @@ sees only the checkpoint plus the recent tail. The checkpoint records
 `unknown`.
 
 Unlike pruning, compaction is **visible**: it emits `AgentResponse::Compacted`,
-which the TUI renders as `Compacted N messages: X -> Y chars.`. A user seeing
+which the TUI renders as `Compacted N messages: X -> Y bytes.`. A user seeing
 that notice knows a real summarization happened.
 
 ## Manual and reactive compaction

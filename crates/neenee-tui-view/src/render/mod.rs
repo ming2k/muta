@@ -228,6 +228,10 @@ pub struct HeightCache {
     width: u16,
     heights: std::collections::HashMap<u64, u16>,
     virtual_index: Option<layout::VirtualLayoutIndex>,
+    /// Width-independent, render-only rows derived from completed edit
+    /// patches. Unlike height entries, these survive structural transcript
+    /// invalidation and resize; their own source identity controls reuse.
+    diff_cache: tools::DiffCache,
 }
 
 impl HeightCache {
@@ -1135,6 +1139,21 @@ mod tests {
         );
         // The skip path must actually have been reachable (cache populated).
         assert!(cache.get(messages[0].id).is_some());
+    }
+
+    #[test]
+    fn completed_diff_cache_survives_height_invalidation_and_resize() {
+        let mut cache = HeightCache::default();
+        let first = cache.diff_cache.patch(42, "old", "new", 10);
+
+        cache.clear();
+        cache.prepare(120);
+
+        let second = cache.diff_cache.patch(42, "old", "new", 10);
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "width-dependent height invalidation must retain semantic diff rows"
+        );
     }
 
     #[test]

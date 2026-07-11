@@ -1576,6 +1576,84 @@ mod tests {
     }
 
     #[test]
+    fn startup_model_recording_restores_boot_model_on_next_launch() {
+        // Regression for "recently-used model not restored on startup". The
+        // OAuth GPT (`chatgpt`) provider is multi-model: a user who boots into
+        // a non-default model (e.g. selects `gpt-5.6-terra` while the catalog's
+        // default channel is `gpt-5.6-sol`) must, on the *next* launch, reopen
+        // on that same model. Restoration works only if startup records the
+        // boot model via `record_model` — previously startup recorded only the
+        // provider, leaving `last_models` empty, so the next launch fell back
+        // to the default-channel model.
+        //
+        // Modeled here with a generic multi-model "relay" provider (two
+        // channels, default channel = first = "alpha"), exactly mirroring the
+        // `chatgpt` shape from `CHATGPT_BUILTIN_MODELS`.
+        use neenee_store::config::{UserChannelConfig, UserProviderConfig, UserTransport};
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "relay".to_string(),
+            name: Some("Relay".to_string()),
+            channels: vec![
+                UserChannelConfig {
+                    label: "alpha".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    model: Some("alpha".to_string()),
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "beta".to_string(),
+                    transport: UserTransport::OpenAiCompat,
+                    model: Some("beta".to_string()),
+                    ..Default::default()
+                },
+            ],
+            default_channel: 0,
+            ..Default::default()
+        });
+        config.default_provider = "relay".to_string();
+        // Boot into the non-default-channel model "beta" (analogous to a
+        // session pin or `default_model` selecting gpt-5.6-terra).
+        config.default_model = Some("beta".to_string());
+
+        // The model the startup provider is actually built with — same
+        // config-only precedence `build_provider_for` uses, and what
+        // `agent_loop::run` now records via `record_model`.
+        let boot_model = resolved_model_name(&config, "relay");
+        assert_eq!(boot_model, "beta", "boot resolves to the pinned model");
+
+        let mut usage = ProviderUsage::default();
+        usage.record("relay");
+        usage.record_model("relay", &boot_model);
+
+        // ── Next launch: a fresh session with no `default_model` pin. ──
+        // (Session pins live in `SessionData`, not config.toml, so a fresh
+        // session sees only the global default — here empty.) Restoration must
+        // come from the recorded `last_models` entry, not the default channel.
+        let mut next_config = config.clone();
+        next_config.default_model = None;
+        assert_eq!(
+            resolved_model_name_with_usage(&next_config, "relay", &usage),
+            "beta",
+            "next launch must reopen on the recorded boot model"
+        );
+
+        // Counter-assertion: the pre-fix behavior — recording only the
+        // provider, never the model — leaves `last_models` empty, so the next
+        // launch wrongly reopens on the default-channel model "alpha".
+        let provider_only_usage = {
+            let mut u = ProviderUsage::default();
+            u.record("relay");
+            u
+        };
+        assert_eq!(
+            resolved_model_name_with_usage(&next_config, "relay", &provider_only_usage),
+            "alpha",
+            "without record_model the default-channel model wins (the bug)"
+        );
+    }
+
+    #[test]
     #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn built_in_anthropic_applies_per_model_reasoning_overrides() {
         // ADR-0046: reasoning is opt-in per model. A `[model_reasoning]` entry

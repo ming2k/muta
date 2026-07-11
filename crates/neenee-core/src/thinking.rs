@@ -80,6 +80,14 @@ pub enum ThinkingSupport {
     /// over an Anthropic-compatible relay, where the transport falls back to the
     /// conservative `adaptive` form if the user turns thinking on.)
     ReasoningContent,
+    /// The model reasons, but **deliberately hides its full reasoning chain**:
+    /// only a summary of its reasoning is surfaced (via the OpenAI Responses
+    /// `reasoning_summary_text` stream), never the raw chain. (GPT-5.x family.)
+    /// Unlike [`Self::ReasoningContent`], these models cannot disclose their
+    /// complete thought process, so the TUI gates thinking disclosure at message
+    /// creation: a `ReasoningSummary` model never produces a `MessageKind::Thinking`
+    /// message, avoiding phantom layout entries.
+    ReasoningSummary,
     /// Anthropic **adaptive** thinking: emit `thinking: {type:"adaptive"}` and
     /// drive depth via `output_config.effort`. Opt-in (off unless the user turns
     /// it on); manual `type:"enabled"` is rejected with 400. (Opus 4.7/4.8;
@@ -110,5 +118,20 @@ impl ThinkingSupport {
     /// display. Everything except [`Self::None`] reasons.
     pub const fn reasons(self) -> bool {
         !matches!(self, ThinkingSupport::None)
+    }
+
+    /// `true` when the model fully discloses its reasoning chain — i.e. its
+    /// complete thought process can be surfaced to the user. `None` does not
+    /// reason at all (nothing to disclose), and [`Self::ReasoningSummary`]
+    /// intentionally hides the chain, returning only a summary. All other
+    /// variants disclose. The TUI uses this to gate thinking-message creation:
+    /// a model whose chain is not disclosed never produces a
+    /// `MessageKind::Thinking` message, so no phantom entries leak into layout
+    /// counts, selection math, or scroll state.
+    pub const fn chain_disclosed(self) -> bool {
+        !matches!(
+            self,
+            ThinkingSupport::None | ThinkingSupport::ReasoningSummary
+        )
     }
 }

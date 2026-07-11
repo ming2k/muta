@@ -30,7 +30,7 @@ use serde::Serialize;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::Agent;
+use crate::{Agent, RequestTokenEstimate};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, InjectionOrigin, Message, NoticeKind, NoticeSeverity, NoticeSource,
@@ -42,7 +42,7 @@ use neenee_store::{
     config::Config,
     session::{
         ContextProjectionCheckpoint, ContextProjectionResult, PursuitCheckpoint, SessionStore,
-        UNCAPPED_ITERATIONS, estimate_bytes, estimate_tokens, run_compaction,
+        UNCAPPED_ITERATIONS, estimate_bytes, run_compaction,
     },
 };
 
@@ -400,6 +400,45 @@ impl ContextProjectionSettings {
                 * neenee_core::CHARS_PER_TOKEN,
         }
     }
+
+    /// Adjust the post-compaction history target so the complete projected
+    /// request — checkpoint, system prompt, injected context, and tool schemas
+    /// — lands near `target_utilization`, not merely the durable transcript.
+    pub fn for_request(&self, request: RequestTokenEstimate) -> Self {
+        let mut resolved = self.clone();
+        let floor = resolved.budget.target_tokens.clamp(1, 2_000);
+        resolved.budget.target_tokens = resolved
+            .budget
+            .target_tokens
+            .saturating_sub(request.overhead_tokens)
+            .max(floor);
+        resolved
+    }
+}
+
+#[cfg(test)]
+mod projection_settings_tests {
+    use super::*;
+
+    #[test]
+    fn compaction_target_accounts_for_projected_request_overhead() {
+        let settings = ContextProjectionSettings {
+            budget: neenee_core::CompactionPolicy::default().resolve(200_000),
+            preserve_turns: 6,
+            summarize: true,
+            prune: true,
+            prune_protect_chars: 24_000,
+        };
+        let resolved = settings.for_request(RequestTokenEstimate {
+            history_tokens: 100_000,
+            overhead_tokens: 12_000,
+            total_tokens: 112_000,
+        });
+
+        assert_eq!(settings.budget.target_tokens, 50_000);
+        assert_eq!(resolved.budget.target_tokens, 38_000);
+        assert_eq!(resolved.budget.compaction_threshold_tokens, 170_000);
+    }
 }
 
 /// Mid-turn model-context projection gate: prunes old tool results durably when
@@ -690,20 +729,23 @@ pub async fn execute_round(
     // (ADR-0019) so it engages only once pressure crosses that fraction of the
     // window — not every turn — mirroring the mid-turn gate. Pruning also
     // self-limits to runs that reclaim meaningful space.
-    if projection.prune && estimate_tokens(&turn_history) > projection.budget.prune_threshold_tokens
+    let mut request_estimate = agent.estimate_next_request_tokens(&turn_history);
+    if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {
         prune_and_commit(&mut turn_history, &session, &projection).await?;
+        request_estimate = agent.estimate_next_request_tokens(&turn_history);
     }
-    if estimate_tokens(&turn_history) > projection.budget.compaction_threshold_tokens {
+    if request_estimate.total_tokens > projection.budget.compaction_threshold_tokens {
         let _ = tx.send(turn(
             &session_id,
             RoundEvent::Activity("compacting context".to_string()),
         ));
         let extra = agent.fire_pre_compact().await;
+        let compaction_settings = projection.for_request(request_estimate);
         if let Some(checkpoint) = compact_round_history(
             &mut turn_history,
             &session,
-            &projection,
+            &compaction_settings,
             Some(agent.provider.clone()),
             extra,
         )
@@ -746,7 +788,8 @@ pub async fn execute_round(
             let overflow_settings = ContextProjectionSettings {
                 preserve_turns: projection.preserve_turns.max(1),
                 ..projection.clone()
-            };
+            }
+            .for_request(agent.estimate_next_request_tokens(&turn_history));
             if compact_round_history(
                 &mut turn_history,
                 &session,

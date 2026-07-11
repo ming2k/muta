@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc};
 
 use neenee_core::{
-    AgentRequest, AgentResponse, ImagePart, ParentStatus, PermissionRequest,
+    AgentRequest, AgentResponse, ChannelAuth, ImagePart, ParentStatus, PermissionRequest,
     ProviderPickerSnapshot, Pursuit, Role, SessionOverview, TodoList,
 };
 
@@ -1300,25 +1300,28 @@ impl App {
     }
 
     /// Open the provider editor in **edit** mode for an existing user provider,
-    /// pre-filling its metadata. The Model field is hidden (models are managed in
-    /// the stage-2 list), so only Name / Base URL / Token show — and Base URL is
-    /// omitted for a native-Gemini provider.
+    /// pre-filling its metadata. The visible fields depend on the channel's auth
+    /// type: an API-key channel shows Name / Base URL / Token, while an OAuth
+    /// channel (ChatGPT/Codex, xAI) shows Name only — its endpoint and token are
+    /// owned by the auth flow and must not be hand-edited. The Model field is
+    /// always hidden (models are managed in the stage-2 list).
     pub fn open_edit_provider_editor(
         &mut self,
         id: String,
         name: String,
         protocol: String,
         base_url: String,
+        auth: ChannelAuth,
     ) {
         self.active_modal = Modal::CustomProvider;
         self.custom_edit_id = Some(id);
-        self.custom_fields = edit_fields(&protocol);
+        self.custom_fields = edit_fields(&protocol, auth);
         self.custom_field = 0;
         self.custom_protocol_wire = protocol;
         self.custom_models.clear();
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
-        self.custom_auth = neenee_core::ChannelAuth::ApiKey;
+        self.custom_auth = auth;
         // Edit mode never carries a template id: edits to an existing provider
         // are sent as `EditProvider`, which ignores template_id anyway, and a
         // stray id here must not leak into a later create flow.

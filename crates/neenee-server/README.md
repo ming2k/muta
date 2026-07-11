@@ -13,3 +13,9 @@ transport so any frontend can attach.
 
 It depends on `neenee-agent` for the orchestration loop and on `neenee-store`
 for durable state; frontends depend only on the transport surface exposed here.
+
+## Frontend protocol
+
+The current hot-attach WebSocket API is documented in the
+[frontend integration guide](../../docs/reference/server-api.md) and the
+[machine-readable AsyncAPI contract](../../docs/reference/server.asyncapi.yaml).

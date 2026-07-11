@@ -112,6 +112,10 @@ pub struct Terminal<W: io::Write> {
     back: Grid,
     front: Grid,
     cursor: CursorState,
+    /// A resize invalidated the terminal contents, but the clear/reset is held
+    /// until the next committed frame. Staged measurement frames must never
+    /// write terminal bytes of their own.
+    pending_clear: bool,
 }
 
 impl<W: io::Write> Terminal<W> {
@@ -125,6 +129,7 @@ impl<W: io::Write> Terminal<W> {
             back,
             front,
             cursor: CursorState::Hidden,
+            pending_clear: false,
         }
     }
 
@@ -133,15 +138,7 @@ impl<W: io::Write> Terminal<W> {
         self.back.resize(width, height);
         self.front = Grid::new(width, height);
         self.back.mark_all_dirty();
-        // Best-effort: a resize must reconcile our SGR tracker with the real
-        // terminal. If the write fails we still proceed — the next frame's
-        // full repaint is the fallback and worst case is a transient style
-        // glitch, not a hang.
-        let _ = self.backend.invalidate();
-        use crossterm::QueueableCommand;
-        let _ = self.backend.writer().queue(crossterm::terminal::Clear(
-            crossterm::terminal::ClearType::All,
-        ));
+        self.pending_clear = true;
     }
 
     fn hidden_cursor_parking_pos(&self) -> (u16, u16) {
@@ -149,9 +146,7 @@ impl<W: io::Write> Terminal<W> {
         (w.saturating_sub(1), h.saturating_sub(1))
     }
 
-    /// Run the app's draw closure against a fresh frame, then diff → render
-    /// → promote. Returns `Ok(())` on success.
-    pub fn draw<F>(&mut self, render: F) -> io::Result<()>
+    fn render_frame<F>(&mut self, render: F)
     where
         F: FnOnce(&mut Frame<'_>),
     {
@@ -162,21 +157,26 @@ impl<W: io::Write> Terminal<W> {
             self.back.resize(w, h);
             self.front = Grid::new(w, h);
             self.back.mark_all_dirty();
-            // Reconcile the SGR tracker with the real terminal on resize.
-            // `invalidate` emits a real `\x1b[0m`; a failure here only
-            // risks a transient style glitch on the next frame, so we
-            // swallow it rather than aborting the draw.
+            self.pending_clear = true;
+        }
+        let mut frame = Frame::new(&mut self.back);
+        render(&mut frame);
+        self.cursor = frame.take_cursor();
+    }
+
+    fn commit(&mut self) -> io::Result<()> {
+        if self.pending_clear {
+            // Reconcile the SGR tracker and real terminal only when a frame is
+            // actually committed. A staged layout pass may resize the grids,
+            // but it must remain completely invisible.
             let _ = self.backend.invalidate();
             use crossterm::QueueableCommand;
             let _ = self.backend.writer().queue(crossterm::terminal::Clear(
                 crossterm::terminal::ClearType::All,
             ));
+            self.pending_clear = false;
         }
-        {
-            let mut frame = Frame::new(&mut self.back);
-            render(&mut frame);
-            self.cursor = frame.take_cursor();
-        }
+
         let cmd: DrawCmd = diff::diff(&self.back, &self.front);
         self.backend.render(&cmd)?;
         diff::promote(&mut self.back, &mut self.front);
@@ -194,6 +194,36 @@ impl<W: io::Write> Terminal<W> {
         }
         self.backend.writer().flush()?;
         Ok(())
+    }
+
+    /// Run the app's draw closure against a fresh frame, then diff → render
+    /// → promote. Returns `Ok(())` on success.
+    pub fn draw<F>(&mut self, render: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut Frame<'_>),
+    {
+        self.render_frame(render);
+        self.commit()
+    }
+
+    /// Render into the retained back grid without emitting terminal output.
+    /// The next [`Self::draw`] replaces or completes this staged frame and
+    /// commits only the final grid. This supports layout-dependent state such
+    /// as bottom-follow scrolling without flashing an intermediate viewport.
+    pub fn stage<F>(&mut self, render: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut Frame<'_>),
+    {
+        self.render_frame(render);
+        Ok(())
+    }
+
+    /// Commit the currently staged back grid without running layout again.
+    /// Callers use this when a measurement pass confirms that its viewport was
+    /// already final; if layout-dependent state changed, call [`Self::draw`]
+    /// instead so the staged grid is replaced before the single commit.
+    pub fn commit_staged(&mut self) -> io::Result<()> {
+        self.commit()
     }
 
     /// Borrow the underlying writer (for alt-screen / raw-mode setup).
@@ -263,5 +293,35 @@ impl TestTerminal {
     /// The caret position the last draw closure requested (or `Hidden`).
     pub fn cursor(&self) -> CursorState {
         self.cursor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Style;
+    use crate::backend::Bce;
+
+    #[test]
+    fn staged_frame_emits_only_the_final_committed_grid() {
+        crossterm::style::force_color_output(true);
+        let mut output = Vec::new();
+        {
+            let backend = Backend::with_bce(&mut output, Bce::No);
+            let mut terminal = Terminal::new(backend);
+
+            terminal
+                .stage(|frame| frame.put(0, 0, Style::default(), "intermediate"))
+                .unwrap();
+            assert!(terminal.writer().is_empty());
+
+            terminal
+                .draw(|frame| frame.put(0, 0, Style::default(), "final"))
+                .unwrap();
+        }
+
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("final"));
+        assert!(!rendered.contains("intermediate"));
     }
 }

@@ -1,0 +1,1031 @@
+asyncapi: 3.1.0
+info:
+  title: neenee hot-attach WebSocket API
+  version: 0.20.0
+  description: |
+    Machine-readable contract for `neenee-server`'s current hot-attach transport.
+    The server is started from a running TUI with `/serve [port]`; it is not yet
+    the multi-session daemon described as a future phase in ADR-0037.
+
+    Every WebSocket text frame contains exactly one JSON value. The first
+    server frame is always `History`; subsequent server frames are `Response`.
+    Clients send only `Request` frames. Binary frames are ignored. The current
+    implementation has no authentication, subprotocol negotiation, or HTTP API.
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
+  externalDocs:
+    description: Human-readable frontend integration guide
+    url: https://github.com/anthropics/neenee/blob/main/docs/reference/server-api.md
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:{port}
+    protocol: ws
+    description: Port selected by `/serve [port]`; omitting it asks the OS for a free port.
+    variables:
+      port:
+        default: '0'
+        description: Actual bound port printed by the TUI after startup.
+channels:
+  session:
+    address: /
+    description: One full-duplex connection to the TUI's currently active session.
+    messages:
+      request:
+        $ref: '#/components/messages/Request'
+      history:
+        $ref: '#/components/messages/History'
+      response:
+        $ref: '#/components/messages/Response'
+operations:
+  sendRequest:
+    action: send
+    channel:
+      $ref: '#/channels/session'
+    summary: Send an agent command from the frontend to the server.
+    messages:
+      - $ref: '#/channels/session/messages/request'
+  receiveHistory:
+    action: receive
+    channel:
+      $ref: '#/channels/session'
+    summary: Receive the transcript snapshot once, immediately after connect.
+    messages:
+      - $ref: '#/channels/session/messages/history'
+  receiveResponse:
+    action: receive
+    channel:
+      $ref: '#/channels/session'
+    summary: Receive live agent and session events.
+    messages:
+      - $ref: '#/channels/session/messages/response'
+components:
+  messages:
+    Request:
+      name: Request
+      title: Frontend request envelope
+      payload:
+        $ref: '#/components/schemas/RequestEnvelope'
+      examples:
+        - name: chat
+          payload:
+            type: Request
+            Chat:
+              text: Hello
+              images: []
+              sent_at_ms: 1770000000000
+        - name: interrupt
+          payload:
+            type: Request
+            Interrupt: null
+    History:
+      name: History
+      title: Initial transcript snapshot
+      payload:
+        $ref: '#/components/schemas/HistoryEnvelope'
+      examples:
+        - name: emptyHistory
+          payload:
+            type: History
+            messages: []
+    Response:
+      name: Response
+      title: Live server response envelope
+      payload:
+        $ref: '#/components/schemas/ResponseEnvelope'
+      examples:
+        - name: streamingDelta
+          payload:
+            type: Response
+            Round:
+              session_id: session-123
+              event:
+                StreamDelta: Hello
+        - name: permissionPrompt
+          payload:
+            type: Response
+            Round:
+              session_id: session-123
+              event:
+                PermissionRequest:
+                  id: permission-123
+                  tool: edit_file
+                  label: Edit file
+                  description: Modify a project file
+                  arguments: '{"path":"README.md"}'
+                  scope: README.md
+  schemas:
+    RequestEnvelope:
+      description: |
+        `type` is the outer Wire discriminator. The second discriminator is the
+        Rust `AgentRequest` variant name. Unit variants serialize as a key with
+        a null value because they are flattened into this envelope.
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: Request
+      allOf:
+        - $ref: '#/components/schemas/AgentRequest'
+      unevaluatedProperties: false
+    HistoryEnvelope:
+      type: object
+      required: [type, messages]
+      properties:
+        type:
+          const: History
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+      additionalProperties: false
+    ResponseEnvelope:
+      description: "The type field plus one flattened AgentResponse variant."
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: Response
+      allOf:
+        - $ref: '#/components/schemas/AgentResponse'
+      unevaluatedProperties: false
+
+    AgentRequest:
+      oneOf:
+        - $ref: '#/components/schemas/RequestChat'
+        - $ref: '#/components/schemas/RequestSlashCommand'
+        - $ref: '#/components/schemas/RequestInterrupt'
+        - $ref: '#/components/schemas/RequestPermissionReply'
+        - $ref: '#/components/schemas/RequestUserQuestionReply'
+        - $ref: '#/components/schemas/RequestInputReply'
+        - $ref: '#/components/schemas/RequestSwitchProvider'
+        - $ref: '#/components/schemas/RequestAddProvider'
+        - $ref: '#/components/schemas/RequestConnectProvider'
+        - $ref: '#/components/schemas/RequestAuthorizeOAuth'
+        - $ref: '#/components/schemas/RequestEditProvider'
+        - $ref: '#/components/schemas/RequestRemoveProviderModel'
+        - $ref: '#/components/schemas/RequestEditProviderModel'
+        - $ref: '#/components/schemas/RequestEditModelReasoning'
+        - $ref: '#/components/schemas/RequestDeleteProvider'
+        - $ref: '#/components/schemas/RequestToggleFavorite'
+        - $ref: '#/components/schemas/RequestSetDefaultModel'
+        - $ref: '#/components/schemas/RequestDeleteSession'
+        - $ref: '#/components/schemas/RequestQuerySessionContext'
+        - $ref: '#/components/schemas/RequestRevokePermission'
+        - $ref: '#/components/schemas/RequestClearAllPermissions'
+        - $ref: '#/components/schemas/RequestToggleTool'
+        - $ref: '#/components/schemas/RequestToggleMcpServer'
+        - $ref: '#/components/schemas/RequestReconnectMcpServer'
+        - $ref: '#/components/schemas/RequestShellCommand'
+        - $ref: '#/components/schemas/RequestExitSideView'
+        - $ref: '#/components/schemas/RequestUpdateDoomGuardConfig'
+        - $ref: '#/components/schemas/RequestUpdateTuiLayout'
+    RequestChat:
+      type: object
+      required: [Chat]
+      properties:
+        Chat:
+          type: object
+          required: [text, images]
+          properties:
+            text: { type: string }
+            images:
+              type: array
+              items: { $ref: '#/components/schemas/ImagePart' }
+            sent_at_ms: { type: [integer, 'null'], minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+    RequestSlashCommand:
+      type: object
+      required: [SlashCommand]
+      properties:
+        SlashCommand: { type: string, examples: [/help] }
+      additionalProperties: false
+    RequestInterrupt: { $ref: '#/components/schemas/UnitRequestInterrupt' }
+    UnitRequestInterrupt:
+      type: object
+      required: [Interrupt]
+      properties: { Interrupt: { type: 'null' } }
+      additionalProperties: false
+    RequestPermissionReply:
+      type: object
+      required: [PermissionReply]
+      properties:
+        PermissionReply:
+          type: object
+          required: [request_id, decision, parent_call_id]
+          properties:
+            request_id: { type: string }
+            decision: { enum: [Once, Always, Reject] }
+            parent_call_id: { type: [string, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestUserQuestionReply:
+      type: object
+      required: [UserQuestionReply]
+      properties:
+        UserQuestionReply:
+          type: object
+          required: [request_id, answers, parent_call_id]
+          properties:
+            request_id: { type: string }
+            answers:
+              type: array
+              items: { type: array, items: { type: string } }
+            parent_call_id: { type: [string, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestInputReply:
+      type: object
+      required: [InputReply]
+      properties:
+        InputReply:
+          type: object
+          required: [request_id, text, parent_call_id]
+          properties:
+            request_id: { type: string }
+            text: { type: string }
+            parent_call_id: { type: [string, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestSwitchProvider:
+      type: object
+      required: [SwitchProvider]
+      properties:
+        SwitchProvider:
+          type: object
+          required: [provider_type, model, api_key, base_url]
+          properties:
+            provider_type: { type: string }
+            model: { type: string }
+            api_key: { type: [string, 'null'] }
+            base_url: { type: [string, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestAddProvider:
+      type: object
+      required: [AddProvider]
+      properties:
+        AddProvider:
+          type: object
+          required: [name, protocol, base_url, api_key, user_agent, models, auth, template_id]
+          properties:
+            name: { type: string }
+            protocol: { type: string, enum: [openai, anthropic, gemini] }
+            base_url: { type: string }
+            api_key: { type: string }
+            user_agent: { type: [string, 'null'] }
+            models: { type: array, minItems: 1, items: { type: string } }
+            auth: { $ref: '#/components/schemas/ChannelAuth' }
+            template_id: { type: [string, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestConnectProvider:
+      type: object
+      required: [ConnectProvider]
+      properties:
+        ConnectProvider:
+          type: object
+          required: [id, method]
+          properties:
+            id: { type: string }
+            method: { $ref: '#/components/schemas/LoginMethod' }
+          additionalProperties: false
+      additionalProperties: false
+    RequestAuthorizeOAuth:
+      type: object
+      required: [AuthorizeOAuth]
+      properties:
+        AuthorizeOAuth:
+          type: object
+          required: [method, auth]
+          properties:
+            method: { $ref: '#/components/schemas/LoginMethod' }
+            auth: { $ref: '#/components/schemas/ChannelAuth' }
+          additionalProperties: false
+      additionalProperties: false
+    RequestEditProvider:
+      type: object
+      required: [EditProvider]
+      properties:
+        EditProvider:
+          type: object
+          required: [id, name, protocol, base_url, api_key]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            protocol: { type: string }
+            base_url: { type: string }
+            api_key: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    RequestRemoveProviderModel:
+      type: object
+      required: [RemoveProviderModel]
+      properties:
+        RemoveProviderModel:
+          type: object
+          required: [provider_id, model]
+          properties: { provider_id: { type: string }, model: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestEditProviderModel:
+      type: object
+      required: [EditProviderModel]
+      properties:
+        EditProviderModel:
+          type: object
+          required: [provider_id, model, effort, thinking]
+          properties:
+            provider_id: { type: string }
+            model: { type: string }
+            effort: { type: [string, 'null'] }
+            thinking: { type: [boolean, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestEditModelReasoning:
+      type: object
+      required: [EditModelReasoning]
+      properties:
+        EditModelReasoning:
+          type: object
+          required: [model, effort, thinking]
+          properties:
+            model: { type: string }
+            effort: { type: [string, 'null'] }
+            thinking: { type: [boolean, 'null'] }
+          additionalProperties: false
+      additionalProperties: false
+    RequestDeleteProvider: { $ref: '#/components/schemas/SingleIdRequest' }
+    SingleIdRequest:
+      oneOf:
+        - type: object
+          required: [DeleteProvider]
+          properties: { DeleteProvider: { $ref: '#/components/schemas/IdPayload' } }
+          additionalProperties: false
+        - type: object
+          required: [ToggleFavorite]
+          properties: { ToggleFavorite: { $ref: '#/components/schemas/IdPayload' } }
+          additionalProperties: false
+        - type: object
+          required: [SetDefaultModel]
+          properties: { SetDefaultModel: { $ref: '#/components/schemas/IdPayload' } }
+          additionalProperties: false
+        - type: object
+          required: [DeleteSession]
+          properties: { DeleteSession: { $ref: '#/components/schemas/IdPayload' } }
+          additionalProperties: false
+    IdPayload:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+      additionalProperties: false
+    RequestToggleFavorite:
+      type: object
+      required: [ToggleFavorite]
+      properties: { ToggleFavorite: { $ref: '#/components/schemas/IdPayload' } }
+      additionalProperties: false
+    RequestSetDefaultModel:
+      type: object
+      required: [SetDefaultModel]
+      properties: { SetDefaultModel: { $ref: '#/components/schemas/IdPayload' } }
+      additionalProperties: false
+    RequestDeleteSession:
+      type: object
+      required: [DeleteSession]
+      properties: { DeleteSession: { $ref: '#/components/schemas/IdPayload' } }
+      additionalProperties: false
+    RequestQuerySessionContext:
+      type: object
+      required: [QuerySessionContext]
+      properties: { QuerySessionContext: { type: 'null' } }
+      additionalProperties: false
+    RequestRevokePermission:
+      type: object
+      required: [RevokePermission]
+      properties:
+        RevokePermission:
+          type: object
+          required: [tool, scope]
+          properties: { tool: { type: string }, scope: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestClearAllPermissions:
+      type: object
+      required: [ClearAllPermissions]
+      properties: { ClearAllPermissions: { type: 'null' } }
+      additionalProperties: false
+    RequestToggleTool:
+      type: object
+      required: [ToggleTool]
+      properties:
+        ToggleTool:
+          type: object
+          required: [name, enabled]
+          properties: { name: { type: string }, enabled: { type: boolean } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestToggleMcpServer:
+      type: object
+      required: [ToggleMcpServer]
+      properties:
+        ToggleMcpServer:
+          type: object
+          required: [name, enabled]
+          properties: { name: { type: string }, enabled: { type: boolean } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestReconnectMcpServer:
+      type: object
+      required: [ReconnectMcpServer]
+      properties:
+        ReconnectMcpServer:
+          type: object
+          required: [name]
+          properties: { name: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestShellCommand:
+      type: object
+      required: [ShellCommand]
+      properties:
+        ShellCommand:
+          type: object
+          required: [command]
+          properties: { command: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    RequestExitSideView:
+      type: object
+      required: [ExitSideView]
+      properties: { ExitSideView: { type: 'null' } }
+      additionalProperties: false
+    RequestUpdateDoomGuardConfig:
+      type: object
+      required: [UpdateDoomGuardConfig]
+      properties:
+        UpdateDoomGuardConfig: { $ref: '#/components/schemas/DoomGuardConfig' }
+      additionalProperties: false
+    RequestUpdateTuiLayout:
+      type: object
+      required: [UpdateTuiLayout]
+      properties: { UpdateTuiLayout: { type: string, enum: [default, legacy] } }
+      additionalProperties: false
+
+    AgentResponse:
+      description: |
+        Externally tagged Rust enum. This contract enumerates all top-level
+        response variants. Detailed schemas are provided for the interaction,
+        streaming, and state-sync paths most frontends consume; large evolving
+        snapshots retain an open object payload where noted.
+      oneOf:
+        - $ref: '#/components/schemas/ResponseRound'
+        - $ref: '#/components/schemas/ResponseParentStatus'
+        - $ref: '#/components/schemas/ResponseSideViewOpened'
+        - $ref: '#/components/schemas/ResponseSideViewClosed'
+        - $ref: '#/components/schemas/ResponsePermissionsCleared'
+        - $ref: '#/components/schemas/ResponseProviderKeys'
+        - $ref: '#/components/schemas/ResponseProviderPicker'
+        - $ref: '#/components/schemas/ResponseConversationCleared'
+        - $ref: '#/components/schemas/ResponseConversationReplaced'
+        - $ref: '#/components/schemas/ResponseSessionsOverview'
+        - $ref: '#/components/schemas/ResponseError'
+        - $ref: '#/components/schemas/ResponseExit'
+        - $ref: '#/components/schemas/ResponseProviderSwitched'
+        - $ref: '#/components/schemas/ResponseConnectStatus'
+        - $ref: '#/components/schemas/ResponseSessionContext'
+        - $ref: '#/components/schemas/ResponseDoomGuardConfigUpdated'
+        - $ref: '#/components/schemas/ResponseTuiLayoutUpdated'
+    ResponseRound:
+      type: object
+      required: [Round]
+      properties:
+        Round:
+          type: object
+          required: [session_id, event]
+          properties:
+            session_id: { type: string }
+            event: { $ref: '#/components/schemas/RoundEvent' }
+          additionalProperties: false
+      additionalProperties: false
+    ResponseParentStatus:
+      type: object
+      required: [ParentStatus]
+      properties: { ParentStatus: { enum: [Idle, Running, NeedsApproval, NeedsInput, Failed, Interrupted] } }
+      additionalProperties: false
+    ResponseSideViewOpened:
+      type: object
+      required: [SideViewOpened]
+      properties:
+        SideViewOpened:
+          type: object
+          required: [side_id, primary_id]
+          properties: { side_id: { type: string }, primary_id: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    ResponseSideViewClosed: { $ref: '#/components/schemas/UnitResponseSideViewClosed' }
+    UnitResponseSideViewClosed:
+      type: string
+      const: SideViewClosed
+    ResponsePermissionsCleared: { type: string, const: PermissionsCleared }
+    ResponseProviderKeys:
+      type: object
+      required: [ProviderKeys]
+      properties:
+        ProviderKeys:
+          type: array
+          items:
+            type: array
+            prefixItems: [{ type: string }, { type: boolean }]
+            minItems: 2
+            maxItems: 2
+      additionalProperties: false
+    ResponseProviderPicker:
+      type: object
+      required: [ProviderPicker]
+      properties: { ProviderPicker: { $ref: '#/components/schemas/ProviderPickerSnapshot' } }
+      additionalProperties: false
+    ResponseConversationCleared: { type: string, const: ConversationCleared }
+    ResponseConversationReplaced:
+      type: object
+      required: [ConversationReplaced]
+      properties:
+        ConversationReplaced: { type: array, items: { $ref: '#/components/schemas/Message' } }
+      additionalProperties: false
+    ResponseSessionsOverview:
+      type: object
+      required: [SessionsOverview]
+      properties:
+        SessionsOverview: { type: array, items: { $ref: '#/components/schemas/SessionOverview' } }
+      additionalProperties: false
+    ResponseError:
+      type: object
+      required: [Error]
+      properties: { Error: { type: string } }
+      additionalProperties: false
+    ResponseExit: { type: string, const: Exit }
+    ResponseProviderSwitched:
+      type: object
+      required: [ProviderSwitched]
+      properties:
+        ProviderSwitched:
+          type: object
+          required: [provider, model]
+          properties: { provider: { type: string }, model: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    ResponseConnectStatus:
+      type: object
+      required: [ConnectStatus]
+      properties: { ConnectStatus: { $ref: '#/components/schemas/ConnectStatus' } }
+      additionalProperties: false
+    ResponseSessionContext:
+      type: object
+      required: [SessionContext]
+      properties: { SessionContext: { $ref: '#/components/schemas/SessionContextSnapshot' } }
+      additionalProperties: false
+    ResponseDoomGuardConfigUpdated:
+      type: object
+      required: [DoomGuardConfigUpdated]
+      properties: { DoomGuardConfigUpdated: { $ref: '#/components/schemas/DoomGuardConfig' } }
+      additionalProperties: false
+    ResponseTuiLayoutUpdated:
+      type: object
+      required: [TuiLayoutUpdated]
+      properties: { TuiLayoutUpdated: { type: string } }
+      additionalProperties: false
+
+    RoundEvent:
+      description: |
+        Externally tagged event enum. Unknown future event keys should be logged
+        and ignored by resilient frontends rather than terminating the socket.
+      oneOf:
+        - { $ref: '#/components/schemas/EventNotice' }
+        - { $ref: '#/components/schemas/EventText' }
+        - { $ref: '#/components/schemas/EventError' }
+        - { $ref: '#/components/schemas/EventToolCall' }
+        - { $ref: '#/components/schemas/EventToolResult' }
+        - { $ref: '#/components/schemas/EventToolStream' }
+        - { $ref: '#/components/schemas/EventToolCancelled' }
+        - { $ref: '#/components/schemas/EventPermissionRequest' }
+        - { $ref: '#/components/schemas/EventUserQuestionRequest' }
+        - { $ref: '#/components/schemas/EventInputRequest' }
+        - { $ref: '#/components/schemas/EventCompacted' }
+        - { $ref: '#/components/schemas/EventHarnessState' }
+        - { $ref: '#/components/schemas/EventPursuitUpdated' }
+        - { type: string, const: PursuitCleared }
+        - { $ref: '#/components/schemas/EventTodosUpdated' }
+        - { $ref: '#/components/schemas/EventUnattendedChanged' }
+        - { $ref: '#/components/schemas/EventSessionReview' }
+        - { $ref: '#/components/schemas/EventRetryScheduled' }
+        - { $ref: '#/components/schemas/EventActivity' }
+        - { $ref: '#/components/schemas/EventTurnStarted' }
+        - { type: string, const: StreamStart }
+        - { $ref: '#/components/schemas/EventStreamDelta' }
+        - { $ref: '#/components/schemas/EventStreamReasoningDelta' }
+        - { $ref: '#/components/schemas/EventStreamReasoningEnd' }
+        - { $ref: '#/components/schemas/EventStreamEnd' }
+        - { type: string, const: StreamDiscard }
+        - { $ref: '#/components/schemas/EventUnsentInput' }
+        - { $ref: '#/components/schemas/EventEnvoy' }
+    EventNotice:
+      type: object
+      required: [Notice]
+      properties: { Notice: { $ref: '#/components/schemas/AgentNotice' } }
+      additionalProperties: false
+    EventText: { type: object, required: [Text], properties: { Text: { type: string } }, additionalProperties: false }
+    EventError: { type: object, required: [Error], properties: { Error: { type: string } }, additionalProperties: false }
+    EventToolCall:
+      type: object
+      required: [ToolCall]
+      properties:
+        ToolCall:
+          type: object
+          required: [id, name, arguments]
+          properties: { id: { type: string }, name: { type: string }, arguments: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    EventToolResult:
+      type: object
+      required: [ToolResult]
+      properties:
+        ToolResult:
+          type: object
+          required: [id, name, output, structured, duration_ms]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            output: { type: string }
+            structured: { $ref: '#/components/schemas/ToolOutput' }
+            duration_ms: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+    EventToolStream:
+      type: object
+      required: [ToolStream]
+      properties:
+        ToolStream:
+          type: object
+          required: [id, stream]
+          properties:
+            id: { type: string }
+            stream: { $ref: '#/components/schemas/ToolStream' }
+          additionalProperties: false
+      additionalProperties: false
+    EventToolCancelled:
+      type: object
+      required: [ToolCancelled]
+      properties:
+        ToolCancelled:
+          type: object
+          required: [id, name]
+          properties: { id: { type: string }, name: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    EventPermissionRequest:
+      type: object
+      required: [PermissionRequest]
+      properties: { PermissionRequest: { $ref: '#/components/schemas/PermissionRequest' } }
+      additionalProperties: false
+    EventUserQuestionRequest:
+      type: object
+      required: [UserQuestionRequest]
+      properties: { UserQuestionRequest: { $ref: '#/components/schemas/UserQuestionRequest' } }
+      additionalProperties: false
+    EventInputRequest:
+      type: object
+      required: [InputRequest]
+      properties: { InputRequest: { $ref: '#/components/schemas/InputRequest' } }
+      additionalProperties: false
+    EventCompacted:
+      type: object
+      required: [Compacted]
+      properties:
+        Compacted:
+          type: object
+          required: [archived_messages, before_chars, after_chars]
+          properties:
+            archived_messages: { type: integer, minimum: 0 }
+            before_chars: { type: integer, minimum: 0 }
+            after_chars: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+    EventHarnessState:
+      type: object
+      required: [HarnessState]
+      properties:
+        HarnessState:
+          type: object
+          required: [pursuit, loop_status, unattended]
+          properties:
+            pursuit: { oneOf: [{ $ref: '#/components/schemas/Pursuit' }, { type: 'null' }] }
+            loop_status: { type: string }
+            unattended: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+    EventPursuitUpdated:
+      type: object
+      required: [PursuitUpdated]
+      properties: { PursuitUpdated: { $ref: '#/components/schemas/Pursuit' } }
+      additionalProperties: false
+    EventTodosUpdated:
+      type: object
+      required: [TodosUpdated]
+      properties: { TodosUpdated: { $ref: '#/components/schemas/TodoList' } }
+      additionalProperties: false
+    EventUnattendedChanged: { type: object, required: [UnattendedChanged], properties: { UnattendedChanged: { type: boolean } }, additionalProperties: false }
+    EventSessionReview:
+      type: object
+      required: [SessionReview]
+      properties:
+        SessionReview:
+          type: object
+          required: [alert]
+          properties: { alert: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    EventRetryScheduled:
+      type: object
+      required: [RetryScheduled]
+      properties:
+        RetryScheduled:
+          type: object
+          required: [attempt, max_attempts, delay_ms, message]
+          properties:
+            attempt: { type: integer, minimum: 0 }
+            max_attempts: { type: integer, minimum: 0 }
+            delay_ms: { type: integer, minimum: 0 }
+            message: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    EventActivity: { type: object, required: [Activity], properties: { Activity: { type: string } }, additionalProperties: false }
+    EventTurnStarted:
+      type: object
+      required: [TurnStarted]
+      properties:
+        TurnStarted:
+          type: object
+          required: [turn]
+          properties: { turn: { type: integer, minimum: 0 } }
+          additionalProperties: false
+      additionalProperties: false
+    EventStreamDelta: { type: object, required: [StreamDelta], properties: { StreamDelta: { type: string } }, additionalProperties: false }
+    EventStreamReasoningDelta: { type: object, required: [StreamReasoningDelta], properties: { StreamReasoningDelta: { type: string } }, additionalProperties: false }
+    EventStreamReasoningEnd: { type: object, required: [StreamReasoningEnd], properties: { StreamReasoningEnd: { type: string } }, additionalProperties: false }
+    EventStreamEnd: { type: object, required: [StreamEnd], properties: { StreamEnd: { type: string } }, additionalProperties: false }
+    EventUnsentInput:
+      type: object
+      required: [UnsentInput]
+      properties:
+        UnsentInput:
+          type: object
+          required: [prompt, images]
+          properties:
+            prompt: { type: string }
+            images: { type: array, items: { $ref: '#/components/schemas/ImagePart' } }
+          additionalProperties: false
+      additionalProperties: false
+    EventEnvoy:
+      type: object
+      required: [Envoy]
+      properties:
+        Envoy:
+          type: object
+          required: [parent_call_id, event]
+          properties:
+            parent_call_id: { type: string }
+            event: { $ref: '#/components/schemas/EnvoyEvent' }
+          additionalProperties: false
+      additionalProperties: false
+
+    EnvoyEvent:
+      description: Nested envoy event; uses the same external enum representation.
+      oneOf:
+        - type: object
+          required: [Started]
+          properties: { Started: { type: object, required: [profile], properties: { profile: { type: string } }, additionalProperties: false } }
+          additionalProperties: false
+        - { $ref: '#/components/schemas/EventNotice' }
+        - { type: string, const: StreamStart }
+        - { $ref: '#/components/schemas/EventStreamDelta' }
+        - { $ref: '#/components/schemas/EventStreamEnd' }
+        - { $ref: '#/components/schemas/EventToolCall' }
+        - type: object
+          required: [ToolResult]
+          properties:
+            ToolResult:
+              type: object
+              required: [id, name, output, duration_ms]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                output: { type: string }
+                duration_ms: { type: integer, minimum: 0 }
+              additionalProperties: false
+          additionalProperties: false
+        - { $ref: '#/components/schemas/EventActivity' }
+        - { $ref: '#/components/schemas/EventPermissionRequest' }
+        - { $ref: '#/components/schemas/EventUserQuestionRequest' }
+        - { $ref: '#/components/schemas/EventInputRequest' }
+
+    AgentNotice:
+      type: object
+      required: [id, kind, severity, surface, title, source]
+      properties:
+        id: { type: string }
+        kind: { enum: [provider_retry, nudge_injected, review_alert] }
+        severity: { enum: [info, warning, error] }
+        surface: { enum: [inline, toast, banner] }
+        title: { type: string }
+        body: { type: [string, 'null'] }
+        source: { enum: [agent, turn_guard, todo, review, pursuit, harness] }
+      additionalProperties: false
+    PermissionRequest:
+      type: object
+      required: [id, tool, label, description, arguments, scope]
+      properties:
+        id: { type: string }
+        tool: { type: string }
+        label: { type: string }
+        description: { type: string }
+        arguments: { type: string, description: JSON encoded as a string }
+        scope: { type: string }
+      additionalProperties: false
+    UserQuestionRequest:
+      type: object
+      required: [id, questions]
+      properties:
+        id: { type: string }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [question, options, multi_select]
+            properties:
+              header: { type: [string, 'null'] }
+              question: { type: string }
+              options:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  required: [label]
+                  properties:
+                    label: { type: string }
+                    description: { type: [string, 'null'] }
+                  additionalProperties: false
+              multi_select: { type: boolean }
+            additionalProperties: false
+      additionalProperties: false
+    InputRequest:
+      type: object
+      required: [id, command, prompt, secret]
+      properties:
+        id: { type: string }
+        command: { type: string }
+        prompt: { type: string }
+        secret: { type: boolean }
+      additionalProperties: false
+    ImagePart:
+      type: object
+      required: [mime, data]
+      properties:
+        mime: { type: string, examples: [image/png] }
+        data: { type: string, contentEncoding: base64 }
+      additionalProperties: false
+    Message:
+      description: |
+        Persisted transcript message. The core fields are stable; optional
+        metadata is intentionally open because the transcript model evolves
+        independently and History must remain forward-compatible.
+      type: object
+      required: [role, content, images, hidden, compacted, children]
+      properties:
+        role: { enum: [User, Assistant, System, Tool] }
+        content: { type: string }
+        content_blob: { type: [string, 'null'] }
+        display_content: { type: [string, 'null'] }
+        images: { type: array, items: { $ref: '#/components/schemas/ImagePart' } }
+        tool_call_id: { type: [string, 'null'] }
+        tool_name: { type: [string, 'null'] }
+        tool_arguments: { type: [string, 'null'] }
+        tool_duration_ms: { type: [integer, 'null'], minimum: 0 }
+        hidden: { type: boolean }
+        compacted: { type: boolean }
+        children: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        sent_at_ms: { type: [integer, 'null'], minimum: 0 }
+      additionalProperties: true
+    ToolStream:
+      oneOf:
+        - type: object
+          required: [Stdout]
+          properties: { Stdout: { type: string } }
+          additionalProperties: false
+        - type: object
+          required: [Stderr]
+          properties: { Stderr: { type: string } }
+          additionalProperties: false
+    ToolOutput:
+      description: |
+        Structured tool result, represented as an externally tagged enum. Its
+        variants evolve with tools; frontends may render known variants and
+        fall back to the sibling `output` text for unknown variants.
+      oneOf:
+        - type: object
+          required: [Text]
+          properties: { Text: { type: string } }
+          additionalProperties: false
+        - type: object
+          required: [Error]
+          properties:
+            Error:
+              type: object
+              required: [message, detail]
+              properties: { message: { type: string }, detail: { type: [string, 'null'] } }
+              additionalProperties: false
+          additionalProperties: false
+        - type: object
+          minProperties: 1
+          maxProperties: 1
+          additionalProperties: true
+    Pursuit:
+      type: object
+      required: [objective, is_complete]
+      properties: { objective: { type: string }, is_complete: { type: boolean } }
+      additionalProperties: false
+    TodoList:
+      type: object
+      required: [items, next_id, updated_at_turn]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, content, status, created_at, updated_at]
+            properties:
+              id: { type: integer, minimum: 0 }
+              content: { type: string }
+              status: { enum: [pending, in_progress, completed, cancelled] }
+              created_at: { type: integer, minimum: 0 }
+              updated_at: { type: integer, minimum: 0 }
+            additionalProperties: false
+        next_id: { type: integer, minimum: 1 }
+        updated_at_turn: { type: integer, minimum: 0 }
+      additionalProperties: false
+    DoomGuardConfig:
+      type: object
+      required: [enabled, window]
+      properties:
+        enabled: { type: boolean }
+        window: { type: integer, minimum: 1 }
+      additionalProperties: false
+    ChannelAuth: { enum: [ApiKey, XaiOAuth, ChatGptOAuth] }
+    LoginMethod: { enum: [device, browser] }
+    ConnectStatus:
+      oneOf:
+        - type: object
+          required: [state, provider, url, user_code, message]
+          properties:
+            state: { const: pending }
+            provider: { type: string }
+            url: { type: string, format: uri }
+            user_code: { type: string }
+            message: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [state, provider]
+          properties: { state: { const: done }, provider: { type: string } }
+          additionalProperties: false
+        - type: object
+          required: [state, provider, message]
+          properties: { state: { const: failed }, provider: { type: string }, message: { type: string } }
+          additionalProperties: false
+    SessionOverview:
+      type: object
+      required: [id, overview, created_at, updated_at, message_count, active]
+      properties:
+        id: { type: string }
+        overview: { type: string }
+        created_at: { type: integer, minimum: 0 }
+        updated_at: { type: integer, minimum: 0 }
+        message_count: { type: integer, minimum: 0 }
+        active: { type: boolean }
+      additionalProperties: false
+    ProviderPickerSnapshot:
+      type: object
+      required: [default_id, rows]
+      properties:
+        default_id: { type: string }
+        rows: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: false
+    SessionContextSnapshot:
+      type: object
+      required: [model, tools, permissions, skills, mcp]
+      properties:
+        model: { type: object, additionalProperties: true }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        permissions: { type: array, items: { type: object, additionalProperties: true } }
+        skills: { type: array, items: { type: object, additionalProperties: true } }
+        mcp: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: false

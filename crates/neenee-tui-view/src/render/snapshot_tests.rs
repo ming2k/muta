@@ -90,6 +90,7 @@ fn render_grid(msg: &TranscriptMessage, width: u16, height: u16) -> String {
         let mut layout_map = LayoutMap::default();
         let selection = SelectionState::default();
         let theme = Theme::default();
+        let mut diff_cache = crate::render::tools::DiffCache::default();
         let mut skip_rows = 0usize;
         let mut current_y = area.y;
         let mut content_lines = 0usize;
@@ -102,6 +103,7 @@ fn render_grid(msg: &TranscriptMessage, width: u16, height: u16) -> String {
             &selection,
             None,
             &theme,
+            &mut diff_cache,
             &mut layout_map,
             &mut skip_rows,
             &mut current_y,
@@ -468,6 +470,25 @@ fn edit_file_diff_renders_from_structured_patch() {
     insta::assert_snapshot!(render_grid(&m, 80, 30));
 }
 
+#[test]
+fn failed_edit_renders_error_instead_of_intended_diff() {
+    let m = tool_step_structured(
+        "edit_file",
+        r#"{"path":"a.rs","old_string":"let x = 1;","new_string":"let x = 2;"}"#,
+        neenee_core::ToolOutput::Error {
+            message: "old_string was not found".into(),
+            detail: Some("The file changed before the edit ran.".into()),
+        },
+        true,
+    );
+    let rendered = render_grid(&m, 80, 30);
+
+    assert!(rendered.contains("Error: old_string was not found"));
+    assert!(rendered.contains("The file changed before the edit ran."));
+    assert!(!rendered.contains("- let x = 1;"));
+    assert!(!rendered.contains("+ let x = 2;"));
+}
+
 // ── Tool-step batch spacing (ADR-0001, "spacing belongs to the body") ──
 //
 // Collapsed tool steps stack flush — no blank row between adjacent headers —
@@ -685,6 +706,27 @@ fn user_message_before_tool_step_has_single_separator_row() {
     assert!(
         rows[tool_idx - 1].trim().is_empty(),
         "row immediately before tool header should be the separator blank row:\n{grid}"
+    );
+}
+
+/// The metadata component owns separators, so a sent user header with both a
+/// turn and timestamp renders exactly one separator between the two chips.
+#[test]
+fn sent_user_header_has_one_metadata_separator() {
+    let message = TranscriptMessage::new(Role::User, "inspect files")
+        .with_turn(5)
+        .with_sent_at_ms(1_700_000_000_000);
+
+    let grid = render_transcript_grid(&[message], 60, 14);
+    let header = grid
+        .lines()
+        .find(|row| row.contains("turn 5"))
+        .expect("sent user header must render");
+
+    assert_eq!(
+        header.matches('·').count(),
+        1,
+        "turn and timestamp should have one separator:\n{grid}"
     );
 }
 

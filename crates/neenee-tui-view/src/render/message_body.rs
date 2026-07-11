@@ -61,19 +61,15 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
 }
 
 fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
-    // The trailing metadata after the anchor, drawn muted (grey, no bold). For
-    // a sent message that is the send time (and the " · " separator is folded
-    // in here when an anchor precedes it). Queued messages render no meta —
-    // the anchor path emits their `⏸ Queued` marker instead.
+    // The trailing metadata after the anchor, drawn muted (grey, no bold).
+    // Return only the chip text: `MetaStrip::detail` owns the separator between
+    // visible chips. Queued messages render no meta — the anchor path emits
+    // their `⏸ Queued` marker instead.
     if is_queued {
         return String::new();
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
-        if msg.turn.is_some() {
-            format!(" · {}", sent_time_label(sent_at_ms))
-        } else {
-            sent_time_label(sent_at_ms)
-        }
+        sent_time_label(sent_at_ms)
     } else if msg.turn.is_none() {
         // No turn stamp and no send time (e.g. a legacy session): fall back
         // to a neutral marker so the header row is never blank.

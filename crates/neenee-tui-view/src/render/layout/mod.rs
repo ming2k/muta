@@ -393,6 +393,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.selection,
                 self.cell_selection,
                 self.theme,
+                &mut self.height_cache.diff_cache,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,

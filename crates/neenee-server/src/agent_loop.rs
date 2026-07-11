@@ -158,14 +158,39 @@ pub async fn run(mut req_rx: mpsc::UnboundedReceiver<AgentRequest>, h: Harness) 
 
     send_harness_state(&resp_tx, &session.id().await, &agent, "idle");
     let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(&config)));
-    // Record that the default model was activated on startup, so the
-    // picker's recency ordering reflects "last used = now". Best-effort:
-    // usage tracking is rebuildable state and must never block startup.
+    // Record that the default provider + model were activated on startup, so
+    // the picker's recency ordering reflects "last used = now" for both
+    // stages, and the provider is pinned to the exact model it booted under.
+    // Both signals are needed: `record` drives stage-1 provider ordering and
+    // `record_model` drives stage-2 model ordering *and* writes the
+    // `last_models` pin that `active_model_id_for_entry` consults on the next
+    // launch to re-open the provider on its exact model instead of a
+    // re-derived default. Recording only the provider (the previous behavior)
+    // left `last_models` stale, so a session that booted into a provider —
+    // never manually switched its model — reopened on the default-channel
+    // model rather than the one it actually ran with. Best-effort: usage
+    // tracking is rebuildable state and must never block startup.
     {
         let initial_id = catalog::default_provider_id(&config).to_string();
+        // Resolve the model the way `build_provider_for` did when main.rs
+        // constructed the startup provider: `config.default_model` when the
+        // entry serves it, otherwise the entry's default-channel model. The
+        // config-only resolver (`resolved_model_name`, *not* the `_with_usage`
+        // variant) mirrors that precedence exactly — it ignores `last_models`,
+        // so it never pins a model the live provider was not actually built
+        // with. Pinning the exact live model (rather than a usage-derived one)
+        // is what lets the next launch re-open this provider on the same model.
+        let initial_model = catalog::resolved_model_name(&config, &initial_id);
         provider_usage.record(&initial_id);
+        // Skip the model pin for an unbuildable provider (resolved to the
+        // `"mock-model"` sentinel): it has no real channel, so pinning the
+        // sentinel would be a spurious `last_models` entry. The provider
+        // recency bump above still runs so the picker ordering is correct.
+        if initial_model != "mock-model" {
+            provider_usage.record_model(&initial_id, &initial_model);
+        }
         if let Err(error) = provider_usage.save() {
-            tracing::warn!(?error, "could not persist model usage telemetry");
+            tracing::warn!(?error, "could not persist provider/model usage telemetry");
         }
     }
     // Push the initial model-picker snapshot (default id + per-model

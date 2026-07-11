@@ -43,13 +43,13 @@ const TRUNCATE_MIN_CHARS: usize = 2_000;
 const TRUNCATE_KEEP_EACH_SIDE: usize = 400;
 
 /// Declarative context-compaction policy expressed as fractions of the active
-/// model's context window, plus a fallback window for models whose size the
-/// registry does not know. Pure data; resolved into absolute token thresholds
-/// for one concrete model by [`CompactionPolicy::resolve`].
+/// model's full context window, plus a fallback window for models whose size
+/// the registry does not know. Pure data; resolved into absolute token
+/// thresholds for one concrete model by [`CompactionPolicy::resolve`].
 ///
-/// Pressure is measured in tokens via [`estimate_tokens`] (or, in future, real
-/// `prompt_tokens` reported by the provider), so these thresholds compare
-/// directly against a model's token-denominated context window.
+/// Request pressure is estimated in tokens from prepared messages and tool
+/// schemas, so these thresholds compare directly against a model's
+/// token-denominated context window.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompactionPolicy {
@@ -69,16 +69,6 @@ pub struct CompactionPolicy {
     /// (the registry resolves to `0`). Conservative, so unknown / local models
     /// still relieve pressure instead of overflowing.
     pub fallback_window_tokens: usize,
-    /// Absolute ceiling for the model-visible working set. A large advertised
-    /// provider window is a capacity limit, not a latency budget: `0` disables
-    /// this ceiling, otherwise the policy uses the smaller of this and the
-    /// active model's window before deriving prune/compaction thresholds.
-    pub max_active_tokens: usize,
-    /// Headroom kept outside the history estimate for system-prompt changes,
-    /// tool schemas, wire framing, and the next completion. Those bytes do not
-    /// live in `Message`, so reserving them avoids treating a history-only
-    /// estimate as the whole provider request.
-    pub prompt_reserve_tokens: usize,
 }
 
 impl Default for CompactionPolicy {
@@ -88,8 +78,6 @@ impl Default for CompactionPolicy {
             target_utilization: 0.25,
             prune_utilization: 0.65,
             fallback_window_tokens: 32_000,
-            max_active_tokens: 96_000,
-            prompt_reserve_tokens: 8_000,
         }
     }
 }
@@ -99,28 +87,15 @@ impl CompactionPolicy {
     /// `window_tokens == 0` (unknown model) substitutes the fallback window so
     /// compaction still engages.
     pub fn resolve(&self, window_tokens: usize) -> ContextBudget {
-        let provider_window = if window_tokens == 0 {
+        let window = if window_tokens == 0 {
             self.fallback_window_tokens
         } else {
             window_tokens
-        };
-        let active_window = if self.max_active_tokens == 0 {
-            provider_window
-        } else {
-            provider_window.min(self.max_active_tokens)
-        };
-        // Keep at least one token available even for a misconfigured tiny
-        // window/reserve pair. The normal values leave 88k usable tokens in
-        // the default 96k working set.
-        let reserve = self
-            .prompt_reserve_tokens
-            .min(active_window.saturating_sub(1));
-        let window = active_window.saturating_sub(reserve).max(1);
+        }
+        .max(1);
         let threshold = |fraction: f64| (window as f64 * fraction) as usize;
         ContextBudget {
             window_tokens: window,
-            active_window_tokens: active_window,
-            prompt_reserve_tokens: reserve,
             prune_threshold_tokens: threshold(self.prune_utilization),
             compaction_threshold_tokens: threshold(self.utilization),
             target_tokens: threshold(self.target_utilization),
@@ -129,19 +104,14 @@ impl CompactionPolicy {
 }
 
 /// Resolved, model-specific token thresholds — the runtime form of a
-/// [`CompactionPolicy`] against one active model. Pressure measured by
-/// [`estimate_tokens`] is compared against these; content-level sizing (summary
-/// budgets, pruning protect budgets) is derived from them in characters.
+/// [`CompactionPolicy`] against one active model. Projected request pressure is
+/// compared against these; content-level sizing (summary budgets, pruning
+/// protect budgets) is derived from them in characters.
 #[derive(Debug, Clone, Copy)]
 pub struct ContextBudget {
-    /// History tokens available to the projection policy after reserving prompt
-    /// overhead and output headroom.
+    /// Full provider context window used to derive the thresholds (or the
+    /// fallback value when the model's window is unknown).
     pub window_tokens: usize,
-    /// The actual model-visible working-set ceiling before the reserve. This is
-    /// the smaller of the provider/fallback window and `max_active_tokens`.
-    pub active_window_tokens: usize,
-    /// Non-history headroom reserved from [`Self::active_window_tokens`].
-    pub prompt_reserve_tokens: usize,
     /// Cheap tool-result pruning fires above this many tokens.
     pub prune_threshold_tokens: usize,
     /// A full summarizing compaction fires above this many tokens.
@@ -1015,11 +985,7 @@ mod tests {
 
     #[test]
     fn policy_resolves_thresholds_relative_to_window() {
-        let policy = CompactionPolicy {
-            max_active_tokens: 0,
-            prompt_reserve_tokens: 0,
-            ..CompactionPolicy::default()
-        };
+        let policy = CompactionPolicy::default();
         let budget = policy.resolve(200_000);
         assert_eq!(budget.window_tokens, 200_000);
         assert_eq!(budget.prune_threshold_tokens, 130_000); // 65%
@@ -1033,11 +999,7 @@ mod tests {
 
     #[test]
     fn policy_falls_back_for_unknown_window() {
-        let policy = CompactionPolicy {
-            max_active_tokens: 0,
-            prompt_reserve_tokens: 0,
-            ..CompactionPolicy::default()
-        };
+        let policy = CompactionPolicy::default();
         let budget = policy.resolve(0);
         assert_eq!(budget.window_tokens, 32_000);
         assert_eq!(budget.compaction_threshold_tokens, 27_200); // 85% of 32_000
@@ -1055,8 +1017,6 @@ mod tests {
             target_utilization = 0.2
             prune_utilization = 0.7
             fallback_window_tokens = 64_000
-            max_active_tokens = 0
-            prompt_reserve_tokens = 0
         "#;
         let policy: CompactionPolicy = toml::from_str(toml).unwrap();
         let budget = policy.resolve(100_000);
@@ -1065,14 +1025,23 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_caps_large_models_and_reserves_prompt_headroom() {
+    fn removed_working_set_keys_are_ignored_for_compatibility() {
+        let policy: CompactionPolicy =
+            toml::from_str("max_active_tokens = 96000\nprompt_reserve_tokens = 8000\n").unwrap();
+
+        assert_eq!(policy, CompactionPolicy::default());
+        let serialized = toml::to_string(&policy).unwrap();
+        assert!(!serialized.contains("max_active_tokens"));
+        assert!(!serialized.contains("prompt_reserve_tokens"));
+    }
+
+    #[test]
+    fn default_policy_uses_the_full_large_model_window() {
         let budget = CompactionPolicy::default().resolve(1_000_000);
-        assert_eq!(budget.active_window_tokens, 96_000);
-        assert_eq!(budget.prompt_reserve_tokens, 8_000);
-        assert_eq!(budget.window_tokens, 88_000);
-        assert_eq!(budget.prune_threshold_tokens, 57_200);
-        assert_eq!(budget.compaction_threshold_tokens, 74_800);
-        assert_eq!(budget.target_tokens, 22_000);
+        assert_eq!(budget.window_tokens, 1_000_000);
+        assert_eq!(budget.prune_threshold_tokens, 650_000);
+        assert_eq!(budget.compaction_threshold_tokens, 850_000);
+        assert_eq!(budget.target_tokens, 250_000);
     }
 
     // ----- char-class token estimator ---------------------------------------

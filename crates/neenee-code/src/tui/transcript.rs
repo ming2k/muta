@@ -128,7 +128,27 @@ pub(super) fn transcript_messages_from_core(
         });
         if message.role == Role::Assistant {
             restored_round = restored_round.saturating_add(1);
-            if let Some(reasoning) = message.reasoning_content.take() {
+            // Mirrors the live path's `StreamReasoningDelta` gate: a hidden-chain
+            // model (`ReasoningSummary`, e.g. GPT-5.x) never disclosed its full
+            // reasoning chain, so its persisted `reasoning_content` is only a
+            // summary. Restoring it as a `MessageKind::Thinking` message would
+            // resurrect a phantom entry the live stream never created — leaking
+            // into layout counts, selection math, and scroll state. Skip it.
+            // `model` is the persisted `Option<String>` attribution. Use
+            // `model_by_id` (not `resolve`): `resolve` falls back to a model
+            // with `ThinkingSupport::None` for unrecognized ids, whose
+            // `chain_disclosed()` is `false`, which would suppress restoration
+            // of reasoning traces for local/user-defined models that DO reason
+            // — a regression for legacy transcripts. `model_by_id` returns
+            // `None` for unknown ids, and we default to `true` (disclosed) so
+            // only known hidden-chain models (`ReasoningSummary`, GPT-5.x) are
+            // gated.
+            let chain_disclosed = model
+                .as_deref()
+                .and_then(neenee_core::model_by_id)
+                .map(|m| m.thinking.chain_disclosed())
+                .unwrap_or(true);
+            if chain_disclosed && let Some(reasoning) = message.reasoning_content.take() {
                 let mut thinking = TranscriptMessage::thinking(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();

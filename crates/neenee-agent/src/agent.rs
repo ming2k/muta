@@ -108,6 +108,20 @@ impl ScopedToolDisable {
 pub(crate) type RoundPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
+/// Estimated token shape of the next provider request.
+///
+/// `history_tokens` is the prepared, non-system conversation, including any
+/// skill messages injected for this request. `overhead_tokens` covers the
+/// freshly composed system message and currently visible tool schemas.
+/// Wire-format framing is intentionally left to the compaction policy's
+/// utilization headroom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestTokenEstimate {
+    pub history_tokens: usize,
+    pub overhead_tokens: usize,
+    pub total_tokens: usize,
+}
+
 // `AgentIdentity` now lives in `neenee-core` (`identity.rs`) as pure domain
 // vocabulary, alongside the role profiles. It is re-exported by name at the
 // crate root below and via `pub use neenee_core::*`, so all existing
@@ -573,6 +587,45 @@ impl Agent {
             .clone()
     }
 
+    /// Estimate the complete next request at the same pre-wire choke point the
+    /// provider call uses. This keeps projection pressure tied to what the
+    /// model will actually receive instead of measuring durable history alone.
+    pub fn estimate_next_request_tokens(&self, messages: &[Message]) -> RequestTokenEstimate {
+        let mut prepared = messages.to_vec();
+        self.prepare_turn_messages(&mut prepared);
+        // Use per-message wire weight here rather than `estimate_tokens`: the
+        // latter intentionally includes persisted envoy children, while the
+        // provider receives only the parent message's rendered result.
+        let message_tokens = |messages: &[Message]| {
+            messages
+                .iter()
+                .map(neenee_core::estimate_message_tokens)
+                .sum::<i64>()
+                .max(1) as usize
+        };
+        let history = prepared
+            .iter()
+            .filter(|message| message.role != Role::System)
+            .cloned()
+            .collect::<Vec<_>>();
+        let history_tokens = message_tokens(&history);
+        let prepared_message_tokens = message_tokens(&prepared);
+        let tool_schema_tokens = self
+            .visible_tools()
+            .iter()
+            .map(|tool| {
+                neenee_core::count_tokens(&tool.to_openai_function().to_string()).max(0) as usize
+            })
+            .sum::<usize>();
+        let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
+
+        RequestTokenEstimate {
+            history_tokens,
+            overhead_tokens: total_tokens.saturating_sub(history_tokens),
+            total_tokens,
+        }
+    }
+
     /// Dev-only dry run: rebuild the head system message and auto-load any
     /// skills mentioned in the latest visible user turn against a borrowed
     /// message list, exactly as the next turn would (`prepare_turn_messages`),
@@ -908,7 +961,7 @@ impl Agent {
             .context_prune_threshold_tokens
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if budget == 0 || estimate_tokens(messages) <= budget {
+        if budget == 0 || self.estimate_next_request_tokens(messages).total_tokens <= budget {
             return Ok(());
         }
         let gate = self

@@ -23,7 +23,7 @@ use crate::render::text_layout::{
     WrappedLine, block_selection_range, code_gutter_line, line_selection, line_spans,
     line_spans_rich, padded_tail, wrap_text,
 };
-use crate::render::tools::{ArgLayout, DiffLine, DiffOp, ResultKind, ToolStatus};
+use crate::render::tools::{ArgLayout, DiffCache, DiffLine, DiffOp, ResultKind, ToolStatus};
 use crate::render::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
     EnvoyBarInfo, REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
@@ -1217,16 +1217,33 @@ fn emit_bash_lines_folded(
 fn draw_tool_result(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
+    message_id: u64,
     name: &str,
     arguments: &str,
     output: &str,
     structured: Option<&neenee_core::ToolOutput>,
+    diff_cache: &mut DiffCache,
     selection: &SelectionState,
     indent: usize,
     inner_w: usize,
 ) {
-    let kind = crate::render::tools::presenter_for(name).result_kind();
     let block_idx = 1usize;
+    // Explicit tool errors are terminal results, not the successful shape the
+    // presenter normally renders. In particular, a failed edit has no Patch;
+    // deriving a diff from its call arguments would show an intended change
+    // that never reached disk and hide the actionable failure message.
+    if matches!(
+        structured,
+        Some(
+            neenee_core::ToolOutput::Error { .. }
+                | neenee_core::ToolOutput::PermissionDenied { .. }
+        )
+    ) {
+        draw_tool_error(ctx, mi, block_idx, output, selection, indent, inner_w);
+        return;
+    }
+
+    let kind = crate::render::tools::presenter_for(name).result_kind();
     match kind {
         ResultKind::Listing => {
             draw_listing_content(ctx, mi, block_idx, output, selection, indent, inner_w)
@@ -1270,26 +1287,55 @@ fn draw_tool_result(
         }
         ResultKind::Diff => {
             // Prefer the structured Patch payload (old/new from the result);
-            // fall back to parsing the arguments for legacy/restored steps.
-            let diff: Vec<DiffLine> = match structured {
+            // fall back to argument-derived rows only for legacy/restored
+            // completed steps. Both paths are cached by stable message id and
+            // exact source, so animation frames never repeat Myers/word diffing.
+            let diff = match structured {
                 Some(neenee_core::ToolOutput::Patch {
                     old,
                     new,
                     start_line,
                     ..
-                }) => {
-                    let offset = start_line.saturating_sub(1);
-                    let full = crate::render::tools::line_diff(old, new, offset);
-                    crate::render::tools::collapse_context_runs(&full)
-                }
-                _ => {
-                    let full = crate::render::tools::diff_lines_for(name, arguments);
-                    crate::render::tools::collapse_context_runs(&full)
-                }
+                }) => diff_cache.patch(message_id, old, new, *start_line),
+                _ => diff_cache.legacy_arguments(message_id, name, arguments),
             };
-            draw_diff_content(ctx, &diff, indent, inner_w);
+            draw_diff_content(ctx, diff.as_ref(), indent, inner_w);
         }
     }
+}
+
+/// Render an explicit tool failure as error text on the shared code surface.
+/// It deliberately has no line-number gutter: these rows describe the failed
+/// operation and are not source-file content.
+#[allow(clippy::too_many_arguments)]
+fn draw_tool_error(
+    ctx: &mut RenderCtx<'_, '_>,
+    mi: usize,
+    block_idx: usize,
+    output: &str,
+    selection: &SelectionState,
+    indent: usize,
+    inner_w: usize,
+) {
+    let bg = ctx.theme.code_surface();
+    let pad = Style::default().bg(bg);
+    let error = Style::default()
+        .bg(bg)
+        .fg(ctx.theme.err())
+        .add_modifier(Modifier::BOLD);
+    let selection = block_selection_range(selection, mi, block_idx);
+    let _ = emit_bash_lines(
+        ctx,
+        mi,
+        block_idx,
+        indent,
+        inner_w.max(1),
+        pad,
+        selection,
+        output,
+        error,
+        0,
+    );
 }
 
 /// Resolve the shell command for a `bash` step: prefer the structured
@@ -1770,6 +1816,7 @@ pub fn draw_tool_step(
     selection: &SelectionState,
     cell_selection: Option<&CellDragInfo>,
     theme: &Theme,
+    diff_cache: &mut DiffCache,
     layout_map: &mut LayoutMap,
     skip_rows: &mut usize,
     current_y: &mut u16,
@@ -1935,10 +1982,12 @@ pub fn draw_tool_step(
                     draw_tool_result(
                         &mut ctx,
                         mi,
+                        msg.id,
                         name,
                         arguments,
                         output.as_deref().unwrap_or(""),
                         structured.as_deref(),
+                        diff_cache,
                         selection,
                         indent,
                         inner_w,

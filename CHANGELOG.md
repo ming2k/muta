@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Context compaction again follows the active model's full window.** The
+  undocumented 96k working-set ceiling and fixed 8k prompt reserve no longer
+  make 1M-token models compact at roughly 7.5% utilization. Pruning and full
+  compaction now compare the complete projected request — including the live
+  system prompt, injected skills, and visible tool schemas — with the model's
+  65%/85% thresholds. Legacy `max_active_tokens` and
+  `prompt_reserve_tokens` config keys are ignored, and compaction notices label
+  their UTF-8 size measurements as bytes rather than characters.
+
+- **Completed edits no longer flash the transcript or show malformed context.**
+  Bottom-follow layout now stages height-changing transcript frames and commits
+  only the final scroll position, so an auto-expanded diff does not paint an
+  intermediate viewport first. Edit patches preserve the file's original line
+  boundaries and endings while selecting three real context lines on each side;
+  failed edits render their error instead of a diff for a change that never
+  reached disk. Completed Patch diffs are derived once in a bounded render-layer
+  cache and reused across later animation frames.
+
 ## [0.20.0] - 2026-07-10
 
 ### Changed

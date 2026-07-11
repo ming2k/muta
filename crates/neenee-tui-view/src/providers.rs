@@ -13,7 +13,7 @@
 //! directly.
 
 use neenee_core::{
-    KNOWN_MODELS, ProviderModelInfo, ProviderPickerSnapshot, WireFormat, resolve_model,
+    ChannelAuth, KNOWN_MODELS, ProviderModelInfo, ProviderPickerSnapshot, WireFormat, resolve_model,
 };
 
 use crate::fuzzy;
@@ -299,14 +299,20 @@ pub fn provider_template_label_for(protocol: &str) -> String {
         .unwrap_or_else(|| "＋ Add provider".to_string())
 }
 
-/// The ordered editor fields shown when **editing** an existing user provider:
-/// Name, Base URL, and Token. The Model field is omitted — models (and their
-/// per-model reasoning, ADR-0046) are managed in the stage-2 list. The Base URL
-/// is editable for every protocol, including native Gemini (a 中转站/relay
-/// supplies its versioned host, e.g. `https://relay.example.com/v1beta`).
-pub fn edit_fields(protocol: &str) -> Vec<CustomField> {
+/// The ordered editor fields shown when **editing** an existing user provider.
+/// For an API-key channel the form offers Name, Base URL, and Token (the Model
+/// field is omitted — models, and their per-model reasoning, ADR-0046, are
+/// managed in the stage-2 list). For an OAuth channel (ChatGPT/Codex or xAI)
+/// only Name is editable: the Base URL and Token are fixed by the auth flow
+/// (e.g. `https://api.x.ai/...`, `https://chatgpt.com/backend-api/codex/...`)
+/// and must not be hand-edited, so a rename is the only safe operation.
+pub fn edit_fields(protocol: &str, auth: ChannelAuth) -> Vec<CustomField> {
     let _ = protocol;
-    vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+    if auth.is_oauth() {
+        vec![CustomField::Name]
+    } else {
+        vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+    }
 }
 
 /// Whether a protocol's model set is *closed*: the candidate list is the full,
@@ -907,5 +913,30 @@ mod tests {
         ids.sort_unstable();
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
         assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
+    }
+
+    #[test]
+    fn edit_fields_api_key_shows_name_url_token() {
+        // An API-key provider exposes every editable field; editing can change
+        // the endpoint and key as well as rename.
+        let fields = edit_fields("openai", ChannelAuth::ApiKey);
+        assert_eq!(
+            fields,
+            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
+        );
+    }
+
+    #[test]
+    fn edit_fields_oauth_shows_name_only() {
+        // An OAuth channel's endpoint and bearer are owned by the auth flow
+        // (xAI `https://api.x.ai/...`, ChatGPT
+        // `https://chatgpt.com/backend-api/codex/...`). The editor must expose
+        // only a rename, so the server-side guard is never the lone defense
+        // against wiping them.
+        let xai = edit_fields("xai", ChannelAuth::XaiOAuth);
+        assert_eq!(xai, vec![CustomField::Name]);
+
+        let chatgpt = edit_fields("chatgpt", ChannelAuth::ChatGptOAuth);
+        assert_eq!(chatgpt, vec![CustomField::Name]);
     }
 }

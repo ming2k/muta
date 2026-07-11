@@ -25,6 +25,7 @@ mod read;
 mod read_image;
 mod web;
 
+pub(crate) use diff::DiffCache;
 pub use diff::{DiffLine, DiffOp};
 pub use diff::{collapse_context_runs, line_diff};
 

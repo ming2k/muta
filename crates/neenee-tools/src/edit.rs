@@ -19,42 +19,61 @@ fn contextual_patch(
     match_offset: usize,
     old_str: &str,
     new_str: &str,
-    start_line: usize,
 ) -> (String, String, usize) {
-    let before = &content[..match_offset];
-    let after = &content[match_offset + old_str.len()..];
+    let match_end = match_offset + old_str.len();
 
-    let before_lines: Vec<&str> = before
-        .lines()
-        .rev()
-        .take(DIFF_CONTEXT)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    let after_lines: Vec<&str> = after.lines().take(DIFF_CONTEXT).collect();
-
-    let new_start_line = start_line.saturating_sub(before_lines.len()).max(1);
-
-    let build = |replacement: &str| -> String {
-        let mut s = String::with_capacity(
-            before_lines.iter().map(|l| l.len() + 1).sum::<usize>()
-                + replacement.len()
-                + after_lines.iter().map(|l| l.len() + 1).sum::<usize>(),
-        );
-        for l in &before_lines {
-            s.push_str(l);
-            s.push('\n');
+    // Anchor the patch at the beginning of the line containing the match, then
+    // walk back over complete source lines. Keeping byte slices instead of
+    // splitting/rejoining with `str::lines()` preserves CRLF and prevents a
+    // leading newline after the match from becoming a phantom context row.
+    let mut context_start = content[..match_offset]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    for _ in 0..DIFF_CONTEXT {
+        if context_start == 0 {
+            break;
         }
-        s.push_str(replacement);
-        for l in &after_lines {
-            s.push('\n');
-            s.push_str(l);
-        }
-        s
+        let previous_line_end = context_start - 1;
+        context_start = content[..previous_line_end]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+    }
+
+    // If the match includes its trailing newline, it already ends at a line
+    // boundary. Otherwise include the unchanged suffix of the line containing
+    // the match before walking forward over the requested context lines.
+    let mut context_end = if old_str.as_bytes().last() == Some(&b'\n') {
+        match_end
+    } else {
+        content[match_end..]
+            .find('\n')
+            .map(|rel| match_end + rel + 1)
+            .unwrap_or(content.len())
     };
+    for _ in 0..DIFF_CONTEXT {
+        if context_end >= content.len() {
+            break;
+        }
+        context_end = content[context_end..]
+            .find('\n')
+            .map(|rel| context_end + rel + 1)
+            .unwrap_or(content.len());
+    }
 
-    (build(old_str), build(new_str), new_start_line)
+    let prefix = &content[context_start..match_offset];
+    let suffix = &content[match_end..context_end];
+    let build = |replacement: &str| {
+        let mut snippet = String::with_capacity(prefix.len() + replacement.len() + suffix.len());
+        snippet.push_str(prefix);
+        snippet.push_str(replacement);
+        snippet.push_str(suffix);
+        snippet
+    };
+    let start_line = content[..context_start].matches('\n').count() + 1;
+
+    (build(old_str), build(new_str), start_line)
 }
 
 /// Count non-overlapping occurrences of `needle` in `haystack`.
@@ -103,9 +122,7 @@ fn apply_unique_edit(
             let Some(offset) = content.find(old) else {
                 return Ok(None);
             };
-            let start_line = content[..offset].matches('\n').count() + 1;
-            let (old_ctx, new_ctx, ctx_start) =
-                contextual_patch(content, offset, old, new, start_line);
+            let (old_ctx, new_ctx, ctx_start) = contextual_patch(content, offset, old, new);
             // Replace only this single occurrence by stitching the prefix, the
             // new text, and the suffix back together — *not* `str::replace`,
             // which would rewrite every occurrence.
@@ -230,6 +247,55 @@ mod tests {
             .unwrap()
             .expect("single match should apply");
         assert_eq!(edit.new_content, "foo\nqux\nbaz");
+        assert_eq!(edit.old_ctx, "foo\nbar\nbaz");
+        assert_eq!(edit.new_ctx, "foo\nqux\nbaz");
+        assert_eq!(edit.ctx_start, 1);
+    }
+
+    #[test]
+    fn contextual_patch_keeps_three_real_lines_without_phantom_blank() {
+        let content = "above 1\nabove 2\nabove 3\nold\nbelow 1\nbelow 2\nbelow 3\nbelow 4\n";
+        let offset = content.find("old").unwrap();
+        let (old, new, start_line) = contextual_patch(content, offset, "old", "new");
+
+        assert_eq!(
+            old,
+            "above 1\nabove 2\nabove 3\nold\nbelow 1\nbelow 2\nbelow 3\n"
+        );
+        assert_eq!(
+            new,
+            "above 1\nabove 2\nabove 3\nnew\nbelow 1\nbelow 2\nbelow 3\n"
+        );
+        assert_eq!(start_line, 1);
+    }
+
+    #[test]
+    fn contextual_patch_preserves_inline_prefix_suffix_and_line_number() {
+        let content =
+            "discard\nheader\nkeep 1\nkeep 2\nlet value = old;\nafter 1\nafter 2\nafter 3\n";
+        let offset = content.find("old").unwrap();
+        let (old, new, start_line) = contextual_patch(content, offset, "old", "new");
+
+        assert_eq!(
+            old,
+            "header\nkeep 1\nkeep 2\nlet value = old;\nafter 1\nafter 2\nafter 3\n"
+        );
+        assert_eq!(
+            new,
+            "header\nkeep 1\nkeep 2\nlet value = new;\nafter 1\nafter 2\nafter 3\n"
+        );
+        assert_eq!(start_line, 2);
+    }
+
+    #[test]
+    fn contextual_patch_preserves_crlf_and_trailing_newline_match() {
+        let content = "before\r\nold\r\nafter 1\r\nafter 2\r\nafter 3\r\nafter 4\r\n";
+        let offset = content.find("old\r\n").unwrap();
+        let (old, new, start_line) = contextual_patch(content, offset, "old\r\n", "new\r\n");
+
+        assert_eq!(old, "before\r\nold\r\nafter 1\r\nafter 2\r\nafter 3\r\n");
+        assert_eq!(new, "before\r\nnew\r\nafter 1\r\nafter 2\r\nafter 3\r\n");
+        assert_eq!(start_line, 1);
     }
 
     #[test]

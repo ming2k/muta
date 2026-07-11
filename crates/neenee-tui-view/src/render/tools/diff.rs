@@ -6,7 +6,15 @@
 //! delete/insert pairs are further split into word-level fragments so the
 //! exact edited span is highlighted within a changed line.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use similar::{ChangeTag, TextDiff};
+
+/// Maximum number of completed edit diffs retained by one transcript renderer.
+/// Entries are small contextual patches, but the bound keeps session switches
+/// and long-running processes from accumulating render-only state forever.
+const DIFF_CACHE_CAPACITY: usize = 256;
 
 /// `(added, removed)` line counts for the change from `old` to `new`. Used for
 /// the `+N -M` summary suffix in the step header. Computed from the real diff
@@ -57,6 +65,155 @@ pub struct DiffLine {
     pub new_no: Option<usize>,
     /// Word-level fragments; the concatenation equals the line text.
     pub frags: Vec<DiffFrag>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DiffSource {
+    Patch {
+        old: String,
+        new: String,
+        start_line: usize,
+    },
+    LegacyArguments {
+        name: String,
+        arguments: String,
+    },
+}
+
+struct CachedDiff {
+    source: DiffSource,
+    lines: Arc<[DiffLine]>,
+    last_used: u64,
+}
+
+/// Bounded render-layer cache for completed edit diffs.
+///
+/// The durable transcript keeps the canonical [`ToolOutput::Patch`](neenee_core::ToolOutput)
+/// only. Myers/word diffing and context collapsing are presentation work, so
+/// their derived rows live here and are reused across animation frames. A
+/// source equality check, rather than a hash alone, makes reuse collision-free
+/// when a message id is replaced during session navigation.
+#[derive(Default)]
+pub(crate) struct DiffCache {
+    entries: HashMap<u64, CachedDiff>,
+    clock: u64,
+}
+
+impl DiffCache {
+    /// Return the completed Patch's derived rows, computing them only when this
+    /// message id is first seen or its canonical Patch content changes.
+    pub(crate) fn patch(
+        &mut self,
+        message_id: u64,
+        old: &str,
+        new: &str,
+        start_line: usize,
+    ) -> Arc<[DiffLine]> {
+        let now = self.next_tick();
+        if let Some(lines) = self.reuse(message_id, now, |source| {
+            matches!(
+                source,
+                DiffSource::Patch {
+                    old: cached_old,
+                    new: cached_new,
+                    start_line: cached_start,
+                } if cached_old == old && cached_new == new && *cached_start == start_line
+            )
+        }) {
+            return lines;
+        }
+
+        let source = DiffSource::Patch {
+            old: old.to_string(),
+            new: new.to_string(),
+            start_line,
+        };
+        let offset = start_line.saturating_sub(1);
+        let lines = collapse_context_runs(&line_diff(old, new, offset));
+        self.insert(message_id, source, lines, now)
+    }
+
+    /// Cache the argument-derived compatibility diff used by restored sessions
+    /// created before structured Patch results were persisted.
+    pub(crate) fn legacy_arguments(
+        &mut self,
+        message_id: u64,
+        name: &str,
+        arguments: &str,
+    ) -> Arc<[DiffLine]> {
+        let now = self.next_tick();
+        if let Some(lines) = self.reuse(message_id, now, |source| {
+            matches!(
+                source,
+                DiffSource::LegacyArguments {
+                    name: cached_name,
+                    arguments: cached_arguments,
+                } if cached_name == name && cached_arguments == arguments
+            )
+        }) {
+            return lines;
+        }
+
+        let source = DiffSource::LegacyArguments {
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        };
+        let lines = collapse_context_runs(&super::diff_lines_for(name, arguments));
+        self.insert(message_id, source, lines, now)
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1).max(1);
+        self.clock
+    }
+
+    fn reuse(
+        &mut self,
+        message_id: u64,
+        now: u64,
+        matches_source: impl FnOnce(&DiffSource) -> bool,
+    ) -> Option<Arc<[DiffLine]>> {
+        if let Some(cached) = self.entries.get_mut(&message_id)
+            && matches_source(&cached.source)
+        {
+            cached.last_used = now;
+            return Some(Arc::clone(&cached.lines));
+        }
+        None
+    }
+
+    fn insert(
+        &mut self,
+        message_id: u64,
+        source: DiffSource,
+        lines: Vec<DiffLine>,
+        now: u64,
+    ) -> Arc<[DiffLine]> {
+        let lines: Arc<[DiffLine]> = Arc::from(lines);
+        self.entries.insert(
+            message_id,
+            CachedDiff {
+                source,
+                lines: Arc::clone(&lines),
+                last_used: now,
+            },
+        );
+        if self.entries.len() > DIFF_CACHE_CAPACITY
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.last_used)
+                .map(|(id, _)| *id)
+        {
+            self.entries.remove(&oldest);
+        }
+        lines
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl DiffLine {
@@ -291,6 +448,28 @@ pub fn collapse_context_runs(diff: &[DiffLine]) -> Vec<DiffLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_patch_diff_is_reused_until_its_source_changes() {
+        let mut cache = DiffCache::default();
+        let first = cache.patch(7, "let x = 1;", "let x = 2;", 10);
+        let second = cache.patch(7, "let x = 1;", "let x = 2;", 10);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let changed = cache.patch(7, "let x = 2;", "let x = 3;", 10);
+        assert!(!Arc::ptr_eq(&second, &changed));
+        assert_eq!(cache.len(), 1, "one message id replaces its prior source");
+    }
+
+    #[test]
+    fn diff_cache_is_bounded_and_evicts_old_entries() {
+        let mut cache = DiffCache::default();
+        for id in 0..=DIFF_CACHE_CAPACITY as u64 {
+            cache.patch(id, "old", "new", 1);
+        }
+        assert_eq!(cache.len(), DIFF_CACHE_CAPACITY);
+        assert!(!cache.entries.contains_key(&0));
+    }
 
     #[test]
     fn counts_match_real_diff() {

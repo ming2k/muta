@@ -1027,9 +1027,15 @@ pub(super) async fn run_app_loop(
             app.cursor_visible = caret_visible;
         }
 
+        // A transcript mutation can change the measured bottom after layout.
+        // While following that bottom, stage the measurement frame in the
+        // retained grid without flushing it; the immediate next pass paints at
+        // the final scroll offset and is the only frame the terminal sees.
+        let stage_bottom_follow = transcript_changed && app.follow_bottom;
+
         // Draw frame (skipped when nothing changed — see `needs_draw`).
         if needs_draw {
-            terminal.draw(|f| {
+            let render_frame = |f: &mut neenee_tui::Frame<'_>| {
                 let mut layout_map = LayoutMap::new();
                 app.modal_hit_map.clear();
                 // Borrow the height cache out of `app` for the duration of the draw:
@@ -1709,7 +1715,12 @@ pub(super) async fn run_app_loop(
                 } else {
                     None
                 };
-            })?;
+            };
+            if stage_bottom_follow {
+                terminal.stage(render_frame)?;
+            } else {
+                terminal.draw(render_frame)?;
+            }
         } // end `if needs_draw`
 
         // Recompute the bottom scroll offset for the next frame and keep the
@@ -1730,18 +1741,16 @@ pub(super) async fn run_app_loop(
             app.scroll = app.scroll.min(limit);
         }
 
-        // Anti-jump on transcript replace (e.g. resuming a session): the draw we
-        // just did measured the *new*, taller transcript while `scroll` still
-        // held the previous transcript's bottom, so that first frame is pinned
-        // too high. Now that `max_scroll` reflects the real content height, pin
-        // to the true bottom and force an immediate redraw within this iteration
-        // (no input-poll wait) so the corrected frame replaces the stale one
-        // back-to-back — the user never sees the intermediate scroll position.
-        // `transcript_changed` clears next iteration, so this fires at most once.
-        if transcript_changed && needs_draw && app.follow_bottom && app.scroll != app.max_scroll {
-            app.scroll = app.max_scroll;
-            input_redraw_pending = true;
-            continue;
+        // The staged pass above measured the new content but emitted no bytes.
+        // If the bottom moved, redraw immediately at the final offset. If it
+        // did not, commit the already-final staged grid without a second layout.
+        if stage_bottom_follow && needs_draw {
+            if app.scroll != app.max_scroll {
+                app.scroll = app.max_scroll;
+                input_redraw_pending = true;
+                continue;
+            }
+            terminal.commit_staged()?;
         }
         app.retain_visible_focused_target();
 
@@ -2623,11 +2632,11 @@ pub(super) async fn run_app_loop(
                                     .iter()
                                     .find(|r| r.id == id)
                                     .cloned();
-                                let (name, protocol, base_url) = row
-                                    .map(|r| (r.name, r.protocol, r.base_url))
+                                let (name, protocol, base_url, auth) = row
+                                    .map(|r| (r.name, r.protocol, r.base_url, r.auth))
                                     .unwrap_or_default();
                                 app.model_search = false;
-                                app.open_edit_provider_editor(id, name, protocol, base_url);
+                                app.open_edit_provider_editor(id, name, protocol, base_url, auth);
                             }
                         }
                     }

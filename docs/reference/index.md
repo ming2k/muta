@@ -16,6 +16,13 @@ Lookup-oriented documentation — tables, lists, and exact values.
 
 - [Configuration](configuration.md) — every `config.toml` key with its default
 
+## Server API
+
+- [WebSocket frontend integration](server-api.md) — connection lifecycle,
+  message framing, frontend flows, and compatibility guidance
+- [AsyncAPI contract](server.asyncapi.yaml) — machine-readable WebSocket
+  channels, operations, schemas, and examples
+
 ## Files and persistence
 
 - [Paths](paths.md) — every file neenee reads or writes, by XDG category,

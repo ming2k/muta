@@ -18,10 +18,16 @@ the [pruning](../explanation/agent-design/context-pruning.md) and
 [compaction](../explanation/agent-design/context-compaction.md) deep-dives, and
 ADR-0019 / ADR-0021 for the design.
 
-Pressure is estimated in tokens (`estimate_tokens`, ~4 chars/token) and compared
-against the resolved thresholds. Each fraction is multiplied by the active
-model's context window (`0` → the fallback window) to produce an absolute
-threshold.
+Pressure estimates the complete next request: prepared conversation messages,
+the regenerated system prompt, newly injected skills, and visible tool schemas.
+Each fraction is multiplied by the active model's full context window (`0` →
+the fallback window) to produce an absolute threshold. The gap above
+`compaction.utilization` reserves room for protocol framing and the next model
+completion.
+
+The removed `compaction.max_active_tokens` and
+`compaction.prompt_reserve_tokens` keys are ignored when loading older config
+files. Performance limits are not part of context-capacity safety policy.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

@@ -74,6 +74,18 @@ async fn test_ws_round_trip() {
         other => panic!("expected Chat, got {:?}", other),
     }
 
+    // Flattened unit variants use an explicit null value on the wire.
+    ws.send(WsMessage::Text(
+        r#"{"type":"Request","Interrupt":null}"#.into(),
+    ))
+    .await
+    .unwrap();
+    let interrupt = tokio::time::timeout(Duration::from_secs(2), req_rx.recv())
+        .await
+        .expect("timeout waiting for interrupt")
+        .expect("req_rx closed");
+    assert!(matches!(interrupt, AgentRequest::Interrupt));
+
     // 4. Simulate agent_loop emitting a response → broadcast → should reach WS client
     let resp = AgentResponse::Round {
         session_id,
@@ -91,6 +103,19 @@ async fn test_ws_round_trip() {
     println!("Got response: {}", preview);
     assert!(resp_str.contains("Response"), "expected Response");
     assert!(resp_str.contains("hello back from agent"));
+
+    // A unit AgentResponse is flattened into the envelope as `Variant: null`.
+    let _ = bc_tx.send(AgentResponse::ConversationCleared);
+    let unit_msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .expect("timeout waiting for unit response")
+        .expect("stream closed")
+        .expect("ws error");
+    let unit: serde_json::Value = serde_json::from_str(&unit_msg.to_string()).unwrap();
+    assert_eq!(
+        unit,
+        serde_json::json!({"type": "Response", "ConversationCleared": null})
+    );
 
     println!("\n✅ All checks passed: history replay + request round-trip + response tap");
 }

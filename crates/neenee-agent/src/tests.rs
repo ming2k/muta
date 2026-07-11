@@ -2157,3 +2157,31 @@ fn prepare_turn_messages_projects_out_command_echoes() {
          echoes dropped: {contents:?}"
     );
 }
+
+#[test]
+fn request_pressure_includes_system_prompt_and_tool_schemas() {
+    let without_tools = agent();
+    let with_tools = Agent::new(
+        Arc::new(TestProvider),
+        vec![Arc::new(WriteTestTool)],
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    let messages = vec![Message::new(Role::User, "inspect the request budget")];
+
+    let plain = without_tools.estimate_next_request_tokens(&messages);
+    let with_schema = with_tools.estimate_next_request_tokens(&messages);
+
+    assert_eq!(
+        plain.total_tokens,
+        plain.history_tokens + plain.overhead_tokens
+    );
+    assert!(
+        plain.overhead_tokens > 0,
+        "the system prompt is request overhead"
+    );
+    assert!(
+        with_schema.total_tokens > plain.total_tokens,
+        "an advertised tool schema must increase projected request pressure"
+    );
+}
