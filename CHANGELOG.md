@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-07-11
+
+### Fixed
+
+- **Release tarball builds again with `--locked`.** The committed `Cargo.lock`
+  locked the nine optics packages (`iris`, `iris-sys`, `lens`, `lens-sys`,
+  `flux`, `flux-sys`, `flux-text`, `flux-text-sys`, `flux-text-layout`) as
+  source-less path entries. This happens when the lock is regenerated while the
+  local, gitignored `.cargo/config.toml` path override (pointing at a sibling
+  `../optics` checkout) is active: cargo drops the `source = "git+..."` line.
+  That lock is unresolvable anywhere the override is absent — CI, the release
+  tarball, downstream packagers — and breaks every `--locked` step with
+  "cannot update the lock file ... because --locked was passed". v0.19.0
+  shipped this same bug; v0.20.1 regressed. Regenerated the lock with the
+  override disabled so all nine entries carry their pinned git source
+  (`rev = 0c9d4a2`), with no version or dependency changes.
+
 ## [0.20.1] - 2026-07-11
 
 ### Fixed
@@ -1271,7 +1288,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.20.2...HEAD
+[0.20.2]: https://github.com/ming2k/neenee/releases/tag/v0.20.2
 [0.20.1]: https://github.com/ming2k/neenee/releases/tag/v0.20.1
 [0.20.0]: https://github.com/ming2k/neenee/releases/tag/v0.20.0
 [0.19.1]: https://github.com/ming2k/neenee/releases/tag/v0.19.1
