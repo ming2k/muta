@@ -7,7 +7,10 @@
 //! of the shared `TokenSourceLedger`, so it reflects every turn booked so far
 //! this session.
 
-use neenee_core::TokenSourceReport;
+use neenee_core::{
+    ContextTokenSnapshot, ContextTokenSource, RequestUsageSource, RequestUsageStatus,
+    TokenSourceReport,
+};
 use neenee_tui::{
     Color, Frame, Modifier, Style, {Line, Span},
 };
@@ -21,12 +24,20 @@ use crate::render::primitives::{
     modal_frame, modal_header, render_body, render_modal_footer,
 };
 
+/// Live context-meter values shown above the completed-request ledger.
+#[derive(Debug, Clone, Copy)]
+pub struct ContextUsageView {
+    pub snapshot: Option<ContextTokenSnapshot>,
+    pub window_tokens: usize,
+}
+
 /// Draw the token bill (list) or, when `detail` is set, the per-model breakdown
 /// for `report.rows[selected]`. `selected` is the highlighted line in the bill;
 /// `scroll` drives the detail body. Returns the painted panel rect.
 pub fn draw_token_report_modal(
     frame: &mut Frame,
     report: &TokenSourceReport,
+    context: ContextUsageView,
     selected: usize,
     detail: bool,
     scroll: &mut usize,
@@ -53,14 +64,28 @@ pub fn draw_token_report_modal(
         )
     } else if report.rows.is_empty() {
         (
-            "Token Bill",
-            list_body(report, sel, body_width, theme),
+            "Context Usage",
+            list_body(
+                report,
+                context.snapshot,
+                context.window_tokens,
+                sel,
+                body_width,
+                theme,
+            ),
             vec![FooterHint::always("Esc", "close")],
         )
     } else {
         (
-            "Token Bill",
-            list_body(report, sel, body_width, theme),
+            "Context Usage",
+            list_body(
+                report,
+                context.snapshot,
+                context.window_tokens,
+                sel,
+                body_width,
+                theme,
+            ),
             vec![
                 FooterHint::always("↑↓", "select"),
                 FooterHint::always("Enter", "details"),
@@ -87,18 +112,68 @@ pub fn draw_token_report_modal(
 /// The bill: one selectable line per provider+model, plus a grand total.
 fn list_body<'a>(
     report: &TokenSourceReport,
+    current_context: Option<ContextTokenSnapshot>,
+    context_window: usize,
     sel: usize,
     body_width: usize,
     theme: &Theme,
 ) -> Vec<Line<'a>> {
     let mut body: Vec<Line> = Vec::new();
 
-    if report.rows.is_empty() {
+    body.push(Line::from(Span::styled(
+        "Current AI-visible context",
+        Style::default()
+            .fg(theme.brand())
+            .add_modifier(Modifier::BOLD),
+    )));
+    if let Some(snapshot) = current_context {
+        let size = if context_window > 0 {
+            let ratio = (snapshot.tokens as f64 / context_window as f64).clamp(0.0, 1.0);
+            format!(
+                "{} / {}  ({}%)",
+                fmt_token_count(snapshot.tokens),
+                fmt_token_count(context_window),
+                (ratio * 100.0).round() as u32,
+            )
+        } else {
+            fmt_token_count(snapshot.tokens)
+        };
+        let (source, source_color) = match snapshot.source {
+            ContextTokenSource::Api => ("provider usage (reported)", theme.ok()),
+            ContextTokenSource::Projection => {
+                ("local request projection (estimated)", theme.warn())
+            }
+        };
+        body.push(kv("Size", &size, theme.fg(), theme));
+        body.push(kv("Source", source, source_color, theme));
+    } else {
         body.push(placeholder(
-            "No token usage recorded yet — send a message first.",
+            "Current context estimate unavailable.",
             true,
             theme.muted(),
         ));
+    }
+    body.push(Line::from(""));
+    body.push(Line::from(Span::styled(
+        "Request usage",
+        Style::default()
+            .fg(theme.brand())
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    if report.rows.is_empty() {
+        body.push(placeholder(
+            "No model request attempts recorded yet.",
+            true,
+            theme.muted(),
+        ));
+        if current_context.is_some_and(|snapshot| snapshot.source == ContextTokenSource::Projection)
+        {
+            body.push(Line::from(Span::styled(
+                "The context above is the initial pre-request estimate.",
+                Style::default().fg(theme.muted()),
+            )));
+        }
         return body;
     }
 
@@ -129,11 +204,20 @@ fn list_body<'a>(
         let selected = i == sel;
         let marker = if selected { "> " } else { "  " };
         let label = truncate_str(&format!("{} · {}", row.provider, row.model), name_budget);
-        let (src_text, src_color) = source_label(
-            row.totals.reported_tokens,
-            row.totals.estimated_tokens,
-            theme,
-        );
+        let (src_text, src_color) = if row.totals.total() == 0
+            && row
+                .requests
+                .iter()
+                .any(|request| request.status == RequestUsageStatus::InFlight)
+        {
+            ("in flight".to_string(), theme.info())
+        } else {
+            source_label(
+                row.totals.reported_tokens,
+                row.totals.estimated_tokens,
+                theme,
+            )
+        };
         let name_style = if selected {
             Style::default()
                 .fg(theme.brand())
@@ -228,7 +312,7 @@ fn detail_body<'a>(
         theme,
     ));
     body.push(kv(
-        "Input / Output",
+        "Reported input/output",
         &format!(
             "{} / {}",
             fmt_tokens(t.prompt_tokens),
@@ -264,7 +348,7 @@ fn detail_body<'a>(
 
     body.push(Line::from(""));
     body.push(Line::from(Span::styled(
-        "Per-round line items",
+        "Request attempts",
         Style::default()
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD),
@@ -272,71 +356,111 @@ fn detail_body<'a>(
     body.push(rule(body_width, theme));
     body.push(Line::from(Span::styled(
         format!(
-            "{:>3}  {:<9}{:>9}{:>9}{:>9}   {:<13}",
-            "Rnd", "Source", "Input", "Output", "Total", "Cache r/w"
+            "{:<13}{:<12}{:<10}{:>9}{:>9}{:>9}",
+            "Request", "State", "Source", "Input", "Output", "Total"
         ),
         Style::default().fg(theme.muted()),
     )));
 
-    if row.rounds.is_empty() {
+    if row.requests.is_empty() && row.rounds.is_empty() {
         body.push(placeholder("No per-round detail.", true, theme.muted()));
     }
-    let mut current_turn: Option<u64> = None;
-    for (i, r) in row.rounds.iter().enumerate() {
-        if r.turn != 0 && current_turn != Some(r.turn) {
-            current_turn = Some(r.turn);
+    let attempts = if row.requests.is_empty() {
+        row.rounds
+            .iter()
+            .enumerate()
+            .map(|(index, round)| {
+                let source = if round.reported {
+                    RequestUsageSource::Reported
+                } else {
+                    RequestUsageSource::Estimated
+                };
+                (
+                    "principal".to_string(),
+                    round.turn,
+                    if round.round == 0 {
+                        index.saturating_add(1) as u32
+                    } else {
+                        round.round
+                    },
+                    1,
+                    RequestUsageStatus::Completed,
+                    source,
+                    round.prompt_tokens,
+                    round.completion_tokens,
+                    round.total_tokens,
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        row.requests
+            .iter()
+            .map(|request| {
+                (
+                    request.key.actor_id.clone(),
+                    request.key.round,
+                    request.key.turn,
+                    request.key.attempt,
+                    request.status,
+                    request.source,
+                    request.prompt_tokens,
+                    request.completion_tokens,
+                    request.total_tokens,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut current_round: Option<u64> = None;
+    for (actor, round, turn, attempt, status, source, prompt, completion, total) in attempts {
+        if round != 0 && current_round != Some(round) {
+            current_round = Some(round);
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
-                format!("Turn {}", r.turn),
+                format!("Round {round}"),
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
             )));
         }
-        let (src, src_color) = if r.reported {
-            ("upstream", theme.ok())
-        } else {
-            ("local", theme.warn())
+        let (src, src_color) = match source {
+            RequestUsageSource::Reported => ("reported", theme.ok()),
+            RequestUsageSource::Estimated => ("estimated", theme.warn()),
+            RequestUsageSource::Unknown => ("pending", theme.info()),
         };
-        let (input, output) = if r.reported {
-            (fmt_tokens(r.prompt_tokens), fmt_tokens(r.completion_tokens))
-        } else {
+        let (input, output) = if source == RequestUsageSource::Unknown {
             ("—".to_string(), "—".to_string())
-        };
-        let cache = if r.cache_read_tokens > 0 || r.cache_write_tokens > 0 {
-            format!(
-                "{}/{}",
-                fmt_tokens(r.cache_read_tokens),
-                fmt_tokens(r.cache_write_tokens)
-            )
         } else {
-            "—".to_string()
+            (fmt_tokens(prompt), fmt_tokens(completion))
         };
-        let round_label = if r.round == 0 {
-            i + 1
+        let (state, state_color) = match status {
+            RequestUsageStatus::InFlight => ("in flight", theme.info()),
+            RequestUsageStatus::Completed => ("completed", theme.ok()),
+            RequestUsageStatus::Interrupted => ("interrupted", theme.warn()),
+            RequestUsageStatus::Failed => ("failed", theme.err()),
+            RequestUsageStatus::Abandoned => ("abandoned", theme.warn()),
+        };
+        let request_label = if actor == "principal" {
+            format!("T{turn}/A{attempt}")
         } else {
-            r.round as usize
+            format!("E T{turn}/A{attempt}")
         };
         body.push(Line::from(vec![
             Span::styled(
-                format!("{:>3}  ", round_label),
+                format!("{request_label:<13}"),
                 Style::default().fg(theme.muted()),
             ),
-            Span::styled(format!("{:<9}", src), Style::default().fg(src_color)),
+            Span::styled(format!("{state:<12}"), Style::default().fg(state_color)),
+            Span::styled(format!("{src:<10}"), Style::default().fg(src_color)),
             Span::styled(
-                format!("{:>9}{:>9}{:>9}", input, output, fmt_tokens(r.total_tokens)),
+                format!("{input:>9}{output:>9}{:>9}", fmt_tokens(total)),
                 Style::default().fg(theme.fg()),
-            ),
-            Span::styled(
-                format!("   {:<13}", cache),
-                Style::default().fg(theme.muted()),
             ),
         ]));
     }
 
     body.push(Line::from(""));
     body.push(Line::from(Span::styled(
-        "Upstream = authoritative provider usage; local = char-class estimate.",
+        "Reported = provider usage; estimated = local prompt + observed completion.",
         Style::default().fg(theme.muted()),
     )));
     body
@@ -382,6 +506,20 @@ fn fmt_tokens(n: i64) -> String {
     }
 }
 
+/// Format a non-negative context size with the same SI suffixes used by the
+/// always-visible context meter.
+fn fmt_token_count(n: usize) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B", n as f64 / 1_000_000_000.0)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Truncate a string to fit a column width, appending an ellipsis when cut.
 fn truncate_str(s: &str, max: usize) -> String {
     if s.width() <= max {
@@ -392,5 +530,61 @@ fn truncate_str(s: &str, max: usize) -> String {
         let mut out = s.chars().take(max.saturating_sub(1)).collect::<String>();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body_text(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn empty_ledger_still_shows_initial_context_projection() {
+        let theme = Theme::default();
+        let report = TokenSourceReport::default();
+        let body = list_body(
+            &report,
+            Some(ContextTokenSnapshot {
+                tokens: 12_500,
+                source: ContextTokenSource::Projection,
+            }),
+            200_000,
+            0,
+            80,
+            &theme,
+        );
+        let text = body_text(&body);
+
+        assert!(text.contains("Current AI-visible context"));
+        assert!(text.contains("12.5k / 200.0k  (6%)"));
+        assert!(text.contains("local request projection (estimated)"));
+        assert!(text.contains("initial pre-request estimate"));
+        assert!(!text.contains("No token usage recorded yet"));
+    }
+
+    #[test]
+    fn detail_groups_lifecycle_attempts_by_turn_round_and_attempt() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+        let first = ledger.begin_request("session", "relay", "model", 2, 1, 800);
+        ledger.settle_request(&first, RequestUsageStatus::Interrupted, None, 20);
+        let retry = ledger.begin_request("session", "relay", "model", 2, 1, 800);
+        ledger.settle_request(&retry, RequestUsageStatus::Completed, None, 40);
+        let report = ledger.snapshot_for_session("session");
+
+        let text = body_text(&detail_body(&report, 0, 80, &theme));
+        assert!(text.contains("Round 2"));
+        assert!(text.contains("T1/A1"));
+        assert!(text.contains("T1/A2"));
+        assert!(text.contains("interrupted"));
+        assert!(text.contains("completed"));
+        assert!(text.contains("estimated"));
     }
 }

@@ -110,6 +110,9 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **context compaction** | The heavier second projection layer: summarizes older complete turns into a durable checkpoint with a visible `Compacted` notice. [Context compaction](../explanation/agent-design/context-compaction.md) |
 | **overflow recovery** | The reactive backstop: if a provider reports context overflow before any tool event, the runner may compact and retry once. [Harness architecture](../explanation/agent-design/harness.md) |
 | **pressure** | Context size estimated in tokens (~4 chars/token), compared against thresholds derived from the active model's context window. [Configuration](configuration.md) |
+| **current context** | Replaceable token projection of the next provider input for one session. It is a state value, not an accumulated usage total. [Token accounting](../explanation/agent-design/token-accounting.md) |
+| **request attempt** | One concrete provider request, identified within a session by actor, round, turn, and attempt number. Retries are separate attempts because each may be billable. [ADR-0055](../adr/0055-session-scoped-request-lifecycle-accounting.md) |
+| **request usage** | Additive input/output/cache accounting for provider request attempts, recorded as reported, estimated, or pending. Distinct from current context. [Token accounting](../explanation/agent-design/token-accounting.md) |
 
 ## Providers
 

@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use similar::{ChangeTag, TextDiff};
+use similar::{ChangeTag, DiffOp as SimilarDiffOp, TextDiff};
 
 /// Maximum number of completed edit diffs retained by one transcript renderer.
 /// Entries are small contextual patches, but the bound keeps session switches
@@ -43,8 +43,6 @@ pub enum DiffOp {
     Add,
     /// Line present only in the old text.
     Remove,
-    /// Collapsed run of unchanged lines (elided context between changes).
-    Ellipsis,
 }
 
 /// One intra-line fragment: `text` plus whether it is part of the edited span
@@ -67,6 +65,33 @@ pub struct DiffLine {
     pub frags: Vec<DiffFrag>,
 }
 
+/// One Git-style change hunk with an explicit old/new source range.
+///
+/// Ranges are stored in the same display form used by unified diff headers:
+/// `start` is 1-based for non-empty ranges, while an empty range names the
+/// line immediately before the insertion/deletion point. Keeping this
+/// semantic data out of the renderer avoids reconstructing it from elided
+/// presentation rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffHunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    pub lines: Vec<DiffLine>,
+}
+
+impl DiffHunk {
+    /// Standard unified-diff hunk header.
+    pub fn header(&self) -> String {
+        format!(
+            "@@ -{} +{} @@",
+            format_hunk_range(self.old_start, self.old_count),
+            format_hunk_range(self.new_start, self.new_count),
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DiffSource {
     Patch {
@@ -82,7 +107,7 @@ enum DiffSource {
 
 struct CachedDiff {
     source: DiffSource,
-    lines: Arc<[DiffLine]>,
+    hunks: Arc<[DiffHunk]>,
     last_used: u64,
 }
 
@@ -108,7 +133,7 @@ impl DiffCache {
         old: &str,
         new: &str,
         start_line: usize,
-    ) -> Arc<[DiffLine]> {
+    ) -> Arc<[DiffHunk]> {
         let now = self.next_tick();
         if let Some(lines) = self.reuse(message_id, now, |source| {
             matches!(
@@ -129,8 +154,8 @@ impl DiffCache {
             start_line,
         };
         let offset = start_line.saturating_sub(1);
-        let lines = collapse_context_runs(&line_diff(old, new, offset));
-        self.insert(message_id, source, lines, now)
+        let hunks = line_diff_hunks(old, new, offset);
+        self.insert(message_id, source, hunks, now)
     }
 
     /// Cache the argument-derived compatibility diff used by restored sessions
@@ -140,7 +165,7 @@ impl DiffCache {
         message_id: u64,
         name: &str,
         arguments: &str,
-    ) -> Arc<[DiffLine]> {
+    ) -> Arc<[DiffHunk]> {
         let now = self.next_tick();
         if let Some(lines) = self.reuse(message_id, now, |source| {
             matches!(
@@ -158,8 +183,8 @@ impl DiffCache {
             name: name.to_string(),
             arguments: arguments.to_string(),
         };
-        let lines = collapse_context_runs(&super::diff_lines_for(name, arguments));
-        self.insert(message_id, source, lines, now)
+        let hunks = super::diff_hunks_for(name, arguments);
+        self.insert(message_id, source, hunks, now)
     }
 
     fn next_tick(&mut self) -> u64 {
@@ -172,12 +197,12 @@ impl DiffCache {
         message_id: u64,
         now: u64,
         matches_source: impl FnOnce(&DiffSource) -> bool,
-    ) -> Option<Arc<[DiffLine]>> {
+    ) -> Option<Arc<[DiffHunk]>> {
         if let Some(cached) = self.entries.get_mut(&message_id)
             && matches_source(&cached.source)
         {
             cached.last_used = now;
-            return Some(Arc::clone(&cached.lines));
+            return Some(Arc::clone(&cached.hunks));
         }
         None
     }
@@ -186,15 +211,15 @@ impl DiffCache {
         &mut self,
         message_id: u64,
         source: DiffSource,
-        lines: Vec<DiffLine>,
+        hunks: Vec<DiffHunk>,
         now: u64,
-    ) -> Arc<[DiffLine]> {
-        let lines: Arc<[DiffLine]> = Arc::from(lines);
+    ) -> Arc<[DiffHunk]> {
+        let hunks: Arc<[DiffHunk]> = Arc::from(hunks);
         self.entries.insert(
             message_id,
             CachedDiff {
                 source,
-                lines: Arc::clone(&lines),
+                hunks: Arc::clone(&hunks),
                 last_used: now,
             },
         );
@@ -207,7 +232,7 @@ impl DiffCache {
         {
             self.entries.remove(&oldest);
         }
-        lines
+        hunks
     }
 
     #[cfg(test)]
@@ -248,19 +273,6 @@ impl DiffLine {
     /// The full line text (all fragments concatenated).
     pub fn text(&self) -> String {
         self.frags.iter().map(|f| f.text.as_str()).collect()
-    }
-
-    /// A collapsed-context marker line: `⋯` in muted style, no line number.
-    fn ellipsis() -> Self {
-        DiffLine {
-            op: DiffOp::Ellipsis,
-            old_no: None,
-            new_no: None,
-            frags: vec![DiffFrag {
-                text: "⋯".to_string(),
-                changed: false,
-            }],
-        }
     }
 }
 
@@ -309,7 +321,59 @@ fn word_diff_pair<'a>(old: &'a str, new: &'a str) -> (Vec<DiffFrag>, Vec<DiffFra
 /// Pass `0` when the offset is unknown or irrelevant (e.g. `write_file`).
 pub fn line_diff(old: &str, new: &str, line_offset: usize) -> Vec<DiffLine> {
     let diff = TextDiff::from_lines(old, new);
+    lines_for_ops(&diff, diff.ops(), line_offset)
+}
 
+/// Default amount of unchanged source context on each side of a hunk.
+/// This matches Git's unified-diff default (`-U3`).
+const DIFF_CONTEXT_LINES: usize = 3;
+
+/// Build explicit Git-style hunks. `similar` owns the grouping semantics, so
+/// leading/trailing unchanged regions are absent and every returned hunk has
+/// authoritative old/new ranges, including zero-length sides for pure
+/// insertions and deletions.
+pub fn line_diff_hunks(old: &str, new: &str, line_offset: usize) -> Vec<DiffHunk> {
+    let diff = TextDiff::from_lines(old, new);
+    diff.grouped_ops(DIFF_CONTEXT_LINES)
+        .into_iter()
+        .filter_map(|ops| {
+            // `grouped_ops` never yields empty groups; guard defensively so the
+            // range logic can never see a missing endpoint.
+            let (first, rest) = ops.split_first()?;
+            let last = rest.last().unwrap_or(first);
+            let old_range = first.old_range().start..last.old_range().end;
+            let new_range = first.new_range().start..last.new_range().end;
+            Some(DiffHunk {
+                old_start: display_hunk_start(old_range.start, old_range.len(), line_offset),
+                old_count: old_range.len(),
+                new_start: display_hunk_start(new_range.start, new_range.len(), line_offset),
+                new_count: new_range.len(),
+                lines: lines_for_ops(&diff, &ops, line_offset),
+            })
+        })
+        .collect()
+}
+
+/// Convert a zero-based range start to unified-diff display semantics.
+/// Non-empty ranges are 1-based. Empty ranges identify the line immediately
+/// before the insertion/deletion point and therefore do not add one.
+fn display_hunk_start(start: usize, count: usize, line_offset: usize) -> usize {
+    start + line_offset + usize::from(count > 0)
+}
+
+fn format_hunk_range(start: usize, count: usize) -> String {
+    if count == 1 {
+        start.to_string()
+    } else {
+        format!("{start},{count}")
+    }
+}
+
+fn lines_for_ops(
+    diff: &TextDiff<'_, '_, '_, str>,
+    ops: &[SimilarDiffOp],
+    line_offset: usize,
+) -> Vec<DiffLine> {
     // Buffer consecutive deletes/inserts so they can be paired into word-diffs.
     let mut pending_del: Vec<(usize, &str)> = Vec::new();
     let mut pending_ins: Vec<(usize, &str)> = Vec::new();
@@ -353,7 +417,7 @@ pub fn line_diff(old: &str, new: &str, line_offset: usize) -> Vec<DiffLine> {
             ins.clear();
         };
 
-    for op in diff.ops() {
+    for op in ops {
         for change in diff.iter_changes(op) {
             match change.tag() {
                 ChangeTag::Equal => {
@@ -383,66 +447,6 @@ pub fn line_diff(old: &str, new: &str, line_offset: usize) -> Vec<DiffLine> {
     flush(&mut pending_del, &mut pending_ins, &mut out);
 
     out
-}
-
-/// Context lines kept on each side of a change hunk before collapsing.
-/// GitHub-style: 3 lines above and 3 below each change group.
-const COLLAPSE_CONTEXT: usize = 3;
-
-/// Collapse long runs of unchanged context lines into a single [`DiffOp::Ellipsis`]
-/// marker so a diff spanning distant edits stays compact. Keeps up to
-/// `COLLAPSE_CONTEXT` (3) lines of context around each change group —
-/// GitHub-style: 3 lines above and 3 below every hunk. Everything beyond that
-/// window is replaced by one `⋯` row.
-///
-/// Leading and trailing context (before the first / after the last change) is
-/// also trimmed to `COLLAPSE_CONTEXT` lines.
-pub fn collapse_context_runs(diff: &[DiffLine]) -> Vec<DiffLine> {
-    let n = diff.len();
-    if n == 0 {
-        return Vec::new();
-    }
-
-    // Mark every line within COLLAPSE_CONTEXT of a change for keeping.
-    let mut keep = vec![false; n];
-    for (i, line) in diff.iter().enumerate() {
-        if line.op == DiffOp::Remove || line.op == DiffOp::Add {
-            for offset in 0..=COLLAPSE_CONTEXT {
-                if i >= offset {
-                    keep[i - offset] = true;
-                }
-                if i + offset < n {
-                    keep[i + offset] = true;
-                }
-            }
-        }
-    }
-
-    // Build output, inserting one ellipsis wherever a kept section follows a
-    // gap of one or more skipped lines.
-    let mut result = Vec::with_capacity(n);
-    let mut prev_kept = false;
-    let mut last_kept: Option<usize> = None;
-
-    for (i, line) in diff.iter().enumerate() {
-        if keep[i] {
-            if !prev_kept && i > 0 {
-                result.push(DiffLine::ellipsis());
-            }
-            result.push(line.clone());
-            prev_kept = true;
-            last_kept = Some(i);
-        } else {
-            prev_kept = false;
-        }
-    }
-
-    // Trailing ellipsis if skipped lines follow the last kept line.
-    if last_kept.is_some_and(|idx| idx + 1 < n) {
-        result.push(DiffLine::ellipsis());
-    }
-
-    result
 }
 
 #[cfg(test)]
@@ -569,79 +573,69 @@ mod tests {
     }
 
     #[test]
-    fn collapse_inserts_ellipsis_for_long_context_runs() {
-        // Two changes separated by 20 context lines.
+    fn distant_changes_form_explicit_hunks() {
         let old = "a\nCHANGE1\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np\nq\nr\ns\nCHANGE2\nz";
         let new = "a\nchange1\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\no\np\nq\nr\ns\nchange2\nz";
-        let diff = line_diff(old, new, 0);
-        let collapsed = collapse_context_runs(&diff);
+        let hunks = line_diff_hunks(old, new, 0);
 
-        // Should contain exactly one Ellipsis line.
-        let ellipsis_count = collapsed
-            .iter()
-            .filter(|l| l.op == DiffOp::Ellipsis)
-            .count();
-        assert_eq!(ellipsis_count, 1, "one ellipsis for the gap");
-
-        // The change lines survive.
-        let has_remove = collapsed.iter().any(|l| l.op == DiffOp::Remove);
-        let has_add = collapsed.iter().any(|l| l.op == DiffOp::Add);
-        assert!(has_remove && has_add);
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].header(), "@@ -1,5 +1,5 @@");
+        assert_eq!(hunks[1].header(), "@@ -17,5 +17,5 @@");
+        assert!(
+            hunks
+                .iter()
+                .all(|hunk| hunk.lines.iter().any(|line| line.op == DiffOp::Remove))
+        );
+        assert!(
+            hunks
+                .iter()
+                .all(|hunk| hunk.lines.iter().any(|line| line.op == DiffOp::Add))
+        );
     }
 
     #[test]
-    fn collapse_keeps_short_context_runs_intact() {
-        // Two changes separated by 4 context lines — well within the
-        // 2*COLLAPSE_CONTEXT=6 overlap window, so no ellipsis needed.
+    fn nearby_changes_share_one_hunk() {
         let old = "a\nCHANGE1\nc\nd\ne\nf\nCHANGE2\nz";
         let new = "a\nchange1\nc\nd\ne\nf\nchange2\nz";
-        let diff = line_diff(old, new, 0);
-        let collapsed = collapse_context_runs(&diff);
+        let hunks = line_diff_hunks(old, new, 0);
 
-        // No ellipsis — the keep windows overlap.
-        let ellipsis_count = collapsed
-            .iter()
-            .filter(|l| l.op == DiffOp::Ellipsis)
-            .count();
-        assert_eq!(ellipsis_count, 0);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].header(), "@@ -1,8 +1,8 @@");
     }
 
     #[test]
-    fn collapse_inserts_ellipsis_when_hunks_are_far_apart() {
-        // Two changes separated by 8 context lines — just over the 6-line
-        // overlap window (2*COLLAPSE_CONTEXT), so an ellipsis is inserted.
-        let old = "a\nCHANGE1\nc\nd\ne\nf\ng\nh\ni\nj\nCHANGE2\nz";
-        let new = "a\nchange1\nc\nd\ne\nf\ng\nh\ni\nj\nchange2\nz";
-        let diff = line_diff(old, new, 0);
-        let collapsed = collapse_context_runs(&diff);
+    fn pure_insert_and_delete_use_standard_zero_length_ranges() {
+        let insert = line_diff_hunks("", "new\n", 0);
+        assert_eq!(insert.len(), 1);
+        assert_eq!(insert[0].header(), "@@ -0,0 +1 @@");
 
-        let ellipsis_count = collapsed
-            .iter()
-            .filter(|l| l.op == DiffOp::Ellipsis)
-            .count();
-        assert_eq!(
-            ellipsis_count, 1,
-            "gap > 2*COLLAPSE_CONTEXT triggers ellipsis"
-        );
-
-        let has_remove = collapsed.iter().any(|l| l.op == DiffOp::Remove);
-        let has_add = collapsed.iter().any(|l| l.op == DiffOp::Add);
-        assert!(has_remove && has_add);
+        let delete = line_diff_hunks("old\n", "", 0);
+        assert_eq!(delete.len(), 1);
+        assert_eq!(delete[0].header(), "@@ -1 +0,0 @@");
     }
 
     #[test]
-    fn collapse_trims_leading_and_trailing_context() {
-        // 20 context lines, one change, 20 more context lines.
+    fn unchanged_text_has_no_hunks() {
+        assert!(line_diff_hunks("same\n", "same\n", 0).is_empty());
+    }
+
+    #[test]
+    fn hunk_grouping_keeps_three_lines_without_edge_ellipsis() {
         let old = "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nCHANGE\nl11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nl19\nl20";
         let new = "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nchange\nl11\nl12\nl13\nl14\nl15\nl16\nl17\nl18\nl19\nl20";
-        let diff = line_diff(old, new, 0);
-        let collapsed = collapse_context_runs(&diff);
+        let hunks = line_diff_hunks(old, new, 0);
 
-        // Two ellipses: one before, one after the change.
-        let ellipsis_count = collapsed
-            .iter()
-            .filter(|l| l.op == DiffOp::Ellipsis)
-            .count();
-        assert_eq!(ellipsis_count, 2, "leading + trailing ellipsis");
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].header(), "@@ -8,7 +8,7 @@");
+        assert_eq!(hunks[0].lines.first().unwrap().old_no, Some(8));
+        assert_eq!(hunks[0].lines.last().unwrap().old_no, Some(14));
+    }
+
+    #[test]
+    fn hunk_headers_include_file_line_offset() {
+        let hunks = line_diff_hunks("a\nb\nc", "a\nB\nc", 14);
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].header(), "@@ -15,3 +15,3 @@");
     }
 }

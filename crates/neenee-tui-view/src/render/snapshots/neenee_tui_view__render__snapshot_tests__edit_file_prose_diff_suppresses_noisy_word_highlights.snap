@@ -1,8 +1,10 @@
 ---
 source: crates/neenee-tui-view/src/render/snapshot_tests.rs
+assertion_line: 379
 expression: "render_grid(&m, 100, 30)"
 ---
 - Edit docs/explanation/tui.md +1 -1
+         @@ -1 +1 @@
    1   - Because the frame is a pure function of state, anything that changes state — a streamed tok
          en, a permission request, a mouse drag — shows up on the very next frame with no manual inv
          alidation.
@@ -10,10 +12,11 @@ expression: "render_grid(&m, 100, 30)"
          t grid and walks only the dirty rows from each row's dirty column.
 
 backgrounds:
-A=#070808  B=#201414  C=#121F16  .=reset
+A=#070808  B=#111312  C=#201414  D=#121F16  .=reset
 0: A100
 1: B100
-2: B100
-3: B100
+2: C100
+3: C100
 4: C100
-5: C100
+5: D100
+6: D100

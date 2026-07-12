@@ -484,6 +484,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (reported vs. estimated) into it, and the TUI reads it for the
     // token-source report modal (opened by clicking the context meter).
     let token_ledger = neenee_core::TokenSourceLedger::shared();
+    envoy_tool_handle.bind_accounting(
+        token_ledger.clone(),
+        agent.thread_id_handle(),
+        agent.turn_counter_handle(),
+    );
 
     let driver = neenee_session::SessionDriver {
         req_rx,

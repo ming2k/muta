@@ -34,7 +34,7 @@ pub use neenee_core::{estimate_bytes, estimate_tokens};
 /// `provider_selection`. A session that has run `/provider` pins its own
 /// provider + model here so the live selection does not leak into the global
 /// `config.toml` or affect other concurrent sessions.
-const CURRENT_SCHEMA_VERSION: u32 = 6;
+const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
@@ -189,6 +189,11 @@ struct SessionData {
     /// `#[serde(default)]` so legacy snapshots load as 0.
     #[serde(default)]
     turn_counter: u64,
+    /// Per-request token accounting for this session. Unlike the historical
+    /// process-global ledger, these records survive resume and cannot leak
+    /// across `/session open` boundaries.
+    #[serde(default)]
+    request_usage_records: Vec<neenee_core::RequestUsageRecord>,
     /// Session-scoped stop-gate runtime view (ADR-0048 Phase 2). `None` for a
     /// session with no armed pursuit. Restored on resume so an armed pursuit
     /// mid-iteration does not silently disarm.
@@ -219,6 +224,7 @@ impl Default for SessionData {
             provider_selection: None,
             disabled_tools: std::collections::HashSet::new(),
             turn_counter: 0,
+            request_usage_records: Vec::new(),
             pursuit_runtime: None,
         }
     }
@@ -452,6 +458,17 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::TurnCounterSet { counter } => {
                 data.turn_counter = *counter;
             }
+            SessionEvent::RequestUsageUpsert { record } => {
+                if let Some(existing) = data
+                    .request_usage_records
+                    .iter_mut()
+                    .find(|existing| existing.key == record.key)
+                {
+                    *existing = record.clone();
+                } else {
+                    data.request_usage_records.push(record.clone());
+                }
+            }
             SessionEvent::ProviderSelectionSet { selection } => {
                 data.provider_selection = selection.clone();
             }
@@ -580,6 +597,15 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             timestamp: data.updated_at,
             event: SessionEvent::TurnCounterSet {
                 counter: data.turn_counter,
+            },
+        });
+    }
+    for record in &data.request_usage_records {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::RequestUsageUpsert {
+                record: record.clone(),
             },
         });
     }
@@ -914,6 +940,63 @@ impl SessionStore {
             .await
     }
 
+    /// Durable lifecycle-aware request accounting for the active session.
+    pub async fn request_usage_records(&self) -> Vec<neenee_core::RequestUsageRecord> {
+        self.state.lock().await.data.request_usage_records.clone()
+    }
+
+    /// Replace the session's request ledger. Callers pass records already
+    /// scoped to the active session; the store validates that boundary before
+    /// appending the snapshot event.
+    pub async fn set_request_usage_records(
+        &self,
+        records: Vec<neenee_core::RequestUsageRecord>,
+    ) -> Result<(), String> {
+        let (path, data) = {
+            let mut state = self.state.lock().await;
+            if records
+                .iter()
+                .any(|record| record.key.session_id != state.data.id)
+            {
+                return Err("request usage record belongs to another session".to_string());
+            }
+            if state
+                .data
+                .request_usage_records
+                .iter()
+                .any(|existing| !records.iter().any(|record| record.key == existing.key))
+            {
+                return Err("request usage records are append/update only".to_string());
+            }
+            if state.data.request_usage_records == records {
+                return Ok(());
+            }
+            let changed = records
+                .iter()
+                .filter(|record| {
+                    state
+                        .data
+                        .request_usage_records
+                        .iter()
+                        .find(|existing| existing.key == record.key)
+                        != Some(*record)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            state.data.request_usage_records = records.clone();
+            state.data.updated_at = unix_timestamp();
+            ensure_event_log_started(&state.event_log, &state.data)?;
+            for record in changed {
+                state
+                    .event_log
+                    .append(SessionEvent::RequestUsageUpsert { record })?;
+            }
+            (state.path.clone(), state.data.clone())
+        };
+        self.persist_off_runtime(path, data, self.blob_store.clone())
+            .await
+    }
+
     /// The session-scoped provider + model pin (C6). `None` means "follow the
     /// global default"; the harness seeds this on first `/provider` switch.
     pub async fn provider_selection(&self) -> Option<ProviderSelection> {
@@ -1227,6 +1310,9 @@ impl SessionStore {
         child.created_at = now;
         child.updated_at = now;
         child.loop_checkpoint = None;
+        // Usage belongs to concrete requests made by the parent session. A
+        // fork inherits context, not historical billing records.
+        child.request_usage_records.clear();
 
         let child_path = self.sessions_dir.join(format!("{fork_id}.json"));
         let child_log = EventLog::new(child_path.with_extension("jsonl"));
@@ -1268,6 +1354,7 @@ impl SessionStore {
         side.created_at = now;
         side.updated_at = now;
         side.loop_checkpoint = None;
+        side.request_usage_records.clear();
 
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let side_log = EventLog::new(side_path.with_extension("jsonl"));
@@ -2897,6 +2984,50 @@ mod tests {
         let cleared = SessionStore::for_path(path.clone());
         assert!(cleared.provider_selection().await.is_none());
 
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn request_usage_round_trips_through_disk() {
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-request-usage-state-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        let session_id = store.id().await;
+        let record = neenee_core::RequestUsageRecord {
+            key: neenee_core::RequestUsageKey {
+                session_id,
+                actor_id: "principal".to_string(),
+                round: 2,
+                turn: 1,
+                attempt: 1,
+            },
+            provider: "openai".to_string(),
+            model: "gpt".to_string(),
+            status: neenee_core::RequestUsageStatus::Completed,
+            source: neenee_core::RequestUsageSource::Reported,
+            projected_prompt_tokens: 900,
+            prompt_tokens: 910,
+            completion_tokens: 90,
+            total_tokens: 1_000,
+            ..Default::default()
+        };
+        store
+            .set_request_usage_records(vec![record.clone()])
+            .await
+            .unwrap();
+
+        let reloaded = SessionStore::for_path(path);
+        assert_eq!(reloaded.request_usage_records().await, vec![record]);
+        assert!(
+            reloaded
+                .set_request_usage_records(Vec::new())
+                .await
+                .is_err(),
+            "request attempts cannot be silently removed"
+        );
         let _ = fs::remove_dir_all(directory);
     }
 

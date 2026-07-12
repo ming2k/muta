@@ -159,6 +159,8 @@ impl SessionDriver {
         let skills_registry_for_commands = skills_registry.clone();
 
         let initial_session_id = session.id().await;
+        token_ledger.restore_session(&initial_session_id, session.request_usage_records().await);
+        token_ledger.set_active_session(initial_session_id.clone());
         let initial_context = agent
             .estimate_next_request_tokens(&session.model_window().await)
             .total_tokens;
@@ -223,6 +225,8 @@ impl SessionDriver {
             let pre_projection = agent
                 .estimate_next_request_tokens(&session.model_window().await)
                 .total_tokens;
+            let pre_provider = agent.provider.provider_id();
+            let pre_model = agent.provider.model();
             match req {
                 AgentRequest::Interrupt => {
                     crate::handlers_permission::interrupt(&agent, &session, &resp_tx, &ctt_clone)
@@ -597,7 +601,17 @@ impl SessionDriver {
             let post_projection = agent
                 .estimate_next_request_tokens(&session.model_window().await)
                 .total_tokens;
+            let provider_or_model_changed =
+                pre_provider != agent.provider.provider_id() || pre_model != agent.provider.model();
             let session_changed = post_session_id != pre_session_id;
+
+            if session_changed {
+                token_ledger
+                    .restore_session(&post_session_id, session.request_usage_records().await);
+                token_ledger.set_active_session(post_session_id.clone());
+                agent.set_thread_id(post_session_id.clone());
+                agent.restore_turn_count(session.turn_counter().await);
+            }
 
             // Re-publish a session-scoped projection only when the AI-visible
             // context actually changed this request (session switch, `/clear`,
@@ -606,7 +620,7 @@ impl SessionDriver {
             // variants — keeps a non-driving command echo (or any no-op
             // request) from overwriting a fresh provider-reported context
             // anchor with the lower local estimate.
-            if session_changed || post_projection != pre_projection {
+            if session_changed || provider_or_model_changed || post_projection != pre_projection {
                 let _ = resp_tx.send(turn(
                     &post_session_id,
                     neenee_core::RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {

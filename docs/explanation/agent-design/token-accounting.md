@@ -43,10 +43,10 @@ At the single booking point (`Agent::book_turn_usage`,
 `crates/neenee-agent/src/agent.rs`), each round's usage is resolved through this
 chain, in order:
 
-```
-streamed Usage event  ──▶  take_last_usage()  ──▶  estimate_message_tokens()
-(OpenAI include_usage,     (non-streaming chat       (local char-class
- Anthropic message_delta)   residual, Gemini)         estimator)
+```text
+streamed Usage event  ──▶  take_last_usage()  ──▶  projected prompt +
+(OpenAI include_usage,     (non-streaming chat       estimated completion
+ Anthropic message_delta)   residual, Gemini)         (local char-class)
        │                          │                          │
        ▼                          ▼                          ▼
    reported: true            reported: true            reported: false
@@ -61,12 +61,14 @@ streamed Usage event  ──▶  take_last_usage()  ──▶  estimate_message_
    did not carry usage, the provider stashes the `usage` object internally and
    hands it out here. This is a *consume-once* drain: the value is cleared after
    reading so it can never be double-counted.
-3. **`estimate_message_tokens()` — the local estimator.** The final fallback,
-   used whenever the provider reported nothing. Described in detail below.
+3. **Local request estimate.** The final fallback combines the exact pre-wire
+   prompt projection with an estimate of the completed or observed output.
+   This keeps estimated totals comparable with reported input-plus-output
+   totals. The character estimator is described below.
 
-Whichever source wins, the count is added to the round's `TokenUsage` and —
-crucially — recorded into the **token-source ledger** tagged as *reported* (the
-first two) or *estimated* (the third). That tag is what the report modal shows.
+Whichever source wins, the count settles the same request attempt and is tagged
+as *reported* (the first two) or *estimated* (the third). That tag is what the
+report modal shows.
 
 ### Why "streamed first, then drained"?
 
@@ -135,8 +137,7 @@ The estimator measures the **content the provider will receive** (message
 transcripts). It deliberately excludes:
 
 - **`reasoning_content`** (extended thinking) — never sent to the provider, so
-  it does not consume the window. *(Note: the TUI's hint-bar meter includes it
-  as an intentional upper bound — see "Display vs. runtime" below.)*
+  it does not consume the next request's window.
 - **Framing overhead** — per-message role tags, the chat template the serving
   runtime applies, system-prompt token counts from the provider's tokenizer.
   These are unknowable without the real tokenizer, so the estimator ignores
@@ -145,53 +146,61 @@ transcripts). It deliberately excludes:
 
 ## The token-source ledger
 
-To make the reported-vs-estimated distinction observable, neenee keeps a running
-`TokenSourceLedger` (`crates/neenee-core/src/token_ledger.rs`):
+To make the reported-vs-estimated distinction observable, neenee keeps one
+lifecycle record per concrete provider request:
 
+```text
+session
+  └─ actor
+      └─ round
+          └─ turn
+              └─ attempt → state + source + input/output/cache usage
 ```
-TokenSourceLedger
-  └─ (provider_id, model) ─▶ { reported_tokens, estimated_tokens }
-```
 
-Every booked round increments one of the two counters under its `(provider, model)`
-key. A session that switches providers or models keeps each one's accuracy
-picture separate. The ledger is a thread-safe shared `Arc` held jointly by:
+The actor separates the principal from each envoy. A retry creates a new
+attempt under the same round and turn because every request that reached the
+provider may be billed. Attempts move from `in_flight` to `completed`,
+`interrupted`, `failed`, or `abandoned`. An abandoned attempt is an in-flight
+record recovered after a process crash.
 
-- **The agent** (writer) — `book_turn_usage` records each round.
-- **The TUI** (reader) — the report modal calls `snapshot()` to render.
+Terminal events update the same keyed record. Reported usage can replace an
+estimate, but an estimate cannot replace reported usage. This makes replay and
+duplicate terminal events idempotent rather than double-counting them.
 
-`snapshot()` returns a `TokenSourceReport`: a sorted list of rows
-(provider/model/totals) plus a grand total, with no lock held during render.
+Records are persisted with the session. Opening or resuming a session restores
+its own ledger; a fork begins with no copied request usage because the parent
+requests must not be billed twice. Provider/model totals and turn-level rows
+are derived from these records instead of serving as mutable primary state.
 
-## The Token Source report modal
+## The Context Usage modal
 
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is now **clickable**. Clicking it opens a centered, read-only
-**Token Source Report** modal:
+**Context Usage** modal. The top section shows current AI-visible context. The
+request-usage section groups the active session's attempts by provider and
+model, and a detail page expands it into round, turn, and attempt rows:
 
 ```
-┌─ Token Source Report ─────────────────────────────────────┐
-│ Provider / Model          Reported    Estimated    % Real │
+┌─ Context Usage ───────────────────────────────────────────┐
+│ Current AI-visible context                              │
+│ Size                 12.5k / 200.0k (6%)                │
+│ Source               local request projection           │
 │ ──────────────────────────────────────────────────────────│
-│ openai · gpt-4o              12.3k          0       100%  │
-│ gemini · gemini-2.5           8.1k          0       100%  │
-│ kimi · k2                        0        2.4k         0% │
-│ ──────────────────────────────────────────────────────────│
-│ Total                        20.4k        2.4k        89% │
-│                                                            │
-│ Reported = authoritative counts from the provider's usage │
-│ Estimated = local char-class heuristic (provider reported  │
-│             no usage).                                     │
+│ Request usage                                            │
+│ openai · gpt-4o                 12.3k          100% real │
+│ relay · local-model              2.4k          estimated │
 │                                              Esc close     │
 └────────────────────────────────────────────────────────────┘
 ```
 
 The report answers two questions at a glance:
 
-- **"How accurate is my context meter?"** — the `% Real` column. `100%` means
-  every token for that model came from the provider; `0%` means it was all
-  estimated (e.g. a local relay that strips `usage`). The grand total's
-  percentage is the session-wide accuracy.
+- **"What would the next request contain?"** — the current-context section is
+  available before the first request and refreshes after committed history
+  changes.
+- **"How accurate is request accounting?"** — `% Real` describes the usage
+  ledger, not the current-context projection. `100%` means every settled token
+  for that model came from provider usage.
 - **"Which of my providers actually report usage?"** — the row breakdown makes
   it obvious which models are measured and which are guessed, so a user
   debugging a premature-overflow or never-compacts issue knows whether to look
@@ -200,21 +209,22 @@ The report answers two questions at a glance:
 The percentage colors signal accuracy at a glance: green when fully reported,
 yellow when mixed, muted/red when all estimated.
 
-## Display vs. runtime: two numbers, on purpose
+## Current context vs. request usage
 
-There are two token-counting paths, and they intentionally disagree slightly:
+The two displayed quantities intentionally answer different questions:
 
-| Path | Includes reasoning? | Used for |
-|------|:---:|----------|
-| **Runtime** (`estimate_tokens` / `book_turn_usage`) | No | Pruning & compaction threshold decisions |
-| **Display** (hint-bar `estimate_context_tokens`) | Yes | The on-screen meter the user glances at |
+| Quantity | Behavior | Used for |
+|----------|----------|----------|
+| **Current context** | Replaceable projection of the next provider input | Hint-bar meter, pruning, compaction |
+| **Request usage** | Additive input/output usage for every network attempt | Provider/model totals, billing diagnostics |
 
-The runtime path excludes `reasoning_content` because that text is never sent to
-the provider — it consumes zero window. The display path includes it because the
-meter is a *user-facing* signal of "how much is in my transcript", and reasoning
-blocks are visible bulk the user might want to be aware of. So the displayed
-number is an intentional **upper bound**; the decision number is the precise
-one. The Token Source report reflects the runtime (decision) accounting.
+Provider usage does not directly replace current context. Billed output can
+include hidden reasoning or generated text discarded by an interrupt, neither
+of which necessarily enters the next request. Conversely, a tool result or
+context projection can change the next request without changing the previous
+usage object. Current context is therefore recomputed from committed
+AI-visible history, while provider usage remains authoritative only for the
+request ledger.
 
 ## How each provider surfaces usage
 
@@ -229,14 +239,13 @@ the `usage` object it previously discarded:
 
 Each adapter implements `Provider::usage_supported() -> true` and stashes the
 parsed `TokenUsage` in an internal `Mutex`, drained by `take_last_usage()`. The
-`ProxyProvider` (which fronts the hot-swappable provider) delegates both methods
-to the live inner provider so attribution tracks the active model even after a
-mid-session `/provider` switch.
+The active provider and model are captured before dispatch, so a later
+mid-session provider switch cannot reattribute an in-flight request.
 
 Providers that never report usage (test doubles, a relay that strips the field)
 keep the trait's default: `usage_supported() -> false`, `take_last_usage() ->
 None`. The booking chain falls straight through to the estimator, and the ledger
-records those turns as estimated — exactly as the report shows.
+records those attempts as estimated — exactly as the report shows.
 
 ## The `CHARS_PER_TOKEN` constant, and why it still exists
 

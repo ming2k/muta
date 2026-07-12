@@ -26,8 +26,7 @@ mod read_image;
 mod web;
 
 pub(crate) use diff::DiffCache;
-pub use diff::{DiffLine, DiffOp};
-pub use diff::{collapse_context_runs, line_diff};
+pub use diff::{DiffHunk, DiffLine, DiffOp, line_diff, line_diff_hunks};
 
 use neenee_tui::Color;
 use serde_json::Value;
@@ -103,8 +102,8 @@ pub enum ResultKind {
     Grep,
     /// Shell output with `$ command` framing and exit/section markers.
     Bash,
-    /// A red/green line diff derived from the tool's arguments (edit/write)
-    /// rather than its output.
+    /// A red/green line diff derived from a structured patch result. Legacy
+    /// restored sessions may fall back to the original tool arguments.
     Diff,
 }
 
@@ -221,17 +220,17 @@ pub fn summary_for(name: &str, arguments: &str, profile: Option<&str>) -> String
     truncate(&presenter_for(name).summary(&view), SUMMARY_BUDGET)
 }
 
-/// Build the renderable diff for a tool step whose [`ToolPresenter::result_kind`]
-/// is [`ResultKind::Diff`]. Reads `old_string`/`new_string` from `edit_file`
-/// arguments. Returns an empty diff for any other tool or malformed arguments.
-pub fn diff_lines_for(name: &str, arguments: &str) -> Vec<DiffLine> {
+/// Build explicit renderable hunks from legacy tool arguments. Current
+/// completed edits use their structured Patch result instead; this path keeps
+/// restored sessions created before structured results were persisted usable.
+pub fn diff_hunks_for(name: &str, arguments: &str) -> Vec<DiffHunk> {
     let Ok(value) = serde_json::from_str::<Value>(arguments) else {
         return Vec::new();
     };
     let get = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or("");
     match name {
-        "edit_file" => diff::line_diff(get("old_string"), get("new_string"), 0),
-        "write_file" => diff::line_diff("", get("content"), 0),
+        "edit_file" => diff::line_diff_hunks(get("old_string"), get("new_string"), 0),
+        "write_file" => diff::line_diff_hunks("", get("content"), 0),
         _ => Vec::new(),
     }
 }

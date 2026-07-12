@@ -147,7 +147,10 @@ pub async fn run_tui(
     let cm_clone = current_model.clone();
     // Session-scoped AI context snapshot. The listener updates it only from
     // harness projection/API events; the rendered transcript is never used.
-    let context_tokens = Arc::new(Mutex::new(None::<neenee_core::ContextTokenSnapshot>));
+    let context_tokens = Arc::new(Mutex::new(HashMap::<
+        String,
+        neenee_core::ContextTokenSnapshot,
+    >::new()));
     let context_tokens_clone = context_tokens.clone();
 
     let is_responding = Arc::new(AtomicBool::new(false));
@@ -313,9 +316,10 @@ pub async fn run_tui(
                     };
                     match event {
                         RoundEvent::ContextTokens(snapshot) => {
-                            if !routes_to_side {
-                                *context_tokens_clone.lock().await = Some(snapshot);
-                            }
+                            context_tokens_clone
+                                .lock()
+                                .await
+                                .insert(session_id.clone(), snapshot);
                         }
                         RoundEvent::Notice(notice) => {
                             // Provider retry has a dedicated, self-refreshing
@@ -946,14 +950,14 @@ pub async fn run_tui(
                 }
                 AgentResponse::ConversationCleared => {
                     messages_clone.write().await.clear();
-                    *context_tokens_clone.lock().await = None;
+                    context_tokens_clone.lock().await.clear();
                 }
                 AgentResponse::ConversationReplaced(messages) => {
                     *messages_clone.write().await =
                         transcript_messages_from_core(messages, &tui_config_clone);
                     // The model-window revision changed; do not reuse an API
                     // anchor from the previous session/projection.
-                    *context_tokens_clone.lock().await = None;
+                    context_tokens_clone.lock().await.clear();
                 }
                 AgentResponse::SessionsOverview(sessions) => {
                     *sessions_overview_clone.lock().await = sessions;

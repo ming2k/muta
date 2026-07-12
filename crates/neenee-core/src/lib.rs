@@ -63,7 +63,8 @@ pub mod pressure;
 pub mod principal;
 pub mod token_ledger;
 pub use token_ledger::{
-    TokenRound, TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
+    RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenRound,
+    TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
 };
 pub mod doomguardconfig;
 pub mod prompt;

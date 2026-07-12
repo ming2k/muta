@@ -94,6 +94,14 @@ pub struct EnvoyTool {
     /// exposed via [`EnvoyTool::registry`] so the binary that constructs the
     /// tool (and drives the harness) can hand the same `Arc` to the harness.
     registry: Arc<EnvoyRegistry>,
+    accounting: std::sync::Mutex<Option<EnvoyAccountingContext>>,
+}
+
+#[derive(Clone)]
+struct EnvoyAccountingContext {
+    ledger: Arc<neenee_core::TokenSourceLedger>,
+    session_id: Arc<std::sync::Mutex<Option<String>>>,
+    turn_counter: Arc<std::sync::Mutex<u64>>,
 }
 
 impl EnvoyTool {
@@ -112,7 +120,25 @@ impl EnvoyTool {
             profile,
             parent_variants: std::sync::Mutex::new(None),
             registry: Arc::new(EnvoyRegistry::default()),
+            accounting: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Bind the parent's session-scoped accounting handles. Each spawned
+    /// envoy gets its own actor id while sharing the session ledger, so nested
+    /// provider requests are visible without colliding with the principal's
+    /// turn/round numbers.
+    pub fn bind_accounting(
+        &self,
+        ledger: Arc<neenee_core::TokenSourceLedger>,
+        session_id: Arc<std::sync::Mutex<Option<String>>>,
+        turn_counter: Arc<std::sync::Mutex<u64>>,
+    ) {
+        *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) = Some(EnvoyAccountingContext {
+            ledger,
+            session_id,
+            turn_counter,
+        });
     }
 
     /// Bind the parent agent's variant-selection handle (the **override** axis)
@@ -305,6 +331,30 @@ impl EnvoyTool {
             SkillRegistry::empty(),
             identity,
         ));
+        if let Some(accounting) = self
+            .accounting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            let session_id = accounting
+                .session_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .unwrap_or_default();
+            let turn = *accounting
+                .turn_counter
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let actor = call_id
+                .map(|id| format!("envoy:{id}"))
+                .unwrap_or_else(|| format!("envoy:{}", uuid::Uuid::new_v4()));
+            envoy.set_thread_id(session_id);
+            envoy.restore_turn_count(turn);
+            envoy.set_accounting_actor_id(actor);
+            envoy.install_token_ledger(accounting.ledger);
+        }
         // A `task` envoy runs unobstructed: disable the deterministic
         // read-loop guard's nudge (ADR-0034) so a short-lived, parent-supervised
         // envoy is never steered by it. The parent and `abort` remain its

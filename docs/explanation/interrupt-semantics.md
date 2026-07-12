@@ -107,12 +107,12 @@ conversation context ends up identical to the pre-send state. Hidden control
 prompts (pursuit continuation, verify nudge) are not unsentable: they are
 harness-internal and are never surfaced as editable user input.
 
-This is billing-clean at the conversation layer (no assistant message enters
-history, so no future round re-sends phantom output, and the local token
-ledger records zero), with one caveat: the HTTP request was already on the
-wire, so the provider may still charge the *input* tokens for the cancelled
-request. Phase 1 unsend saves you a bad conversation round and all output
-tokens, but it cannot un-send the network packet. See
+This is clean at the conversation layer: no assistant message enters history,
+so no future round re-sends phantom output. The request ledger retains an
+`interrupted` attempt with an estimated prompt because the HTTP request was
+already on the wire and the provider may still charge its input. Phase 1
+unsend saves a bad conversation round and future output tokens, but it cannot
+un-send the network packet. See
 [Billing reality](#billing-reality).
 
 ### Phase 2 — Local (stream rendering)
@@ -147,8 +147,9 @@ consequences are precise and important:
   are never converted into a `Message`.
 - No assistant message enters `messages`, so it never enters `turn_history`,
   so it is never persisted and never sent in any future request's context.
-- `book_turn_usage` is never called, so the token ledger records **zero**
-  for this round locally.
+- No terminal provider usage is normally available. The request attempt is
+  retained as `interrupted`, using the pre-wire prompt estimate plus observed
+  output as an explicitly estimated total.
 - On the wire, the SSE connection is dropped (the `stream` binding goes out
   of scope), which the provider treats as a stop signal.
 
@@ -191,32 +192,27 @@ wire-valid form before any provider sees it.
 
 ## Interrupted turns and the token ledger
 
-Because `book_turn_usage` sits after the streaming loop, an interrupt in
-Phase 1 or Phase 2 means the round is recorded as **zero tokens** locally —
-the authoritative `usage` chunk never arrived and the local estimator never
-ran on a finalized message. This is by design (there is no finalized message
-to estimate), but it produces a known divergence:
+Every provider request enters the ledger before it goes on the wire. An
+interrupt changes that same attempt from `in_flight` to `interrupted`.
 
-> **The local token ledger under-counts interrupted turns; the real bill is
-> higher than the ledger shows.**
+If a provider usage event arrived before cancellation, the attempt retains the
+reported counts. Otherwise it uses the pre-wire prompt estimate plus observed
+output and labels the result estimated. The exact provider invoice remains
+unrecoverable without a terminal usage event, but the attempt no longer
+disappears or masquerades as a precise zero.
 
-Phase 3 interrupts are the exception: if the assistant message was pushed
-before the interrupt, its usage *may* already have been captured if the
-provider reported it mid-stream (`streamed_usage`), but typically the
-`usage` event is the terminal one that got cut off, so Phase 3 is also
-usually under-counted. The [Token accounting](agent-design/token-accounting.md)
-page covers the reported-vs-estimated distinction for *completed* turns;
-interrupted turns are simply un-reported, and there is no client-side way to
-recover the exact number.
+After cleanup, current context is recomputed from the final committed history.
+An unsend therefore removes the user message from current context immediately;
+discarded partial output never contributes to it.
 
 ## Billing reality
 
 An interrupt optimizes the *conversation* and the *local accounting*, not
 the *invoice*. Three layers, three different truths:
 
-**1. neenee's local ledger** — records zero for an interrupted round (Phase 1
-and 2) because `book_turn_usage` never runs. This is the number shown in the
-UI. It is a lower bound.
+**1. neenee's local ledger** — records an interrupted attempt. It uses reported
+usage when available and otherwise shows an explicit estimate. The estimate is
+diagnostic, not a provider invoice.
 
 **2. The provider's real invoice** — is computed server-side from what the
 model actually processed and produced, independent of whether the client
@@ -297,8 +293,9 @@ unused.
   marker; **Phase 3** (tool execution) keeps the committed assistant message
   but drops the tool results, and provider serialization self-heals the
   dangling tool calls.
-- Interrupted turns record **zero** in the local token ledger but are
-  **not free** on the real invoice: input always bills, a few output
-  tokens bill, the bulk of un-generated output does not.
+- Interrupted turns remain visible in the local request ledger. Without a
+  terminal usage event their totals are estimated, while the real invoice may
+  differ: input usually bills, some generated output may bill, and the bulk of
+  un-generated output does not.
 - No "interrupted" marker is injected into context — omission is cheaper,
   clearer, and avoids steering the model.

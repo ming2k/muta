@@ -91,6 +91,12 @@ pub enum SessionEvent {
     /// semantics. Mirrors `Agent::turn_counter` so a resumed session's todo
     /// stale-detector comparisons stay valid.
     TurnCounterSet { counter: u64 },
+    /// Insert or replace one lifecycle-aware request attempt. The key makes
+    /// replay idempotent and avoids rewriting the full ledger on every stream
+    /// boundary.
+    RequestUsageUpsert {
+        record: neenee_core::RequestUsageRecord,
+    },
     /// The session-scoped provider + model pin changed (C6). `selection = None`
     /// means "follow the global default". Snapshot semantics. Set by the
     /// `/provider` switch handler so the session reopens on its own provider

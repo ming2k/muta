@@ -188,6 +188,7 @@ pub struct Agent {
     input: std::sync::Mutex<InputState>,
     pub(crate) skills_registry: skills::SkillRegistry,
     thread_id: Arc<std::sync::Mutex<Option<String>>>,
+    accounting_actor_id: std::sync::Mutex<String>,
     /// Context-pressure threshold (in tokens) above which the harness asks the
     /// [`ContextProjectionGate`] to project the model-visible window between
     /// tool rounds. `0` disables mid-turn projection. Derived from the active
@@ -411,6 +412,92 @@ impl TurnState {
     }
 }
 
+/// RAII settlement for one concrete provider request. Any early-return path
+/// (interrupt, timeout, provider error, invalid response) still terminally
+/// records the attempt; normal completion explicitly settles it with the
+/// provider usage or the local fallback estimate.
+struct RequestAccountingGuard {
+    ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
+    key: Option<neenee_core::RequestUsageKey>,
+    cancel: CancellationToken,
+    projected_prompt_tokens: i64,
+    observed_completion_tokens: i64,
+    observed_usage: Option<TokenUsage>,
+    settled: bool,
+}
+
+impl RequestAccountingGuard {
+    fn begin(
+        agent: &Agent,
+        cancel: &CancellationToken,
+        provider: &str,
+        model: &str,
+        tool_rounds: usize,
+        projected_prompt_tokens: usize,
+    ) -> Self {
+        let ledger = agent.token_ledger();
+        let key = ledger.as_ref().map(|ledger| {
+            ledger.begin_request_for_actor(
+                &agent.thread_id().unwrap_or_default(),
+                &agent.accounting_actor_id(),
+                provider,
+                model,
+                agent.turn_count(),
+                tool_rounds.saturating_add(1) as u32,
+                projected_prompt_tokens as i64,
+            )
+        });
+        Self {
+            ledger,
+            key,
+            cancel: cancel.clone(),
+            projected_prompt_tokens: projected_prompt_tokens as i64,
+            observed_completion_tokens: 0,
+            observed_usage: None,
+            settled: false,
+        }
+    }
+
+    fn observe_output(&mut self, text: &str) {
+        self.observed_completion_tokens = self
+            .observed_completion_tokens
+            .saturating_add(pressure::estimate_string_tokens(text));
+    }
+
+    fn observe_usage(&mut self, usage: TokenUsage) {
+        self.observed_usage = Some(usage);
+    }
+
+    fn settle(
+        &mut self,
+        status: neenee_core::RequestUsageStatus,
+        usage: Option<TokenUsage>,
+        estimated_completion_tokens: i64,
+    ) {
+        if self.settled {
+            return;
+        }
+        if let (Some(ledger), Some(key)) = (&self.ledger, &self.key) {
+            ledger.settle_request(key, status, usage, estimated_completion_tokens);
+        }
+        self.settled = true;
+    }
+}
+
+impl Drop for RequestAccountingGuard {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let status = if self.cancel.is_cancelled() {
+            neenee_core::RequestUsageStatus::Interrupted
+        } else {
+            neenee_core::RequestUsageStatus::Failed
+        };
+        self.settle(status, self.observed_usage, self.observed_completion_tokens);
+    }
+}
+
 /// Construction-time configuration for an [`Agent`].
 ///
 /// Prompt policy is assembled before the agent starts running and is immutable
@@ -596,6 +683,7 @@ impl Agent {
             input: std::sync::Mutex::new(InputState::default()),
             skills_registry,
             thread_id,
+            accounting_actor_id: std::sync::Mutex::new("principal".to_string()),
             context_prune_threshold_tokens: Arc::new(std::sync::Mutex::new(0)),
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
@@ -893,77 +981,29 @@ impl Agent {
         state: &mut TurnState,
         response: &Message,
         streamed_usage: Option<TokenUsage>,
-        tool_rounds: usize,
-    ) -> Option<usize> {
-        let provider_id = self.provider.provider_id();
-        let model = self.provider.model();
+        request: &mut RequestAccountingGuard,
+    ) {
         // Prefer the usage the provider reported (streamed, then drained).
         let reported = streamed_usage.or_else(|| self.provider.take_last_usage());
-        let turn = self.turn_count();
-        let round = tool_rounds.saturating_add(1) as u32;
         if let Some(usage) = reported {
             state.token_usage.total_tokens += usage.total_tokens;
             state.token_usage.prompt_tokens += usage.prompt_tokens;
             state.token_usage.completion_tokens += usage.completion_tokens;
             state.token_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
             state.token_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
-            if let Some(ledger) = self
-                .token_ledger
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-            {
-                // Use the round overload so the report can surface the per-turn
-                // line item and cache hit-rate; the cache write/read counts are
-                // already included in usage.total_tokens (folded in by the
-                // provider's usage parser), so they're tracked here as a
-                // *breakout*, not added again.
-                ledger.record_round(
-                    &provider_id,
-                    &model,
-                    neenee_core::TokenRound {
-                        turn,
-                        round,
-                        reported: true,
-                        prompt_tokens: usage.prompt_tokens,
-                        completion_tokens: usage.completion_tokens,
-                        total_tokens: usage.total_tokens.max(1),
-                        cache_write_tokens: usage.cache_creation_input_tokens,
-                        cache_read_tokens: usage.cache_read_input_tokens,
-                    },
-                );
-            }
-            return Some(
-                usage
-                    .prompt_tokens
-                    .saturating_add(usage.completion_tokens)
-                    .max(0) as usize,
-            );
+            request.settle(neenee_core::RequestUsageStatus::Completed, Some(usage), 0);
         } else {
-            // No upstream usage: fall back to the local estimator and mark the
-            // turn as estimated so the report reflects reality.
-            let estimated = pressure::estimate_message_tokens(response);
+            // Estimate both sides of the request. The old fallback counted
+            // only the assistant response while the reported path counted
+            // prompt + completion, making mixed-source totals incomparable.
+            let completion = pressure::estimate_message_tokens(response).max(0);
+            let prompt = request.projected_prompt_tokens.max(0);
+            let estimated = prompt.saturating_add(completion);
             state.token_usage.total_tokens += estimated;
-            if let Some(ledger) = self
-                .token_ledger
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-            {
-                ledger.record_round(
-                    &provider_id,
-                    &model,
-                    neenee_core::TokenRound {
-                        turn,
-                        round,
-                        reported: false,
-                        total_tokens: estimated,
-                        ..Default::default()
-                    },
-                );
-            }
+            state.token_usage.prompt_tokens += prompt;
+            state.token_usage.completion_tokens += completion;
+            request.settle(neenee_core::RequestUsageStatus::Completed, None, completion);
         }
-        None
     }
 
     /// Install the lifecycle hook registry (ADR-0025). Replaces any prior
@@ -1108,6 +1148,28 @@ impl Agent {
 
     pub fn set_thread_id(&self, thread_id: impl Into<String>) {
         *self.thread_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(thread_id.into());
+    }
+
+    pub fn thread_id_handle(&self) -> Arc<std::sync::Mutex<Option<String>>> {
+        Arc::clone(&self.thread_id)
+    }
+
+    pub fn turn_counter_handle(&self) -> Arc<std::sync::Mutex<u64>> {
+        Arc::clone(&self.turn_counter)
+    }
+
+    pub fn set_accounting_actor_id(&self, actor_id: impl Into<String>) {
+        *self
+            .accounting_actor_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = actor_id.into();
+    }
+
+    fn accounting_actor_id(&self) -> String {
+        self.accounting_actor_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn clear_thread_id(&self) {
@@ -1802,9 +1864,20 @@ impl Agent {
             // `[hooks]` config (envoys, tests).
             self.run_round_start_hooks(messages, &state, tool_rounds)
                 .await;
+            let request_projection = self.estimate_next_request_tokens(messages).total_tokens;
+            let request_provider = self.provider.provider_id();
+            let request_model = self.provider.model();
+            let mut request_accounting = RequestAccountingGuard::begin(
+                self,
+                cancel,
+                &request_provider,
+                &request_model,
+                tool_rounds,
+                request_projection,
+            );
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
-                context_tokens: self.estimate_next_request_tokens(messages).total_tokens,
+                context_tokens: request_projection,
             });
 
             let response = match tokio::time::timeout(
@@ -1831,16 +1904,7 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
-            if let Some(context_tokens) =
-                self.book_turn_usage(&mut state, &response, None, tool_rounds)
-            {
-                on_event(AgentEvent::ContextTokens(
-                    neenee_core::ContextTokenSnapshot {
-                        tokens: context_tokens,
-                        source: neenee_core::ContextTokenSource::Api,
-                    },
-                ));
-            }
+            self.book_turn_usage(&mut state, &response, None, &mut request_accounting);
             messages.push(response.clone());
 
             // The model produced no text stream, so nothing was shown to the UI
@@ -1942,9 +2006,20 @@ impl Agent {
             self.run_round_start_hooks(messages, &state, tool_rounds)
                 .await;
             tracing::debug!(tool_round = tool_rounds, "requesting model completion");
+            let request_projection = self.estimate_next_request_tokens(messages).total_tokens;
+            let request_provider = self.provider.provider_id();
+            let request_model = self.provider.model();
+            let mut request_accounting = RequestAccountingGuard::begin(
+                self,
+                cancel,
+                &request_provider,
+                &request_model,
+                tool_rounds,
+                request_projection,
+            );
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
-                context_tokens: self.estimate_next_request_tokens(messages).total_tokens,
+                context_tokens: request_projection,
             });
             // Race the model request against cancellation so an interrupt
             // while we're waiting on the network resolves promptly instead of
@@ -2018,6 +2093,7 @@ impl Agent {
                         };
                         match event? {
                             ProviderStreamEvent::TextDelta(delta) => {
+                                request_accounting.observe_output(&delta);
                                 content.push_str(&delta);
                                 on_event(AgentEvent::AssistantDelta {
                                     delta,
@@ -2026,6 +2102,7 @@ impl Agent {
                                 emitted_text = true;
                             }
                             ProviderStreamEvent::ReasoningDelta(delta) => {
+                                request_accounting.observe_output(&delta);
                                 reasoning_content.push_str(&delta);
                                 on_event(AgentEvent::ReasoningDelta {
                                     delta,
@@ -2051,14 +2128,17 @@ impl Agent {
                                     call.id.push_str(&id);
                                 }
                                 if let Some(name) = name {
+                                    request_accounting.observe_output(&name);
                                     call.name.push_str(&name);
                                 }
+                                request_accounting.observe_output(&arguments);
                                 call.arguments.push_str(&arguments);
                             }
                             ProviderStreamEvent::Usage(usage) => {
                                 // Take the last reported usage (providers may
                                 // emit one final usage chunk). Prefer it over
                                 // the local estimate at booking time.
+                                request_accounting.observe_usage(usage);
                                 streamed_usage = Some(usage);
                             }
                         }
@@ -2090,8 +2170,8 @@ impl Agent {
                 // Stamp which provider/model produced this turn so a session
                 // that mixes models stays traceable after resume. The proxy
                 // provider delegates to whichever concrete provider is active.
-                provider: Some(self.provider.provider_id()),
-                model: Some(self.provider.model()),
+                provider: Some(request_provider),
+                model: Some(request_model),
                 // Drain any provider-opaque wire credential the turn
                 // accumulated (e.g. the Anthropic thinking signature) so the
                 // next replay re-emits it verbatim. None for providers that
@@ -2107,16 +2187,12 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
-            if let Some(context_tokens) =
-                self.book_turn_usage(&mut state, &response, streamed_usage.take(), tool_rounds)
-            {
-                on_event(AgentEvent::ContextTokens(
-                    neenee_core::ContextTokenSnapshot {
-                        tokens: context_tokens,
-                        source: neenee_core::ContextTokenSource::Api,
-                    },
-                ));
-            }
+            self.book_turn_usage(
+                &mut state,
+                &response,
+                streamed_usage.take(),
+                &mut request_accounting,
+            );
             messages.push(response.clone());
 
             // `emitted_text` means assistant text was already streamed to the

@@ -631,6 +631,13 @@ pub async fn execute_round(
         retry_base_ms,
         retry_max_ms,
     } = context;
+    // Bind accounting to the session that admitted this turn. The principal
+    // agent survives `/session open` and `/resume`, so its construction-time
+    // thread id is not sufficient for attribution.
+    agent.set_thread_id(session_id.clone());
+    if let Some(ledger) = agent.token_ledger() {
+        ledger.set_active_session(session_id.clone());
+    }
     // Bump the harness turn counter first thing so anything that reads it
     // during this turn (e.g. the `todo` / `todo_update` tools stamping
     // `updated_at_turn`) sees the new value. The TUI's stale detector
@@ -714,10 +721,22 @@ pub async fn execute_round(
     // delegates to `SessionStore::append_turn`, which writes only the delta.
     {
         let session_for_round = Arc::clone(&session);
+        let accounting_ledger = agent.token_ledger();
+        let accounting_session_id = session_id.clone();
         agent.set_turn_persist(Arc::new(move |messages: &[Message]| {
             let session = Arc::clone(&session_for_round);
             let snapshot = messages.to_vec();
-            Box::pin(async move { session.append_turn(&snapshot).await })
+            let ledger = accounting_ledger.clone();
+            let session_id = accounting_session_id.clone();
+            Box::pin(async move {
+                session.append_turn(&snapshot).await?;
+                if let Some(ledger) = ledger {
+                    session
+                        .set_request_usage_records(ledger.records_for_session(&session_id))
+                        .await?;
+                }
+                Ok(())
+            })
         }));
     }
     let _ = tx.send(turn(
@@ -769,10 +788,32 @@ pub async fn execute_round(
         attempt += 1;
         let activity_for_run = tool_activity.clone();
         let streamed_for_run = streamed_text.clone();
+        let accounting_ledger = agent.token_ledger();
+        let accounting_session = Arc::clone(&session);
+        let accounting_session_id = session_id.clone();
         let result = agent
             .run_streaming_with_events(&mut turn_history, &token, |event| {
                 if matches!(event, AgentEvent::ToolCall { .. }) {
                     activity_for_run.store(true, Ordering::SeqCst);
+                }
+                if matches!(event, AgentEvent::ModelRequestStarted { .. })
+                    && let Some(ledger) = accounting_ledger.clone()
+                {
+                    // Persist the in-flight state without blocking streaming.
+                    // The task reads the ledger when it runs, so if completion
+                    // races ahead it writes the newer terminal record rather
+                    // than overwriting it with a stale in-flight snapshot.
+                    let session = Arc::clone(&accounting_session);
+                    let session_id = accounting_session_id.clone();
+                    tokio::spawn(async move {
+                        let records = ledger.records_for_session(&session_id);
+                        if let Err(error) = session.set_request_usage_records(records).await {
+                            tracing::warn!(
+                                %error,
+                                "could not persist in-flight request usage"
+                            );
+                        }
+                    });
                 }
                 relay_agent_event(&tx, &session_id, event, &streamed_for_run);
             })
@@ -781,6 +822,9 @@ pub async fn execute_round(
         let Err(error) = result else {
             break result;
         };
+        if let Err(error) = persist_request_usage(&agent, &session, &session_id).await {
+            tracing::warn!(%error, "could not persist request usage after failed attempt");
+        }
         if matches!(error, HarnessError::ContextOverflow(_))
             && !compacted_after_overflow
             && !tool_activity.load(Ordering::SeqCst)
@@ -915,6 +959,8 @@ pub async fn execute_round(
         {
             turn_history.pop();
             session.replace_messages(turn_history).await?;
+            persist_request_usage(&agent, &session, &session_id).await?;
+            send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
             let _ = tx.send(turn(
                 &session_id,
                 RoundEvent::UnsentInput {
@@ -933,6 +979,12 @@ pub async fn execute_round(
         RoundEvent::Activity("saving response".to_string()),
     ));
     session.replace_messages(turn_history).await?;
+    persist_request_usage(&agent, &session, &session_id).await?;
+    // Publish from the final committed history on every terminal path. This
+    // reconciles the pre-wire estimate after interruption, tool cancellation,
+    // or response commit instead of leaving the meter anchored to a request
+    // shape that is no longer AI-visible.
+    send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
     let outcome = result?;
 
     // Marker-based completion: if the model explicitly emitted the completion
@@ -1045,6 +1097,35 @@ pub async fn execute_round(
     }
 
     Ok(completed)
+}
+
+fn send_context_projection(
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: &str,
+    agent: &Agent,
+    messages: &[Message],
+) {
+    let tokens = agent.estimate_next_request_tokens(messages).total_tokens;
+    let _ = tx.send(turn(
+        session_id,
+        RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+            tokens,
+            source: neenee_core::ContextTokenSource::Projection,
+        }),
+    ));
+}
+
+async fn persist_request_usage(
+    agent: &Agent,
+    session: &SessionStore,
+    session_id: &str,
+) -> Result<(), String> {
+    let Some(ledger) = agent.token_ledger() else {
+        return Ok(());
+    };
+    session
+        .set_request_usage_records(ledger.records_for_session(session_id))
+        .await
 }
 
 pub fn retry_delay_ms(

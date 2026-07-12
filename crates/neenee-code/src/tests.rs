@@ -210,14 +210,17 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
         SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
+    let ledger = neenee_core::TokenSourceLedger::shared();
+    agent.install_token_ledger(ledger.clone());
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
 
     let completed = execute_round(
         RoundContext {
             agent,
             tx,
             token: CancellationToken::new(),
-            session_id: session.id().await,
+            session_id: session_id.clone(),
             session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
@@ -287,6 +290,16 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             ..
         }
     )));
+    let attempts = ledger.records_for_session(&session_id);
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].key.attempt, 1);
+    assert_eq!(attempts[0].status, neenee_core::RequestUsageStatus::Failed);
+    assert_eq!(attempts[1].key.attempt, 2);
+    assert_eq!(
+        attempts[1].status,
+        neenee_core::RequestUsageStatus::Completed
+    );
+    assert_eq!(session.request_usage_records().await, attempts);
     let _ = std::fs::remove_dir_all(directory);
 }
 

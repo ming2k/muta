@@ -13,6 +13,106 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+/// Lifecycle state of one concrete provider request attempt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestUsageStatus {
+    #[default]
+    InFlight,
+    Completed,
+    Interrupted,
+    Failed,
+    /// Restored after a crash while the request was still marked in-flight.
+    Abandoned,
+}
+
+impl RequestUsageStatus {
+    pub fn is_terminal(self) -> bool {
+        self != Self::InFlight
+    }
+}
+
+/// Provenance of the counts attached to a request attempt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestUsageSource {
+    #[default]
+    Unknown,
+    Reported,
+    Estimated,
+}
+
+/// Stable identity of a concrete network attempt. A model round may have
+/// multiple attempts when the transport retries; those attempts can each be
+/// billed and therefore must never overwrite one another.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RequestUsageKey {
+    pub session_id: String,
+    #[serde(default = "default_request_actor")]
+    pub actor_id: String,
+    /// User-perceived exchange (ADR-0047 vocabulary).
+    pub round: u64,
+    /// Model request within the round.
+    pub turn: u32,
+    pub attempt: u32,
+}
+
+fn default_request_actor() -> String {
+    "principal".to_string()
+}
+
+/// One request attempt's lifecycle and token accounting. This is the durable
+/// fact from which provider/model and turn-level aggregates are derived.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestUsageRecord {
+    pub key: RequestUsageKey,
+    pub provider: String,
+    pub model: String,
+    pub status: RequestUsageStatus,
+    pub source: RequestUsageSource,
+    /// Estimate of the exact pre-wire request input. Kept even after reported
+    /// usage arrives so the UI can explain estimate-vs-provider drift.
+    pub projected_prompt_tokens: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub cache_read_tokens: i64,
+}
+
+impl RequestUsageRecord {
+    fn totals(&self) -> TokenSourceTotals {
+        match self.source {
+            RequestUsageSource::Reported => TokenSourceTotals {
+                reported_tokens: self.total_tokens,
+                prompt_tokens: self.prompt_tokens,
+                completion_tokens: self.completion_tokens,
+                cache_write_tokens: self.cache_write_tokens,
+                cache_read_tokens: self.cache_read_tokens,
+                ..Default::default()
+            },
+            RequestUsageSource::Estimated => TokenSourceTotals {
+                estimated_tokens: self.total_tokens,
+                ..Default::default()
+            },
+            RequestUsageSource::Unknown => TokenSourceTotals::default(),
+        }
+    }
+
+    fn as_round(&self) -> TokenRound {
+        TokenRound {
+            turn: self.key.round,
+            round: self.key.turn,
+            reported: self.source == RequestUsageSource::Reported,
+            prompt_tokens: self.prompt_tokens,
+            completion_tokens: self.completion_tokens,
+            total_tokens: self.total_tokens,
+            cache_write_tokens: self.cache_write_tokens,
+            cache_read_tokens: self.cache_read_tokens,
+        }
+    }
+}
+
 /// One provider+model pair's accumulated token totals, split by source.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenSourceTotals {
@@ -103,6 +203,15 @@ pub struct TokenSourceLedger {
     /// `(provider, model)` → accumulator (totals + per-round line items). A
     /// [`BTreeMap`] so the report iterates in a stable order.
     entries: Mutex<BTreeMap<(String, String), Entry>>,
+    /// Lifecycle-aware request records. Legacy `record*` callers continue to
+    /// use `entries`; production request accounting uses this keyed map so a
+    /// terminal event updates exactly one attempt and duplicate events are
+    /// idempotent.
+    requests: Mutex<BTreeMap<RequestUsageKey, RequestUsageRecord>>,
+    /// Session selected by the harness. `snapshot()` filters lifecycle records
+    /// to this id, preventing usage from another opened session leaking into
+    /// the current report.
+    active_session: Mutex<Option<String>>,
 }
 
 impl TokenSourceLedger {
@@ -114,6 +223,158 @@ impl TokenSourceLedger {
     /// ledger).
     pub fn shared() -> Arc<Self> {
         Arc::new(Self::new())
+    }
+
+    pub fn set_active_session(&self, session_id: impl Into<String>) {
+        *self
+            .active_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(session_id.into());
+    }
+
+    pub fn active_session(&self) -> Option<String> {
+        self.active_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Insert an in-flight request and allocate the next attempt number for
+    /// its `(session, actor, round, turn)` tuple.
+    pub fn begin_request(
+        &self,
+        session_id: &str,
+        provider: &str,
+        model: &str,
+        round: u64,
+        turn: u32,
+        projected_prompt_tokens: i64,
+    ) -> RequestUsageKey {
+        self.begin_request_for_actor(
+            session_id,
+            "principal",
+            provider,
+            model,
+            round,
+            turn,
+            projected_prompt_tokens,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_request_for_actor(
+        &self,
+        session_id: &str,
+        actor_id: &str,
+        provider: &str,
+        model: &str,
+        round: u64,
+        turn: u32,
+        projected_prompt_tokens: i64,
+    ) -> RequestUsageKey {
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        let attempt = requests
+            .keys()
+            .filter(|key| {
+                key.session_id == session_id
+                    && key.actor_id == actor_id
+                    && key.round == round
+                    && key.turn == turn
+            })
+            .map(|key| key.attempt)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let key = RequestUsageKey {
+            session_id: session_id.to_string(),
+            actor_id: actor_id.to_string(),
+            round,
+            turn,
+            attempt,
+        };
+        requests.insert(
+            key.clone(),
+            RequestUsageRecord {
+                key: key.clone(),
+                provider: provider.to_string(),
+                model: model.to_string(),
+                status: RequestUsageStatus::InFlight,
+                source: RequestUsageSource::Unknown,
+                projected_prompt_tokens: projected_prompt_tokens.max(0),
+                ..Default::default()
+            },
+        );
+        key
+    }
+
+    /// Terminally settle one attempt. Replaying the same event is harmless;
+    /// authoritative reported usage can upgrade an estimate, but an estimate
+    /// can never downgrade an already reported record.
+    pub fn settle_request(
+        &self,
+        key: &RequestUsageKey,
+        status: RequestUsageStatus,
+        usage: Option<crate::TokenUsage>,
+        estimated_completion_tokens: i64,
+    ) {
+        if !status.is_terminal() {
+            return;
+        }
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(record) = requests.get_mut(key) else {
+            return;
+        };
+        if record.status.is_terminal() && record.source == RequestUsageSource::Reported {
+            return;
+        }
+        record.status = status;
+        if let Some(usage) = usage {
+            record.source = RequestUsageSource::Reported;
+            record.prompt_tokens = usage.prompt_tokens.max(0);
+            record.completion_tokens = usage.completion_tokens.max(0);
+            record.total_tokens = usage.total_tokens.max(0);
+            record.cache_write_tokens = usage.cache_creation_input_tokens.max(0);
+            record.cache_read_tokens = usage.cache_read_input_tokens.max(0);
+        } else {
+            record.source = RequestUsageSource::Estimated;
+            record.prompt_tokens = record.projected_prompt_tokens.max(0);
+            record.completion_tokens = estimated_completion_tokens.max(0);
+            record.total_tokens = record
+                .prompt_tokens
+                .saturating_add(record.completion_tokens);
+        }
+    }
+
+    /// Owned lifecycle records for one session, in stable request order.
+    pub fn records_for_session(&self, session_id: &str) -> Vec<RequestUsageRecord> {
+        let mut records = self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|record| record.key.session_id == session_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by(|a, b| request_display_order(a).cmp(&request_display_order(b)));
+        records
+    }
+
+    /// Replace one session's records from durable state. Any persisted
+    /// in-flight request is crash residue and becomes `Abandoned` with an
+    /// estimated prompt lower-bound before being exposed.
+    pub fn restore_session(&self, session_id: &str, records: Vec<RequestUsageRecord>) {
+        let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        requests.retain(|key, _| key.session_id != session_id);
+        for mut record in records {
+            record.key.session_id = session_id.to_string();
+            if record.status == RequestUsageStatus::InFlight {
+                record.status = RequestUsageStatus::Abandoned;
+                record.source = RequestUsageSource::Estimated;
+                record.prompt_tokens = record.projected_prompt_tokens.max(0);
+                record.total_tokens = record.prompt_tokens;
+            }
+            requests.insert(record.key.clone(), record);
+        }
     }
 
     /// Book one turn as a line item — the single entry point all the public
@@ -206,16 +467,59 @@ impl TokenSourceLedger {
 
     /// A snapshot of the ledger suitable for rendering (owned, no lock held).
     pub fn snapshot(&self) -> TokenSourceReport {
+        let active_session = self.active_session();
+        self.snapshot_filtered(active_session.as_deref())
+    }
+
+    pub fn snapshot_for_session(&self, session_id: &str) -> TokenSourceReport {
+        self.snapshot_filtered(Some(session_id))
+    }
+
+    fn snapshot_filtered(&self, session_id: Option<&str>) -> TokenSourceReport {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let rows: Vec<TokenSourceRow> = entries
+        let mut rows: Vec<TokenSourceRow> = entries
             .iter()
             .map(|((provider, model), entry)| TokenSourceRow {
                 provider: provider.to_string(),
                 model: model.to_string(),
                 totals: entry.totals,
                 rounds: entry.rounds.clone(),
+                requests: Vec::new(),
             })
             .collect();
+        drop(entries);
+
+        let requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        for record in requests.values().filter(|record| {
+            session_id.is_none_or(|session_id| record.key.session_id == session_id)
+        }) {
+            let row = if let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.provider == record.provider && row.model == record.model)
+            {
+                row
+            } else {
+                let index = rows.len();
+                rows.push(TokenSourceRow {
+                    provider: record.provider.clone(),
+                    model: record.model.clone(),
+                    totals: TokenSourceTotals::default(),
+                    rounds: Vec::new(),
+                    requests: Vec::new(),
+                });
+                &mut rows[index]
+            };
+            row.requests.push(record.clone());
+            if record.status.is_terminal() {
+                row.totals.add(record.totals());
+                row.rounds.push(record.as_round());
+            }
+        }
+        rows.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
+        for row in &mut rows {
+            row.requests
+                .sort_by(|a, b| request_display_order(a).cmp(&request_display_order(b)));
+        }
         let grand_total =
             rows.iter()
                 .map(|r| r.totals)
@@ -227,6 +531,16 @@ impl TokenSourceLedger {
     }
 }
 
+fn request_display_order(record: &RequestUsageRecord) -> (u64, u8, u32, u32, &str) {
+    (
+        record.key.round,
+        u8::from(record.key.actor_id != "principal"),
+        record.key.turn,
+        record.key.attempt,
+        record.key.actor_id.as_str(),
+    )
+}
+
 /// One row of the report: a single provider+model and its source split.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenSourceRow {
@@ -235,6 +549,8 @@ pub struct TokenSourceRow {
     pub totals: TokenSourceTotals,
     /// The ordered per-turn line items behind `totals`.
     pub rounds: Vec<TokenRound>,
+    /// Lifecycle-aware attempts behind this provider/model row.
+    pub requests: Vec<RequestUsageRecord>,
 }
 
 /// A full snapshot of the ledger: per-row breakdown + a grand total.
@@ -247,6 +563,78 @@ pub struct TokenSourceReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_attempts_are_keyed_idempotent_and_session_scoped() {
+        let ledger = TokenSourceLedger::new();
+        let first = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
+        let retry = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
+        let other = ledger.begin_request("s2", "anthropic", "claude", 1, 1, 500);
+        let envoy =
+            ledger.begin_request_for_actor("s1", "envoy:call-1", "openai", "gpt", 3, 1, 300);
+        assert_eq!(first.attempt, 1);
+        assert_eq!(retry.attempt, 2);
+        assert_eq!(other.attempt, 1);
+        assert_eq!(envoy.attempt, 1, "a distinct actor has its own attempts");
+
+        ledger.settle_request(&first, RequestUsageStatus::Failed, None, 25);
+        ledger.settle_request(
+            &retry,
+            RequestUsageStatus::Completed,
+            Some(crate::TokenUsage {
+                prompt_tokens: 990,
+                completion_tokens: 110,
+                total_tokens: 1_100,
+                ..Default::default()
+            }),
+            0,
+        );
+        // A duplicate weaker terminal event cannot downgrade reported usage.
+        ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 999);
+        ledger.settle_request(&envoy, RequestUsageStatus::Completed, None, 30);
+
+        let report = ledger.snapshot_for_session("s1");
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].requests.len(), 3);
+        assert_eq!(report.rows[0].totals.reported_tokens, 1_100);
+        assert_eq!(report.rows[0].totals.estimated_tokens, 1_355);
+        assert_eq!(
+            report.rows[0].requests[1].status,
+            RequestUsageStatus::Completed
+        );
+        assert_eq!(
+            report.rows[0].requests[1].source,
+            RequestUsageSource::Reported
+        );
+    }
+
+    #[test]
+    fn restore_marks_crash_residue_abandoned() {
+        let ledger = TokenSourceLedger::new();
+        let key = RequestUsageKey {
+            session_id: "old".to_string(),
+            actor_id: "principal".to_string(),
+            round: 4,
+            turn: 2,
+            attempt: 1,
+        };
+        ledger.restore_session(
+            "restored",
+            vec![RequestUsageRecord {
+                key,
+                provider: "relay".to_string(),
+                model: "model".to_string(),
+                status: RequestUsageStatus::InFlight,
+                projected_prompt_tokens: 700,
+                ..Default::default()
+            }],
+        );
+        let records = ledger.records_for_session("restored");
+        assert_eq!(records[0].status, RequestUsageStatus::Abandoned);
+        assert_eq!(records[0].source, RequestUsageSource::Estimated);
+        assert_eq!(records[0].prompt_tokens, 700);
+        assert_eq!(records[0].total_tokens, 700);
+    }
 
     #[test]
     fn records_reported_and_estimated_separately() {

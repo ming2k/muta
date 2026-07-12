@@ -536,6 +536,65 @@ async fn stalled_provider_stream_times_out_as_retryable() {
     );
 }
 
+#[tokio::test]
+async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
+    struct PendingProvider;
+    #[async_trait]
+    impl Provider for PendingProvider {
+        async fn chat(&self, _: Vec<Message>) -> Result<Message, String> {
+            unreachable!("streaming path should be used")
+        }
+        async fn stream_chat(
+            &self,
+            _: Vec<Message>,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::pending()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _: Vec<Message>,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            Ok(Box::pin(stream::pending()))
+        }
+    }
+
+    let agent = Agent::new(
+        Arc::new(PendingProvider),
+        Vec::new(),
+        crate::skills::SkillRegistry::empty(),
+        crate::AgentIdentity::default(),
+    );
+    agent.set_thread_id("interrupt-session");
+    agent.bump_turn();
+    let ledger = neenee_core::TokenSourceLedger::shared();
+    agent.install_token_ledger(ledger.clone());
+    let token = CancellationToken::new();
+    let cancel_on_start = token.clone();
+    let mut messages = vec![Message::new(Role::User, "hello")];
+
+    let result = agent
+        .run_streaming_with_events(&mut messages, &token, |event| {
+            if matches!(event, AgentEvent::ModelRequestStarted { .. }) {
+                cancel_on_start.cancel();
+            }
+        })
+        .await;
+
+    assert!(matches!(result, Err(HarnessError::Interrupted)));
+    let records = ledger.records_for_session("interrupt-session");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].status,
+        neenee_core::RequestUsageStatus::Interrupted
+    );
+    assert_eq!(
+        records[0].source,
+        neenee_core::RequestUsageSource::Estimated
+    );
+    assert!(records[0].prompt_tokens > 0);
+    assert_eq!(records[0].completion_tokens, 0);
+}
+
 /// A provider whose `stream_chat_events` future never resolves simulates a
 /// server that accepts the TCP connection but never sends HTTP response
 /// headers (overloaded upstream, dropped proxy). Without the idle-timeout on

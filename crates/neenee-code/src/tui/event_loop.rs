@@ -131,7 +131,7 @@ pub(super) struct UiRuntime {
     pub current_provider: Arc<Mutex<String>>,
     pub current_model: Arc<Mutex<String>>,
     /// Latest AI-visible context size for the primary session.
-    pub context_tokens: Arc<Mutex<Option<neenee_core::ContextTokenSnapshot>>>,
+    pub context_tokens: Arc<Mutex<HashMap<String, neenee_core::ContextTokenSnapshot>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     pub activity_status: Arc<Mutex<String>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
@@ -855,7 +855,6 @@ pub(super) async fn run_app_loop(
             );
         }
         app.parent_status = *runtime.parent_status.lock().await;
-        app.context_tokens = *runtime.context_tokens.lock().await;
         // Drain a pending side-view transition (enter/leave `/btw`).
         match runtime.side_view_signal.lock().await.take() {
             Some(crate::tui::event_loop::SideViewSignal::Opened { side_id, .. }) => {
@@ -866,6 +865,21 @@ pub(super) async fn run_app_loop(
             }
             None => {}
         }
+        let primary_session_id = session.id().await;
+        let viewed_session_id = if app.in_side_view {
+            app.side_session_id
+                .as_deref()
+                .unwrap_or(primary_session_id.as_str())
+        } else {
+            primary_session_id.as_str()
+        }
+        .to_string();
+        app.context_tokens = runtime
+            .context_tokens
+            .lock()
+            .await
+            .get(&viewed_session_id)
+            .copied();
 
         // Drain a pending Phase-1 unsend: the user interrupted before any model
         // output arrived, the harness reverted the conversation context, and the
@@ -1537,11 +1551,17 @@ pub(super) async fn run_app_loop(
                         let report = app
                             .token_ledger
                             .as_ref()
-                            .map(|l| l.snapshot())
+                            .map(|l| l.snapshot_for_session(&viewed_session_id))
                             .unwrap_or_default();
                         Some(render::draw_token_report_modal(
                             f,
                             &report,
+                            render::ContextUsageView {
+                                snapshot: app.context_tokens,
+                                window_tokens: crate::tui::providers::model_context_window(
+                                    &app.current_model,
+                                ),
+                            },
                             app.modal_index.min(report.rows.len().saturating_sub(1)),
                             app.token_report_detail,
                             &mut app.token_report_scroll,

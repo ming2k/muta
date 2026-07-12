@@ -393,10 +393,10 @@ fn edit_file_multihunk_interleaves_changes() {
 }
 
 #[test]
-fn edit_file_distant_hunks_show_ellipsis_with_range_header() {
-    // Two changes separated by 10 context lines — well past the 2×3=6
-    // overlap window. An ellipsis row must appear between the two hunks
-    // with a centred ⋮ gutter and a @@ range header in theme-info colour.
+fn edit_file_distant_changes_render_explicit_hunks() {
+    // Two changes separated by 10 context lines become two explicit hunks.
+    // Each hunk owns a standard @@ range header; omitted source is represented
+    // by the gap between hunks rather than a synthetic ellipsis row.
     let old = concat!(
         "line  1\nline  2\nCHANGE\n",
         "line  4\nline  5\nline  6\nline  7\nline  8\nline  9\n",

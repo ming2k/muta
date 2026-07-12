@@ -541,6 +541,21 @@ pub async fn dispatch(
                 }
             };
             let side_id = side_session.id.clone();
+            if let Some(ledger) = agent.token_ledger() {
+                side_session.agent.install_token_ledger(ledger.clone());
+                ledger.restore_session(&side_id, side_session.store.request_usage_records().await);
+            }
+            let side_context = side_session
+                .agent
+                .estimate_next_request_tokens(&side_session.store.model_window().await)
+                .total_tokens;
+            let _ = resp_tx.send(turn(
+                &side_id,
+                RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+                    tokens: side_context,
+                    source: neenee_core::ContextTokenSource::Projection,
+                }),
+            ));
             *side.write().await = Some(side_session);
             active_view_side.store(true, Ordering::SeqCst);
             // Tell the TUI to enter the side view (seeds the

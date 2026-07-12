@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Context accounting is now session-scoped and request-lifecycle aware.**
+  Current context remains a replaceable projection of the next model input;
+  provider usage is recorded separately for every principal or envoy
+  round/turn/attempt. Completed, interrupted, failed, retried, and crash-
+  abandoned attempts retain reported-versus-estimated provenance and survive
+  session resume. Forks inherit context without duplicating the parent's
+  historical request usage.
+
 - **Renamed `neenee-server` to `neenee-session`.** The crate that owns one
   live agent session's runtime — the request loop, handlers, `/btw` side
   sessions, MCP runtime, slash-command dispatch, and `/serve` transport — is
@@ -21,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `neenee_server::…` must update to `neenee_session::…`. This is a breaking
   public-API rename; ADRs (notably ADR-0037) retain the historical
   `neenee-server` / `agent_loop` names as decision records.
+
+### Fixed
+
+- **The context report now shows the initial pre-request estimate and refreshes
+  immediately after interruption or unsend.** The modal separates current
+  AI-visible context from request usage and expands provider/model
+  totals into round, turn, and attempt lifecycle rows. Primary and `/btw` side
+  sessions no longer overwrite each other's context meter or token report.
 
 ## [0.20.2] - 2026-07-11
 
