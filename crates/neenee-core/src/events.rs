@@ -412,9 +412,31 @@ pub enum NoticeSource {
 /// question: every turn event — whether from the primary or a `/btw` side —
 /// arrives tagged with its `session_id`, and global/command responses stay
 /// top-level.
+/// Origin of the current model-context token count shown by frontends.
+///
+/// This describes the AI-visible request context, never the durable session or
+/// rendered transcript size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContextTokenSource {
+    /// Count reported by the provider for the completed request, plus that
+    /// request's completion (which becomes history for the next request).
+    Api,
+    /// Local estimate of the provider-visible projection of `model_window`.
+    Projection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextTokenSnapshot {
+    pub tokens: usize,
+    pub source: ContextTokenSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RoundEvent {
     Notice(AgentNotice),
+    /// Current AI-visible context size for this session. Frontends must use
+    /// this instead of estimating from the persisted/rendered transcript.
+    ContextTokens(ContextTokenSnapshot),
     Text(String),
     /// Turn-level error (e.g. a provider failure mid-turn). Distinct from the
     /// global [`AgentResponse::Error`] only in that it belongs to a specific
@@ -746,7 +768,13 @@ pub enum AgentEvent {
     Notice(AgentNotice),
     ModelRequestStarted {
         tool_round: usize,
+        /// Semantic estimate of the exact request projection after round-start
+        /// hooks and immediately before it is sent to the provider.
+        context_tokens: usize,
     },
+    /// Provider-reported context after a completed request. This supersedes the
+    /// pre-request projection for that session until its context mutates again.
+    ContextTokens(ContextTokenSnapshot),
     AssistantDelta {
         delta: String,
         start: bool,

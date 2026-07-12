@@ -159,51 +159,82 @@ pub struct PromptRegistry {
     entries: Vec<Entry>,
 }
 
+/// Configuration error returned while composing a [`PromptRegistry`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptRegistryError {
+    /// A section with the same stable id is already registered.
+    DuplicateId(&'static str),
+    /// An override refers to an id that is not registered.
+    UnknownId(String),
+}
+
+impl std::fmt::Display for PromptRegistryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateId(id) => write!(f, "duplicate PromptSection id: {id}"),
+            Self::UnknownId(id) => write!(f, "unknown PromptSection id: {id}"),
+        }
+    }
+}
+
+impl std::error::Error for PromptRegistryError {}
+
 impl PromptRegistry {
     /// An empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register a section. Panics on a duplicate id — registration happens at
-    /// startup, so a collision is a programmer error, not a runtime condition.
+    /// Register a section. Panics on a duplicate id — use
+    /// [`try_register`](Self::try_register) when the section comes from an
+    /// embedding or other fallible configuration surface.
     pub fn register<S: PromptSection + 'static>(&mut self, section: S) {
+        if let Err(error) = self.try_register(section) {
+            panic!("{error}");
+        }
+    }
+
+    /// Register a section without panicking on an id collision.
+    pub fn try_register<S: PromptSection + 'static>(
+        &mut self,
+        section: S,
+    ) -> Result<(), PromptRegistryError> {
         let id = section.id();
-        assert!(
-            !self.entries.iter().any(|e| e.section.id() == id),
-            "duplicate PromptSection id: {id}"
-        );
+        if self.entries.iter().any(|e| e.section.id() == id) {
+            return Err(PromptRegistryError::DuplicateId(id));
+        }
         self.entries.push(Entry {
             section: Box::new(section),
             rank_override: None,
             disabled: false,
         });
+        Ok(())
     }
 
     /// Override a section's ordering by id, without editing its source. This
     /// is the lever for "flexible reordering": default order comes from
     /// [`PromptSection::rank`], runtime overrides come from here.
-    pub fn set_rank(&mut self, id: &str, rank: u32) {
-        for entry in &mut self.entries {
-            if entry.section.id() == id {
-                entry.rank_override = Some(rank);
-                return;
-            }
-        }
-        debug_assert!(false, "set_rank: unknown PromptSection id {id}");
+    pub fn set_rank(&mut self, id: &str, rank: u32) -> Result<(), PromptRegistryError> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.section.id() == id)
+            .ok_or_else(|| PromptRegistryError::UnknownId(id.to_owned()))?;
+        entry.rank_override = Some(rank);
+        Ok(())
     }
 
     /// Disable a section by id (it is skipped as if inactive). The opposite of
     /// `set_rank` — used to turn a section off without removing its
     /// registration.
-    pub fn disable(&mut self, id: &str) {
-        for entry in &mut self.entries {
-            if entry.section.id() == id {
-                entry.disabled = true;
-                return;
-            }
-        }
-        debug_assert!(false, "disable: unknown PromptSection id {id}");
+    pub fn disable(&mut self, id: &str) -> Result<(), PromptRegistryError> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.section.id() == id)
+            .ok_or_else(|| PromptRegistryError::UnknownId(id.to_owned()))?;
+        entry.disabled = true;
+        Ok(())
     }
 
     /// Assemble every active **System**-channel section into one head
@@ -451,7 +482,7 @@ mod tests {
         let mut reg = PromptRegistry::new();
         reg.register(sys("system.a", 10, "A"));
         reg.register(sys("system.b", 20, "B"));
-        reg.set_rank("system.b", 5);
+        reg.set_rank("system.b", 5).unwrap();
 
         let msg = reg.build_system_message(&PromptContext::empty());
         assert_eq!(msg.content, "B\nA", "override rank wins over default");
@@ -462,7 +493,7 @@ mod tests {
         let mut reg = PromptRegistry::new();
         reg.register(sys("system.a", 10, "A"));
         reg.register(sys("system.b", 20, "B"));
-        reg.disable("system.b");
+        reg.disable("system.b").unwrap();
 
         let msg = reg.build_system_message(&PromptContext::empty());
         assert_eq!(msg.content, "A");
@@ -470,6 +501,24 @@ mod tests {
             reg.render_section("system.b", &PromptContext::empty())
                 .is_none(),
             "disabled section also yields None via render_section"
+        );
+    }
+
+    #[test]
+    fn fallible_configuration_reports_invalid_ids() {
+        let mut reg = PromptRegistry::new();
+        reg.try_register(sys("system.tone", 10, "Tone")).unwrap();
+        assert_eq!(
+            reg.try_register(sys("system.tone", 20, "Tone again")),
+            Err(PromptRegistryError::DuplicateId("system.tone"))
+        );
+        assert_eq!(
+            reg.disable("missing"),
+            Err(PromptRegistryError::UnknownId("missing".to_owned()))
+        );
+        assert_eq!(
+            reg.set_rank("missing", 1),
+            Err(PromptRegistryError::UnknownId("missing".to_owned()))
         );
     }
 

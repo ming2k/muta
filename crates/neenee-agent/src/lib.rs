@@ -71,14 +71,14 @@ pub use neenee_core::{
     EnvoyEvent, EnvoyProfile, HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest,
     McpConnectionStatus, McpServerConfig, Message, PRUNED_TOOL_PLACEHOLDER, PatchOp,
     PermissionDecision, PermissionRequest, PromptChannel, PromptContext, PromptRegistry,
-    PromptSection, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
-    ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, RoundOutcome, RoundTimer,
-    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, ThreadPursuit, TokenUsage,
-    Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion,
-    UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes,
-    estimate_tokens, is_context_overflow, is_interactive_command, is_secret_command,
-    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
-    truncate_utf8,
+    PromptRegistryError, PromptSection, Provider, ProviderEntry, ProviderPickerRow,
+    ProviderPickerSnapshot, ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role,
+    RoundOutcome, RoundTimer, SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE,
+    ThreadPursuit, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream,
+    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow, is_interactive_command,
+    is_secret_command, parse_retryable_error, prune_tool_results, public_error_message,
+    retryable_error, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -125,7 +125,7 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub mod agent;
-pub use agent::{Agent, RequestTokenEstimate};
+pub use agent::{Agent, AgentBuilder, RequestTokenEstimate};
 
 mod bash_policy;
 pub mod catalog;

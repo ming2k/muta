@@ -19,7 +19,7 @@ neenee-agent        orchestration: Agent, the turn/round loop, tool dispatch,
     ^                  provider abstraction, skills, envoys
     |                  (depends on core + store + providers + tools)
     |
-neenee-server       session harness: agent_loop dispatcher, handlers, /btw side
+neenee-session       session runtime: SessionDriver, handlers, /btw side
     ^                  sessions, MCP runtime, serve transport, slash extension
     |                  point. Application-neutral — holds NO product name or
     |                  principal (ADR-0054).
@@ -28,12 +28,12 @@ neenee-server       session harness: agent_loop dispatcher, handlers, /btw side
 neenee-code  ────────────────────────  application binaries. Each supplies its
 (neenee-quant-bin, future)            own identity + PrincipalProfile + tools +
     |                                  custom slash commands, then drives a
-    |                                  Harness via neenee-server.
+    |                                  SessionDriver via neenee-session.
     +--- neenee-tui / neenee-tui-view     rendering (neenee-code's frontend)
 ```
 
 The strict-DAG property from ADR-0005 is preserved: dependencies only point
-upward in this diagram, never down or sideways between peers. `neenee-server`
+upward in this diagram, never down or sideways between peers. `neenee-session`
 adds exactly one node between `agent` and the applications, with zero reverse
 edges (ADR-0037).
 
@@ -68,14 +68,13 @@ full-duplex envoy registry (ADR-0029). This crate knows how to run *one* LLM
 turn with tools; it does not know about sessions, slash commands, or frontends.
 Identity-agnostic and role-agnostic by design.
 
-### `neenee-server` — session harness
+### `neenee-session` — session harness
 
 The layer that turns "an engine that can run a turn" into "a running agent
 session a frontend can drive." It owns:
 
-- **`agent_loop::run`** — the dispatcher: `while let Some(req) = req_rx.recv()`
-  routing each `AgentRequest` to a handler. This is the agent's heart.
-- **`Harness`** — the long-lived state container the dispatcher closes over.
+- **`SessionDriver`** — owns one session's request receiver and long-lived
+  state, then routes each `AgentRequest` to a handler until the channel closes.
 - **Handlers** — `handlers_chat` / `handlers_permission` / `handlers_provider`
   / `handlers_session` / `handlers_slash`: one per `AgentRequest` group.
 - **`/btw` side sessions** (`side`), **MCP runtime** (`mcp_runtime` +
@@ -95,8 +94,8 @@ mission, or `PrincipalProfile`. The embedding supplies an `AgentIdentity` to
 
 **What's not done.** `SessionRegistry::create_session` / `close_session` are
 stubs (ADR-0037 Step 6, Pending). Today there is exactly one session per
-process, driven by `Harness` constructed in the application's `main.rs`. The
-multi-session daemon is the remaining migration step.
+process, driven by `SessionDriver` constructed in the application's `main.rs`.
+The multi-session daemon is the remaining migration step.
 
 ### Application layer — `neenee-code` (and future `neenee-quant-bin`)
 
@@ -107,23 +106,23 @@ The binary. `neenee-code`:
 2. Binds its principal (`apply_principal_profile(&principal_code())`) — the
    identity + principal live in `neenee-code/src/identity.rs`, **not** in the
    server (ADR-0054).
-3. Builds a `Harness` and `tokio::spawn(agent_loop::run(req_rx, harness))`.
+3. Builds a `SessionDriver` and spawns its `run` method.
 4. Runs the TUI in the main thread, holding `req_tx` / `resp_rx`.
 
 > **Note on the current `neenee-code` dependency shape.** `neenee-code` depends
 > on `neenee-agent`, `neenee-store`, `neenee-tools`, and `neenee-providers`
-> *directly*, not only on `neenee-server`. This is because the Harness assembly
-> (provider/toolset/agent construction) still lives in `main.rs` rather than
+> *directly*, not only on `neenee-session`. This is because `SessionDriver`
+> assembly (provider/toolset/agent construction) still lives in `main.rs` rather than
 > behind a server-layer factory. Once `SessionRegistry::create_session` is
 > populated (ADR-0037 Step 6), that assembly moves into the server and
-> `neenee-code` can depend on `neenee-server` alone for orchestration. The
+> `neenee-code` can depend on `neenee-session` alone for orchestration. The
 > direct deps are an interim "reach-through," not a design intent — see
 > ADR-0037 §1 for the target DAG.
 
 `neenee-quant` is currently a library of quant-domain tools (implements
 `neenee_core::Tool`); a future `neenee-quant-bin` would mirror `neenee-code`:
 bring its own quant identity + principal + tools + `/backtest`-class slash
-commands, then drive the same neutral `neenee-server`.
+commands, then drive the same neutral `neenee-session`.
 
 ## How a request flows across the layers
 
@@ -131,7 +130,7 @@ commands, then drive the same neutral `neenee-server`.
 TUI keystroke / WS client
         │  AgentRequest (over mpsc, no source metadata)
         ▼
-neenee-server: agent_loop::run  ──►  handlers_*  ──►  neenee-agent: Agent::turn
+neenee-session: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
         │                                                  │
         │  AgentResponse (over mpsc → TUI; cloned → broadcast → WS)  ◄──┘
         ▼
@@ -139,7 +138,7 @@ TUI renders + WS clients receive
 ```
 
 The crucial property: `AgentRequest` carries **no source/client field**, so
-`agent_loop` cannot tell whether a request came from the TUI, a browser, the
+`SessionDriver` cannot tell whether a request came from the TUI, a browser, the
 `/repeat` scheduler, or an internal command tool. All frontends are
 indistinguishable to the dispatcher — which is what lets them co-drive the same
 session. See the [Server WebSocket API](../reference/server-api.md) for the

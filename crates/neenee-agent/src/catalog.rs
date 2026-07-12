@@ -1618,7 +1618,7 @@ mod tests {
 
         // The model the startup provider is actually built with — same
         // config-only precedence `build_provider_for` uses, and what
-        // `agent_loop::run` now records via `record_model`.
+        // `SessionDriver::run` now records via `record_model`.
         let boot_model = resolved_model_name(&config, "relay");
         assert_eq!(boot_model, "beta", "boot resolves to the pinned model");
 

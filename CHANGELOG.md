@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed `neenee-server` to `neenee-session`.** The crate that owns one
+  live agent session's runtime — the request loop, handlers, `/btw` side
+  sessions, MCP runtime, slash-command dispatch, and `/serve` transport — is
+  now named for what it actually is. The vocabulary it defines
+  (`SessionDriver`, `SessionRegistry`, `SessionHandle`, `SharedState`) already
+  centered on "session"; the crate name now matches. `agent_loop::Harness`
+  and the free `agent_loop::run(req_rx, harness)` are gone: the module is
+  `session_driver`, the type is `SessionDriver`, and it owns the request
+  receiver itself (`tokio::spawn(driver.run())`). Embeddings that referenced
+  `neenee_server::…` must update to `neenee_session::…`. This is a breaking
+  public-API rename; ADRs (notably ADR-0037) retain the historical
+  `neenee-server` / `agent_loop` names as decision records.
+
 ## [0.20.2] - 2026-07-11
 
 ### Fixed

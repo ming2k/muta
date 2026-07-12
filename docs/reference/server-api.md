@@ -1,6 +1,6 @@
 # Server WebSocket API
 
-This page is the frontend integration guide for the current `neenee-server`
+This page is the frontend integration guide for the current `neenee-session`
 hot-attach transport. Its machine-readable contract is
 [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
@@ -14,7 +14,7 @@ hot-attach transport. Its machine-readable contract is
 
 ## Scope and current limitations
 
-This contract describes `crates/neenee-server/src/serve.rs` as it exists now:
+This contract describes `crates/neenee-session/src/serve.rs` as it exists now:
 
 - `/serve [port] [--public]` starts a listener attached to the **currently
   running TUI session**.
@@ -307,7 +307,7 @@ A production frontend should:
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/neenee-server/src/serve.rs` (`Wire`)
+- envelope: `crates/neenee-session/src/serve.rs` (`Wire`)
 - requests/responses/events: `crates/neenee-core/src/events.rs`
 - transcript: `crates/neenee-core/src/message.rs`
 - tool output: `crates/neenee-core/src/tool_output.rs`

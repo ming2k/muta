@@ -170,6 +170,9 @@ pub struct App {
     /// Shared token-source ledger (reported vs. estimated token accounting),
     /// read by the TokenReport modal. `None` in tests that don't surface it.
     pub token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
+    /// Latest session-scoped AI context snapshot from the harness. This is a
+    /// provider usage/projection value, never a persisted transcript estimate.
+    pub context_tokens: Option<neenee_core::ContextTokenSnapshot>,
     /// Scroll offset of the TokenReport modal body.
     pub token_report_scroll: usize,
     /// `true` when the TokenReport modal is drilled into a single provider/model

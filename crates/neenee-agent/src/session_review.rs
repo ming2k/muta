@@ -99,12 +99,14 @@ impl Agent {
                 .clone(),
         );
         let sub_tools = REVIEW.resolve_tools(&self.toolset, &model, &model_sel);
-        let mut reviewer = Agent::new(
+        let reviewer = Agent::builder(
             self.provider.clone(),
             sub_tools,
             SkillRegistry::empty(),
             crate::AgentIdentity::default(),
-        );
+        )
+        .with_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions))
+        .build();
         // The reviewer must not run its own reviews (recursion) and is bounded
         // by a tight hard stop so it cannot loop. It registers no review
         // dimensions of its own.
@@ -112,13 +114,9 @@ impl Agent {
         // The reviewer reads a transcript excerpt; disable the deterministic
         // read-loop guard's nudge (ADR-0034) so its own reads are never steered.
         reviewer.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
-        // The reviewer's head system message is the review composition (persona
-        // + dimensions + JSON contract), not the default mission-neutral set.
-        // Installed as a dedicated registry so `ensure_system_prompt` rebuilds
-        // it correctly every round (ADR-0039 stage 6) — previously a pre-seeded
-        // system message here was clobbered on round 1 and the review prompt
-        // never reached the model.
-        reviewer.set_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions));
+        // The builder installed the dedicated review composition above so
+        // `ensure_system_prompt` rebuilds persona + dimensions + JSON contract
+        // every round instead of clobbering a pre-seeded system message.
 
         let transcript = serialize_transcript(messages, TRANSCRIPT_SNAPSHOT_BUDGET_CHARS);
         let user = format!(

@@ -145,6 +145,10 @@ pub async fn run_tui(
     let current_model = Arc::new(Mutex::new(initial_model.clone()));
     let cp_clone = current_provider.clone();
     let cm_clone = current_model.clone();
+    // Session-scoped AI context snapshot. The listener updates it only from
+    // harness projection/API events; the rendered transcript is never used.
+    let context_tokens = Arc::new(Mutex::new(None::<neenee_core::ContextTokenSnapshot>));
+    let context_tokens_clone = context_tokens.clone();
 
     let is_responding = Arc::new(AtomicBool::new(false));
     let ir_clone = is_responding.clone();
@@ -308,6 +312,11 @@ pub async fn run_tui(
                         &messages_clone
                     };
                     match event {
+                        RoundEvent::ContextTokens(snapshot) => {
+                            if !routes_to_side {
+                                *context_tokens_clone.lock().await = Some(snapshot);
+                            }
+                        }
                         RoundEvent::Notice(notice) => {
                             // Provider retry has a dedicated, self-refreshing
                             // transcript disclosure driven by RetryScheduled.
@@ -937,10 +946,14 @@ pub async fn run_tui(
                 }
                 AgentResponse::ConversationCleared => {
                     messages_clone.write().await.clear();
+                    *context_tokens_clone.lock().await = None;
                 }
                 AgentResponse::ConversationReplaced(messages) => {
                     *messages_clone.write().await =
                         transcript_messages_from_core(messages, &tui_config_clone);
+                    // The model-window revision changed; do not reuse an API
+                    // anchor from the previous session/projection.
+                    *context_tokens_clone.lock().await = None;
                 }
                 AgentResponse::SessionsOverview(sessions) => {
                     *sessions_overview_clone.lock().await = sessions;
@@ -1067,6 +1080,7 @@ pub async fn run_tui(
         activity_rect: None,
         hint_context_rect: None,
         token_ledger: Some(token_ledger),
+        context_tokens: None,
         token_report_scroll: 0,
         token_report_detail: false,
         todos_rect: None,
@@ -1200,6 +1214,7 @@ pub async fn run_tui(
         event_loop::UiRuntime {
             current_provider,
             current_model,
+            context_tokens,
             harness,
             activity_status,
             pending_permission,

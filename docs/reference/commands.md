@@ -42,7 +42,7 @@ are dispatched by the agent backend.
 
 Hot-attach a WebSocket listener to the currently running session so a browser
 or other client can attach (ADR-0037 §7, ADR-0054). This is a pure frontend
-concern — it never reaches `agent_loop`. See the
+concern — it never reaches `SessionDriver`. See the
 [Server WebSocket API](server-api.md) for the full protocol.
 
 | Form | Effect |

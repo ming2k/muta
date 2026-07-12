@@ -1,5 +1,5 @@
 [package]
-name = "neenee-server"
+name = "neenee-session"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

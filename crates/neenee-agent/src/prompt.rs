@@ -314,8 +314,8 @@ impl PromptSection for FileEditingGuidance {
 }
 
 /// Build the registry with the default system-channel sections, in rank
-/// order. Called once from [`Agent::new`]; an embedding may add more sections
-/// (or reorder / disable these) afterwards via the registry handle.
+/// order. Called by [`Agent::builder`]; an embedding may add, reorder, or
+/// disable sections on [`crate::AgentBuilder`] before freezing the agent.
 ///
 /// Note: skills are deliberately *not* injected into the system prompt. The
 /// model discovers them lazily via the `list_skills` tool and loads bodies on
@@ -444,8 +444,9 @@ fn render_review_dimensions(dimensions: &[Arc<dyn SessionReview>]) -> String {
 }
 
 /// Build the reviewer envoy's prompt registry: persona + dimensions + JSON
-/// contract. Installed on the reviewer via [`Agent::set_prompt_registry`] so
-/// its head system message — rebuilt every round — is the review composition.
+/// contract. Installed on the reviewer via
+/// [`crate::AgentBuilder::with_prompt_registry`] so its head system message —
+/// rebuilt every round — is the review composition.
 pub(crate) fn reviewer_prompt_registry(dimensions: &[Arc<dyn SessionReview>]) -> PromptRegistry {
     let mut registry = PromptRegistry::new();
     registry.register(ReviewPersona);

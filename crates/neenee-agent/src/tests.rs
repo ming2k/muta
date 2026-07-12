@@ -229,15 +229,15 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
 fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     use neenee_core::{REVIEW, Role};
 
-    let reviewer = Agent::new(
+    let dimensions = crate::session_review::default_reviews();
+    let reviewer = Agent::builder(
         Arc::new(TestProvider),
         Vec::new(),
         crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
-    );
-    let mut reviewer = reviewer;
-    let dimensions = crate::session_review::default_reviews();
-    reviewer.set_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions));
+    )
+    .with_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions))
+    .build();
 
     // Drive the same placement path the streaming loop uses: the registry
     // composes the head system message from the reviewer's sections.
@@ -426,7 +426,7 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
     let model_rounds = events
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::ModelRequestStarted { tool_round } => Some(*tool_round),
+            AgentEvent::ModelRequestStarted { tool_round, .. } => Some(*tool_round),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1035,9 +1035,10 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::Notice(notice) => {
                 format!("notice {:?} {:?}", notice.kind, notice.title)
             }
-            AgentEvent::ModelRequestStarted { tool_round } => {
+            AgentEvent::ModelRequestStarted { tool_round, .. } => {
                 format!("model-request turn={tool_round}")
             }
+            AgentEvent::ContextTokens(_) => "context-tokens".to_string(),
             AgentEvent::AssistantDelta { delta, start } => {
                 format!("assistant-delta start={start} {delta:?}")
             }

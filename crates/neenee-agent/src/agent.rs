@@ -411,7 +411,105 @@ impl TurnState {
     }
 }
 
+/// Construction-time configuration for an [`Agent`].
+///
+/// Prompt policy is assembled before the agent starts running and is immutable
+/// afterwards. This keeps request preparation deterministic while allowing an
+/// embedding to add product-specific sections or replace the composition for a
+/// specialized agent such as the session reviewer.
+pub struct AgentBuilder {
+    provider: Arc<dyn Provider>,
+    toolset: neenee_core::ToolSet,
+    skills_registry: skills::SkillRegistry,
+    identity: AgentIdentity,
+    prompt_registry: crate::PromptRegistry,
+}
+
+impl AgentBuilder {
+    fn new(
+        provider: Arc<dyn Provider>,
+        toolset: neenee_core::ToolSet,
+        skills_registry: skills::SkillRegistry,
+        identity: AgentIdentity,
+    ) -> Self {
+        Self {
+            provider,
+            toolset,
+            skills_registry,
+            identity,
+            prompt_registry: crate::prompt::default_prompt_registry(),
+        }
+    }
+
+    /// Add an embedding-owned prompt section to the default composition.
+    pub fn register_prompt_section<S: crate::PromptSection + 'static>(
+        mut self,
+        section: S,
+    ) -> Result<Self, crate::PromptRegistryError> {
+        self.prompt_registry.try_register(section)?;
+        Ok(self)
+    }
+
+    /// Disable a registered default or custom section by its stable id.
+    pub fn disable_prompt_section(mut self, id: &str) -> Result<Self, crate::PromptRegistryError> {
+        self.prompt_registry.disable(id)?;
+        Ok(self)
+    }
+
+    /// Override a registered section's rank in the final composition.
+    pub fn rank_prompt_section(
+        mut self,
+        id: &str,
+        rank: u32,
+    ) -> Result<Self, crate::PromptRegistryError> {
+        self.prompt_registry.set_rank(id, rank)?;
+        Ok(self)
+    }
+
+    /// Replace the default composition wholesale.
+    pub fn with_prompt_registry(mut self, registry: crate::PromptRegistry) -> Self {
+        self.prompt_registry = registry;
+        self
+    }
+
+    /// Freeze the configuration and construct the agent.
+    pub fn build(self) -> Agent {
+        Agent::from_toolset_with_prompt_registry(
+            self.provider,
+            self.toolset,
+            self.skills_registry,
+            self.identity,
+            self.prompt_registry,
+        )
+    }
+}
+
 impl Agent {
+    /// Start configuring an agent from a flat tool list.
+    pub fn builder(
+        provider: Arc<dyn Provider>,
+        tools: Vec<Arc<dyn Tool>>,
+        skills_registry: skills::SkillRegistry,
+        identity: AgentIdentity,
+    ) -> AgentBuilder {
+        AgentBuilder::new(
+            provider,
+            neenee_core::ToolSet::from_tools(tools),
+            skills_registry,
+            identity,
+        )
+    }
+
+    /// Start configuring an agent from a full multi-variant tool set.
+    pub fn builder_from_toolset(
+        provider: Arc<dyn Provider>,
+        toolset: neenee_core::ToolSet,
+        skills_registry: skills::SkillRegistry,
+        identity: AgentIdentity,
+    ) -> AgentBuilder {
+        AgentBuilder::new(provider, toolset, skills_registry, identity)
+    }
+
     /// Construct an agent from a flat tool list. The tools are grouped into a
     /// [`neenee_core::ToolSet`] (one capability per [`Tool::name`], one variant
     /// per [`Tool::variant`]) — the common case for a single-variant toolset or
@@ -440,6 +538,16 @@ impl Agent {
         toolset: neenee_core::ToolSet,
         skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
+    ) -> Self {
+        Self::builder_from_toolset(provider, toolset, skills_registry, identity).build()
+    }
+
+    fn from_toolset_with_prompt_registry(
+        provider: Arc<dyn Provider>,
+        toolset: neenee_core::ToolSet,
+        skills_registry: skills::SkillRegistry,
+        identity: AgentIdentity,
+        prompt_registry: crate::PromptRegistry,
     ) -> Self {
         let pursuit_state = crate::pursuit_state::PursuitState::new();
         let thread_id = Arc::new(std::sync::Mutex::new(None));
@@ -503,7 +611,7 @@ impl Agent {
             inbox_rx: std::sync::Mutex::new(None),
             identity,
             round_persist: std::sync::Mutex::new(None),
-            prompt_registry: crate::prompt::default_prompt_registry(),
+            prompt_registry,
             variant_selection: Arc::new(
                 std::sync::Mutex::new(neenee_core::VariantSelection::new()),
             ),
@@ -601,7 +709,7 @@ impl Agent {
                 .iter()
                 .map(neenee_core::estimate_message_tokens)
                 .sum::<i64>()
-                .max(1) as usize
+                .max(0) as usize
         };
         let history = prepared
             .iter()
@@ -614,7 +722,8 @@ impl Agent {
             .visible_tools()
             .iter()
             .map(|tool| {
-                neenee_core::count_tokens(&tool.to_openai_function().to_string()).max(0) as usize
+                neenee_core::estimate_semantic_json_tokens(&tool.to_openai_function()).max(0)
+                    as usize
             })
             .sum::<usize>();
         let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
@@ -644,16 +753,6 @@ impl Agent {
     /// owns the orthogonal **scope** axis.
     pub fn variant_selection_handle(&self) -> Arc<std::sync::Mutex<neenee_core::VariantSelection>> {
         Arc::clone(&self.variant_selection)
-    }
-
-    /// Replace the prompt registry wholesale. Used by sub-callers that need a
-    /// different system-message composition than the default mission-neutral
-    /// set — currently the `/review` diagnostic, whose reviewer envoy gets
-    /// a persona + dimensions + JSON-contract registry (ADR-0039 stage 6) so
-    /// `ensure_system_prompt` rebuilds the review prompt correctly each round
-    /// instead of clobbering a pre-seeded system message.
-    pub(crate) fn set_prompt_registry(&mut self, registry: crate::PromptRegistry) {
-        self.prompt_registry = registry;
     }
 
     /// Override the opt-in hard-stop budget. Mirrors `[agent] hard_stop_turns`
@@ -794,7 +893,7 @@ impl Agent {
         state: &mut TurnState,
         response: &Message,
         streamed_usage: Option<TokenUsage>,
-    ) {
+    ) -> Option<usize> {
         let provider_id = self.provider.provider_id();
         let model = self.provider.model();
         // Prefer the usage the provider reported (streamed, then drained).
@@ -829,6 +928,12 @@ impl Agent {
                     },
                 );
             }
+            return Some(
+                usage
+                    .prompt_tokens
+                    .saturating_add(usage.completion_tokens)
+                    .max(0) as usize,
+            );
         } else {
             // No upstream usage: fall back to the local estimator and mark the
             // turn as estimated so the report reflects reality.
@@ -843,6 +948,7 @@ impl Agent {
                 ledger.record(&provider_id, &model, estimated, false);
             }
         }
+        None
     }
 
     /// Install the lifecycle hook registry (ADR-0025). Replaces any prior
@@ -1683,6 +1789,7 @@ impl Agent {
                 .await;
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
+                context_tokens: self.estimate_next_request_tokens(messages).total_tokens,
             });
 
             let response = match tokio::time::timeout(
@@ -1709,7 +1816,14 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
-            self.book_turn_usage(&mut state, &response, None);
+            if let Some(context_tokens) = self.book_turn_usage(&mut state, &response, None) {
+                on_event(AgentEvent::ContextTokens(
+                    neenee_core::ContextTokenSnapshot {
+                        tokens: context_tokens,
+                        source: neenee_core::ContextTokenSource::Api,
+                    },
+                ));
+            }
             messages.push(response.clone());
 
             // The model produced no text stream, so nothing was shown to the UI
@@ -1813,6 +1927,7 @@ impl Agent {
             tracing::debug!(tool_round = tool_rounds, "requesting model completion");
             on_event(AgentEvent::ModelRequestStarted {
                 tool_round: tool_rounds,
+                context_tokens: self.estimate_next_request_tokens(messages).total_tokens,
             });
             // Race the model request against cancellation so an interrupt
             // while we're waiting on the network resolves promptly instead of
@@ -1975,7 +2090,16 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
-            self.book_turn_usage(&mut state, &response, streamed_usage.take());
+            if let Some(context_tokens) =
+                self.book_turn_usage(&mut state, &response, streamed_usage.take())
+            {
+                on_event(AgentEvent::ContextTokens(
+                    neenee_core::ContextTokenSnapshot {
+                        tokens: context_tokens,
+                        source: neenee_core::ContextTokenSource::Api,
+                    },
+                ));
+            }
             messages.push(response.clone());
 
             // `emitted_text` means assistant text was already streamed to the

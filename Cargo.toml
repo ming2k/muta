@@ -13,7 +13,7 @@ members = [
     "crates/neenee-quant-gui",
     "crates/neenee-agent",
     "crates/neenee-code",
-    "crates/neenee-server",
+    "crates/neenee-session",
     "crates/neenee-tui",
     "crates/neenee-tui-view",
     "crates/neenee-editor",

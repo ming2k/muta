@@ -62,7 +62,7 @@ gated or shipped.
 # Format (fmt job). cargo fmt has no --exclude, so select gated crates.
 cargo fmt --all --check \
   -p neenee-core -p neenee-store -p neenee-providers -p neenee-tools \
-  -p neenee-agent -p neenee-code -p neenee-server \
+  -p neenee-agent -p neenee-code -p neenee-session \
   -p neenee-tui -p neenee-tui-view -p neenee-editor
 
 # Clippy (clippy job).

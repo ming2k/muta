@@ -1,6 +1,6 @@
 //! This CLI's identity + principal profile.
 //!
-//! Lives in the application layer (`neenee-code`), NOT in `neenee-server`.
+//! Lives in the application layer (`neenee-code`), NOT in `neenee-session`.
 //! The server layer stays application-neutral — a future `neenee-quant`
 //! binary brings its own identity/principal. The server's `/btw` side
 //! session reuses the primary agent's identity via `Agent::identity()`,

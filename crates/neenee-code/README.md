@@ -6,12 +6,12 @@ coding agent against a local checkout.
 This is the primary user-facing crate. It wires together the foundation
 (`neenee-core` + `neenee-store`), the LLM providers (`neenee-providers`), the
 built-in tools (`neenee-tools`), the orchestration loop (`neenee-agent`), and
-the session transport (`neenee-server`), then renders the interactive interface
+the session transport (`neenee-session`), then renders the interactive interface
 via the in-house `neenee-tui` rendering engine (ADR-0038).
 
 The coding identity (`neenee_identity` / `principal_code`) lives in this
 crate's `src/identity.rs` — the application layer, not the server layer
-(ADR-0054). `neenee-server` is application-neutral and holds no product name.
+(ADR-0054). `neenee-session` is application-neutral and holds no product name.
 
 Run with:
 

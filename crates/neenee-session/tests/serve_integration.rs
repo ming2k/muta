@@ -4,14 +4,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 // Integration test: start_server + connect via WS + verify history replay + request/response round-trip
-// Run: cargo test -p neenee-server --test serve_integration -- --nocapture
+// Run: cargo test -p neenee-session --test serve_integration -- --nocapture
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use neenee_core::{AgentRequest, AgentResponse, RoundEvent};
-use neenee_server::serve;
+use neenee_session::serve;
 use neenee_store::session::SessionStore;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -94,7 +94,7 @@ async fn test_ws_round_trip() {
         .expect("req_rx closed");
     assert!(matches!(interrupt, AgentRequest::Interrupt));
 
-    // 4. Simulate agent_loop emitting a response → broadcast → should reach WS client
+    // 4. Simulate SessionDriver emitting a response → broadcast → should reach WS client
     let resp = AgentResponse::Round {
         session_id,
         event: RoundEvent::Text("hello back from agent".to_string()),

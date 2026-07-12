@@ -18,4 +18,4 @@ other.
 
 This crate is I/O-free at the domain level but drives `neenee-store` and
 `neenee-providers`. Frontends (`neenee-code`, `neenee-quant`) sit above it via
-`neenee-server`'s transport.
+`neenee-session`'s transport.

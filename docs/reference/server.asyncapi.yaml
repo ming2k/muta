@@ -3,7 +3,7 @@ info:
   title: neenee hot-attach WebSocket API
   version: 0.20.0
   description: |
-    Machine-readable contract for `neenee-server`'s current hot-attach transport.
+    Machine-readable contract for `neenee-session`'s current hot-attach transport.
     The server is started from a running TUI with `/serve [port] [--public]`; it
     is not yet the multi-session daemon described as a future phase in ADR-0037.
 

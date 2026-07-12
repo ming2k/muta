@@ -159,7 +159,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
 /// - _unrecognised / unset_ — defaults to `info`.
 ///
 /// `RUST_LOG` still takes precedence per-target when set (e.g.
-/// `RUST_LOG=neenee_code=debug,neenee_server=trace`), because
+/// `RUST_LOG=neenee_code=debug,neenee_session=trace`), because
 /// `EnvFilter::try_from_default_env` is consulted first. This keeps the
 /// familiar `RUST_LOG` ergonomics for fine-grained filtering while giving a
 /// sane always-on default out of the box.
@@ -193,7 +193,7 @@ pub fn init_tracing() -> Option<WorkerGuard> {
             .then_some(l.as_str())
             .unwrap_or("info");
         tracing_subscriber::EnvFilter::new(format!(
-            "neenee={lvl},neenee_core={lvl},neenee_server={lvl}"
+            "neenee={lvl},neenee_core={lvl},neenee_session={lvl}"
         ))
     });
     tracing_subscriber::fmt()

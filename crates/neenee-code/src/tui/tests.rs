@@ -841,6 +841,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         activity_rect: None,
         hint_context_rect: None,
         token_ledger: None,
+        context_tokens: None,
         token_report_scroll: 0,
         token_report_detail: false,
         todos_rect: None,

@@ -26,17 +26,15 @@
 //!
 //! # Migration posture
 //!
-//! This crate is being populated incrementally. The driver logic currently
-//! living in `neenee-code` (`agent_loop`, `handlers/*`, `side`,
-//! `agent_setup`, `session_view`, …) is pure of TUI dependencies except for a
-//! single `/export` + clipboard call path, and is slated to move here. Until
-//! then the types below define the target shape and the TUI continues to drive
-//! `neenee-agent` directly. The shapes are intentionally close to the existing
-//! `agent_loop::Harness` fields so the eventual move is mechanical.
+//! The frontend-neutral session driver and its handlers live in this crate.
+//! `neenee-code` still assembles one [`session_driver::SessionDriver`] during
+//! startup; the remaining migration step is to move that assembly behind
+//! [`SessionRegistry::create_session`] so a server process can own multiple
+//! sessions.
 //!
 //! # Dependency posture
 //!
-//! `neenee-server` depends on `neenee-agent` (orchestration), `neenee-store`
+//! `neenee-session` depends on `neenee-agent` (orchestration), `neenee-store`
 //! (persistence), `neenee-providers` + `neenee-tools` (concrete impls the
 //! session assembles), and `neenee-core` (vocabulary). It does **not** depend
 //! on `neenee-code` — frontends depend on this crate, never the reverse.
@@ -53,7 +51,6 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-pub mod agent_loop;
 pub mod agent_setup;
 pub mod export;
 pub mod handlers_chat;
@@ -68,6 +65,7 @@ pub mod pursuits;
 pub mod registry;
 pub mod review;
 pub mod serve;
+pub mod session_driver;
 pub mod session_view;
 pub mod shared;
 pub mod shell;
@@ -77,6 +75,7 @@ pub mod startup;
 pub mod ui_bridge;
 
 pub use registry::{SessionHandle, SessionRegistry};
+pub use session_driver::SessionDriver;
 pub use shared::SharedState;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 

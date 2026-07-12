@@ -11,7 +11,7 @@ use neenee_tui::{
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
-use crate::document::{TranscriptMessage, estimate_context_tokens};
+use crate::document::TranscriptMessage;
 use crate::layout::LayoutMap;
 
 use super::Theme;
@@ -415,19 +415,12 @@ pub struct HintBarView<'a> {
     /// without occupying a raised pill — plain text that carries its meaning
     /// without any chrome.
     pub unattended: bool,
-    /// Authoritative provider-reported context size for the active
-    /// `(provider, model)`, used as the **anchor** for the context meter:
-    /// `prompt_tokens + completion_tokens` from the most recent reported
-    /// round. The provider's `prompt_tokens` already measures the serialized
-    /// request (system prompt + every prior turn + tool schemas + per-message
-    /// template overhead), and the prior completion is now part of history,
-    /// so this is the true current context size without any delta tracking.
-    ///
-    /// `None` means no provider usage is available yet (first turn before a
-    /// response, or a non-reporting provider); the meter then falls back to
-    /// the local [`estimate_context_tokens`] estimate, which excludes
-    /// `Thinking` and `Notice` content that never reaches the model.
-    pub last_reported_context: Option<i64>,
+    /// Session-scoped size of the AI-visible request context. Produced by the
+    /// harness from provider API usage when available, otherwise from the
+    /// projected `model_window`; it is deliberately unrelated to durable or
+    /// rendered transcript size. `None` is shown as zero until the first
+    /// projection snapshot arrives.
+    pub context_tokens: Option<usize>,
 }
 
 /// Draw the single-line hint bar pinned below the input box. Carries the model
@@ -444,11 +437,11 @@ pub fn draw_hint_bar(
 ) -> Option<Rect> {
     let HintBarView {
         current_model,
-        messages,
+        messages: _,
         reasoning_effort,
         shell_active,
         unattended,
-        last_reported_context,
+        context_tokens,
     } = view;
 
     let bg = theme.surface();
@@ -574,15 +567,12 @@ pub fn draw_hint_bar(
     // reports a context window; the percentage takes the threshold color so
     // a nearly full window is unmissable.
     //
-    // Anchor on the authoritative provider-reported usage when available
-    // (prompt + completion from the last reported round — already measures the
-    // serialized request); otherwise fall back to the local estimate, which
-    // excludes `Thinking`/`Notice` content never sent to the model.
+    // The harness owns projection semantics. Never infer AI context from the
+    // rendered transcript: it contains durable command echoes, archived turns,
+    // and UI-only children while omitting system/tool-schema input.
     let mut context_seg_width = 0usize;
     if context_max > 0 {
-        let used = last_reported_context
-            .map(|n| n.max(0) as usize)
-            .unwrap_or_else(|| estimate_context_tokens(messages));
+        let used = context_tokens.unwrap_or(0);
         let ctx_spans = context_usage_spans(used, context_max, theme, bg);
         let ctx_width: usize = ctx_spans.iter().map(|s| s.content.width()).sum();
         right_spans.push(Span::styled(
@@ -734,7 +724,7 @@ mod tests {
                     reasoning_effort: None,
                     shell_active: false,
                     unattended: false,
-                    last_reported_context: None,
+                    context_tokens: None,
                 },
                 &theme,
             );
@@ -756,7 +746,7 @@ mod tests {
                     reasoning_effort: None,
                     shell_active,
                     unattended: false,
-                    last_reported_context: None,
+                    context_tokens: None,
                 };
                 draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
             });
@@ -804,7 +794,7 @@ mod tests {
                         reasoning_effort: effort,
                         shell_active: false,
                         unattended: false,
-                        last_reported_context: None,
+                        context_tokens: None,
                     },
                     &Theme::default(),
                 );

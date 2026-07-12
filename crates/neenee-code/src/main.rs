@@ -21,8 +21,8 @@ mod showcase;
 mod tui;
 
 use mcp_runtime::McpRuntime;
-pub(crate) use neenee_server::{
-    agent_loop, agent_setup, hooks, mcp_catalog, mcp_runtime, pursuits, side, startup,
+pub(crate) use neenee_session::{
+    agent_setup, hooks, mcp_catalog, mcp_runtime, pursuits, side, startup,
 };
 
 /// This CLI's identity, handed to the engine as its opening system prompt.
@@ -33,7 +33,7 @@ pub(crate) use neenee_server::{
 /// this binary's `identity` module (the application layer); the server crate
 /// is application-neutral and holds no product name or principal.
 use crate::identity::{neenee_identity, principal_code};
-use neenee_server::startup::{BuiltinCmd, StartupMode, init_tracing, parse_args};
+use neenee_session::startup::{BuiltinCmd, StartupMode, init_tracing, parse_args};
 
 use pursuits::load_legacy_pursuit_from_config;
 
@@ -485,7 +485,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // token-source report modal (opened by clicking the context meter).
     let token_ledger = neenee_core::TokenSourceLedger::shared();
 
-    let harness = agent_loop::Harness {
+    let driver = neenee_session::SessionDriver {
+        req_rx,
         tx: resp_tx,
         req_tx: req_tx_for_commands,
         agent,
@@ -509,9 +510,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         open_picker_on_start,
         ui: Arc::new(crate::tui::clipboard::TuiClipboard),
         token_ledger: token_ledger.clone(),
-        extra_commands: Arc::new(neenee_server::slash_handler::SlashCommandRegistry::new()),
+        extra_commands: Arc::new(neenee_session::slash_handler::SlashCommandRegistry::new()),
     };
-    tokio::spawn(agent_loop::run(req_rx, harness));
+    tokio::spawn(driver.run());
 
     // Start TUI in the main thread
     match start_tui(

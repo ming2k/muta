@@ -115,16 +115,16 @@ impl SessionRegistry {
     /// # Not yet implemented
     ///
     /// The body is the next step of the migration: it moves
-    /// `neenee-code`'s `agent_loop::Harness` construction + `agent_loop::run`
-    /// loop in here, with the single change that `resp_tx` becomes a
+    /// `neenee-code`'s [`crate::session_driver::SessionDriver`] construction
+    /// in here, with the single change that `resp_tx` becomes a
     /// `broadcast::Sender` (multi-subscriber) rather than an `mpsc::Sender`
-    /// (single-consumer). The harness fields and dispatch match arms are
+    /// (single-consumer). The driver fields and dispatch match arms are
     /// already TUI-free.
     pub async fn create_session(
         &self,
         _resume: Option<&str>,
     ) -> Result<Arc<SessionHandle>, String> {
-        // TODO(server-move): port agent_loop::Harness + run into this crate.
+        // TODO(server-move): construct and spawn SessionDriver here.
         // The shape is:
         //   1. let session = Arc::new(SessionStore::load_for_project(...));
         //   2. let (req_tx, req_rx) = mpsc::unbounded_channel();
@@ -157,8 +157,9 @@ impl SessionRegistry {
 }
 
 /// The per-turn cancellation slot + generation counter a driver task owns.
-/// Mirrors `agent_loop::Harness`'s `current_task_token` / `task_generation` so
-/// the server-side driver can be interrupted the same way the TUI's is.
+/// Mirrors [`crate::session_driver::SessionDriver`]'s `current_task_token` /
+/// `task_generation` so the server-side driver can be interrupted without
+/// routing through the frontend.
 ///
 /// Held inside the driver task; a clone of the `CancellationToken` is kept by
 /// the registry so [`SessionRegistry::close_session`] can cancel without

@@ -326,7 +326,7 @@ async fn envoy_tool_registry_routes_reply_into_live_envoy() {
     // permission request UP as `EnvoyEvent::PermissionRequest`, the tool
     // registers the child's handle by the parent `call_id`, and a reply pulled
     // from the registry resolves the parked oneshot so the tool runs. This is
-    // the agent-layer contract the harness (agent_loop.rs) and TUI rely on.
+    // the agent-layer contract the session driver and TUI rely on.
     let ran = Arc::new(AtomicUsize::new(0));
     let envoy_tool = Arc::new(EnvoyTool::new(
         Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),

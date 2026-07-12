@@ -609,15 +609,27 @@ fn truncate_middle(content: &str) -> String {
 }
 
 pub fn estimate_message_tokens(message: &Message) -> i64 {
-    let mut tokens = count_tokens(&message.content);
+    let mut tokens = if message.content.is_empty() {
+        0
+    } else {
+        count_tokens(&message.content)
+    };
     if let Some(calls) = message.tool_calls.as_ref() {
         for c in calls {
             // Tool-call name is a known function identifier — for the common
             // ASCII short names (~8-15 chars) it collapses to 1-3 tokens, so we
             // count it as natural language rather than dense code.
-            tokens += count_tokens(&c.name);
-            // JSON arguments are code: dense punctuation + identifiers.
-            tokens += count_tokens(&c.arguments);
+            if !c.name.is_empty() {
+                tokens += count_tokens(&c.name);
+            }
+            // Count the semantic JSON values/keys while omitting punctuation
+            // and transport envelopes. Malformed/incremental arguments fall
+            // back to text estimation rather than disappearing.
+            if let Ok(arguments) = serde_json::from_str(&c.arguments) {
+                tokens += estimate_semantic_json_tokens(&arguments);
+            } else if !c.arguments.is_empty() {
+                tokens += count_tokens(&c.arguments);
+            }
         }
     }
     tokens
@@ -625,6 +637,58 @@ pub fn estimate_message_tokens(message: &Message) -> i64 {
 
 pub fn estimate_string_tokens(s: &str) -> i64 {
     count_tokens(s)
+}
+
+/// Estimate the model-visible semantic content of structured JSON without
+/// charging for transport-only JSON syntax or generic envelope keys.
+///
+/// Object property names and scalar values remain significant: tool argument
+/// keys and JSON-Schema property names carry meaning for the model. Only the
+/// braces, brackets, quotes, commas and repeated protocol/container labels are
+/// omitted. Empty structures therefore contribute zero tokens.
+pub fn estimate_semantic_json_tokens(value: &serde_json::Value) -> i64 {
+    const ENVELOPE_KEYS: &[&str] = &[
+        "$schema",
+        "additionalProperties",
+        "description",
+        "enum",
+        "function",
+        "items",
+        "name",
+        "parameters",
+        "properties",
+        "required",
+        "type",
+    ];
+
+    fn estimate(value: &serde_json::Value) -> i64 {
+        match value {
+            serde_json::Value::Null => 0,
+            serde_json::Value::Bool(value) => count_tokens(if *value { "true" } else { "false" }),
+            serde_json::Value::Number(value) => count_tokens(&value.to_string()),
+            serde_json::Value::String(value) => {
+                if value.is_empty() {
+                    0
+                } else {
+                    count_tokens(value)
+                }
+            }
+            serde_json::Value::Array(values) => values.iter().map(estimate).sum(),
+            serde_json::Value::Object(values) => values
+                .iter()
+                .map(|(key, value)| {
+                    let key_tokens = if ENVELOPE_KEYS.contains(&key.as_str()) {
+                        0
+                    } else {
+                        count_tokens(key)
+                    };
+                    key_tokens + estimate(value)
+                })
+                .sum(),
+        }
+    }
+
+    estimate(value)
 }
 
 /// Approximate token count of a string, without a real tokenizer.
@@ -1127,6 +1191,38 @@ mod tests {
     fn count_tokens_empty_is_one() {
         // Empty string floors to 1, matching the old estimator's `.max(1)`.
         assert_eq!(count_tokens(""), 1);
+    }
+
+    #[test]
+    fn semantic_json_ignores_transport_syntax_but_keeps_domain_content() {
+        let empty = serde_json::json!({"type": "object", "properties": {}});
+        let meaningful = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File to read"}
+            },
+            "required": ["path"]
+        });
+        assert!(
+            estimate_semantic_json_tokens(&empty) > 0,
+            "schema type is semantic"
+        );
+        assert!(
+            estimate_semantic_json_tokens(&meaningful) > estimate_semantic_json_tokens(&empty),
+            "property names and descriptions must remain model-visible"
+        );
+        assert_eq!(estimate_semantic_json_tokens(&serde_json::json!({})), 0);
+    }
+
+    #[test]
+    fn message_estimate_treats_empty_content_and_empty_arguments_as_zero() {
+        let mut message = Message::new(Role::Assistant, "");
+        message.tool_calls = Some(vec![crate::ToolCall {
+            id: "call_1".into(),
+            name: String::new(),
+            arguments: "{}".into(),
+        }]);
+        assert_eq!(estimate_message_tokens(&message), 0);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# neenee-server
+# neenee-session
 
 The session/transport layer between the orchestration crate (`neenee-agent`)
 and the frontends (`neenee-code` TUI today, a browser frontend tomorrow).
@@ -25,8 +25,8 @@ product here.
 
 ## What it provides
 
-- **`agent_loop`** — the dispatcher (`Harness` + `run`) that routes
-  `AgentRequest`s to handlers. The agent's heart.
+- **`session_driver`** — `SessionDriver` owns one session's request loop and
+  routes `AgentRequest`s to handlers.
 - **Handlers** — chat, permission, provider, session, slash (the 22 built-in
   commands).
 - **`slash_handler`** — a `SlashCommandHandler` trait + `SlashCommandRegistry`
@@ -50,5 +50,5 @@ ADR-0054 for the design decisions.
 ## Status
 
 `SessionRegistry::create_session` / `close_session` are stubs (ADR-0037 Step 6,
-Pending). Today one session per process is driven by a `Harness` constructed in
-the application's `main.rs`; the multi-session daemon is the remaining step.
+Pending). Today the application's `main.rs` constructs one `SessionDriver` per
+process; moving that assembly into the registry is the remaining daemon step.

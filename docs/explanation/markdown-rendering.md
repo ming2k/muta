@@ -287,4 +287,4 @@ transparent and maintainable.
 | Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `crates/neenee-code/src/tui/layout.rs` |
 | Selection extraction (`get_selected_text`) | `crates/neenee-code/src/tui/selection.rs` |
 | Grid engine (`Grid`, `diff`, `Backend`) | `crates/neenee-tui/src/` |
-| Export-to-markdown (clipboard handoff) | `crates/neenee-server/src/export.rs` |
+| Export-to-markdown (clipboard handoff) | `crates/neenee-session/src/export.rs` |

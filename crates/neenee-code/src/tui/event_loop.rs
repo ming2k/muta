@@ -130,6 +130,8 @@ pub(super) fn apply_transcript_patch(
 pub(super) struct UiRuntime {
     pub current_provider: Arc<Mutex<String>>,
     pub current_model: Arc<Mutex<String>>,
+    /// Latest AI-visible context size for the primary session.
+    pub context_tokens: Arc<Mutex<Option<neenee_core::ContextTokenSnapshot>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     pub activity_status: Arc<Mutex<String>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
@@ -853,6 +855,7 @@ pub(super) async fn run_app_loop(
             );
         }
         app.parent_status = *runtime.parent_status.lock().await;
+        app.context_tokens = *runtime.context_tokens.lock().await;
         // Drain a pending side-view transition (enter/leave `/btw`).
         match runtime.side_view_signal.lock().await.take() {
             Some(crate::tui::event_loop::SideViewSignal::Opened { side_id, .. }) => {
@@ -1175,18 +1178,6 @@ pub(super) async fn run_app_loop(
                             };
                             if show { m.effort.as_deref() } else { None }
                         });
-                    // Authoritative context anchor for the meter: the most
-                    // recent provider-reported round's prompt+completion for
-                    // the active (provider, model). `None` before the first
-                    // response or for non-reporting providers, in which case
-                    // the bar falls back to the local transcript estimate.
-                    let hint_context_anchor = app
-                        .token_ledger
-                        .as_ref()
-                        .and_then(|ledger| {
-                            ledger.last_reported_round(&app.current_provider, &app.current_model)
-                        })
-                        .map(|round| round.prompt_tokens + round.completion_tokens);
                     app.hint_context_rect = render::draw_hint_bar(
                         f,
                         hint_rect,
@@ -1198,7 +1189,7 @@ pub(super) async fn run_app_loop(
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
                             unattended: app.unattended,
-                            last_reported_context: hint_context_anchor,
+                            context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                         },
                         &app.theme,
                     );
@@ -2119,7 +2110,7 @@ pub(super) async fn run_app_loop(
                     app.record_input_history(cmd.clone());
                     // `/serve` is a pure frontend concern (hot-attach a
                     // WebSocket listener to the running session). Intercept
-                    // it here rather than routing through agent_loop.
+                    // it here rather than routing through SessionDriver.
                     if cmd == "/serve" || cmd.starts_with("/serve ") {
                         let tokens = cmd.split_whitespace().collect::<Vec<_>>();
                         let mut port: u16 = 0;
@@ -2164,16 +2155,16 @@ pub(super) async fn run_app_loop(
                             // binds all interfaces and forces a bearer token that
                             // the client must send as `Authorization: Bearer <t>`.
                             let expose = if expose_public {
-                                neenee_server::serve::ServeExpose::Public
+                                neenee_session::serve::ServeExpose::Public
                             } else {
-                                neenee_server::serve::ServeExpose::Local
+                                neenee_session::serve::ServeExpose::Local
                             };
-                            let opts = neenee_server::serve::ServeOptions {
+                            let opts = neenee_session::serve::ServeOptions {
                                 port,
                                 expose,
                                 token: None,
                             };
-                            let handle = neenee_server::serve::start_server(
+                            let handle = neenee_session::serve::start_server(
                                 opts,
                                 app.tx.clone(),
                                 bc_tx,

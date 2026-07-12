@@ -2,7 +2,7 @@
 //! follow-up).
 //!
 //! The built-in command vocabulary ([`crate::startup::BuiltinCmd`]) is a
-//! closed set compiled into `neenee-server`: adding a built-in means editing
+//! closed set compiled into `neenee-session`: adding a built-in means editing
 //! the `define_builtin_commands!` macro *and* a `match` arm, so completion,
 //! `/help`, and dispatch can never drift.
 //!

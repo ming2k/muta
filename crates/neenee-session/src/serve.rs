@@ -9,7 +9,7 @@
 //!    (the TUI listener task taps each response into it).
 //! 3. Reads inbound [`AgentRequest`]s from the WebSocket and feeds them into
 //!    the same `req_tx` the TUI uses — so a browser request and a TUI
-//!    keystroke are indistinguishable to `agent_loop`.
+//!    keystroke are indistinguishable to [`crate::session_driver::SessionDriver`].
 //!
 //! The wire format is newline-delimited JSON: one `serde_json`-erialized
 //! `AgentRequest` or `AgentResponse` per WebSocket text frame.
@@ -283,7 +283,7 @@ async fn handle_connection(
                     }
                 }
             }
-            // browser → agent_loop
+            // browser → SessionDriver
             msg = ws_source.next() => {
                 match msg {
                     Some(Ok(WsMessage::Text(text))) => {

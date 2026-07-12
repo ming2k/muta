@@ -1,7 +1,7 @@
 //! Tests extracted from `main.rs`. These cover the orchestration layer
 //! (provider retry behavior, the proxy provider, retry-delay math), context-
 //! overflow classification, and the self-registration of built-in tools via
-//! `inventory`. None of them exercise `main.rs` / `agent_loop.rs` code
+//! `inventory`. None of them exercise `main.rs` / `session_driver.rs` code
 //! directly — they live here purely so the binary entry-point stays focused
 //! on wiring.
 

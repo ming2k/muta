@@ -1103,7 +1103,19 @@ pub fn relay_agent_event(
 ) {
     let response = match event {
         AgentEvent::Notice(notice) => turn(session_id, RoundEvent::Notice(notice)),
-        AgentEvent::ModelRequestStarted { tool_round } => {
+        AgentEvent::ModelRequestStarted {
+            tool_round,
+            context_tokens,
+        } => {
+            // The projection is session-scoped and was computed at the exact
+            // pre-wire boundary, after hooks and request preparation.
+            let _ = tx.send(turn(
+                session_id,
+                RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+                    tokens: context_tokens,
+                    source: neenee_core::ContextTokenSource::Projection,
+                }),
+            ));
             // Structured round signal first, so the Activity modal can show
             // `turn N · round M · waiting for model` with the round as a
             // first-class field rather than text-mining it out of the status
@@ -1116,6 +1128,9 @@ pub fn relay_agent_event(
                 session_id,
                 RoundEvent::Activity("waiting for model".to_string()),
             )
+        }
+        AgentEvent::ContextTokens(snapshot) => {
+            turn(session_id, RoundEvent::ContextTokens(snapshot))
         }
         AgentEvent::AssistantDelta { delta, start } => {
             if start {

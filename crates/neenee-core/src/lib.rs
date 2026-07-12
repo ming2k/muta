@@ -83,12 +83,13 @@ pub use doomguardconfig::DoomGuardConfig;
 pub use dynamic::DynamicCatalog;
 pub use envoy::{EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
-    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus, EnvoyEvent,
-    HarnessSnapshot, InputReply, InputRequest, McpServerInfo, ModelInfo, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
-    PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
-    ProviderPickerSnapshot, RoundEvent, SessionContextSnapshot, SessionOverview, SkillInfo,
-    ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus,
+    ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
+    InputRequest, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
+    NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
+    ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RoundEvent,
+    SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
+    UserQuestionReply, UserQuestionRequest,
 };
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
@@ -98,12 +99,13 @@ pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
-    PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens, estimate_tokens,
-    prune_tool_results,
+    PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens,
+    estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
 };
 pub use principal::{PrincipalProfile, PrincipalRuntimeConfig};
 pub use prompt::{
-    PromptChannel, PromptContext, PromptRegistry, PromptSection, ProviderPromptHints,
+    PromptChannel, PromptContext, PromptRegistry, PromptRegistryError, PromptSection,
+    ProviderPromptHints,
 };
 pub use session_review::{DEFAULT_REVIEWER_HARD_STOP, ReviewStatus, ReviewVerdict, SessionReview};
 pub use session_title::{TITLE_MAX_LEN, clean_title};
