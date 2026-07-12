@@ -58,6 +58,13 @@ impl TokenSourceTotals {
 /// of the bill so the report can show a per-round breakdown.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenRound {
+    /// 1-based harness turn index this round belongs to. `0` for legacy/bookings
+    /// made before the field existed (rendered as a fallback index).
+    #[serde(default)]
+    pub turn: u64,
+    /// 1-based model-request index within the turn. `0` = unknown/legacy.
+    #[serde(default)]
+    pub round: u32,
     /// `true` = authoritative provider usage; `false` = local char-class estimate.
     pub reported: bool,
     /// Reported input tokens (includes cache write+read for Anthropic).
@@ -364,6 +371,8 @@ mod tests {
             "anthropic",
             "claude",
             TokenRound {
+                turn: 0,
+                round: 0,
                 reported: true,
                 prompt_tokens: 1000,
                 completion_tokens: 200,

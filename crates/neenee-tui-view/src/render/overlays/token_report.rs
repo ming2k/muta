@@ -273,7 +273,7 @@ fn detail_body<'a>(
     body.push(Line::from(Span::styled(
         format!(
             "{:>3}  {:<9}{:>9}{:>9}{:>9}   {:<13}",
-            "#", "Source", "Input", "Output", "Total", "Cache r/w"
+            "Rnd", "Source", "Input", "Output", "Total", "Cache r/w"
         ),
         Style::default().fg(theme.muted()),
     )));
@@ -281,7 +281,18 @@ fn detail_body<'a>(
     if row.rounds.is_empty() {
         body.push(placeholder("No per-round detail.", true, theme.muted()));
     }
+    let mut current_turn: Option<u64> = None;
     for (i, r) in row.rounds.iter().enumerate() {
+        if r.turn != 0 && current_turn != Some(r.turn) {
+            current_turn = Some(r.turn);
+            body.push(Line::from(""));
+            body.push(Line::from(Span::styled(
+                format!("Turn {}", r.turn),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
         let (src, src_color) = if r.reported {
             ("upstream", theme.ok())
         } else {
@@ -301,9 +312,14 @@ fn detail_body<'a>(
         } else {
             "—".to_string()
         };
+        let round_label = if r.round == 0 {
+            i + 1
+        } else {
+            r.round as usize
+        };
         body.push(Line::from(vec![
             Span::styled(
-                format!("{:>3}  ", i + 1),
+                format!("{:>3}  ", round_label),
                 Style::default().fg(theme.muted()),
             ),
             Span::styled(format!("{:<9}", src), Style::default().fg(src_color)),

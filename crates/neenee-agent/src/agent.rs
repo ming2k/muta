@@ -893,11 +893,14 @@ impl Agent {
         state: &mut TurnState,
         response: &Message,
         streamed_usage: Option<TokenUsage>,
+        tool_rounds: usize,
     ) -> Option<usize> {
         let provider_id = self.provider.provider_id();
         let model = self.provider.model();
         // Prefer the usage the provider reported (streamed, then drained).
         let reported = streamed_usage.or_else(|| self.provider.take_last_usage());
+        let turn = self.turn_count();
+        let round = tool_rounds.saturating_add(1) as u32;
         if let Some(usage) = reported {
             state.token_usage.total_tokens += usage.total_tokens;
             state.token_usage.prompt_tokens += usage.prompt_tokens;
@@ -919,6 +922,8 @@ impl Agent {
                     &provider_id,
                     &model,
                     neenee_core::TokenRound {
+                        turn,
+                        round,
                         reported: true,
                         prompt_tokens: usage.prompt_tokens,
                         completion_tokens: usage.completion_tokens,
@@ -945,7 +950,17 @@ impl Agent {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
             {
-                ledger.record(&provider_id, &model, estimated, false);
+                ledger.record_round(
+                    &provider_id,
+                    &model,
+                    neenee_core::TokenRound {
+                        turn,
+                        round,
+                        reported: false,
+                        total_tokens: estimated,
+                        ..Default::default()
+                    },
+                );
             }
         }
         None
@@ -1816,7 +1831,9 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
-            if let Some(context_tokens) = self.book_turn_usage(&mut state, &response, None) {
+            if let Some(context_tokens) =
+                self.book_turn_usage(&mut state, &response, None, tool_rounds)
+            {
                 on_event(AgentEvent::ContextTokens(
                     neenee_core::ContextTokenSnapshot {
                         tokens: context_tokens,
@@ -2091,7 +2108,7 @@ impl Agent {
                 return Err(empty_response_error(&response));
             }
             if let Some(context_tokens) =
-                self.book_turn_usage(&mut state, &response, streamed_usage.take())
+                self.book_turn_usage(&mut state, &response, streamed_usage.take(), tool_rounds)
             {
                 on_event(AgentEvent::ContextTokens(
                     neenee_core::ContextTokenSnapshot {

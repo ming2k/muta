@@ -219,6 +219,10 @@ impl SessionDriver {
             ));
         }
         while let Some(req) = req_rx.recv().await {
+            let pre_session_id = session.id().await;
+            let pre_projection = agent
+                .estimate_next_request_tokens(&session.model_window().await)
+                .total_tokens;
             match req {
                 AgentRequest::Interrupt => {
                     crate::handlers_permission::interrupt(&agent, &session, &resp_tx, &ctt_clone)
@@ -587,22 +591,30 @@ impl SessionDriver {
                 }
             }
 
-            // Every request may mutate the active model window or request
-            // configuration (session/provider/tool/skill switches included).
-            // Publish a fresh session-scoped projection after dispatch. A
-            // provider-reported snapshot emitted by a completed model request
-            // supersedes this estimate until the next mutation.
-            let session_id = session.id().await;
-            let projected = agent
+            // Compare against the post-dispatch projection and only re-publish
+            // when the AI-visible context changed.
+            let post_session_id = session.id().await;
+            let post_projection = agent
                 .estimate_next_request_tokens(&session.model_window().await)
                 .total_tokens;
-            let _ = resp_tx.send(turn(
-                &session_id,
-                neenee_core::RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
-                    tokens: projected,
-                    source: neenee_core::ContextTokenSource::Projection,
-                }),
-            ));
+            let session_changed = post_session_id != pre_session_id;
+
+            // Re-publish a session-scoped projection only when the AI-visible
+            // context actually changed this request (session switch, `/clear`,
+            // `/compact`, provider/tool/skill change, …). Comparing the pre-
+            // and post-dispatch estimates — rather than enumerating request
+            // variants — keeps a non-driving command echo (or any no-op
+            // request) from overwriting a fresh provider-reported context
+            // anchor with the lower local estimate.
+            if session_changed || post_projection != pre_projection {
+                let _ = resp_tx.send(turn(
+                    &post_session_id,
+                    neenee_core::RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+                        tokens: post_projection,
+                        source: neenee_core::ContextTokenSource::Projection,
+                    }),
+                ));
+            }
         }
     }
 }
