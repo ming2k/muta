@@ -31,7 +31,6 @@ use futures::stream::{self, BoxStream};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{
     Agent, AgentEvent, AgentOp, EnvoyEvent, EnvoyTool, Message, Provider, ProviderStreamEvent,
     Role, ToolCall,
@@ -66,7 +65,6 @@ async fn inject_user_message_lands_in_transcript() {
     let agent = Arc::new(Agent::new(
         Arc::new(IdleProvider),
         Vec::new(),
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let handle = agent.install_inbox();
@@ -156,7 +154,6 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
     let agent = Arc::new(Agent::new(
         Arc::new(WriteCallProvider(AtomicUsize::new(0))),
         vec![Arc::new(BrokerGatedTool(Arc::clone(&ran)))],
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let handle = agent.install_inbox();
@@ -208,7 +205,6 @@ async fn handle_reply_is_noop_after_agent_dropped() {
     let agent = Arc::new(Agent::new(
         Arc::new(IdleProvider),
         Vec::new(),
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let handle = agent.install_inbox();
@@ -287,7 +283,6 @@ async fn streaming_loop_fires_permission_broker_direct() {
     let agent = Arc::new(Agent::new(
         Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),
         vec![Arc::new(BrokerGatedTool(Arc::clone(&ran))) as Arc<dyn Tool>],
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     agent.set_unattended(false);

@@ -1,18 +1,16 @@
 //! The `todo` and `todo_update` tools.
 //!
-//! These are orchestration-layer tools: they implement the core [`Tool`]
-//! trait but mutate shared agent-owned state (`TodoToolContext`) rather than
-//! touching the filesystem. They live here — not in `neenee-tools` alongside
-//! the stateless file tools — because they need the same `Arc<Mutex<TodoList>>`
-//! cell the `Agent` owns. Domain types (`TodoList`, `TodoStatus`, etc.) stay
-//! in `neenee-core`; this module only wires them into the tool interface.
+//! They implement the core [`Tool`] contract and mutate an injected
+//! [`TodoToolContext`]. The agent owns the underlying state; this crate owns
+//! the concrete tool implementations.
 
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde_json::json;
 
-use neenee_core::{MAX_TODOS, TodoStatus, TodoToolContext, Tool};
+use neenee_core::{MAX_TODOS, TodoList, TodoStatus, Tool};
 
 const TODO_DESCRIPTION: &str = "Maintain the task list for the current work. Replace the whole list each call with the current \
      set of concrete steps, in the order you intend to tackle them. At most one item may be \
@@ -20,6 +18,36 @@ const TODO_DESCRIPTION: &str = "Maintain the task list for the current work. Rep
      panel and persisted across restarts, so keep it honest: add an item when you commit to a step, \
      move it to in_progress when you start, and to completed the moment it is done. The returned \
      list reflects the reconciled state (items keep their identity when you resend the same content).";
+
+/// Shared handle injected into the todo tools so they mutate the live state
+/// owned by the agent that dispatches them.
+#[derive(Clone)]
+pub struct TodoToolContext {
+    todos: Arc<Mutex<TodoList>>,
+    turn_counter: Arc<Mutex<u64>>,
+}
+
+impl TodoToolContext {
+    pub fn new(todos: Arc<Mutex<TodoList>>, turn_counter: Arc<Mutex<u64>>) -> Self {
+        Self {
+            todos,
+            turn_counter,
+        }
+    }
+
+    pub fn todos(&self) -> TodoList {
+        self.todos.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_todos(&self, list: TodoList) {
+        let mut guard = self.todos.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = list;
+    }
+
+    pub fn current_turn(&self) -> u64 {
+        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// Full-replace todo tool. The model sends the desired list each call; the
 /// tool reconciles it against the current list preserving identity (see

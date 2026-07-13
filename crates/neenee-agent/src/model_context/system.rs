@@ -1,33 +1,26 @@
-//! System-prompt assembly and skill injection (ADR-0039).
+//! System-prompt sections and policy registries (ADR-0056).
 //!
 //! The system prompt is no longer one imperative method that pushes string
-//! literals into a `Vec`. It is a [`PromptRegistry`] of declarative
-//! [`PromptSection`]s — one per behavioral paragraph — registered on the
-//! [`Agent`] at construction. [`Agent::ensure_system_prompt`] rebuilds the
-//! context from live agent state each round and asks the registry to compose
-//! the active system sections in rank order.
+//! literals into a `Vec`. It is a [`SystemPromptRegistry`] of declarative
+//! [`SystemPromptSection`]s — one per behavioral paragraph — registered on the
+//! [`Agent`](crate::Agent) at construction. The `model_context` request funnel
+//! rebuilds the singleton system message from live agent state before every
+//! provider request.
 //!
 //! The default system sections ([`IdentityPreamble`], [`ToneGuidance`],
 //! [`PersistenceGuidance`], [`PursuitObjective`], [`DelegationGuidance`])
 //! compose the system message in rank order: sections
 //! that need a visual gap include a leading `\n` in their own `render`, so
 //! joining on a single `\n` preserves a stable layout.
-//!
-//! [`Agent::inject_implicit_skills`] stays here for now (it is a user-channel
-//! injection); ADR-0039 stage 4 will fold it into a user-channel section.
-
-use crate::{
-    Agent, InjectionKind, InjectionOrigin, Message, PromptChannel, PromptContext, PromptRegistry,
-    PromptSection, Role,
-};
+use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
 use neenee_core::{REVIEW, SessionReview};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Default system-channel sections.
+// Default system-prompt sections.
 //
 // Each is a zero-sized struct: the only state a section needs is the live
-// turn state, which arrives via [`PromptContext`]. That makes each section
+// turn state, which arrives via [`SystemPromptContext`]. That makes each section
 // individually unit-testable and individually re-orderable / disable-able.
 // ---------------------------------------------------------------------------
 
@@ -35,23 +28,17 @@ use std::sync::Arc;
 /// embedding. Empty preamble (tests / identity-less agents) → inactive.
 struct IdentityPreamble;
 
-impl PromptSection for IdentityPreamble {
+impl SystemPromptSection for IdentityPreamble {
     fn id(&self) -> &'static str {
         "system.identity_preamble"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         10
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.identity_preamble.is_empty()
     }
-    fn render(&self, ctx: &PromptContext) -> Option<String> {
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
         Some(ctx.identity_preamble.clone())
     }
 }
@@ -60,20 +47,14 @@ impl PromptSection for IdentityPreamble {
 /// Exists as a structural slot for future tone directives.
 struct ToneGuidance;
 
-impl PromptSection for ToneGuidance {
+impl SystemPromptSection for ToneGuidance {
     fn id(&self) -> &'static str {
         "system.tone"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         20
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         None
     }
 }
@@ -84,23 +65,17 @@ impl PromptSection for ToneGuidance {
 /// entry is the single source of truth. Empty for all known models today.
 struct ModelGuidance;
 
-impl PromptSection for ModelGuidance {
+impl SystemPromptSection for ModelGuidance {
     fn id(&self) -> &'static str {
         "system.model_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         25
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.model_guidance.is_empty()
     }
-    fn render(&self, ctx: &PromptContext) -> Option<String> {
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
         if ctx.model_guidance.is_empty() {
             None
         } else {
@@ -113,23 +88,17 @@ impl PromptSection for ModelGuidance {
 /// facts about their wire projection; the prompt registry owns rendering them.
 struct ProviderGuidance;
 
-impl PromptSection for ProviderGuidance {
+impl SystemPromptSection for ProviderGuidance {
     fn id(&self) -> &'static str {
         "system.provider_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         27
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         !ctx.provider_guidance.is_empty()
     }
-    fn render(&self, ctx: &PromptContext) -> Option<String> {
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
         if ctx.provider_guidance.is_empty() {
             None
         } else {
@@ -149,20 +118,14 @@ const PERSISTENCE: &str = "\nSee the task through to a real result in this turn.
                            it yourself before yielding; only hand back to the user when the work \
                            is actually done or you genuinely need their input.";
 
-impl PromptSection for PersistenceGuidance {
+impl SystemPromptSection for PersistenceGuidance {
     fn id(&self) -> &'static str {
         "system.persistence"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         35
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(PERSISTENCE))
     }
 }
@@ -183,23 +146,17 @@ const UNATTENDED: &str = "\nYou are running unattended: no human is reachable th
                           irreversible or high-stakes choice you made on your own in your final \
                           summary instead of stopping to ask.";
 
-impl PromptSection for UnattendedGuidance {
+impl SystemPromptSection for UnattendedGuidance {
     fn id(&self) -> &'static str {
         "system.unattended"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         36
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.unattended
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(UNATTENDED))
     }
 }
@@ -208,23 +165,17 @@ impl PromptSection for UnattendedGuidance {
 /// it from the guidance paragraphs above.
 struct PursuitObjective;
 
-impl PromptSection for PursuitObjective {
+impl SystemPromptSection for PursuitObjective {
     fn id(&self) -> &'static str {
         "system.pursuit_objective"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         40
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.pursuit.is_some()
     }
-    fn render(&self, ctx: &PromptContext) -> Option<String> {
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
         let pursuit = ctx.pursuit.as_ref()?;
         let state_label = if pursuit.is_complete {
             "complete"
@@ -251,25 +202,19 @@ const DELEGATION: &str = "\nFor open-ended exploration or gathering broad contex
                           For needle queries (a known path or a specific symbol) go direct: read \
                           or search the target yourself.";
 
-impl PromptSection for DelegationGuidance {
+impl SystemPromptSection for DelegationGuidance {
     fn id(&self) -> &'static str {
         "system.delegation_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         55
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
             .iter()
             .any(|name| name == "envoy" || name == "task")
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(DELEGATION))
     }
 }
@@ -290,30 +235,24 @@ const FILE_EDITING: &str = "\nWhen a dedicated tool exists for an operation, pre
                             half-written file behind if a turn is interrupted; a shell pipeline \
                             is none of those.";
 
-impl PromptSection for FileEditingGuidance {
+impl SystemPromptSection for FileEditingGuidance {
     fn id(&self) -> &'static str {
         "system.file_editing_guidance"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         56
     }
-    fn is_active(&self, ctx: &PromptContext) -> bool {
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
             .iter()
             .any(|name| name == "write_file" || name == "edit_file")
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(FILE_EDITING))
     }
 }
 
-/// Build the registry with the default system-channel sections, in rank
+/// Build the registry with the default system-prompt sections, in rank
 /// order. Called by [`Agent::builder`]; an embedding may add, reorder, or
 /// disable sections on [`crate::AgentBuilder`] before freezing the agent.
 ///
@@ -321,8 +260,8 @@ impl PromptSection for FileEditingGuidance {
 /// model discovers them lazily via the `list_skills` tool and loads bodies on
 /// demand via `use_skill`. Injecting a catalog up front bloats every turn for
 /// a benefit the tools already cover.
-pub(crate) fn default_prompt_registry() -> PromptRegistry {
-    let mut registry = PromptRegistry::new();
+pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
+    let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
@@ -336,11 +275,11 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Session-review system-channel sections (ADR-0039 stage 6).
+// Session-review system-prompt sections (ADR-0039 stage 6).
 //
 // The `/review` diagnostic spawns a read-only reviewer envoy that used to
 // pre-seed its system message (`build_reviewer_system_prompt`) and then run
-// the streaming turn loop. But `ensure_system_prompt` replaces any leading
+// the streaming turn loop. But `ensure_system_message` replaces any leading
 // system message on round 1, so the seeded persona + dimensions + JSON
 // contract were clobbered by the default registry's tone+todo and never
 // reached the model — the feature limped along only because verdict parsing
@@ -352,20 +291,14 @@ pub(crate) fn default_prompt_registry() -> PromptRegistry {
 /// The [`REVIEW`] role framing.
 struct ReviewPersona;
 
-impl PromptSection for ReviewPersona {
+impl SystemPromptSection for ReviewPersona {
     fn id(&self) -> &'static str {
         "review.persona"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         10
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(REVIEW.system_prompt))
     }
 }
@@ -373,25 +306,19 @@ impl PromptSection for ReviewPersona {
 /// The list of registered review dimensions to evaluate, pre-rendered from
 /// the live `[SessionReview]` set. Carried as owned text because the dimension
 /// list is bespoke per `/review` run and does not fit the shared
-/// [`PromptContext`].
+/// [`SystemPromptContext`].
 struct ReviewDimensions {
     body: String,
 }
 
-impl PromptSection for ReviewDimensions {
+impl SystemPromptSection for ReviewDimensions {
     fn id(&self) -> &'static str {
         "review.dimensions"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         20
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(self.body.clone())
     }
 }
@@ -407,20 +334,14 @@ const REVIEW_JSON_CONTRACT: &str = "Return ONLY a JSON object (no markdown, no p
      slow or risky but not stuck, and \"stuck\" only when the agent is clearly \
      looping without converging. Include one entry per dimension.";
 
-impl PromptSection for ReviewJsonContract {
+impl SystemPromptSection for ReviewJsonContract {
     fn id(&self) -> &'static str {
         "review.json_contract"
-    }
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
     fn rank(&self) -> u32 {
         30
     }
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(REVIEW_JSON_CONTRACT))
     }
 }
@@ -445,118 +366,16 @@ fn render_review_dimensions(dimensions: &[Arc<dyn SessionReview>]) -> String {
 
 /// Build the reviewer envoy's prompt registry: persona + dimensions + JSON
 /// contract. Installed on the reviewer via
-/// [`crate::AgentBuilder::with_prompt_registry`] so its head system message —
+/// [`crate::AgentBuilder::with_system_prompt_registry`] so its head system message —
 /// rebuilt every round — is the review composition.
-pub(crate) fn reviewer_prompt_registry(dimensions: &[Arc<dyn SessionReview>]) -> PromptRegistry {
-    let mut registry = PromptRegistry::new();
+pub(crate) fn reviewer_system_prompt_registry(
+    dimensions: &[Arc<dyn SessionReview>],
+) -> SystemPromptRegistry {
+    let mut registry = SystemPromptRegistry::new();
     registry.register(ReviewPersona);
     registry.register(ReviewDimensions {
         body: render_review_dimensions(dimensions),
     });
     registry.register(ReviewJsonContract);
     registry
-}
-
-impl Agent {
-    /// Derive the read-only prompt context from live agent state. Owned plain
-    /// data (ADR-0039): rebuilt each round, no `&Agent` leaks into sections.
-    pub(crate) fn build_prompt_context(&self, messages: &[Message]) -> PromptContext {
-        let tool_names: Vec<String> = self
-            .visible_tools()
-            .iter()
-            .map(|t| t.name().to_string())
-            .collect();
-        let last_visible_user_text = messages
-            .iter()
-            .filter(|m| m.role == Role::User && !m.hidden)
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let model_guidance = neenee_core::resolve_model(&self.provider.model()).model_guidance;
-        let provider_guidance = self.provider.prompt_hints().system_guidance;
-        PromptContext {
-            identity_preamble: self.identity.preamble(),
-            pursuit: self.get_pursuit(),
-            tool_names,
-            last_visible_user_text,
-            model_guidance,
-            provider_guidance,
-            unattended: self.get_unattended(),
-        }
-    }
-
-    /// Compose the system message from live state and place it at the head of
-    /// the conversation, replacing an existing leading system message in place
-    /// or inserting a new one.
-    pub(crate) fn ensure_system_prompt(&self, messages: &mut Vec<Message>) {
-        let ctx = self.build_prompt_context(messages);
-        let system = self.prompt_registry.build_system_message(&ctx);
-        match messages.first_mut() {
-            Some(first) if first.role == Role::System => *first = system,
-            _ => messages.insert(0, system),
-        }
-    }
-
-    /// Single pre-request funnel for both turn loops: drop empty assistant
-    /// tails, rebuild the head system message, then auto-load mentioned
-    /// skills. Collapses the previously duplicated triple at the two
-    /// round-boundary call sites (ADR-0039).
-    pub(crate) fn prepare_turn_messages(&self, messages: &mut Vec<Message>) {
-        crate::agent::remove_empty_assistant_messages(messages);
-        // Project out non-driving command echoes so they never reach the
-        // provider, while remaining durable + visible on resume/export. The
-        // predicate is the single `is_command_echo` check; this funnel is the
-        // one pre-wire chokepoint every backend passes through (ADR-0050).
-        messages.retain(|m| !m.is_command_echo());
-        self.ensure_system_prompt(messages);
-        self.inject_implicit_skills(messages);
-    }
-
-    /// Auto-load skills whose names are mentioned in the latest user turn.
-    /// Mentioned skills are injected as hidden user messages so the model
-    /// behaves as if the skill content was explicitly loaded.
-    pub(crate) fn inject_implicit_skills(&self, messages: &mut Vec<Message>) {
-        let text = messages
-            .iter()
-            .filter(|m| m.role == Role::User && !m.hidden)
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.is_empty() {
-            return;
-        }
-
-        let already_loaded: std::collections::HashSet<String> = messages
-            .iter()
-            .filter(|m| m.role == Role::User && m.hidden)
-            .filter_map(|m| {
-                let prefix = "[Skill '";
-                let start = m.content.find(prefix)? + prefix.len();
-                let end = m.content[start..].find("' loaded]")?;
-                Some(m.content[start..start + end].to_string())
-            })
-            .collect();
-
-        let mentioned: Vec<String> = {
-            let registry = self.skills_registry.lock();
-            registry
-                .resolve_mentions(&text)
-                .into_iter()
-                .map(|s| s.name)
-                .filter(|name| !already_loaded.contains(name))
-                .collect()
-        };
-
-        for name in mentioned {
-            // Body is loaded lazily (and cached) on first use of this skill.
-            let Some(Ok(content)) = self.skills_registry.body_for(&name) else {
-                continue;
-            };
-            messages.push(Message::injected(
-                Role::User,
-                format!("[Skill '{}' loaded]\n{}\n[/Skill]", name, content),
-                InjectionOrigin::new(InjectionKind::ImplicitSkill).with_reason(name),
-            ));
-        }
-    }
 }

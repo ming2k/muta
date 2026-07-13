@@ -7,8 +7,8 @@
 use std::sync::{Arc, RwLock};
 
 use neenee_agent::orchestration::ProxyProvider;
-use neenee_agent::skills::SkillRegistry;
 use neenee_core::Provider;
+use neenee_skills::SkillRegistry;
 use neenee_store::{RepeatStore, config::Config, embedding, provider_usage::ProviderUsage};
 use tokio::sync::RwLock as AsyncRwLock;
 

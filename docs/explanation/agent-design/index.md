@@ -72,10 +72,10 @@ model of one agent round.
    gate the flag controls) from the broader *expressed* posture
    (no confirmations, no questions), and the contexts where the flag is
    forced on. The autonomous counterpart to user questions, read as a pair.
-11. [Skills](skills.md) — on-demand domain expertise: the two-channel model
-   (catalog in the system prompt, body on demand), the source/priority
-   cascade, and explicit versus implicit invocation. The reference for the
-   extension surface that adds instructions rather than tools.
+11. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
+   lazy body loading, the source/priority cascade, and explicit versus
+   implicit invocation. The reference for the extension surface that adds
+   instructions rather than tools.
 12. [Lifecycle hooks](hooks.md) — user-configured actions that fire on the
    agent's lifecycle events (tool call, round end, session start, compaction).
    One event axis with capability implied by the event; the reference for
@@ -108,7 +108,7 @@ to see how the canon fits together:
 user message
   └─ [Harness] execute_round
        ├─ [Session]   use the durable model window and projection metadata
-       ├─ [Prompt]    rebuild system prompt and request-scoped model context
+       ├─ [Context]   prepare request messages and rebuild the system prompt
        └─ [Pursuits]  active pursuit injected into the prompt
        └─ [Hooks]     UserPromptSubmit: deny? / prepend context
        └─ [Provider] stream tokens; reconstruct native tool-call deltas

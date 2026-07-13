@@ -2,8 +2,8 @@
 //!
 //! Lives in `neenee-core` for the same reason [`crate::WebSearchConfig`] and
 //! [`crate::McpServerConfig`] do: the app-layer `Config` owns the `[skills]`
-//! table and the loader (in `neenee-agent::skills`) needs to read it, and
-//! `neenee-store` does not depend on `neenee-agent`.
+//! table and the loader in `neenee-skills` needs to read it, while the store
+//! does not depend on that implementation crate.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,14 +17,12 @@ pub struct SkillsConfig {
     pub urls: Vec<String>,
     /// Skill names to disable (case-sensitive).
     pub disabled: Vec<String>,
-    /// Whether bundled system skills are enabled.
-    pub bundled: bool,
 }
 
 impl SkillsConfig {
     /// True when no skill configuration is present.
     pub fn is_empty(&self) -> bool {
-        self.paths.is_empty() && self.urls.is_empty() && self.disabled.is_empty() && !self.bundled
+        self.paths.is_empty() && self.urls.is_empty() && self.disabled.is_empty()
     }
 
     /// True when the given skill name is disabled.

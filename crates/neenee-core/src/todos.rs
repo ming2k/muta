@@ -3,12 +3,10 @@
 //!
 //! One list, one sticky panel, one persisted field.
 //!
-//! Architecture: domain types live here, a shared [`TodoToolContext`] holds
-//! the `Arc<Mutex<TodoList>>` that the host `Agent` (in `neenee-agent`) also
-//! owns. The concrete `todo` / `todo_update` tools live in `neenee-agent`
-//! (`todo_tools`); they mutate the shared cell so a call takes effect
-//! immediately. The harness mirrors the cell back into the session each turn
-//! (event-sourced) and replays it on resume.
+//! Domain types live here. The agent owns the live task-list cells, while the
+//! concrete `todo` / `todo_update` implementations and their injected context
+//! live in `neenee-tools`. The harness mirrors their state back into the
+//! session each turn and replays it on resume.
 //!
 //! ## Identity vs. display
 //! [`TodoItem::id`] is a stable, monotonic identifier used for persistence
@@ -20,7 +18,6 @@
 //! can reorder or shrink without breaking references.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -291,38 +288,6 @@ pub fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-/// Shared handle injected into the todo tools so they can read and mutate
-/// the live [`TodoList`]. The same `Arc`s are held by the host `Agent` (in
-/// `neenee-agent`), so a tool call is visible to the agent, the harness, and
-/// the TUI immediately.
-#[derive(Clone)]
-pub struct TodoToolContext {
-    todos: Arc<Mutex<TodoList>>,
-    turn_counter: Arc<Mutex<u64>>,
-}
-
-impl TodoToolContext {
-    pub fn new(todos: Arc<Mutex<TodoList>>, turn_counter: Arc<Mutex<u64>>) -> Self {
-        Self {
-            todos,
-            turn_counter,
-        }
-    }
-
-    pub fn todos(&self) -> TodoList {
-        self.todos.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    pub fn set_todos(&self, list: TodoList) {
-        let mut guard = self.todos.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = list;
-    }
-
-    pub fn current_turn(&self) -> u64 {
-        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner())
-    }
 }
 
 #[cfg(test)]

@@ -65,6 +65,48 @@ fn apply_height_invalidation(cache: &mut render::HeightCache, invalidation: Heig
     }
 }
 
+/// Whether the transcript slice painted this frame changed shape.
+///
+/// Primary and `/btw` side transcripts advance independently. Bottom-follow
+/// staging must track the one currently on screen: staging every background
+/// side update while viewing the primary transcript would add a needless
+/// second layout pass, while ignoring side updates reproduces the one-frame
+/// stale-scroll flash that staging exists to prevent. A view transition also
+/// replaces the painted slice without requiring either transcript version to
+/// advance, so it always invalidates the displayed geometry.
+fn displayed_transcript_did_change(
+    in_side_view: bool,
+    primary_changed: bool,
+    side_changed: bool,
+    view_transitioned: bool,
+) -> bool {
+    view_transitioned
+        || if in_side_view {
+            side_changed
+        } else {
+            primary_changed
+        }
+}
+
+#[cfg(test)]
+mod displayed_transcript_change_tests {
+    use super::displayed_transcript_did_change;
+
+    #[test]
+    fn tracks_only_the_transcript_currently_on_screen() {
+        assert!(displayed_transcript_did_change(false, true, false, false));
+        assert!(!displayed_transcript_did_change(false, false, true, false));
+        assert!(displayed_transcript_did_change(true, false, true, false));
+        assert!(!displayed_transcript_did_change(true, true, false, false));
+    }
+
+    #[test]
+    fn view_transition_always_changes_displayed_geometry() {
+        assert!(displayed_transcript_did_change(false, false, false, true));
+        assert!(displayed_transcript_did_change(true, false, false, true));
+    }
+}
+
 /// Replay high-frequency stream changes into the app-owned transcript. Returns
 /// `false` when the local copy cannot safely apply the patch, making the caller
 /// fall back to a full snapshot. The fallback preserves correctness across a
@@ -225,6 +267,39 @@ pub(super) struct UiRuntime {
     /// as a signal (not direct `App` mutation) because the listener and the
     /// loop own disjoint halves of `App`'s state.
     pub unsent_input_signal: Arc<Mutex<Option<UnsentInput>>>,
+    /// Ordered protocol acknowledgements for the compact outbox. The response
+    /// listener cannot mutate `App`, so it forwards only these small signals.
+    pub outbox_signals: Arc<Mutex<VecDeque<OutboxSignal>>>,
+}
+
+pub(super) enum OutboxSignal {
+    Inserted {
+        session_id: String,
+        input_id: String,
+    },
+    Unavailable {
+        session_id: String,
+        input_id: String,
+    },
+    Cancelled {
+        session_id: String,
+        input_id: String,
+    },
+    CancelFailed {
+        session_id: String,
+        input_id: String,
+    },
+    NextRoundStarted {
+        session_id: String,
+        input_id: String,
+    },
+    RoundCompleted {
+        session_id: String,
+    },
+    HarnessState {
+        session_id: String,
+        idle: bool,
+    },
 }
 
 /// A pending `/btw` side-view transition queued by the response listener and
@@ -841,7 +916,8 @@ pub(super) async fn run_app_loop(
         // while the side view is open and the user briefly returns to the
         // primary transcript.
         let side_messages_version = runtime.side_messages.version();
-        if side_messages_version != app.side_messages_version {
+        let side_transcript_changed = side_messages_version != app.side_messages_version;
+        if side_transcript_changed {
             let patch = runtime.side_messages.take_transcript_patch();
             if !apply_transcript_patch(&mut app.side_messages, patch) {
                 app.side_messages = runtime.side_messages.read().await.clone();
@@ -856,15 +932,23 @@ pub(super) async fn run_app_loop(
         }
         app.parent_status = *runtime.parent_status.lock().await;
         // Drain a pending side-view transition (enter/leave `/btw`).
-        match runtime.side_view_signal.lock().await.take() {
+        let side_view_transitioned = match runtime.side_view_signal.lock().await.take() {
             Some(crate::tui::event_loop::SideViewSignal::Opened { side_id, .. }) => {
                 app.enter_side_view(side_id);
+                true
             }
             Some(crate::tui::event_loop::SideViewSignal::Closed) => {
                 app.exit_side_view();
+                true
             }
-            None => {}
-        }
+            None => false,
+        };
+        let displayed_transcript_changed = displayed_transcript_did_change(
+            app.in_side_view,
+            transcript_changed,
+            side_transcript_changed,
+            side_view_transitioned,
+        );
         let primary_session_id = session.id().await;
         let viewed_session_id = if app.in_side_view {
             app.side_session_id
@@ -880,6 +964,63 @@ pub(super) async fn run_app_loop(
             .await
             .get(&viewed_session_id)
             .copied();
+
+        // Apply protocol acknowledgements before handling the next key. The
+        // transcript listener has already committed admitted/started messages;
+        // this side owns only compact outbox and composer state.
+        while let Some(signal) = runtime.outbox_signals.lock().await.pop_front() {
+            match signal {
+                OutboxSignal::Inserted {
+                    session_id,
+                    input_id,
+                }
+                | OutboxSignal::NextRoundStarted {
+                    session_id,
+                    input_id,
+                } => {
+                    app.remove_dispatch(&session_id, &input_id);
+                }
+                OutboxSignal::Unavailable {
+                    session_id,
+                    input_id,
+                } => app.promote_to_next_round(&session_id, &input_id),
+                OutboxSignal::Cancelled {
+                    session_id,
+                    input_id,
+                } => {
+                    if let Some(mut dispatch) = app.remove_dispatch(&session_id, &input_id) {
+                        if session_id == viewed_session_id && app.input.is_empty() {
+                            app.restore_dispatch(dispatch);
+                        } else {
+                            dispatch.target = crate::tui::app::SendTarget::NextRound;
+                            dispatch.state = crate::tui::app::QueuedDispatchState::Waiting;
+                            app.pending_dispatch.push_back(dispatch);
+                        }
+                    }
+                }
+                OutboxSignal::CancelFailed {
+                    session_id,
+                    input_id,
+                } => app.cancel_failed(&session_id, &input_id),
+                OutboxSignal::RoundCompleted { session_id } => {
+                    app.naturally_completed_sessions.insert(session_id);
+                }
+                OutboxSignal::HarnessState { session_id, idle } => {
+                    if idle {
+                        app.running_sessions.remove(&session_id);
+                        app.idle_sessions.insert(session_id);
+                    } else {
+                        app.idle_sessions.remove(&session_id);
+                        // A fresh round invalidates any older success token.
+                        // Its own next-round items must wait for this round's
+                        // terminal result; if it errors or is interrupted they
+                        // remain paused.
+                        app.naturally_completed_sessions.remove(&session_id);
+                        app.running_sessions.insert(session_id);
+                    }
+                }
+            }
+        }
 
         // Drain a pending Phase-1 unsend: the user interrupted before any model
         // output arrived, the harness reverted the conversation context, and the
@@ -899,48 +1040,39 @@ pub(super) async fn run_app_loop(
             app.completion_dismissed = true;
         }
 
-        // Drain the send queue when the harness returns to idle. The
-        // response listener flips `is_responding` to false on the
-        // `loop_status == "idle"` HarnessState snapshot, so reaching here
-        // with a non-empty `pending_dispatch` means a turn just finished
-        // (or the app just started) and the next queued user message is
-        // ready to ship. FIFO: the front of the queue pairs with the first
-        // transcript message still carrying `DeliveryStatus::Queued`.
-        if !runtime.is_responding.load(Ordering::SeqCst)
-            && app.loop_status == "idle"
-            && let Some(dispatch) = app.pending_dispatch.pop_front()
+        // A next-round item auto-runs only after both a natural-completion
+        // event and the matching session's idle snapshot. Error, interrupt,
+        // blocked-hook and vanished-session paths leave it visibly paused.
+        let ready_session = app
+            .naturally_completed_sessions
+            .iter()
+            .find(|session_id| {
+                app.idle_sessions.contains(*session_id)
+                    && app.pending_dispatch.iter().any(|item| {
+                        item.session_id == session_id.as_str()
+                            && item.target == crate::tui::app::SendTarget::NextRound
+                            && item.state == crate::tui::app::QueuedDispatchState::Waiting
+                    })
+            })
+            .cloned();
+        if let Some(session_id) = ready_session
+            && let Some(dispatch) = app.begin_next_round_dispatch(&session_id)
         {
             let sent_at_ms = now_epoch_ms();
-            let round = runtime.round_count.lock().await.saturating_add(1);
-            let mut messages = runtime.messages.write().await;
-            let flipped = messages
-                .iter_mut()
-                .find(|m| {
-                    m.role == Role::User
-                        && m.delivery == crate::tui::document::DeliveryStatus::Queued
-                })
-                .map(|m| {
-                    m.delivery = crate::tui::document::DeliveryStatus::Delivered;
-                    m.sent_at_ms = Some(sent_at_ms);
-                    m.turn = Some(round);
-                })
-                .is_some();
-            drop(messages);
-            // Defensive: if the transcript lost its marker (shouldn't happen
-            // in normal flow), we still want to ship the user's message —
-            // the queue is the source of truth for dispatch.
-            let _ = flipped;
-            runtime.is_responding.store(true, Ordering::SeqCst);
-            *runtime.activity_status.lock().await = "queued".to_string();
-            // Expand paste chips at dispatch time so the model receives the
-            // real paste contents. Image chips stay as positional labels in
-            // the text; their payloads ship via `images`.
             let expanded_text =
                 composer_attachments::expand_paste_chips(&dispatch.text, &dispatch.text_pastes);
-            let _ = app.tx.send(AgentRequest::Chat {
-                text: expanded_text,
-                images: dispatch.images,
-                sent_at_ms: Some(sent_at_ms),
+            app.naturally_completed_sessions.remove(&session_id);
+            app.idle_sessions.remove(&session_id);
+            app.running_sessions.insert(session_id.clone());
+            let _ = app.tx.send(AgentRequest::ChatToSession {
+                session_id,
+                input: neenee_core::QueuedUserInput {
+                    id: dispatch.id,
+                    text: expanded_text,
+                    display_text: Some(dispatch.text),
+                    images: dispatch.images,
+                    sent_at_ms: Some(sent_at_ms),
+                },
             });
         }
 
@@ -1040,11 +1172,12 @@ pub(super) async fn run_app_loop(
             app.cursor_visible = caret_visible;
         }
 
-        // A transcript mutation can change the measured bottom after layout.
-        // While following that bottom, stage the measurement frame in the
-        // retained grid without flushing it; the immediate next pass paints at
-        // the final scroll offset and is the only frame the terminal sees.
-        let stage_bottom_follow = transcript_changed && app.follow_bottom;
+        // A mutation of the transcript currently on screen (or a transition to
+        // a different transcript view) can change the measured bottom after
+        // layout. While following that bottom, stage the measurement frame in
+        // the retained grid without flushing it; the immediate next pass paints
+        // at the final scroll offset and is the only frame the terminal sees.
+        let stage_bottom_follow = displayed_transcript_changed && app.follow_bottom;
 
         // Draw frame (skipped when nothing changed — see `needs_draw`).
         if needs_draw {
@@ -1093,12 +1226,13 @@ pub(super) async fn run_app_loop(
                 let recess = app.active_modal.recess();
                 let chrome_hidden = recess == Recess::Takeover;
 
-                // When zoomed into an envoy, render its child messages and show
-                // a navigation bar; otherwise render the root conversation.
+                // When zoomed into an Envoy, render its child messages and
+                // show a contextual first-row header; otherwise render the
+                // root conversation.
                 let view_messages = app.focused_messages();
-                // `/btw` side banner (ADR-0017): shown only while the side view is
-                // active. The envoy zoom and the side view are mutually
-                // exclusive, so the two banners never coexist.
+                // `/btw` page-header context (ADR-0017): shown only while the
+                // side view is active. Envoy zoom and the side view are
+                // mutually exclusive, so the two modes never coexist.
                 let side_banner = app.in_side_view.then_some(app.parent_status);
                 let envoy_bar = app.focus_stack.last().and_then(|current| {
                     let tasks: Vec<&TranscriptMessage> = app
@@ -1143,9 +1277,11 @@ pub(super) async fn run_app_loop(
                         todos: app.todos.as_ref(),
                         review_alert: app.review_alert.clone(),
                         turn_started_at: app.turn_started_at,
+                        unattended: app.unattended,
                         hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
                         focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
                         logo: app.logo.as_deref(),
+                        guidance: Default::default(),
                         theme: &app.theme,
                         layout: app.transcript_layout,
                         height_cache: Some(&mut height_cache),
@@ -1159,11 +1295,11 @@ pub(super) async fn run_app_loop(
                 let view_height = transcript_render.view_height;
                 let sticky = transcript_render.sticky;
 
-                // The hint bar (model / context) lives directly below the input
-                // box. Rendered only when the chrome is visible. It is drawn before
-                // the composer because it borrows `view_messages` (an immutable
-                // borrow of `app`) while `draw_composer` needs a mutable borrow of
-                // `app.input_scroll`.
+                // The input-action hint bar (with model/context metadata on
+                // the right) lives directly below the input box. It is drawn
+                // before the composer because it borrows `view_messages` (an
+                // immutable borrow of `app`) while `draw_composer` needs a
+                // mutable borrow of `app.input_scroll`.
                 // The permission sheet takes over the hint line as well as the
                 // input box, so suppress the hint bar while it is open.
                 if !chrome_hidden && hint_rect.height > 0 && app.active_modal != Modal::Permission {
@@ -1202,7 +1338,16 @@ pub(super) async fn run_app_loop(
                             shell_active: app.focused_target.is_none()
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
-                            unattended: app.unattended,
+                            busy: app.running_sessions.contains(&viewed_session_id),
+                            send_next_round: app.send_target
+                                == crate::tui::app::SendTarget::NextRound,
+                            pending_insert: app.pending_counts(&viewed_session_id).0,
+                            pending_next_round: app.pending_counts(&viewed_session_id).1,
+                            outbox_paused: app.pending_counts(&viewed_session_id).1 > 0
+                                && app.idle_sessions.contains(&viewed_session_id)
+                                && !app
+                                    .naturally_completed_sessions
+                                    .contains(&viewed_session_id),
                             context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                         },
                         &app.theme,
@@ -1562,7 +1707,8 @@ pub(super) async fn run_app_loop(
                                     &app.current_model,
                                 ),
                             },
-                            app.modal_index.min(report.rows.len().saturating_sub(1)),
+                            app.modal_index
+                                .min(render::token_report_turn_count(&report).saturating_sub(1)),
                             app.token_report_detail,
                             &mut app.token_report_scroll,
                             &app.theme,
@@ -1907,7 +2053,7 @@ pub(super) async fn run_app_loop(
                     &mut app.cursor_position,
                     input::InputContext {
                         active_modal: app.active_modal,
-                        is_responding: runtime.is_responding.load(Ordering::SeqCst),
+                        is_responding: app.running_sessions.contains(&viewed_session_id),
                         completion_kind,
                         suggestion_count,
                         has_exact_suggestion,
@@ -1917,7 +2063,10 @@ pub(super) async fn run_app_loop(
                         in_envoy_view,
                         in_side_view: app.in_side_view,
                         has_focused_target: app.focused_target.is_some(),
-                        has_queued: !app.pending_dispatch.is_empty(),
+                        has_queued: app.pending_dispatch.iter().any(|item| {
+                            item.session_id == viewed_session_id
+                                && item.state == crate::tui::app::QueuedDispatchState::Waiting
+                        }),
                         history_searching: app.history_search,
                         model_searching: app.model_search,
                         picker_in_models_stage: app.picker_provider.is_some(),
@@ -1986,6 +2135,9 @@ pub(super) async fn run_app_loop(
 
             match action {
                 input::InputAction::None => {}
+                input::InputAction::ToggleSendTarget => {
+                    app.send_target = app.send_target.toggled();
+                }
                 input::InputAction::TerminalResized => {
                     // A resize is the prime trigger for crossterm splitting an
                     // in-flight SGR mouse sequence across reads (issue #854).
@@ -2028,27 +2180,37 @@ pub(super) async fn run_app_loop(
                     let has_images = !images.is_empty();
 
                     if !text.is_empty() || has_images {
-                        if runtime.is_responding.load(Ordering::SeqCst) {
-                            // A turn is already in flight: stage the message
-                            // in the send queue instead of cancelling the
-                            // running turn. The transcript gets a distinct
-                            // Queued marker so the user sees their message is
-                            // pending, and the per-frame idle check drains
-                            // the queue (FIFO) as soon as the harness returns
-                            // to idle. Esc remains the explicit interrupt
-                            // path; /slash and !shell commands still dispatch
-                            // immediately (per the queue-scope decision).
+                        if app.running_sessions.contains(&viewed_session_id) {
+                            // Busy sends live in the fixed outbox, not the
+                            // scrollback. Insert is the default; Tab selects a
+                            // one-message next-round follow-up.
+                            let id = uuid::Uuid::new_v4().to_string();
+                            let target = app.send_target;
                             app.pending_dispatch
                                 .push_back(crate::tui::app::QueuedDispatch {
+                                    id: id.clone(),
+                                    session_id: viewed_session_id.clone(),
+                                    target,
+                                    state: crate::tui::app::QueuedDispatchState::Waiting,
                                     text: text.clone(),
                                     images: images.clone(),
                                     text_pastes: text_pastes.clone(),
                                 });
-                            runtime
-                                .messages
-                                .write()
-                                .await
-                                .push(TranscriptMessage::new(Role::User, text.clone()).queued());
+                            if target == crate::tui::app::SendTarget::Insert {
+                                let expanded =
+                                    composer_attachments::expand_paste_chips(&text, &text_pastes);
+                                let _ = app.tx.send(AgentRequest::InsertUserInput {
+                                    session_id: viewed_session_id.clone(),
+                                    input: neenee_core::QueuedUserInput {
+                                        id,
+                                        text: expanded,
+                                        display_text: Some(text.clone()),
+                                        images: images.clone(),
+                                        sent_at_ms: Some(now_epoch_ms()),
+                                    },
+                                });
+                            }
+                            app.send_target = crate::tui::app::SendTarget::Insert;
                             app.record_input_history(text.clone());
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
@@ -2060,15 +2222,23 @@ pub(super) async fn run_app_loop(
                             // in the text as positional labels.
                             let expanded =
                                 composer_attachments::expand_paste_chips(&text, &text_pastes);
-                            runtime.is_responding.store(true, Ordering::SeqCst);
-                            *runtime.activity_status.lock().await = "queued".to_string();
+                            app.send_target = crate::tui::app::SendTarget::Insert;
+                            if !app.in_side_view {
+                                runtime.is_responding.store(true, Ordering::SeqCst);
+                                *runtime.activity_status.lock().await = "queued".to_string();
+                            }
+                            app.idle_sessions.remove(&viewed_session_id);
+                            app.running_sessions.insert(viewed_session_id.clone());
                             let sent_at_ms = now_epoch_ms();
                             let round = runtime.round_count.lock().await.saturating_add(1);
-                            runtime.messages.write().await.push(
-                                TranscriptMessage::new(Role::User, text.clone())
-                                    .with_sent_at_ms(sent_at_ms)
-                                    .with_turn(round),
-                            );
+                            let mut sent = TranscriptMessage::new(Role::User, text.clone())
+                                .with_sent_at_ms(sent_at_ms);
+                            if !app.in_side_view {
+                                sent = sent.with_turn(round);
+                                runtime.messages.write().await.push(sent);
+                            } else {
+                                runtime.side_messages.write().await.push(sent);
+                            }
                             app.record_input_history(text.clone());
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
@@ -3202,8 +3372,8 @@ pub(super) async fn run_app_loop(
                 }
                 input::InputAction::CloseModal => {
                     if app.active_modal == Modal::TokenReport && app.token_report_detail {
-                        // First Esc returns from the per-model detail to the
-                        // bill list; a second Esc closes the modal.
+                        // First Esc returns from round detail to the turn list;
+                        // a second Esc closes the modal.
                         app.token_report_detail = false;
                         app.token_report_scroll = 0;
                     } else {
@@ -3286,12 +3456,16 @@ pub(super) async fn run_app_loop(
                 }
                 input::InputAction::TokenReportActivate => {
                     if app.active_modal == Modal::TokenReport && !app.token_report_detail {
-                        let has_rows = app
+                        let has_turns = app
                             .token_ledger
                             .as_ref()
-                            .map(|l| !l.snapshot().rows.is_empty())
+                            .map(|ledger| {
+                                render::token_report_turn_count(
+                                    &ledger.snapshot_for_session(&viewed_session_id),
+                                ) > 0
+                            })
                             .unwrap_or(false);
-                        if has_rows {
+                        if has_turns {
                             app.token_report_detail = true;
                             app.token_report_scroll = 0;
                         }
@@ -3791,16 +3965,18 @@ pub(super) async fn run_app_loop(
                         app.completion_dismissed = true;
                     }
                 }
-                input::InputAction::RecallQueued => {
-                    // Pop the most-recently-queued message (LIFO undo),
-                    // remove its visual marker from the transcript, and
-                    // load its text + images back into the composer so the
-                    // user can edit and resend. The actual state mutation
-                    // lives on [`App::recall_queued`] so it is unit-testable
-                    // against a plain transcript Vec.
-                    let mut messages = runtime.messages.write().await;
-                    app.recall_queued(&mut messages);
-                }
+                input::InputAction::RecallQueued => match app.recall_queued(&viewed_session_id) {
+                    Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
+                        app.restore_dispatch(dispatch);
+                    }
+                    Some(crate::tui::app::RecallQueued::CancelInsert { input_id }) => {
+                        let _ = app.tx.send(AgentRequest::CancelInsertedInput {
+                            session_id: viewed_session_id.clone(),
+                            input_id,
+                        });
+                    }
+                    None => {}
+                },
                 input::InputAction::HistoryNext => {
                     if let Some(i) = app.history_index {
                         if i + 1 < app.input_history.len() {
@@ -3916,7 +4092,11 @@ pub(super) async fn run_app_loop(
                             let count = app
                                 .token_ledger
                                 .as_ref()
-                                .map(|l| l.snapshot().rows.len())
+                                .map(|ledger| {
+                                    render::token_report_turn_count(
+                                        &ledger.snapshot_for_session(&viewed_session_id),
+                                    )
+                                })
                                 .unwrap_or(0)
                                 .max(1);
                             app.modal_index = (app.modal_index + count - 1) % count;
@@ -3987,7 +4167,11 @@ pub(super) async fn run_app_loop(
                             let count = app
                                 .token_ledger
                                 .as_ref()
-                                .map(|l| l.snapshot().rows.len())
+                                .map(|ledger| {
+                                    render::token_report_turn_count(
+                                        &ledger.snapshot_for_session(&viewed_session_id),
+                                    )
+                                })
                                 .unwrap_or(0)
                                 .max(1);
                             app.modal_index = (app.modal_index + 1) % count;

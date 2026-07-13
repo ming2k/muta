@@ -1,7 +1,7 @@
 //! Step rendering implementation: the summary primitives, the per-tool body
 //! content renderers (code, listing, grep, bash, diff), and the top-level
-//! orchestrators (`draw_tool_step`, `draw_reasoning_trace`,
-//! `draw_envoy_inline_step`, `draw_envoy_bar`) that compose them. Also
+//! orchestrators (`draw_tool_step`, `draw_reasoning_trace`, and
+//! `draw_envoy_inline_step`) that compose them. Also
 //! produces the sticky pinned-step summary that
 //! [`super::super::draw_transcript`] overlays while a step body is scrolled
 //! into view. State and color resolution live in [`super`] (re-exported from
@@ -26,9 +26,9 @@ use crate::render::text_layout::{
 use crate::render::tools::{ArgLayout, DiffCache, DiffHunk, DiffOp, ResultKind, ToolStatus};
 use crate::render::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
-    EnvoyBarInfo, REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
-    STEP_MIN_WIDTH, StickyInfo, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
-    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, Theme,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, StickyInfo,
+    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
+    TRANSCRIPT_BODY_LEADING_INDENT, Theme,
 };
 
 /// Cursor + environment carried through the tool-step body renderers.
@@ -1636,105 +1636,6 @@ pub fn draw_envoy_inline_step(
             }
         }
     }
-}
-
-/// Render the envoy navigation bar: the focused task's label + position
-/// among siblings on the left, and the return / cycle-sibling hints on the
-/// right. Drawn across the full transcript width inside the app_bg gutters.
-pub fn draw_envoy_bar(frame: &mut Frame, rect: Rect, bar: &EnvoyBarInfo, theme: &Theme) {
-    // `rect` arrives already inset by `draw_transcript`.
-    let full_width = rect.width as usize;
-    if full_width < STEP_MIN_WIDTH {
-        return;
-    }
-    let bg = theme.body();
-    let muted = Style::default().bg(bg).fg(theme.muted());
-    let label_style = Style::default()
-        .bg(bg)
-        .fg(theme.fg())
-        .add_modifier(Modifier::BOLD);
-    let accent = Style::default().bg(bg).fg(theme.brand());
-
-    let left_label = format!(" {} ", "Envoy");
-    let desc = bar.label.to_string();
-    let count = if bar.total > 1 {
-        format!(" ({} of {}) ", bar.index, bar.total)
-    } else {
-        " ".to_string()
-    };
-    let right = "Esc back   [ prev   ] next ".to_string();
-
-    let left_used = left_label.width() + desc.width() + count.width();
-    let gap = full_width.saturating_sub(left_used + right.width());
-    let mut spans = vec![
-        Span::styled(left_label, label_style),
-        Span::styled(desc, accent),
-        Span::styled(count, muted),
-        Span::styled(" ".repeat(gap), Style::default().bg(bg)),
-        Span::styled(right, muted),
-    ];
-    let used: usize = spans.iter().map(|s| s.width()).sum();
-    if used < full_width {
-        spans.push(Span::styled(
-            " ".repeat(full_width - used),
-            Style::default().bg(bg),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-}
-
-/// Render the `/btw` side banner (ADR-0017): a top band reading
-/// `Side from main · <parent status> · Esc back`. Mirrors `draw_envoy_bar`'s
-/// style palette so the two zoom modes share a visual language; the parent
-/// status segment is accented so the user notices when the main session hits a
-/// running / idle transition.
-pub fn draw_side_banner(
-    frame: &mut Frame,
-    rect: Rect,
-    status: neenee_core::ParentStatus,
-    theme: &Theme,
-) {
-    let full_width = rect.width as usize;
-    if full_width < STEP_MIN_WIDTH {
-        return;
-    }
-    let bg = theme.body();
-    let muted = Style::default().bg(bg).fg(theme.muted());
-    let label_style = Style::default()
-        .bg(bg)
-        .fg(theme.fg())
-        .add_modifier(Modifier::BOLD);
-    let accent = Style::default().bg(bg).fg(theme.brand());
-
-    let left_label = " Side from main ".to_string();
-    let status_label = match status {
-        neenee_core::ParentStatus::Idle => "main idle",
-        neenee_core::ParentStatus::Running => "main running",
-        neenee_core::ParentStatus::NeedsApproval => "main needs approval",
-        neenee_core::ParentStatus::NeedsInput => "main needs input",
-        neenee_core::ParentStatus::Failed => "main failed",
-        neenee_core::ParentStatus::Interrupted => "main interrupted",
-    };
-    let sep = " · ";
-    let right = " Esc back ".to_string();
-
-    let left_used = left_label.width() + sep.width() + status_label.width();
-    let gap = full_width.saturating_sub(left_used + right.width());
-    let mut spans = vec![
-        Span::styled(left_label, label_style),
-        Span::styled(sep, muted),
-        Span::styled(status_label, accent),
-        Span::styled(" ".repeat(gap), Style::default().bg(bg)),
-        Span::styled(right, muted),
-    ];
-    let used: usize = spans.iter().map(|s| s.width()).sum();
-    if used < full_width {
-        spans.push(Span::styled(
-            " ".repeat(full_width - used),
-            Style::default().bg(bg),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 /// Render a tool-step message as an expandable step with a summary line,

@@ -53,6 +53,9 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     if is_queued {
         return String::new();
     }
+    if msg.origin == crate::document::UserMessageOrigin::Insert {
+        return "↳ insert".to_string();
+    }
     if let Some(turn) = msg.turn {
         format!("turn {}", turn)
     } else {
@@ -67,6 +70,16 @@ fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
     // their `⏸ Queued` marker instead.
     if is_queued {
         return String::new();
+    }
+    if msg.origin == crate::document::UserMessageOrigin::Insert {
+        return match (msg.turn, msg.sent_at_ms) {
+            (Some(turn), Some(sent_at_ms)) => {
+                format!("turn {turn} · {}", sent_time_label(sent_at_ms))
+            }
+            (Some(turn), None) => format!("turn {turn}"),
+            (None, Some(sent_at_ms)) => sent_time_label(sent_at_ms),
+            (None, None) => "Sent".to_string(),
+        };
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
         sent_time_label(sent_at_ms)

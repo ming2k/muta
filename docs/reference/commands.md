@@ -116,7 +116,7 @@ clock-driven scheduler, independent of `/pursue`. See
 | `/tools` | Open the tools manager overlay |
 
 Opens a centered, scrollable list of every tool available to the live session —
-builtins, `mcp:<server>`, `pursuit`, and `plan` — each with its source and an
+builtins and `mcp:<server>` tools — each with its source and an
 `[on]`/`[off]` badge. `↑`/`↓` move the selection, `Space` toggles a tool on or
 off (the harness applies it and replies with a fresh snapshot), and `Esc`
 closes. `/tools` is handled entirely in the TUI and is never forwarded to the
@@ -153,9 +153,11 @@ disturbing the main session context
 
 On-demand only — triggers a bounded read-only `REVIEW` envoy that
 diagnoses the current round and reports verdicts. `/review` takes no
-arguments; the periodic-cadence design was superseded (see
-[ADR-0018](../adr/0018-per-project-multi-instance-concurrency.md)
-revising [ADR-0016](../adr/0016-session-review-over-round-counting.md)).
+arguments. The original periodic-cadence design
+([ADR-0016](../adr/0016-session-review-over-round-counting.md)) was
+superseded by on-demand review plus in-loop steering
+([ADR-0030](../adr/0030-early-loop-intervention-and-round-hook.md));
+ADR-0016 itself remains Accepted.
 
 ### `/search`
 
@@ -190,7 +192,7 @@ Returns the most relevant past messages for the query (see the
 
 | Form | Effect |
 |------|--------|
-| `/export` | Render the live conversation as Markdown — metadata header (session id, provider/model, pursuit, active plan, exported-at), pursuit checklist, then a chronological transcript of user prompts, assistant replies, tool calls, and inlined tool results — and copy it to the system clipboard so it can be pasted into another agent to continue the work. |
+| `/export` | Render the live conversation as Markdown — metadata header (session id, provider/model, pursuit, exported-at), pursuit checklist, then a chronological transcript of user prompts, assistant replies, tool calls, and inlined tool results — and copy it to the system clipboard so it can be pasted into another agent to continue the work. |
 
 The receiving agent gets the full chain of decisions and side effects: hidden
 and system messages are skipped (mirroring TUI rendering), reasoning traces

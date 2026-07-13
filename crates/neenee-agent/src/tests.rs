@@ -12,6 +12,7 @@ struct HintProvider;
 struct PermissionTestProvider(AtomicUsize);
 struct StreamingToolProvider(AtomicUsize);
 struct WriteTestTool;
+struct ShadowTodoTool;
 struct StreamingReadTool(Arc<AtomicUsize>);
 
 #[async_trait]
@@ -174,13 +175,139 @@ impl Tool for StreamingReadTool {
     }
 }
 
+#[async_trait]
+impl Tool for ShadowTodoTool {
+    fn name(&self) -> &str {
+        "todo"
+    }
+
+    fn description(&self) -> &str {
+        "caller-owned shadow"
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn call(&self, _arguments: &str) -> Result<String, String> {
+        Ok("wrong state".to_string())
+    }
+}
+
 fn agent() -> Agent {
     Agent::new(
         Arc::new(TestProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     )
+}
+
+#[test]
+fn agent_installs_its_stateful_todo_tools() {
+    let agent = agent();
+    let names = agent
+        .installed_tools()
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(names.contains("todo"));
+    assert!(names.contains("todo_update"));
+}
+
+#[test]
+fn todo_state_is_scoped_to_one_agent() {
+    let first = agent();
+    let second = agent();
+    let mut list = neenee_core::TodoList::new();
+    list.reconcile(
+        &[("only first".to_string(), neenee_core::TodoStatus::Pending)],
+        1,
+        1,
+    );
+    first.set_todos(list);
+
+    assert_eq!(first.todos().len(), 1);
+    assert!(second.todos().is_empty());
+}
+
+#[test]
+fn agent_builder_accepts_additional_tools() {
+    let agent = Agent::builder(
+        Arc::new(TestProvider),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    )
+    .with_tool(Arc::new(WriteTestTool))
+    .build();
+
+    let names = agent
+        .installed_tools()
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(names.contains("write_test"));
+    assert!(names.contains("todo"));
+    assert!(names.contains("todo_update"));
+}
+
+#[test]
+fn agent_owned_tool_identity_replaces_a_caller_shadow() {
+    let agent = Agent::builder(
+        Arc::new(TestProvider),
+        vec![Arc::new(ShadowTodoTool)],
+        crate::AgentIdentity::default(),
+    )
+    .build();
+
+    let todo = agent
+        .installed_tools()
+        .into_iter()
+        .find(|tool| tool.name() == "todo")
+        .expect("todo should be installed");
+    assert_ne!(todo.description(), "caller-owned shadow");
+}
+
+#[test]
+fn dynamic_tool_sources_publish_toggle_and_remove_without_leaking_a_lock() {
+    let agent = agent();
+    agent.replace_dynamic_tools("plugin:test", vec![Arc::new(WriteTestTool)]);
+
+    assert!(
+        agent
+            .installed_tools()
+            .iter()
+            .any(|tool| tool.name() == "write_test")
+    );
+    let snapshot = agent.snapshot_tools();
+    assert!(
+        snapshot.iter().any(|tool| {
+            tool.name == "write_test" && tool.source == "plugin:test" && tool.enabled
+        })
+    );
+    assert!(agent.set_tool_enabled("write_test", false));
+    assert!(!agent.is_tool_enabled("write_test"));
+
+    agent.remove_dynamic_tools("plugin:test");
+    assert!(
+        !agent
+            .installed_tools()
+            .iter()
+            .any(|tool| tool.name() == "write_test")
+    );
+}
+
+#[test]
+fn static_tool_identity_shadows_a_dynamic_collision() {
+    let agent = agent();
+    agent.replace_dynamic_tools("plugin:shadow", vec![Arc::new(ShadowTodoTool)]);
+
+    let todos: Vec<_> = agent
+        .installed_tools()
+        .into_iter()
+        .filter(|tool| tool.name() == "todo")
+        .collect();
+    assert_eq!(todos.len(), 1);
+    assert_ne!(todos[0].description(), "caller-owned shadow");
 }
 
 fn active_pursuit(objective: &str) -> Pursuit {
@@ -188,6 +315,62 @@ fn active_pursuit(objective: &str) -> Pursuit {
         objective: objective.to_string(),
         is_complete: false,
     }
+}
+
+fn queued_user(id: &str, text: &str) -> neenee_core::QueuedUserInput {
+    neenee_core::QueuedUserInput {
+        id: id.to_string(),
+        text: text.to_string(),
+        display_text: Some(text.to_string()),
+        images: Vec::new(),
+        sent_at_ms: Some(123),
+    }
+}
+
+#[test]
+fn user_input_queue_is_session_and_generation_scoped() {
+    let agent = agent();
+    assert!(agent.begin_user_input_round("session-a", 1).is_empty());
+    assert!(!agent.submit_user_input("session-b", queued_user("wrong", "no")));
+    assert!(agent.submit_user_input("session-a", queued_user("old", "keep me")));
+
+    let stale = agent.begin_user_input_round("session-a", 2);
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].id, "old");
+    assert!(agent.close_user_input_round(1).is_empty());
+
+    assert!(agent.submit_user_input("session-a", queued_user("new", "hello")));
+    assert_eq!(agent.close_user_input_round(2)[0].id, "new");
+    assert!(!agent.submit_user_input("session-a", queued_user("late", "no")));
+}
+
+#[tokio::test]
+async fn queued_user_input_is_admitted_as_visible_user_steer() {
+    let agent = agent();
+    agent.begin_user_input_round("session-a", 1);
+    assert!(agent.submit_user_input("session-a", queued_user("insert-1", "more context")));
+    let mut messages = vec![Message::new(Role::User, "start")];
+    let mut events = Vec::new();
+
+    agent
+        .run_with_events(&mut messages, &CancellationToken::new(), |event| {
+            events.push(event)
+        })
+        .await
+        .expect("turn succeeds");
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::UserInputInserted(input) if input.id == "insert-1"
+    )));
+    assert!(messages.iter().any(|message| {
+        message.role == Role::User
+            && message.content == "more context"
+            && message
+                .origin
+                .as_ref()
+                .is_some_and(|origin| origin.kind == InjectionKind::UserSteer)
+    }));
 }
 
 #[test]
@@ -198,7 +381,7 @@ fn pursuit_is_injected_into_system_prompt() {
     // Drive the real placement path: rebuild the head system message from
     // live agent state and read it back off the message list (ADR-0039).
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_prompt(&mut messages);
+    agent.ensure_system_message(&mut messages);
     let prompt = messages[0].content.clone();
 
     assert!(prompt.contains("ship the harness"));
@@ -209,12 +392,11 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
     let agent = Agent::new(
         Arc::new(HintProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_prompt(&mut messages);
+    agent.ensure_system_message(&mut messages);
 
     assert!(messages[0].content.contains("Provider protocol hint."));
 }
@@ -222,9 +404,9 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
 /// Regression for ADR-0039 stage 6: the `/review` reviewer envoy's head
 /// system message must actually carry the review composition (REVIEW persona +
 /// registered dimensions + JSON contract). Previously the reviewer pre-seeded
-/// a system message that `ensure_system_prompt` clobbered on round 1, so none
+/// a system message that `ensure_system_message` clobbered on round 1, so none
 /// of it reached the model; the reviewer now carries a dedicated registry and
-/// `ensure_system_prompt` rebuilds the composition every round.
+/// `ensure_system_message` rebuilds the composition every round.
 #[test]
 fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     use neenee_core::{REVIEW, Role};
@@ -233,16 +415,17 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     let reviewer = Agent::builder(
         Arc::new(TestProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     )
-    .with_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions))
+    .with_system_prompt_registry(crate::model_context::reviewer_system_prompt_registry(
+        &dimensions,
+    ))
     .build();
 
     // Drive the same placement path the streaming loop uses: the registry
     // composes the head system message from the reviewer's sections.
     let mut messages: Vec<Message> = vec![Message::new(Role::User, "transcript snapshot")];
-    reviewer.ensure_system_prompt(&mut messages);
+    reviewer.ensure_system_message(&mut messages);
 
     let system = &messages[0];
     assert_eq!(system.role, Role::System);
@@ -283,7 +466,7 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     agent.set_pursuit(active_pursuit("ship the harness"));
 
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_prompt(&mut messages);
+    agent.ensure_system_message(&mut messages);
     let prompt = &messages[0].content;
 
     // preamble \n\n persistence \n\n pursuit.
@@ -408,7 +591,6 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
     let agent = Agent::new(
         Arc::new(StreamingToolProvider(AtomicUsize::new(0))),
         vec![Arc::new(StreamingReadTool(calls.clone()))],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let mut messages = vec![Message::new(Role::User, "run")];
@@ -457,7 +639,6 @@ async fn round_persist_fires_at_each_tool_round_boundary() {
     let agent = Agent::new(
         Arc::new(StreamingToolProvider(AtomicUsize::new(0))),
         vec![Arc::new(StreamingReadTool(calls.clone()))],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let seen_for_cb = Arc::clone(&seen_lengths);
@@ -479,7 +660,7 @@ async fn round_persist_fires_at_each_tool_round_boundary() {
 
     // Exactly one boundary crossing (after round 0's tool result). The
     // callback receives the full live history, which includes the
-    // `ensure_system_prompt` message at index 0: [system, user, assistant,
+    // `ensure_system_message` message at index 0: [system, user, assistant,
     // tool_result] = 4. The final round (plain text, no tools) does not
     // cross a boundary and must not fire the callback.
     let recorded = seen_lengths.lock().unwrap().clone();
@@ -521,7 +702,6 @@ async fn stalled_provider_stream_times_out_as_retryable() {
     let agent = Agent::new(
         Arc::new(StalledStreamProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let mut messages = vec![Message::new(Role::User, "hello")];
@@ -561,7 +741,6 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     let agent = Agent::new(
         Arc::new(PendingProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_thread_id("interrupt-session");
@@ -628,7 +807,6 @@ async fn stream_request_that_never_resolves_times_out() {
     let agent = Agent::new(
         Arc::new(PendingStreamProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let mut messages = vec![Message::new(Role::User, "hello")];
@@ -667,7 +845,6 @@ async fn non_streaming_chat_that_never_resolves_times_out() {
     let agent = Agent::new(
         Arc::new(PendingChatProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let mut messages = vec![Message::new(Role::User, "hello")];
@@ -715,7 +892,6 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
     let agent = Agent::new(
         Arc::new(ReasoningOnlyProvider),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
@@ -771,7 +947,6 @@ async fn cancelling_during_tool_execution_emits_tool_cancelled() {
         vec![Arc::new(BlockingTool {
             started: started.clone(),
         })],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let token = CancellationToken::new();
@@ -823,7 +998,6 @@ async fn write_tool_waits_for_permission_and_always_is_cached() {
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     ));
     let call = ToolCall {
@@ -883,7 +1057,6 @@ async fn rejected_permission_does_not_execute_tool() {
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     ));
     let call = ToolCall {
@@ -920,7 +1093,6 @@ async fn headless_run_rejects_write_tools_without_hanging() {
     let agent = Agent::new(
         Arc::new(PermissionTestProvider(AtomicUsize::new(0))),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let mut messages = vec![Message::new(Role::User, "write something")];
@@ -1098,6 +1270,9 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 format!("model-request turn={tool_round}")
             }
             AgentEvent::ContextTokens(_) => "context-tokens".to_string(),
+            AgentEvent::UserInputInserted(input) => {
+                format!("user-input-inserted {:?}", input.text)
+            }
             AgentEvent::AssistantDelta { delta, start } => {
                 format!("assistant-delta start={start} {delta:?}")
             }
@@ -1177,7 +1352,6 @@ async fn golden_native_tool_round_then_final_text() {
             Arc::new(RecordingTool::read("alpha", "A-out")),
             Arc::new(RecordingTool::read("beta", "B-out")),
         ],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1209,7 +1383,6 @@ async fn golden_text_fallback_tool_call_is_discarded_then_dispatched() {
             text_round("finished"),
         ])),
         vec![Arc::new(RecordingTool::read("alpha", "A-out"))],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1251,7 +1424,6 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
             identical(),
         ])),
         vec![Arc::new(tool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
@@ -1285,7 +1457,6 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
             text_round("done"),
         ])),
         vec![Arc::new(bash)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
@@ -1357,7 +1528,6 @@ async fn doom_block_is_surgical_across_files() {
             text_round("done"),
         ])),
         vec![Arc::new(reader), Arc::new(lister)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
@@ -1407,7 +1577,6 @@ async fn doom_guard_suppressed_when_disabled() {
             text_round("done"),
         ])),
         vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
@@ -1446,7 +1615,6 @@ async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
             text_round("done"),
         ])),
         vec![Arc::new(bash)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
@@ -1480,7 +1648,6 @@ async fn bash_policy_user_allow_overrides_builtin_confirm() {
             text_round("done"),
         ])),
         vec![Arc::new(bash)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.seed_permissions_from_config(&[neenee_store::config::PermissionRuleConfig {
@@ -1518,7 +1685,6 @@ async fn golden_rejected_write_tool_terminates_turn() {
             text_round("stopped"),
         ])),
         vec![Arc::new(tool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1552,7 +1718,6 @@ async fn golden_reasoning_precedes_text_in_the_same_round() {
             ProviderStreamEvent::TextDelta("answer".to_string()),
         ]])),
         Vec::new(),
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1592,7 +1757,6 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
             text_round("done"),
         ])),
         vec![Arc::new(neenee_tools::AskUserTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1640,7 +1804,6 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
             text_round("decided on my own"),
         ])),
         vec![Arc::new(neenee_tools::AskUserTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_unattended(true);
@@ -1676,7 +1839,6 @@ async fn unattended_hides_ask_user_from_the_advertised_toolset() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_round("ok")])),
         vec![Arc::new(neenee_tools::AskUserTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let visible_before = agent.visible_tools();
@@ -1715,7 +1877,6 @@ async fn always_permission_persists_across_agents_for_same_project() {
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     ));
     agent.set_project_root(Some(project_root.clone()));
@@ -1760,7 +1921,6 @@ async fn always_permission_persists_across_agents_for_same_project() {
     let agent2 = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     ));
     agent2.set_project_root(Some(project_root.clone()));
@@ -1782,7 +1942,6 @@ async fn always_permission_persists_across_agents_for_same_project() {
     let agent3 = Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent3.set_project_root(Some(other_root));
@@ -1813,7 +1972,6 @@ async fn agent_without_project_root_never_writes_permissions_file() {
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     ));
     // Mutations of the allowlist must be no-ops on disk when no project root
@@ -1863,7 +2021,6 @@ async fn turn_runs_uncapped_until_model_emits_text() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(rounds)),
         vec![Arc::new(read), Arc::new(write)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -1976,7 +2133,6 @@ async fn hard_stop_aborts_when_budget_configured() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(distinct_read_rounds(10, None))),
         vec![Arc::new(tool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     agent.set_hard_stop_turns(3);
@@ -2009,7 +2165,6 @@ async fn review_now_runs_diagnostic_and_returns_verdict() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_round(verdict_json)])),
         vec![Arc::new(tool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
 
@@ -2183,11 +2338,11 @@ async fn debug_trace_aggregates_a_full_stream_into_one_file() {
 }
 
 /// ADR-0050: non-driving command echoes are durable + visible on resume/export
-/// but must be **projected out before the provider wire**. `prepare_turn_messages`
+/// but must be **projected out before the provider wire**. `prepare_request_messages`
 /// is the single pre-wire funnel; this proves echoes are dropped while genuine
 /// user prompts and assistant messages survive.
 #[test]
-fn prepare_turn_messages_projects_out_command_echoes() {
+fn prepare_request_messages_projects_out_command_echoes() {
     let agent = agent();
     let mut messages: Vec<Message> = vec![
         Message::new(Role::User, "first real prompt"),
@@ -2196,14 +2351,14 @@ fn prepare_turn_messages_projects_out_command_echoes() {
         Message::command_echo("!ls -la"),
         Message::new(Role::User, "second real prompt"),
     ];
-    agent.prepare_turn_messages_debug(&mut messages);
+    agent.prepare_request_messages_debug(&mut messages);
 
     // The funnel also prepends a system prompt and removes empty assistant
     // tails; the ADR-0050 concern is specifically the echo projection. Assert
     // no echo leaked through and the driving content survived in order.
     assert!(
         messages.iter().all(|m| !m.is_command_echo()),
-        "no command echo must leak through prepare_turn_messages: {messages:?}"
+        "no command echo must leak through prepare_request_messages: {messages:?}"
     );
     let contents: Vec<&str> = messages
         .iter()
@@ -2224,7 +2379,6 @@ fn request_pressure_includes_system_prompt_and_tool_schemas() {
     let with_tools = Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::skills::SkillRegistry::empty(),
         crate::AgentIdentity::default(),
     );
     let messages = vec![Message::new(Role::User, "inspect the request budget")];

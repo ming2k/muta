@@ -1,6 +1,6 @@
 # 0039. Unified prompt registry: declarative system/user channels via `PromptSection`
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0056
 - **Date:** 2026-06-27
 
 > **Execution status.** The system-channel registry (primary agent + reviewer)

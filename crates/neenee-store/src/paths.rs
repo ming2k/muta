@@ -143,8 +143,7 @@ impl Dirs {
 
     /// User-global skills (`$XDG_DATA_HOME/neenee/skills`). Per-project skills
     /// still live under the project's working directory (`.neenee/skills/`)
-    /// and are not stored here. Bundled system skills are compile-time
-    /// embedded, not disk-resident — see `neenee_agent::skills::bundled`.
+    /// and are not stored here.
     pub fn user_skills_dir(&self) -> PathBuf {
         self.data_dir.join("skills")
     }

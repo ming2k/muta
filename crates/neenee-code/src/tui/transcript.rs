@@ -35,6 +35,10 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
     // durable `CommandEcho` origin unambiguously marks the message as a
     // non-driving command regardless of text shape.
     let is_echo = message.is_command_echo();
+    let is_insert = message
+        .origin
+        .as_ref()
+        .is_some_and(|origin| origin.kind == neenee_core::InjectionKind::UserSteer);
     let content = if let Some(display_content) = message.display_content {
         display_content
     } else if message.content.is_empty() {
@@ -84,6 +88,8 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
                     }));
             if is_slash {
                 msg.origin = UserMessageOrigin::Slash;
+            } else if is_insert {
+                msg.origin = UserMessageOrigin::Insert;
             } else if msg
                 .raw
                 .strip_prefix('!')
@@ -209,6 +215,10 @@ pub(super) fn transcript_messages_from_core(
         if let Some(mut transcript_message) = transcript_message_from_core(message) {
             if transcript_message.role == Role::Assistant {
                 transcript_message.turn = Some(restored_round);
+            } else if transcript_message.role == Role::User
+                && transcript_message.origin == UserMessageOrigin::Insert
+            {
+                transcript_message.turn = Some(restored_round.saturating_add(1));
             }
             restored.push(transcript_message);
         }

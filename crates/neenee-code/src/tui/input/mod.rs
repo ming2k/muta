@@ -156,6 +156,8 @@ pub enum InputAction {
     Quit,
     /// Send a chat message.
     SendChat(String),
+    /// Toggle busy-send semantics for the next message (insert ↔ next round).
+    ToggleSendTarget,
     /// Send a slash command.
     SendSlash(String),
     /// Run a shell command directly (the `!` prefix path). The `!` is
@@ -306,8 +308,7 @@ pub enum InputAction {
     SessionActivate,
     /// Open the currently-selected session in the sessions picker.
     OpenSelectedSession,
-    /// Drill into the selected provider/model line in the TokenReport bill
-    /// (the per-model detail). Bound to `Enter`.
+    /// Drill into the selected turn's model-round usage. Bound to `Enter`.
     TokenReportActivate,
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
@@ -1235,6 +1236,11 @@ pub fn process_event(
                         // entry. The fuzzy filter is a free-text field, so an
                         // alpha key would clash; Tab is the unambiguous gesture.
                         InputAction::HistoryTogglePreview
+                    } else if context.active_modal == super::Modal::None
+                        && context.is_responding
+                        && !context.has_focused_target
+                    {
+                        InputAction::ToggleSendTarget
                     } else {
                         // No completion open and no modal field to cycle: Tab
                         // is a no-op. (There is no zone switching: focus is
@@ -1880,7 +1886,7 @@ pub fn process_event(
                                 && context.suggestion_count > 0
                             {
                                 InputAction::SuggestPrev
-                            } else if context.has_queued {
+                            } else if context.has_queued && input.is_empty() {
                                 // A queued message is waiting to ship; ↑ recalls
                                 // the most-recently-queued one into the input for
                                 // editing instead of walking input history. Once
@@ -3138,6 +3144,45 @@ mod tests {
             key_in_view(KeyCode::BackTab, false, &mut input),
             InputAction::None
         );
+    }
+
+    #[test]
+    fn tab_toggles_busy_send_target_without_editing_the_draft() {
+        let mut input = String::from("follow up");
+        let mut cursor = input.chars().count();
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Tab,
+                KeyModifiers::NONE,
+            )),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::None,
+                is_responding: true,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
+                picker_in_models_stage: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::ToggleSendTarget);
+        assert_eq!(input, "follow up");
     }
 
     #[test]

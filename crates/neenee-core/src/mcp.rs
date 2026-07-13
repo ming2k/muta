@@ -1,9 +1,9 @@
 //! Shared configuration schema for MCP servers.
 //!
 //! Lives in `neenee-core` for the same reason `WebSearchConfig` does: both the
-//! app-layer `Config` (which owns the `[mcp]` table) and the MCP loader (in
-//! `neenee-tools`) need the type, and `neenee-store` does not depend on
-//! `neenee-tools`.
+//! app-layer `Config` (which owns the `[mcp]` table), `neenee-mcp`, and the
+//! session/frontend layers exchange these values without depending on one
+//! another's implementation details.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,11 +29,10 @@ impl Default for McpServerConfig {
     }
 }
 
-/// Runtime status reported by the MCP loader for each configured server.
+/// Runtime status reported by `neenee-mcp` for each configured server.
 ///
 /// Lives in `neenee-core` (alongside [`McpServerConfig`]) so the TUI can
-/// consume it without depending on `neenee-tools`: the loader in
-/// `neenee-tools::mcp` produces these, and frontends render them.
+/// consume it without depending on the connector implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpConnectionStatus {
     /// A connection attempt is in flight (background connect at startup, or a

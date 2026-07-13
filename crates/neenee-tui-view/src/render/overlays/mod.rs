@@ -52,5 +52,5 @@ pub use provider_delete_confirm::{ProviderDeleteChoice, draw_provider_delete_con
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
 pub use toast::{draw_armed_toast, draw_copy_toast};
-pub use token_report::{ContextUsageView, draw_token_report_modal};
+pub use token_report::{ContextUsageView, draw_token_report_modal, token_report_turn_count};
 pub use tools::draw_tools_modal;

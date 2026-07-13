@@ -25,13 +25,12 @@ use neenee_agent::orchestration::{
     emit_pursuit_updated, refresh_agent_pursuit, send_compaction, send_harness_state,
     start_pursuit, turn,
 };
-use neenee_agent::skills::SkillRegistry;
-use neenee_agent::skills::tools::{ListSkillsTool, UseSkillTool};
 use neenee_core::{
     AgentNotice, AgentRequest, AgentResponse, CronExpr, Message, NoticeKind, NoticeSeverity,
     NoticeSource, NoticeSurface, Provider, Pursuit, RoundEvent, Tool, estimate_bytes,
     estimate_tokens,
 };
+use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 use neenee_store::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
@@ -88,7 +87,7 @@ pub async fn dispatch(
     // Record the slash invocation as a durable, non-driving echo so it
     // survives resume/export/audit (ADR-0050). This happens for EVERY command
     // uniformly — the literal `/cmd` text is persisted, never sent to the
-    // model (projected out in `prepare_turn_messages`), and on resume is
+    // model (projected out in `prepare_request_messages`), and on resume is
     // reconstructed with `UserMessageOrigin::Slash`. Commands whose effects
     // mutate state or stream a reply still do so independently; the echo is
     // purely the invocation record. Best-effort: a failed persist logs but
@@ -1161,7 +1160,7 @@ pub async fn dispatch(
                         // implicit-skill injection and lands as the final wire
                         // user message the provider would receive.
                         snapshot.push(Message::new(neenee_core::Role::User, "This is a test."));
-                        agent.prepare_turn_messages_debug(&mut snapshot);
+                        agent.prepare_request_messages_debug(&mut snapshot);
                         // Project to the wire form: this is what the provider
                         // request body would contain (no children / sidecars).
                         snapshot

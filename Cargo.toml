@@ -9,6 +9,8 @@ members = [
     "crates/neenee-providers",
     "crates/neenee-auth",
     "crates/neenee-tools",
+    "crates/neenee-skills",
+    "crates/neenee-mcp",
     "crates/neenee-quant",
     "crates/neenee-quant-gui",
     "crates/neenee-agent",

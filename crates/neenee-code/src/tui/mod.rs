@@ -58,7 +58,7 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::tui::document::{
-    MessageKind, NoticeSeverity, TranscriptMessage, notice_severity_from_core,
+    MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin, notice_severity_from_core,
 };
 use crate::tui::layout::LayoutMap;
 use crate::tui::render::Theme;
@@ -248,6 +248,8 @@ pub async fn run_tui(
     // `UnsentInput`, drained by the event loop to restore the composer.
     let unsent_input_signal = Arc::new(Mutex::new(None::<event_loop::UnsentInput>));
     let unsent_input_signal_clone = unsent_input_signal.clone();
+    let outbox_signals = Arc::new(Mutex::new(VecDeque::<event_loop::OutboxSignal>::new()));
+    let outbox_signals_clone = outbox_signals.clone();
 
     // `/serve` hot-attach tap (ADR-0037 §7). `None` until `/serve <port>`
     // activates it. The response listener clones each `AgentResponse` into the
@@ -321,6 +323,67 @@ pub async fn run_tui(
                                 .await
                                 .insert(session_id.clone(), snapshot);
                         }
+                        RoundEvent::UserInputInserted(input) => {
+                            let input_id = input.id.clone();
+                            let visible = input.display_text.unwrap_or(input.text);
+                            let mut message = TranscriptMessage::new(Role::User, visible)
+                                .with_origin(UserMessageOrigin::Insert);
+                            message.sent_at_ms = input.sent_at_ms;
+                            message.turn = turns_by_session
+                                .get(&session_id)
+                                .copied()
+                                .map(|turn| turn.saturating_add(1));
+                            buf.write().await.push(message);
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::Inserted {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
+                        RoundEvent::UserInputUnavailable { input_id } => {
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::Unavailable {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
+                        RoundEvent::UserInputCancelled { input_id } => {
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::Cancelled {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
+                        RoundEvent::UserInputCancelFailed { input_id } => {
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::CancelFailed {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
+                        RoundEvent::NextRoundStarted(input) => {
+                            let input_id = input.id.clone();
+                            let visible = input.display_text.unwrap_or(input.text);
+                            let mut message = TranscriptMessage::new(Role::User, visible);
+                            message.sent_at_ms = input.sent_at_ms;
+                            buf.write().await.push(message);
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::NextRoundStarted {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
+                        RoundEvent::RoundCompleted => {
+                            outbox_signals_clone
+                                .lock()
+                                .await
+                                .push_back(event_loop::OutboxSignal::RoundCompleted { session_id });
+                        }
                         RoundEvent::Notice(notice) => {
                             // Provider retry has a dedicated, self-refreshing
                             // transcript disclosure driven by RetryScheduled.
@@ -361,30 +424,42 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::StreamStart => {
-                            let (provider, model) =
-                                event_loop::attribution(&cp_clone, &cm_clone).await;
-                            let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
-                            let mut message = TranscriptMessage::new(Role::Assistant, "")
-                                .with_attribution(provider, model);
-                            message.turn = turns_by_session.get(&session_id).copied();
-                            msgs.push(message);
+                            // A stream lifecycle event is not visible transcript content.
+                            // Do not create an empty assistant placeholder here: reasoning-
+                            // only streams (notably hidden-chain GPT models) may never emit
+                            // visible text, and a zero-height message would still create a
+                            // semantic layout boundary. The first visible delta lazily creates
+                            // its own typed component instead. A successful stream does retire
+                            // any transient provider-retry disclosure, independently of whether
+                            // the model's first payload is visible.
+                            {
+                                let mut msgs = buf.write().await;
+                                begin_stream(&mut msgs);
+                            }
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
                                 *activity_clone.lock().await = "responding".to_string();
                             }
                         }
                         RoundEvent::StreamDelta(delta) => {
+                            let turn = turns_by_session.get(&session_id).copied();
                             let mut msgs = buf.write_streaming().await;
-                            let changed = if let Some(last) = msgs.last_mut() {
-                                last.push_stream(&delta);
-                                Some(last.id)
-                            } else {
-                                None
-                            };
-                            if let Some(id) = changed {
+                            if let Some(id) = append_stream_text_delta(&mut msgs, turn, &delta) {
                                 msgs.invalidate_message_height(id);
                                 msgs.record_text_delta(id, delta);
+                            } else {
+                                // This is the first visible text in the model-request round.
+                                // Upgrade to a structural write and create the transcript item
+                                // from real content, never from a transport-level start signal.
+                                drop(msgs);
+                                let (provider, model) =
+                                    event_loop::attribution(&cp_clone, &cm_clone).await;
+                                let mut msgs = buf.write().await;
+                                clear_provider_retry(&mut msgs);
+                                let mut message = TranscriptMessage::new(Role::Assistant, delta)
+                                    .with_attribution(provider, model);
+                                message.turn = turn;
+                                msgs.push(message);
                             }
                         }
                         RoundEvent::StreamEnd(final_content) => {
@@ -392,19 +467,37 @@ pub async fn run_tui(
                                 ir_clone.store(true, Ordering::SeqCst);
                                 *activity_clone.lock().await = "finalizing response".to_string();
                             }
+                            let turn = turns_by_session.get(&session_id).copied();
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
-                            if let Some(last) = msgs.last_mut() {
-                                last.raw = final_content;
-                                last.reparse();
+                            if let Some(message) = msgs.last_mut().filter(|message| {
+                                message.role == Role::Assistant
+                                    && matches!(&message.kind, MessageKind::Text)
+                                    && message.turn == turn
+                            }) {
+                                message.raw = final_content;
+                                message.reparse();
+                            } else if !final_content.is_empty() {
+                                // Defensive fallback for providers that deliver only a final
+                                // payload without any preceding text delta.
+                                let (provider, model) =
+                                    event_loop::attribution(&cp_clone, &cm_clone).await;
+                                let mut message =
+                                    TranscriptMessage::new(Role::Assistant, final_content)
+                                        .with_attribution(provider, model);
+                                message.turn = turn;
+                                msgs.push(message);
                             }
                         }
                         RoundEvent::StreamDiscard => {
+                            let turn = turns_by_session.get(&session_id).copied();
                             let mut msgs = buf.write().await;
-                            if msgs
-                                .last()
-                                .is_some_and(|message| message.role == Role::Assistant)
-                            {
+                            // With lazy stream-item creation, a hidden reasoning stream may
+                            // have no visible message to discard. Never pop an assistant item
+                            // from an earlier round merely because it happens to be last.
+                            if msgs.last().is_some_and(|message| {
+                                message.role == Role::Assistant && message.turn == turn
+                            }) {
                                 msgs.pop();
                             }
                         }
@@ -469,8 +562,10 @@ pub async fn run_tui(
                             // entry, so their high-frequency deltas can retain
                             // the ordinary text-message entries unchanged.
                             let mut msgs = buf.write_streaming().await;
-                            let changed = if let Some(last) =
-                                msgs.last_mut().filter(|message| message.is_thinking())
+                            let turn = turns_by_session.get(&session_id).copied();
+                            let changed = if let Some(last) = msgs
+                                .last_mut()
+                                .filter(|message| message.is_thinking() && message.turn == turn)
                             {
                                 last.push_stream(&delta);
                                 if let MessageKind::Thinking { content, .. } = &mut last.kind {
@@ -478,24 +573,15 @@ pub async fn run_tui(
                                 }
                                 Some(last.id)
                             } else {
-                                // StreamStart inserts an empty assistant placeholder before
-                                // the first reasoning delta. Reasoning renders as its own
-                                // reasoning trace, so that placeholder is never used and only
-                                // leaves an extra blank line between the user message and the
-                                // reasoning header. Drop it before creating the reasoning trace
-                                // so restored history and live reasoning have identical
-                                // spacing.
-                                if msgs
-                                    .last()
-                                    .is_some_and(|m| m.role == Role::Assistant && m.raw.is_empty())
-                                {
-                                    msgs.pop();
-                                }
+                                // The first disclosed reasoning delta creates the visible
+                                // reasoning component directly. `StreamStart` intentionally
+                                // creates no transcript placeholder, so hidden-chain models
+                                // cannot leave phantom spacing behind.
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
                                 let mut thinking = TranscriptMessage::thinking(delta.clone())
                                     .with_attribution(provider, model);
-                                thinking.turn = turns_by_session.get(&session_id).copied();
+                                thinking.turn = turn;
                                 // A reasoning trace's default disclosure honors the
                                 // `[tui.default_expanded] thinking` config (collapsed by
                                 // default). On completion the transition leaves it as-is
@@ -790,6 +876,12 @@ pub async fn run_tui(
                         }
                         RoundEvent::HarnessState(snapshot) => {
                             let running = snapshot.loop_status != "idle";
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::HarnessState {
+                                    session_id: session_id.clone(),
+                                    idle: !running,
+                                },
+                            );
                             if !routes_to_side {
                                 *harness_clone.lock().await = snapshot;
                                 // Each "running" HarnessState marks the start of a new
@@ -1150,6 +1242,10 @@ pub async fn run_tui(
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
+        send_target: crate::tui::app::SendTarget::Insert,
+        naturally_completed_sessions: std::collections::HashSet::new(),
+        idle_sessions: std::collections::HashSet::new(),
+        running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
         layout_map: LayoutMap::new(),
@@ -1247,6 +1343,7 @@ pub async fn run_tui(
             review_alert,
             turn_started_at,
             unsent_input_signal,
+            outbox_signals,
         },
         session,
     )
@@ -1333,6 +1430,31 @@ fn upsert_provider_retry(
 /// Retry state is a live UI component, not durable conversation history.
 fn clear_provider_retry(messages: &mut Vec<TranscriptMessage>) {
     messages.retain(|message| !message.is_provider_retry());
+}
+
+/// Apply the visible transcript effect of a stream-start signal. The signal
+/// retires transient retry state but deliberately creates no message: transport
+/// lifecycle alone must not influence transcript geometry.
+fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
+    clear_provider_retry(messages);
+}
+
+/// Append a streamed assistant-text delta to the current round, creating the
+/// message only when the first visible text arrives. Returning `None` means the
+/// caller must perform the structural insertion (and request a full transcript
+/// snapshot); returning an id permits the cheap per-message patch path.
+fn append_stream_text_delta(
+    messages: &mut [TranscriptMessage],
+    turn: Option<u64>,
+    delta: &str,
+) -> Option<u64> {
+    let message = messages.last_mut().filter(|message| {
+        message.role == Role::Assistant
+            && matches!(&message.kind, MessageKind::Text)
+            && message.turn == turn
+    })?;
+    message.push_stream(delta);
+    Some(message.id)
 }
 
 fn push_local_notice(

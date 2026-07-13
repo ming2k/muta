@@ -12,9 +12,9 @@ use neenee_agent::orchestration::{
     ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput,
     start_interactive_round,
 };
-use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{Agent, AgentIdentity};
 use neenee_core::{AgentResponse, ParentStatus, Provider, Tool};
+use neenee_skills::SkillRegistry;
 use neenee_store::config::Config;
 use neenee_store::session::SessionStore;
 use std::sync::RwLock;
@@ -61,17 +61,18 @@ impl SideSession {
         // Fresh side agent. The provider is shared through the same
         // `ProxyProvider` holder as the primary, which clones the inner
         // `Arc<dyn Provider>` per call and is safe under concurrency
-        // (ADR-0017 §2). Tools come from the cached base snapshot (built-in +
-        // MCP, no `EnvoyTool`) so a side chat recurses no further than the
-        // primary — mirroring the envoy profile filter in `EnvoyTool`.
+        // (ADR-0017 §2). Tools come from the cached static snapshot (no
+        // `EnvoyTool` and no session-scoped dynamic connector sources), so a
+        // side chat neither recurses nor implicitly acquires the principal's
+        // external connections. Dynamic capability propagation must be an
+        // explicit policy decision (ADR-0060).
         let side_provider: Arc<dyn Provider> =
             Arc::new(ProxyProvider::new(provider_holder.clone()));
-        let agent = Arc::new(Agent::new(
-            side_provider,
-            base_tools.to_vec(),
-            skills,
-            identity,
-        ));
+        let agent = Arc::new(
+            Agent::builder(side_provider, base_tools.to_vec(), identity)
+                .with_skills(skills)
+                .build(),
+        );
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
         // A side conversation is a quick aside; run it unattended — without
@@ -146,12 +147,6 @@ pub async fn start_active_turn(
     config: &Config,
     input: RoundInput,
 ) {
-    let projection =
-        ContextProjectionSettings::from_config(config, active_context_window(principal));
-    let retry_max_attempts = config.provider_retry_max_attempts;
-    let retry_base_ms = config.provider_retry_base_ms;
-    let retry_max_ms = config.provider_retry_max_ms;
-
     // Resolve which live session this turn belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
     // at the end of this statement, before the turn starts.
@@ -184,6 +179,96 @@ pub async fn start_active_turn(
                 primary_session.id().await,
             )
         };
+
+    start_resolved_turn(
+        principal, tx, config, agent, session, token_slot, generation, session_id, input,
+    )
+    .await;
+}
+
+/// Resolve a live principal or side agent by its stable session id. Keeping
+/// this lookup explicit prevents an outbox action from following a later view
+/// switch into the wrong conversation.
+pub async fn target_agent(
+    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    principal: &Arc<Agent>,
+    primary_session: &Arc<SessionStore>,
+    target_session_id: &str,
+) -> Option<Arc<Agent>> {
+    if primary_session.id().await == target_session_id {
+        return Some(principal.clone());
+    }
+    side.read()
+        .await
+        .as_ref()
+        .filter(|session| session.id == target_session_id)
+        .map(|session| session.agent.clone())
+}
+
+/// Start a fresh round in one exact live session. Returns `false` when a side
+/// conversation was closed after the message entered the frontend outbox.
+#[allow(clippy::too_many_arguments)]
+pub async fn start_session_turn(
+    target_session_id: &str,
+    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    principal: &Arc<Agent>,
+    primary_session: &Arc<SessionStore>,
+    primary_token_slot: &Arc<AsyncRwLock<Option<CancellationToken>>>,
+    primary_generation: &Arc<AtomicU64>,
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    config: &Config,
+    input: RoundInput,
+) -> bool {
+    let primary_id = primary_session.id().await;
+    let resolved = if primary_id == target_session_id {
+        Some((
+            principal.clone(),
+            primary_session.clone(),
+            primary_token_slot.clone(),
+            primary_generation.clone(),
+            primary_id,
+        ))
+    } else {
+        side.read().await.as_ref().and_then(|session| {
+            (session.id == target_session_id).then(|| {
+                (
+                    session.agent.clone(),
+                    session.store.clone(),
+                    session.token_slot.clone(),
+                    session.generation.clone(),
+                    session.id.clone(),
+                )
+            })
+        })
+    };
+    let Some((agent, session, token_slot, generation, session_id)) = resolved else {
+        return false;
+    };
+
+    start_resolved_turn(
+        principal, tx, config, agent, session, token_slot, generation, session_id, input,
+    )
+    .await;
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_resolved_turn(
+    principal: &Arc<Agent>,
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    config: &Config,
+    agent: Arc<Agent>,
+    session: Arc<SessionStore>,
+    token_slot: Arc<AsyncRwLock<Option<CancellationToken>>>,
+    generation: Arc<AtomicU64>,
+    session_id: String,
+    input: RoundInput,
+) {
+    let projection =
+        ContextProjectionSettings::from_config(config, active_context_window(principal));
+    let retry_max_attempts = config.provider_retry_max_attempts;
+    let retry_base_ms = config.provider_retry_base_ms;
+    let retry_max_ms = config.provider_retry_max_ms;
 
     start_interactive_round(
         InteractiveRoundContext {

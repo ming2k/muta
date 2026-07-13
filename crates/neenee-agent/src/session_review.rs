@@ -23,7 +23,6 @@ use neenee_core::{
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
-use crate::skills::SkillRegistry;
 
 /// Character budget for the transcript snapshot handed to the diagnostic
 /// envoy. Keeps the reviewer's prompt cheap while still showing enough
@@ -102,10 +101,11 @@ impl Agent {
         let reviewer = Agent::builder(
             self.provider.clone(),
             sub_tools,
-            SkillRegistry::empty(),
             crate::AgentIdentity::default(),
         )
-        .with_prompt_registry(crate::prompt::reviewer_prompt_registry(&dimensions))
+        .with_system_prompt_registry(crate::model_context::reviewer_system_prompt_registry(
+            &dimensions,
+        ))
         .build();
         // The reviewer must not run its own reviews (recursion) and is bounded
         // by a tight hard stop so it cannot loop. It registers no review
@@ -115,7 +115,7 @@ impl Agent {
         // read-loop guard's nudge (ADR-0034) so its own reads are never steered.
         reviewer.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
         // The builder installed the dedicated review composition above so
-        // `ensure_system_prompt` rebuilds persona + dimensions + JSON contract
+        // `ensure_system_message` rebuilds persona + dimensions + JSON contract
         // every round instead of clobbering a pre-seeded system message.
 
         let transcript = serialize_transcript(messages, TRANSCRIPT_SNAPSHOT_BUDGET_CHARS);
@@ -126,10 +126,13 @@ impl Agent {
              Evaluate every dimension listed above and return the JSON object now."
         );
         // The transcript is the user message; the head system message is built
-        // by `ensure_system_prompt` from the reviewer registry above. Starting
+        // by `ensure_system_message` from the reviewer registry above. Starting
         // without a pre-seeded system message avoids the round-1 clobber that
         // lost the review prompt before ADR-0039 stage 6.
-        let mut child_messages = vec![Message::new(Role::User, user)];
+        let mut child_messages = vec![crate::model_context::visible_user(
+            neenee_core::InjectionKind::SessionReviewInput,
+            user,
+        )];
 
         let cancel = CancellationToken::new();
         // Box the recursive call: `run_session_review` is reached from inside

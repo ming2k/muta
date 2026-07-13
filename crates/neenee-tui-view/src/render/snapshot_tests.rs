@@ -504,7 +504,7 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
 /// spacing between consecutive steps is captured. Backgrounds are omitted:
 /// these tests are about row counts, not palette.
 fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u16) -> String {
-    use super::{Theme, TranscriptView, draw_transcript};
+    use super::{EmptyStateGuidance, Theme, TranscriptView, draw_transcript};
     use crate::layout::LayoutMap;
 
     let theme = Theme::default();
@@ -531,9 +531,11 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 todos: None,
                 review_alert: String::new(),
                 turn_started_at: None,
+                unattended: false,
                 hovered_step: None,
                 focused_target: None,
                 logo: None,
+                guidance: EmptyStateGuidance::None,
                 theme: &theme,
                 layout: crate::render::layout::Strategy::default(),
                 height_cache: None,

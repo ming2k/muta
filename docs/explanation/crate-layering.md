@@ -7,66 +7,80 @@ head before reading any individual crate or ADR.
 ## The layer diagram
 
 ```text
-neenee-core        vocabulary: events, tools, identity, principal/envoy profiles
-    ^                  (no workspace deps)
-    |
-    +--- neenee-providers ─┐
-    +--- neenee-tools      │  three peers; none depend on each other
-    +--- neenee-store      ┘
-    ^                  (each depends on core)
-    |
-neenee-agent        orchestration: Agent, the turn/round loop, tool dispatch,
-    ^                  provider abstraction, skills, envoys
-    |                  (depends on core + store + providers + tools)
-    |
-neenee-session       session runtime: SessionDriver, handlers, /btw side
-    ^                  sessions, MCP runtime, serve transport, slash extension
-    |                  point. Application-neutral — holds NO product name or
-    |                  principal (ADR-0054).
-    |                  (depends on agent + store + providers + tools + core + auth)
-    |
-neenee-code  ────────────────────────  application binaries. Each supplies its
-(neenee-quant-bin, future)            own identity + PrincipalProfile + tools +
-    |                                  custom slash commands, then drives a
-    |                                  SessionDriver via neenee-session.
-    +--- neenee-tui / neenee-tui-view     rendering (neenee-code's frontend)
+neenee-code ──► neenee-session ──► neenee-agent ──► neenee-tools ──► neenee-store
+                     │                  ├──► neenee-skills ────────────────┤
+                     │                  └──► neenee-providers              │
+                     ├──► neenee-mcp ─────────────────────────────────────┤
+                     └─────────────────────────────────────────────────────┴──► neenee-core
+
+neenee-code ──► neenee-tui ──► neenee-tui-view
 ```
 
-The strict-DAG property from ADR-0005 is preserved: dependencies only point
-upward in this diagram, never down or sideways between peers. `neenee-session`
-adds exactly one node between `agent` and the applications, with zero reverse
-edges (ADR-0037).
+An arrow means “depends on.” The diagram shows the important responsibility
+edges rather than every direct Cargo edge. Higher layers may depend on
+`neenee-core` directly for contracts. Provider implementations also build on
+the protocol SDK crates and shared AI SDK substrate; authentication is another
+downward dependency of `neenee-agent`.
+
+The graph remains acyclic, but the foundation is not a set of three symmetric
+peers: tools use store-owned project/search facilities, while provider
+implementations build on protocol-specific SDK crates. The invariant from
+ADR-0005 is dependency direction, not visual symmetry.
 
 ## Per-layer responsibility
 
-### `neenee-core` — vocabulary
+### `neenee-core` — shared contracts
 
-Pure domain types with no agent/server/TUI dependencies: `AgentRequest` /
-`AgentResponse` / `Message`, the `Tool` trait, `ToolSet`, `AgentIdentity`,
-`PrincipalProfile` / `EnvoyProfile`, `OperationScope`, `TokenSourceLedger`.
-Everything above imports vocabulary from here. This is where role taxonomy
-lives (ADR-0042), so principal and envoy profiles are declared together.
+Pure domain and wire contracts with no workspace dependencies:
+`AgentRequest` / `AgentResponse` / `Message`, the `Provider` and `Tool` traits,
+`ToolSet`, `AgentIdentity`, principal/envoy profiles, `OperationScope`, and
+token-accounting records. Independent layers import the same vocabulary
+without depending on agent orchestration.
 
-### Foundation peers — `neenee-providers`, `neenee-tools`, `neenee-store`
+Core is not the default home for all pure code. An item enters core only when
+multiple independent layers exchange it, it prevents a dependency cycle, or
+it is stable serialized/domain vocabulary. Agent-owned policy stays with the
+agent even when it performs no I/O (ADR-0057).
 
-Three sibling crates that all depend on `core` and on nothing else in the
-workspace:
+### Foundation implementations — providers, tools, skills, MCP, store, and AI SDKs
+
+These crates implement the contracts below orchestration:
 
 - **`neenee-providers`** — concrete LLM provider impls (OpenAI, Anthropic,
-  Google, xAI…) behind the `Provider` trait.
+  Google, xAI…) behind the `Provider` trait. Protocol-specific SDK crates own
+  request/response semantics and share transport mechanics through
+  `neenee-ai-sdk-core`.
 - **`neenee-tools`** — built-in tools (`bash`, `read_text`, `grep`, `glob`,
-  `webfetch`, …) that self-register via `inventory`. Also the markdown
-  custom-command template mechanism.
+  `webfetch`, todo management, …). Most self-register via `inventory`;
+  stateful todo tools receive an agent-owned context from
+  `neenee-agent::tool_integration`. Store-backed tools and project helpers
+  depend on `neenee-store`.
+- **`neenee-skills`** — skill metadata, discovery, remote caching, registry,
+  periodic refresh, and `use_skill` / `list_skills` tool adapters. The agent
+  consumes the registry for model-context injection; Session also reads and
+  refreshes it without reaching through Agent internals.
+- **`neenee-mcp`** — stdio JSON-RPC transport, MCP server lifecycle, tool
+  adapters, live runtime, and catalog refresh. It publishes tools through the
+  core `DynamicToolSink` contract and has no dependency on Agent or Session.
 - **`neenee-store`** — durable state: `SessionStore`, `Config`, embedding index,
   repeat store, XDG paths (ADR-0014).
 
 ### `neenee-agent` — orchestration
 
-The engine. `Agent` + the turn/round loop (ADR-0047), tool-call dispatch,
-streaming, `ProxyProvider`, the skills registry, `EnvoyTool` and the
-full-duplex envoy registry (ADR-0029). This crate knows how to run *one* LLM
-turn with tools; it does not know about sessions, slash commands, or frontends.
-Identity-agnostic and role-agnostic by design.
+The engine. `Agent` + the turn/round loop (ADR-0047), model-context and system-
+prompt policy, tool-call dispatch and compatibility parsing, context
+projection, pursuit continuation, shell input policy, `ProxyProvider`, skill
+context injection,
+`EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
+to run *one* LLM round with tools. It directly consumes `neenee-tools` and
+`neenee-skills`, binds agent-owned state to concrete todo tools, and interacts
+with static and dynamic tools through core contracts. It does not know about
+MCP protocol, sessions, slash commands, or frontends. Identity-agnostic and
+role-agnostic by design.
+
+The `agent -> tools` and `agent -> skills` edges are intentional layering, not
+cycles: neither implementation crate depends on agent orchestration.
+`EnvoyTool` remains in Agent because it constructs and controls agents.
 
 ### `neenee-session` — session harness
 
@@ -77,8 +91,8 @@ session a frontend can drive." It owns:
   state, then routes each `AgentRequest` to a handler until the channel closes.
 - **Handlers** — `handlers_chat` / `handlers_permission` / `handlers_provider`
   / `handlers_session` / `handlers_slash`: one per `AgentRequest` group.
-- **`/btw` side sessions** (`side`), **MCP runtime** (`mcp_runtime` +
-  `mcp_catalog`), **pursuits**, **hooks**, **export**, **review**, **shell**.
+- **`/btw` side sessions** (`side`), ownership of the **`neenee-mcp`
+  runtime**, **pursuits**, **hooks**, **export**, **review**, **shell**.
 - **`serve`** — the hot-attach WebSocket transport (ADR-0037 §7).
 - **`slash_handler`** — the `SlashCommandHandler` extension point so embeddings
   register Rust slash commands without forking the server (ADR-0054).
@@ -101,8 +115,10 @@ The multi-session daemon is the remaining migration step.
 
 The binary. `neenee-code`:
 
-1. Constructs the `Agent` (using `neenee-agent` APIs directly — assembling the
-   provider, toolset, skills, identity).
+1. Constructs the `Agent` (using `neenee-agent` APIs directly — supplying the
+   provider, configured toolset, identity), then attaches a live skill registry
+   when that application enables skills. The agent adds tools tied to its own
+   runtime state.
 2. Binds its principal (`apply_principal_profile(&principal_code())`) — the
    identity + principal live in `neenee-code/src/identity.rs`, **not** in the
    server (ADR-0054).
@@ -110,14 +126,15 @@ The binary. `neenee-code`:
 4. Runs the TUI in the main thread, holding `req_tx` / `resp_rx`.
 
 > **Note on the current `neenee-code` dependency shape.** `neenee-code` depends
-> on `neenee-agent`, `neenee-store`, `neenee-tools`, and `neenee-providers`
+> on `neenee-agent`, `neenee-store`, `neenee-tools`, `neenee-skills`,
+> `neenee-mcp`, and `neenee-providers`
 > *directly*, not only on `neenee-session`. This is because `SessionDriver`
-> assembly (provider/toolset/agent construction) still lives in `main.rs` rather than
-> behind a server-layer factory. Once `SessionRegistry::create_session` is
-> populated (ADR-0037 Step 6), that assembly moves into the server and
-> `neenee-code` can depend on `neenee-session` alone for orchestration. The
-> direct deps are an interim "reach-through," not a design intent — see
-> ADR-0037 §1 for the target DAG.
+> assembly (provider/configured-toolset/agent construction) still lives in
+> `main.rs` rather than behind a session-layer factory. Once
+> `SessionRegistry::create_session` is populated (ADR-0037 Step 6), that
+> assembly moves into the session layer and `neenee-code` can depend on
+> `neenee-session` alone for orchestration. The direct deps are an interim
+> “reach-through,” not a design intent — see ADR-0037 §1 for the target DAG.
 
 `neenee-quant` is currently a library of quant-domain tools (implements
 `neenee_core::Tool`); a future `neenee-quant-bin` would mirror `neenee-code`:
@@ -152,3 +169,9 @@ multi-frontend transport details.
 - [ADR-0053](../adr/0053-declarative-principal-profile.md) — `PrincipalProfile`.
 - [ADR-0054](../adr/0054-server-layer-followups.md) — identity relocation, serve
   security, slash extension point.
+- [ADR-0057](../adr/0057-contract-only-core-boundary.md) — contract-only core
+  admission rule and agent-owned pure policy.
+- [ADR-0059](../adr/0059-agent-tool-integration-boundary.md) — direct
+  agent-to-tools integration and stateful tool construction.
+- [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) — separate
+  skill/MCP capability crates and dynamic tool publication.

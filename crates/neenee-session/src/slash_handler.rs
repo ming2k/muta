@@ -33,8 +33,8 @@ use std::sync::{
 };
 
 use neenee_agent::Agent;
-use neenee_agent::skills::SkillRegistry;
 use neenee_core::{AgentRequest, AgentResponse, Provider, Tool};
+use neenee_skills::SkillRegistry;
 use neenee_store::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };

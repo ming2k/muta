@@ -82,7 +82,7 @@ allow_model_stdin = false
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `default_provider` | `"kimi-code"` | Provider id activated at startup and after `/provider` reset |
+| `default_provider` | `""` (empty) | Provider id activated at startup and after `/provider` reset; empty leaves the choice to the `/provider` picker |
 | `provider_retry_max_attempts` | `6` | Max retry attempts for a transient provider error within a turn |
 | `provider_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
 | `provider_retry_max_ms` | `30000` | Cap on the backoff delay, in milliseconds |
@@ -94,12 +94,12 @@ API keys accept an environment variable or an inline value; see
 
 | Key | Default model | Purpose |
 |-----|---------------|---------|
-| `openai_api_key`, `openai_model` | `gpt-4o` | OpenAI |
-| `gemini_api_key`, `gemini_model` | `gemini-2.5-flash` | Google Gemini |
+| `openai_api_key`, `openai_model` | `gpt-5.6-sol` | OpenAI |
+| `gemini_api_key`, `gemini_model` | `gemini-3.5-flash` | Google Gemini |
 | `moonshot_api_key`, `moonshot_model` | `kimi-k2.7-code` | Moonshot / Kimi Code |
 | `deepseek_api_key`, `deepseek_flash_model`, `deepseek_pro_model` | `deepseek-v4-flash` / `deepseek-v4-pro` | DeepSeek V4 (shared key) |
 | `zai_api_key`, `zai_model` | `glm-5.2` | Z.AI coding plan (GLM-5) |
-| `llama_base_url`, `llama_model` | `http://localhost:8080` / `local-model` | Local Llama server (keyless) |
+| `anthropic_api_key`, `anthropic_model` | `claude-opus-4-8` | Anthropic |
 
 ## User-defined providers
 
@@ -116,7 +116,7 @@ default_channel = 0
 
   [[providers.channels]]
   label = "Default"
-  transport = "openai_compat"   # openai_compat | gemini_native | llama
+  transport = "OpenAiCompat"    # OpenAiCompat | Anthropic | GeminiNative
   model = "acme-7b"
   base_url = "https://relay.example.com/v1"
   api_key_env = "ACME_API_KEY"  # env var name; wins over api_key

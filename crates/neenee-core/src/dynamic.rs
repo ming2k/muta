@@ -8,7 +8,7 @@
 //! 1. **Source of truth** — a remote API, a directory tree, a runtime protocol.
 //! 2. **Local cache** — the last good copy, so a failed refresh never loses
 //!    data.
-//! 3. **Compiled-in fallback** — for first run / offline / corrupt cache.
+//! 3. **Subsystem fallback** — when a catalog has a useful offline baseline.
 //! 4. **Periodic refresh** — a background task keeps the cache current.
 //! 5. **Data-driven construction** — adding an entry to the source makes it
 //!    appear; no code changes in N places.
@@ -22,17 +22,32 @@
 //!
 //! See ADR (dynamic catalog pattern) for the full rationale.
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::Tool;
+
+/// A destination for a named source's dynamically changing tool snapshot.
+///
+/// Connector runtimes publish complete per-source replacements instead of
+/// mutating an agent-owned lock. This keeps synchronization and collision
+/// policy inside the consumer while allowing MCP, plugins, or other discovery
+/// mechanisms to depend only on the core capability contract.
+pub trait DynamicToolSink: Send + Sync {
+    /// Replace every tool currently published by `source`.
+    fn replace(&self, source: &str, tools: Vec<Arc<dyn Tool>>);
+
+    /// Remove `source` and all tools it published.
+    fn remove(&self, source: &str);
+}
 
 /// A dynamically-discoverable list that refreshes from a source of truth.
 ///
 /// Implementations:
 /// - `neenee_agent::modelsdev::ModelsDevCatalog` — providers/models from
 ///   models.dev (remote JSON → file cache → KNOWN_MODELS fallback).
-/// - Remote skill repos — skills from HTTP repos (index.json → dir cache →
-///   bundled fallback).
-/// - MCP tool discovery — tools from connected servers (tools/list → in-memory
-///   → last-known fallback).
+/// - `neenee_skills::SkillCatalog` — skills from local and remote sources.
+/// - `neenee_mcp::McpCatalog` — tools from connected MCP servers.
 ///
 /// The trait is intentionally minimal: `refresh` + cadence. Each implementation
 /// manages its own `load` / fallback internally, because the

@@ -7,11 +7,12 @@
 //! - **The `Agent` struct** (`agent.rs`) — holds the provider, tool set, mode,
 //!   pursuit, and skill registry; runs the streaming ReAct loop
 //!   (`run_streaming_with_events`).
-//! - **System-prompt assembly** (`prompt.rs`) — methods extending `Agent` that
-//!   rebuild the system message each turn and auto-load mentioned skills.
-//! - **Skill registry + discovery** (`skills/`) — loads skills from disk and
-//!   remote indices; produces the `UseSkillTool` / `ListSkillsTool` tool
-//!   implementations.
+//! - **Model-context assembly** (`model_context/`) — the request-preparation
+//!   funnel, system-prompt policy, and harness-authored context messages.
+//! - **Extension integration** — consumes an optional `neenee-skills`
+//!   registry for model-context injection and accepts connector tools through
+//!   a protocol-neutral dynamic-tool port. Discovery and transport stay in
+//!   their dedicated capability crates.
 //! - **Turn orchestration** (`orchestration.rs`) — the policy that wraps every
 //!   agent turn: compaction, mid-turn pruning, retries with backoff, the
 //!   `/pursue` stop-gate driver, and the `/repeat` cron scheduler. Frontends drive the harness
@@ -26,12 +27,11 @@
 //! `Config`, `EmbeddingStore`), and `neenee-providers` (the
 //! `build_provider_for_channel` factory plus the user-agent / spec
 //! constants the catalog uses when constructing concrete impls). It
-//! speaks to tools through the core `Tool` trait, so it does **not**
-//! depend on `neenee-tools` at lib build time — concrete tool instances
-//! are constructed by the binary, which depends on everything.
-//! (`neenee-tools` is a *dev*-dependency so the
-//! `ask_user_tool_blocks_and_returns_selected_answers` integration test
-//! can construct a real `AskUserTool`; dev-deps do not form cycles.)
+//! consumes the concrete coding-tool implementations from `neenee-tools` and
+//! skill capability from `neenee-skills`, then dispatches tools through the
+//! core [`Tool`] and [`ToolSet`] contracts. These dependencies point downward
+//! (`agent -> tools`, `agent -> skills`); orchestration-native tools that
+//! construct or control agents remain in this crate.
 //!
 //! ## Why catalog and EnvoyTool live here (not in store / tools)
 //!
@@ -67,18 +67,16 @@ pub use neenee_store::RepeatStore;
 // the Agent struct expects at the crate root have to be listed here by name.
 // Keep this list in sync with `neenee_core`'s lib.rs re-exports.
 pub use neenee_core::{
-    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, ContextProjectionGate, EXPLORE,
-    EnvoyEvent, EnvoyProfile, HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest,
-    McpConnectionStatus, McpServerConfig, Message, PRUNED_TOOL_PLACEHOLDER, PatchOp,
-    PermissionDecision, PermissionRequest, PromptChannel, PromptContext, PromptRegistry,
-    PromptRegistryError, PromptSection, Provider, ProviderEntry, ProviderPickerRow,
-    ProviderPickerSnapshot, ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role,
-    RoundOutcome, RoundTimer, SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE,
-    ThreadPursuit, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream,
-    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
-    WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow, is_interactive_command,
-    is_secret_command, parse_retryable_error, prune_tool_results, public_error_message,
-    retryable_error, truncate_utf8,
+    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, EXPLORE, EnvoyEvent, EnvoyProfile,
+    HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
+    McpServerConfig, Message, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
+    PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
+    ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, RoundOutcome, RoundTimer,
+    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, ThreadPursuit, TokenUsage,
+    Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion,
+    UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes,
+    estimate_tokens, is_context_overflow, parse_retryable_error, prune_tool_results,
+    public_error_message, retryable_error, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -129,30 +127,38 @@ pub use agent::{Agent, AgentBuilder, RequestTokenEstimate};
 
 mod bash_policy;
 pub mod catalog;
+mod context_projection;
 pub mod doom_guard;
 pub mod dynamic;
+mod dynamic_tools;
 pub mod hooks;
 pub mod modelsdev;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
+pub mod envoy_tool;
 mod hook_runner;
 pub mod loop_guard;
+mod model_context;
 pub mod orchestration;
 mod permission_store;
-// Shadows core's `prompt` module under the `pub use neenee_core::*` glob
-// above; deliberate — see the note there. The prompt *types* are re-exported
-// by name in the explicit list.
-pub mod envoy_tool;
-#[allow(hidden_glob_reexports)]
-mod prompt;
+mod pursuit_prompts;
 mod pursuit_state;
 pub mod session_review;
 pub mod session_title;
-pub mod skills;
-pub mod todo_tools;
+mod shell_input;
+use neenee_skills as skills;
+pub mod system_prompt;
+mod tool_call;
+mod tool_integration;
 
+pub use context_projection::ContextProjectionGate;
 pub use envoy_tool::{EnvoyRegistry, EnvoyTool};
 pub use session_review::{LoopingReview, default_reviews};
-pub use todo_tools::{TodoUpdateTool, TodoWriteTool};
+pub use system_prompt::{
+    SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
+};
+
+/// Model-emitted marker that satisfies the opt-in pursuit stop gate.
+pub const PURSUIT_COMPLETE_MARKER: &str = "[NEENEE_PURSUIT_COMPLETE]";
 
 #[cfg(test)]
 mod tests;

@@ -155,11 +155,11 @@ pub struct Agent {
     /// schema and the executed implementation track the chosen variant. Held
     /// behind a `RwLock` because it is swapped wholesale on selection change.
     resolved_tools: std::sync::RwLock<Vec<Arc<dyn Tool>>>,
-    /// Dynamically refreshable MCP tools, held behind a shared `RwLock` so the
-    /// background `McpCatalog` refresh loop can
-    /// replace them (reconnect, re-discover) without rebuilding the agent.
-    /// `visible_tools` / dispatch / snapshot merge this with `resolved_tools`.
-    mcp_tools: Arc<std::sync::RwLock<Vec<Arc<dyn Tool>>>>,
+    /// Tools published by dynamically changing external sources. MCP and
+    /// future connectors replace their own named snapshots through the core
+    /// [`DynamicToolSink`] port; the agent owns synchronization, provenance,
+    /// collision policy, advertisement, and dispatch.
+    dynamic_tools: Arc<crate::dynamic_tools::DynamicToolRegistry>,
     /// Session-level disabled-tool mask. Names here are hidden from the model
     /// (their schemas are dropped before `prepare_tools`) and rejected at
     /// dispatch, but the tool stays installed so it can be re-enabled without
@@ -173,7 +173,8 @@ pub struct Agent {
     scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
-    /// with the `todo` / `todo_update` tools via `TodoToolContext`.
+    /// with the concrete `todo` / `todo_update` tools installed by
+    /// [`crate::tool_integration`].
     todos: Arc<std::sync::Mutex<neenee_core::TodoList>>,
     /// Harness turn counter, bumped at the start of every `execute_round`.
     /// Shared with the todo tools so they can stamp
@@ -257,6 +258,12 @@ pub struct Agent {
     /// reply must unblock a tool parked mid-turn and cannot wait for the loop.
     inbox_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<AgentOp>>>,
     inbox_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<AgentOp>>>,
+    /// Human-authored inserts for the currently running principal/side round.
+    /// This is deliberately separate from the envoy `AgentOp` inbox: submit,
+    /// cancel, and boundary admission all take this one mutex, which gives the
+    /// UI an exact answer in the cancellation-vs-admission race. `None` means
+    /// the round is not accepting inserts.
+    user_input_queue: std::sync::Mutex<Option<UserInputRound>>,
     /// Who this agent is and what it is for. The single string the system
     /// prompt opens with — supplied by the *embedding* (e.g. the CLI), so this
     /// crate stays identity-agnostic and can be reused by frontends that are
@@ -270,13 +277,10 @@ pub struct Agent {
     /// envoys, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the round boundary is a plain no-op there.
     round_persist: std::sync::Mutex<Option<RoundPersistFn>>,
-    /// Declarative prompt registry (ADR-0039). Holds one [`PromptSection`] per
-    /// injection path, keyed by id. Seeded with the default system-channel
-    /// sections in [`Agent::new`] via [`crate::prompt::default_prompt_registry`];
-    /// the system message is rebuilt each round by composing the active
-    /// sections in rank order. User-channel sections are added in later
-    /// migration stages.
-    pub(crate) prompt_registry: crate::PromptRegistry,
+    /// Declarative system-prompt policy (ADR-0056). Seeded with the default
+    /// sections at construction and rebuilt before every provider request by
+    /// the [`crate::model_context`] funnel.
+    pub(crate) system_prompt_registry: crate::SystemPromptRegistry,
     /// Per-model tool-variant selection (the **override** axis) for the
     /// *current* model: a `capability → variant_id` map. Seeded from
     /// `[tool_variants."<model-id>"]` config via
@@ -397,6 +401,15 @@ pub(crate) struct TurnState {
     /// Per-turn: lives and dies with this `TurnState` so loop state never
     /// crosses turns.
     pub(crate) guards: crate::loop_guard::RoundGuardState,
+    /// Exact tool calls that reached a terminal result in this turn. The set
+    /// becomes an idempotency fence only after a transient provider retry;
+    /// normal model rounds retain their existing repeat-call behavior.
+    completed_tool_calls: HashSet<String>,
+    /// Snapshot of calls completed before a transient provider failure. Only
+    /// this frozen subset is protected: calls first executed after a retry keep
+    /// normal same-turn semantics unless a later provider failure checkpoints
+    /// them too.
+    retry_protected_tool_calls: HashSet<String>,
 }
 
 impl TurnState {
@@ -410,6 +423,56 @@ impl TurnState {
         crate::loop_guard::RoundGuardState::new()
             .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
     }
+
+    fn remember_completed_tool(&mut self, call: &ToolCall) {
+        self.completed_tool_calls
+            .insert(checkpoint_tool_signature(call));
+    }
+
+    fn protect_completed_tools_for_retry(&mut self) {
+        self.retry_protected_tool_calls
+            .extend(self.completed_tool_calls.iter().cloned());
+    }
+
+    fn is_checkpoint_replay(&self, call: &ToolCall) -> bool {
+        self.retry_protected_tool_calls
+            .contains(&checkpoint_tool_signature(call))
+    }
+}
+
+/// Exact, stable identity for retry idempotency. JSON arguments are parsed and
+/// serialized once so insignificant object-key ordering does not turn the same
+/// call into a different identity; malformed argument blobs fall back to their
+/// trimmed wire form.
+fn checkpoint_tool_signature(call: &ToolCall) -> String {
+    let arguments = serde_json::from_str::<serde_json::Value>(&call.arguments)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|_| call.arguments.trim().to_string());
+    format!("{}\u{0}{arguments}", call.name)
+}
+
+/// Live state for one streaming ReAct turn.
+///
+/// Orchestration keeps this value across transient provider retries. A retry
+/// therefore resumes the exact provider request that failed while preserving
+/// completed tool results, loop-guard state, hook scope, accounting, and the
+/// steering inbox. `provider_request_pending` stays set until a complete,
+/// valid assistant response has been accepted; re-entry while it is set skips
+/// request preparation and round-start hooks so retrying cannot replay work
+/// that already happened at the request boundary.
+pub(crate) struct StreamingTurnState {
+    state: TurnState,
+    tool_rounds: usize,
+    inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
+    started_at: std::time::Instant,
+    provider_request_pending: bool,
+    user_input_generation: Option<u64>,
+}
+
+struct UserInputRound {
+    session_id: String,
+    generation: u64,
+    queue: std::collections::VecDeque<neenee_core::QueuedUserInput>,
 }
 
 /// RAII settlement for one concrete provider request. Any early-return path
@@ -500,7 +563,7 @@ impl Drop for RequestAccountingGuard {
 
 /// Construction-time configuration for an [`Agent`].
 ///
-/// Prompt policy is assembled before the agent starts running and is immutable
+/// System-prompt policy is assembled before the agent starts running and is immutable
 /// afterwards. This keeps request preparation deterministic while allowing an
 /// embedding to add product-specific sections or replace the composition for a
 /// specialized agent such as the session reviewer.
@@ -509,64 +572,90 @@ pub struct AgentBuilder {
     toolset: neenee_core::ToolSet,
     skills_registry: skills::SkillRegistry,
     identity: AgentIdentity,
-    prompt_registry: crate::PromptRegistry,
+    system_prompt_registry: crate::SystemPromptRegistry,
 }
 
 impl AgentBuilder {
     fn new(
         provider: Arc<dyn Provider>,
         toolset: neenee_core::ToolSet,
-        skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
     ) -> Self {
         Self {
             provider,
             toolset,
-            skills_registry,
+            skills_registry: skills::SkillRegistry::empty(),
             identity,
-            prompt_registry: crate::prompt::default_prompt_registry(),
+            system_prompt_registry: crate::model_context::default_system_prompt_registry(),
         }
     }
 
-    /// Add an embedding-owned prompt section to the default composition.
-    pub fn register_prompt_section<S: crate::PromptSection + 'static>(
+    /// Add one caller-supplied tool to this agent's capability set.
+    ///
+    /// Agent-owned stateful identities are installed during build and take
+    /// precedence over a caller tool with the same `(name, variant)`.
+    pub fn with_tool(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.toolset.insert(tool);
+        self
+    }
+
+    /// Add caller-supplied tools to this agent's capability set.
+    pub fn with_tools(mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        for tool in tools {
+            self.toolset.insert(tool);
+        }
+        self
+    }
+
+    /// Attach a live skill registry. Agents without one use an empty registry
+    /// and expose no skill tools or implicit skill context.
+    pub fn with_skills(mut self, registry: skills::SkillRegistry) -> Self {
+        self.skills_registry = registry;
+        self
+    }
+
+    /// Add an embedding-owned section to the default system-prompt policy.
+    pub fn register_system_prompt_section<S: crate::SystemPromptSection + 'static>(
         mut self,
         section: S,
-    ) -> Result<Self, crate::PromptRegistryError> {
-        self.prompt_registry.try_register(section)?;
+    ) -> Result<Self, crate::SystemPromptRegistryError> {
+        self.system_prompt_registry.try_register(section)?;
         Ok(self)
     }
 
     /// Disable a registered default or custom section by its stable id.
-    pub fn disable_prompt_section(mut self, id: &str) -> Result<Self, crate::PromptRegistryError> {
-        self.prompt_registry.disable(id)?;
+    pub fn disable_system_prompt_section(
+        mut self,
+        id: &str,
+    ) -> Result<Self, crate::SystemPromptRegistryError> {
+        self.system_prompt_registry.disable(id)?;
         Ok(self)
     }
 
     /// Override a registered section's rank in the final composition.
-    pub fn rank_prompt_section(
+    pub fn rank_system_prompt_section(
         mut self,
         id: &str,
         rank: u32,
-    ) -> Result<Self, crate::PromptRegistryError> {
-        self.prompt_registry.set_rank(id, rank)?;
+    ) -> Result<Self, crate::SystemPromptRegistryError> {
+        self.system_prompt_registry.set_rank(id, rank)?;
         Ok(self)
     }
 
     /// Replace the default composition wholesale.
-    pub fn with_prompt_registry(mut self, registry: crate::PromptRegistry) -> Self {
-        self.prompt_registry = registry;
+    pub fn with_system_prompt_registry(mut self, registry: crate::SystemPromptRegistry) -> Self {
+        self.system_prompt_registry = registry;
         self
     }
 
     /// Freeze the configuration and construct the agent.
     pub fn build(self) -> Agent {
-        Agent::from_toolset_with_prompt_registry(
+        Agent::from_toolset_with_system_prompt_registry(
             self.provider,
             self.toolset,
             self.skills_registry,
             self.identity,
-            self.prompt_registry,
+            self.system_prompt_registry,
         )
     }
 }
@@ -576,25 +665,18 @@ impl Agent {
     pub fn builder(
         provider: Arc<dyn Provider>,
         tools: Vec<Arc<dyn Tool>>,
-        skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
     ) -> AgentBuilder {
-        AgentBuilder::new(
-            provider,
-            neenee_core::ToolSet::from_tools(tools),
-            skills_registry,
-            identity,
-        )
+        AgentBuilder::new(provider, neenee_core::ToolSet::from_tools(tools), identity)
     }
 
     /// Start configuring an agent from a full multi-variant tool set.
     pub fn builder_from_toolset(
         provider: Arc<dyn Provider>,
         toolset: neenee_core::ToolSet,
-        skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
     ) -> AgentBuilder {
-        AgentBuilder::new(provider, toolset, skills_registry, identity)
+        AgentBuilder::new(provider, toolset, identity)
     }
 
     /// Construct an agent from a flat tool list. The tools are grouped into a
@@ -606,15 +688,9 @@ impl Agent {
     pub fn new(
         provider: Arc<dyn Provider>,
         tools: Vec<Arc<dyn Tool>>,
-        skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
     ) -> Self {
-        Self::from_toolset(
-            provider,
-            neenee_core::ToolSet::from_tools(tools),
-            skills_registry,
-            identity,
-        )
+        Self::from_toolset(provider, neenee_core::ToolSet::from_tools(tools), identity)
     }
 
     /// Construct an agent from a full [`neenee_core::ToolSet`], preserving every
@@ -623,37 +699,29 @@ impl Agent {
     pub fn from_toolset(
         provider: Arc<dyn Provider>,
         toolset: neenee_core::ToolSet,
-        skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
     ) -> Self {
-        Self::builder_from_toolset(provider, toolset, skills_registry, identity).build()
+        Self::builder_from_toolset(provider, toolset, identity).build()
     }
 
-    fn from_toolset_with_prompt_registry(
+    fn from_toolset_with_system_prompt_registry(
         provider: Arc<dyn Provider>,
         toolset: neenee_core::ToolSet,
         skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
-        prompt_registry: crate::PromptRegistry,
+        system_prompt_registry: crate::SystemPromptRegistry,
     ) -> Self {
         let pursuit_state = crate::pursuit_state::PursuitState::new();
         let thread_id = Arc::new(std::sync::Mutex::new(None));
 
         let mut toolset = toolset;
-
-        // The unified task list shares its cell + turn counter with the
-        // todo tools. An ad-hoc task edit (todo / todo_update) moves the
-        // same shared list.
         let turn_counter = Arc::new(std::sync::Mutex::new(0u64));
         let todos = Arc::new(std::sync::Mutex::new(neenee_core::TodoList::default()));
-        let todo_context =
-            neenee_core::TodoToolContext::new(Arc::clone(&todos), Arc::clone(&turn_counter));
-        toolset.insert(Arc::new(crate::todo_tools::TodoWriteTool::new(
-            todo_context.clone(),
-        )));
-        toolset.insert(Arc::new(crate::todo_tools::TodoUpdateTool::new(
-            todo_context,
-        )));
+        crate::tool_integration::install_agent_owned_tools(
+            &mut toolset,
+            Arc::clone(&todos),
+            Arc::clone(&turn_counter),
+        );
 
         // Seed the model-visible view by resolving the pool for the live model
         // with no role restriction and no model variant overrides yet: the
@@ -672,7 +740,7 @@ impl Agent {
             provider,
             toolset,
             resolved_tools,
-            mcp_tools: Arc::new(std::sync::RwLock::new(Vec::new())),
+            dynamic_tools: Arc::new(crate::dynamic_tools::DynamicToolRegistry::default()),
             disabled_tools: Arc::new(std::sync::Mutex::new(HashSet::new())),
             scoped_disabled_tools: Arc::new(std::sync::Mutex::new(ScopedToolDisable::default())),
             todos,
@@ -697,9 +765,10 @@ impl Agent {
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
             inbox_rx: std::sync::Mutex::new(None),
+            user_input_queue: std::sync::Mutex::new(None),
             identity,
             round_persist: std::sync::Mutex::new(None),
-            prompt_registry,
+            system_prompt_registry,
             variant_selection: Arc::new(
                 std::sync::Mutex::new(neenee_core::VariantSelection::new()),
             ),
@@ -773,14 +842,23 @@ impl Agent {
                 .resolve_for(&model, &agent_selection, &model_selection);
     }
 
-    /// The current model-visible toolset: exactly one variant per capability for
-    /// the active selection. A snapshot clone for external readers (e.g. a
-    /// envoy dispatch that scopes this resolved list down to its profile).
+    /// Every currently installed tool, including dynamic sources. Static
+    /// capabilities win name collisions; dynamic source order is deterministic.
     pub fn installed_tools(&self) -> Vec<Arc<dyn Tool>> {
-        self.resolved_tools
+        let mut tools = self
+            .resolved_tools
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .clone();
+        let mut seen: HashSet<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
+        tools.extend(
+            self.dynamic_tools
+                .snapshot()
+                .into_iter()
+                .filter(|entry| seen.insert(entry.tool.name().to_string()))
+                .map(|entry| entry.tool),
+        );
+        tools
     }
 
     /// Estimate the complete next request at the same pre-wire choke point the
@@ -788,7 +866,7 @@ impl Agent {
     /// model will actually receive instead of measuring durable history alone.
     pub fn estimate_next_request_tokens(&self, messages: &[Message]) -> RequestTokenEstimate {
         let mut prepared = messages.to_vec();
-        self.prepare_turn_messages(&mut prepared);
+        self.prepare_request_messages(&mut prepared);
         // Use per-message wire weight here rather than `estimate_tokens`: the
         // latter intentionally includes persisted envoy children, while the
         // provider receives only the parent message's rendered result.
@@ -825,13 +903,13 @@ impl Agent {
 
     /// Dev-only dry run: rebuild the head system message and auto-load any
     /// skills mentioned in the latest visible user turn against a borrowed
-    /// message list, exactly as the next turn would (`prepare_turn_messages`),
+    /// message list, exactly as the next turn would (`prepare_request_messages`),
     /// but with no provider call and no mutation of live turn history. Powers
     /// the `/debug preview` so it captures the *real* request shape —
     /// including the freshly composed system prompt and injected skills —
     /// rather than a degenerate reconstruction.
-    pub fn prepare_turn_messages_debug(&self, messages: &mut Vec<Message>) {
-        self.prepare_turn_messages(messages);
+    pub fn prepare_request_messages_debug(&self, messages: &mut Vec<Message>) {
+        self.prepare_request_messages(messages);
     }
 
     /// A shared handle to this agent's live variant selection (the **override**
@@ -1501,6 +1579,145 @@ impl Agent {
             .is_some_and(|tx| tx.send(op).is_ok())
     }
 
+    /// Open a fresh, cancellable user-input queue for one interactive round.
+    /// Any stale entries are returned to the caller so it can surface them as
+    /// unavailable instead of silently carrying them into a different round.
+    pub fn begin_user_input_round(
+        &self,
+        session_id: impl Into<String>,
+        generation: u64,
+    ) -> Vec<neenee_core::QueuedUserInput> {
+        self.user_input_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(UserInputRound {
+                session_id: session_id.into(),
+                generation,
+                queue: std::collections::VecDeque::new(),
+            })
+            .map(|round| round.queue)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+
+    /// Queue human-authored input for the next safe turn boundary. Returns
+    /// `false` once the round has atomically closed its admission gate.
+    pub fn submit_user_input(&self, session_id: &str, input: neenee_core::QueuedUserInput) -> bool {
+        let mut queue = self
+            .user_input_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(round) = queue
+            .as_mut()
+            .filter(|round| round.session_id == session_id)
+        else {
+            return false;
+        };
+        round.queue.push_back(input);
+        true
+    }
+
+    /// Cancel a queued insert. Taking the same mutex as boundary admission
+    /// makes the result definitive: `Some` means the input cannot be admitted;
+    /// `None` means admission already won (or the id was unknown).
+    pub fn cancel_user_input(
+        &self,
+        session_id: &str,
+        input_id: &str,
+    ) -> Option<neenee_core::QueuedUserInput> {
+        let mut queue = self
+            .user_input_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let round = queue
+            .as_mut()
+            .filter(|round| round.session_id == session_id)?;
+        let position = round.queue.iter().position(|input| input.id == input_id)?;
+        round.queue.remove(position)
+    }
+
+    /// Stop accepting inserts and return anything that never crossed a turn
+    /// boundary. Used on interrupted/error/blocked terminal paths.
+    pub fn close_user_input_round(&self, generation: u64) -> Vec<neenee_core::QueuedUserInput> {
+        let mut queue = self
+            .user_input_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !queue
+            .as_ref()
+            .is_some_and(|round| round.generation == generation)
+        {
+            return Vec::new();
+        }
+        queue
+            .take()
+            .map(|round| round.queue)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+
+    fn user_input_generation(&self) -> Option<u64> {
+        self.user_input_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|round| round.generation)
+    }
+
+    /// Admit every currently queued human input. When `close_if_empty` is
+    /// true, observing an empty queue also closes the round atomically so a
+    /// concurrent submit must fail and can be promoted to a next-round item.
+    fn admit_user_inputs<F>(
+        &self,
+        generation: Option<u64>,
+        messages: &mut Vec<Message>,
+        close_if_empty: bool,
+        on_event: &mut F,
+    ) -> usize
+    where
+        F: FnMut(AgentEvent),
+    {
+        let inputs = {
+            let mut queue = self
+                .user_input_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let Some(open) = queue
+                .as_mut()
+                .filter(|round| Some(round.generation) == generation)
+            else {
+                return 0;
+            };
+            if open.queue.is_empty() {
+                if close_if_empty {
+                    *queue = None;
+                }
+                return 0;
+            }
+            open.queue.drain(..).collect::<Vec<_>>()
+        };
+
+        let admitted = inputs.len();
+        for input in inputs {
+            let mut message =
+                crate::model_context::visible_user(InjectionKind::UserSteer, input.text.clone());
+            if let Some(display) = input.display_text.clone() {
+                message = message.with_display_content(display);
+            }
+            if let Some(sent_at_ms) = input.sent_at_ms {
+                message = message.with_sent_at_ms(sent_at_ms);
+            }
+            if !input.images.is_empty() {
+                message = message.with_images(input.images.clone());
+            }
+            messages.push(message);
+            on_event(AgentEvent::UserInputInserted(input));
+        }
+        admitted
+    }
+
     /// Drain every op currently buffered in the inbox and apply it to the live
     /// turn. Called by the driver at the top of every tool round (the only
     /// place it is safe to mutate `messages` or end the turn).
@@ -1522,16 +1739,15 @@ impl Agent {
         while let Ok(op) = rx.try_recv() {
             match op {
                 AgentOp::InjectUserMessage(text) => {
-                    messages.push(
-                        Message::new(Role::User, text)
-                            .with_origin(InjectionOrigin::new(InjectionKind::EnvoySteer)),
-                    );
+                    messages.push(crate::model_context::visible_user(
+                        InjectionKind::EnvoySteer,
+                        text,
+                    ));
                 }
                 AgentOp::InterAgentMessage { msg } => {
-                    messages.push(Message::injected(
-                        Role::User,
+                    messages.push(crate::model_context::hidden_user(
+                        InjectionKind::InterAgent,
                         msg,
-                        InjectionOrigin::new(InjectionKind::InterAgent),
                     ));
                 }
                 AgentOp::Interrupt | AgentOp::Shutdown => {
@@ -1571,26 +1787,27 @@ impl Agent {
         self.permissions.seed_from_config(rules);
     }
 
-    /// Replace the entire set of dynamically-refreshable MCP tools. Called by
-    /// the `McpCatalog` background refresh loop
-    /// after reconnecting servers and re-discovering their tools. The built-in
-    /// built-in capabilities are untouched.
-    pub fn replace_mcp_tools(&self, tools: Vec<Arc<dyn Tool>>) {
-        *self.mcp_tools.write().unwrap_or_else(|e| e.into_inner()) = tools;
+    /// Replace the complete tool snapshot published by one dynamic source.
+    pub fn replace_dynamic_tools(&self, source: &str, tools: Vec<Arc<dyn Tool>>) {
+        self.dynamic_tools.replace(source, tools);
     }
 
-    /// A clone of the shared MCP-tools holder, for passing to a
-    /// `McpCatalog` so its background refresh can
-    /// update the live tool list.
-    pub fn mcp_tools_holder(&self) -> Arc<std::sync::RwLock<Vec<Arc<dyn Tool>>>> {
-        Arc::clone(&self.mcp_tools)
+    /// Remove one dynamic source and every tool it published.
+    pub fn remove_dynamic_tools(&self, source: &str) {
+        self.dynamic_tools.remove(source);
+    }
+
+    /// The connector-facing publication port. It deliberately exposes no
+    /// agent-owned lock or protocol-specific state.
+    pub fn dynamic_tool_sink(&self) -> Arc<dyn neenee_core::DynamicToolSink> {
+        self.dynamic_tools.clone()
     }
 
     /// Set the session-level enabled flag for a tool. No-op when the name is
     /// unknown (so a stale toggle from the modal cannot poison the dispatch
     /// table). Returns whether the flag actually changed.
     pub fn set_tool_enabled(&self, name: &str, enabled: bool) -> bool {
-        let known = self.toolset.variants_of(name).is_some();
+        let known = self.toolset.variants_of(name).is_some() || self.dynamic_tools.contains(name);
         if !known {
             return false;
         }
@@ -1613,6 +1830,9 @@ impl Agent {
     /// Whether `name` is currently enabled (i.e. visible to the model and
     /// dispatchable). Unknown tools report `false`.
     pub fn is_tool_enabled(&self, name: &str) -> bool {
+        if self.toolset.variants_of(name).is_none() && !self.dynamic_tools.contains(name) {
+            return false;
+        }
         let guard = self
             .disabled_tools
             .lock()
@@ -1716,61 +1936,56 @@ impl Agent {
         // any stale call (a name carried over from an earlier turn's tool
         // list) — see `execute_tool`.
         let reclaim_ask_user = self.get_unattended();
-        let mut tools: Vec<Arc<dyn Tool>> = self
-            .resolved_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
+        self.installed_tools()
+            .into_iter()
             .filter(|t| !self.is_name_disabled(t.name()))
             .filter(|t| !(reclaim_ask_user && t.name() == "ask_user"))
-            .cloned()
-            .collect();
-        // Merge dynamically-refreshable MCP tools.
-        if let Ok(mcp) = self.mcp_tools.read() {
-            tools.extend(
-                mcp.iter()
-                    .filter(|t| !self.is_name_disabled(t.name()))
-                    .filter(|t| !(reclaim_ask_user && t.name() == "ask_user"))
-                    .cloned(),
-            );
-        }
-        tools
+            .collect()
     }
 
     /// Structured view of every installed tool, for the session modal's Tools
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
-    /// (`builtin` / `mcp:<server>` / `plan`) from the tool's name.
+    /// (`builtin`, `envoy`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<neenee_core::ToolInfo> {
         let disabled = self
             .disabled_tools
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let envoy = ["envoy"];
-        // Merge the resolved built-in view and dynamically-refreshable MCP
-        // tools into one owned list (one variant per capability).
-        let mut all_tools: Vec<Arc<dyn Tool>> = self
+        let static_tools: Vec<Arc<dyn Tool>> = self
             .resolved_tools
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if let Ok(guard) = self.mcp_tools.read() {
-            all_tools.extend(guard.iter().cloned());
-        }
-        let mut infos: Vec<neenee_core::ToolInfo> = all_tools
+        let mut seen: HashSet<String> = static_tools
             .iter()
-            .map(|t| {
-                let name = t.name();
-                let source = if let Some(rest) = name.strip_prefix("mcp__") {
-                    let server = rest.split("__").next().unwrap_or(rest);
-                    format!("mcp:{}", server)
-                } else if envoy.contains(&name) {
+            .map(|tool| tool.name().to_string())
+            .collect();
+        let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = static_tools
+            .into_iter()
+            .map(|tool| {
+                let source = if envoy.contains(&tool.name()) {
                     "envoy".to_string()
                 } else {
                     "builtin".to_string()
                 };
+                (source, tool)
+            })
+            .collect();
+        sourced_tools.extend(
+            self.dynamic_tools
+                .snapshot()
+                .into_iter()
+                .filter(|entry| seen.insert(entry.tool.name().to_string()))
+                .map(|entry| (entry.source, entry.tool)),
+        );
+        let mut infos: Vec<neenee_core::ToolInfo> = sourced_tools
+            .into_iter()
+            .map(|(source, tool)| {
+                let name = tool.name();
                 neenee_core::ToolInfo {
                     name: name.to_string(),
-                    description: t.description().to_string(),
+                    description: tool.description().to_string(),
                     enabled: !disabled.contains(name),
                     source,
                 }
@@ -1844,6 +2059,7 @@ impl Agent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
+        let user_input_generation = self.user_input_generation();
 
         loop {
             if cancel.is_cancelled() {
@@ -1856,8 +2072,13 @@ impl Agent {
             if !self.drain_inbox(&mut inbox_rx, messages) {
                 return Err(HarnessError::Interrupted);
             }
+            if self.admit_user_inputs(user_input_generation, messages, false, &mut on_event) > 0 {
+                // User input is an admission boundary just like a tool result:
+                // persist it before the provider can observe it.
+                self.fire_round_persist(messages).await?;
+            }
 
-            self.prepare_turn_messages(messages);
+            self.prepare_request_messages(messages);
             // RoundStart hooks (symmetric to the round-end Turn hooks): inject
             // any context at the top of this round's attention, before the
             // model is asked for its next completion. No-op without a
@@ -1936,16 +2157,33 @@ impl Agent {
                 continue;
             }
 
-            // Pursuit stop-gate: if a pursuit is armed and the model has not
-            // signalled completion, re-inject the condition and force another
-            // round instead of ending the turn.
+            // Turn-exit gates. Pursuit may force another turn, and a human
+            // insert queued during the just-finished provider request does the
+            // same. When neither applies, `close_if_empty` atomically closes
+            // admission before this round returns.
+            let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                messages.push(Message::injected(
-                    Role::User,
-                    prompt,
-                    InjectionOrigin::new(kind),
-                ));
+                messages.push(crate::model_context::hidden_user(kind, prompt));
+                continue_round = true;
+            }
+            let admitted = self.admit_user_inputs(
+                user_input_generation,
+                messages,
+                !continue_round,
+                &mut on_event,
+            );
+            if admitted > 0 {
+                continue_round = true;
+            }
+            if continue_round {
+                tool_rounds += 1;
+                if self.check_hard_stop(tool_rounds).is_break() {
+                    return Err(self.hard_stop_error());
+                }
+                self.fire_round_persist(messages).await?;
+                self.run_turn_hooks(messages, &state, tool_rounds).await;
+                self.restore_scoped_round_end();
                 continue;
             }
 
@@ -1965,6 +2203,51 @@ impl Agent {
         &self,
         messages: &mut Vec<Message>,
         cancel: &CancellationToken,
+        on_event: F,
+    ) -> Result<RoundOutcome, HarnessError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        let mut turn = self.begin_streaming_turn();
+        self.resume_streaming_with_events(messages, cancel, &mut turn, on_event)
+            .await
+    }
+
+    /// Start the durable in-memory state for one streaming ReAct turn.
+    ///
+    /// The top-level orchestrator retains this across transient provider
+    /// failures so it can retry the failed request without re-entering the
+    /// turn from scratch. Standalone callers use [`Self::run_streaming_with_events`],
+    /// which creates and consumes the state in one call.
+    pub(crate) fn begin_streaming_turn(&self) -> StreamingTurnState {
+        StreamingTurnState {
+            state: TurnState {
+                guards: TurnState::guards_default(self.doom_guard_config()),
+                ..TurnState::default()
+            },
+            tool_rounds: 0,
+            inbox_rx: self
+                .inbox_rx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(),
+            started_at: std::time::Instant::now(),
+            provider_request_pending: false,
+            user_input_generation: self.user_input_generation(),
+        }
+    }
+
+    /// Run or resume a streaming turn from its last provider-request boundary.
+    ///
+    /// A [`HarnessError::Retryable`] leaves `turn` reusable. If the failed
+    /// request followed completed tool calls, their messages and the complete
+    /// per-turn state are already present, so the next invocation sends the
+    /// same pending provider request instead of executing those tools again.
+    pub(crate) async fn resume_streaming_with_events<F>(
+        &self,
+        messages: &mut Vec<Message>,
+        cancel: &CancellationToken,
+        turn: &mut StreamingTurnState,
         mut on_event: F,
     ) -> Result<RoundOutcome, HarnessError>
     where
@@ -1975,37 +2258,48 @@ impl Agent {
         // provider, which keeps the model from naming it in the first place.
         let visible = self.visible_tools();
         self.provider.prepare_tools(&visible);
-        let turn_start = std::time::Instant::now();
-        let mut state = TurnState {
-            guards: TurnState::guards_default(self.doom_guard_config()),
-            ..TurnState::default()
-        };
-        let mut tool_rounds = 0;
-        // Take the steering inbox receiver for this turn (ADR-0029). See
-        // `run_with_events` for rationale; same dual-no-op contract for a
-        // non-steerable agent.
-        let mut inbox_rx = self
-            .inbox_rx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
 
         loop {
             if cancel.is_cancelled() {
                 return Err(HarnessError::Interrupted);
             }
-            // Apply steering ops queued since the last round before requesting
-            // the next stream. Replies bypass this (see drain_inbox).
-            if !self.drain_inbox(&mut inbox_rx, messages) {
-                return Err(HarnessError::Interrupted);
-            }
 
-            self.prepare_turn_messages(messages);
-            // RoundStart hooks (see the non-streaming path). Inject any context
-            // at the top of this round before the stream request goes out.
-            self.run_round_start_hooks(messages, &state, tool_rounds)
-                .await;
-            tracing::debug!(tool_round = tool_rounds, "requesting model completion");
+            let resuming_provider_request = turn.provider_request_pending;
+            if resuming_provider_request {
+                turn.state.protect_completed_tools_for_retry();
+            }
+            if !turn.provider_request_pending {
+                // Apply steering ops queued since the last round before
+                // preparing a new provider request. Replies bypass this (see
+                // `drain_inbox`). A transient retry deliberately skips this
+                // block: the already-prepared request is the checkpoint.
+                if !self.drain_inbox(&mut turn.inbox_rx, messages) {
+                    return Err(HarnessError::Interrupted);
+                }
+                if self.admit_user_inputs(
+                    turn.user_input_generation,
+                    messages,
+                    false,
+                    &mut on_event,
+                ) > 0
+                {
+                    self.fire_round_persist(messages).await?;
+                }
+
+                self.prepare_request_messages(messages);
+                // RoundStart hooks belong to a logical model round, not to
+                // each network attempt. Run them once before checkpointing the
+                // request so retries cannot duplicate injected context or hook
+                // side effects.
+                self.run_round_start_hooks(messages, &turn.state, turn.tool_rounds)
+                    .await;
+                turn.provider_request_pending = true;
+            }
+            tracing::debug!(
+                tool_round = turn.tool_rounds,
+                resumed = resuming_provider_request,
+                "requesting model completion"
+            );
             let request_projection = self.estimate_next_request_tokens(messages).total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
@@ -2014,11 +2308,11 @@ impl Agent {
                 cancel,
                 &request_provider,
                 &request_model,
-                tool_rounds,
+                turn.tool_rounds,
                 request_projection,
             );
             on_event(AgentEvent::ModelRequestStarted {
-                tool_round: tool_rounds,
+                tool_round: turn.tool_rounds,
                 context_tokens: request_projection,
             });
             // Race the model request against cancellation so an interrupt
@@ -2187,8 +2481,12 @@ impl Agent {
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));
             }
+            // The request checkpoint is consumed only after a complete,
+            // valid response is available. Any earlier return leaves it set
+            // so orchestration can retry this exact request.
+            turn.provider_request_pending = false;
             self.book_turn_usage(
-                &mut state,
+                &mut turn.state,
                 &response,
                 streamed_usage.take(),
                 &mut request_accounting,
@@ -2201,15 +2499,15 @@ impl Agent {
                 .dispatch_tool_calls(
                     &response,
                     messages,
-                    &mut state,
+                    &mut turn.state,
                     emitted_text,
                     cancel,
                     &mut on_event,
                 )
                 .await?
             {
-                tool_rounds += 1;
-                if self.check_hard_stop(tool_rounds).is_break() {
+                turn.tool_rounds += 1;
+                if self.check_hard_stop(turn.tool_rounds).is_break() {
                     return Err(self.hard_stop_error());
                 }
                 self.project_context_if_needed(messages, cancel).await?;
@@ -2218,23 +2516,42 @@ impl Agent {
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.
                 self.fire_round_persist(messages).await?;
-                self.run_turn_hooks(messages, &state, tool_rounds).await;
+                self.run_turn_hooks(messages, &turn.state, turn.tool_rounds)
+                    .await;
                 // Restore RoundEnd-scoped disables (mirror of the non-streaming
                 // path). TurnEnd-scoped disables survive until turn end.
                 self.restore_scoped_round_end();
                 continue;
             }
 
-            // Pursuit stop-gate (mirror of the non-streaming path): if a
-            // pursuit is armed and the model has not signalled completion,
-            // re-inject the condition and force another round.
+            // Turn-exit gates (mirror of the non-streaming path). The insert
+            // drain happens after the provider response commits, so an input
+            // typed during a would-be final answer can still force one more
+            // turn in this same round.
+            let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                messages.push(Message::injected(
-                    Role::User,
-                    prompt,
-                    InjectionOrigin::new(kind),
-                ));
+                messages.push(crate::model_context::hidden_user(kind, prompt));
+                continue_round = true;
+            }
+            let admitted = self.admit_user_inputs(
+                turn.user_input_generation,
+                messages,
+                !continue_round,
+                &mut on_event,
+            );
+            if admitted > 0 {
+                continue_round = true;
+            }
+            if continue_round {
+                turn.tool_rounds += 1;
+                if self.check_hard_stop(turn.tool_rounds).is_break() {
+                    return Err(self.hard_stop_error());
+                }
+                self.fire_round_persist(messages).await?;
+                self.run_turn_hooks(messages, &turn.state, turn.tool_rounds)
+                    .await;
+                self.restore_scoped_round_end();
                 continue;
             }
 
@@ -2243,8 +2560,8 @@ impl Agent {
             self.restore_scoped_turn_end();
             return Ok(RoundOutcome {
                 message: response,
-                token_usage: state.token_usage,
-                duration_ms: turn_start.elapsed().as_millis() as u64,
+                token_usage: turn.state.token_usage,
+                duration_ms: turn.started_at.elapsed().as_millis() as u64,
             });
         }
     }
@@ -2298,6 +2615,30 @@ impl Agent {
                 state.consecutive_readonly_rounds = 0;
             }
 
+            // A provider retry may produce the same tool request again even
+            // though its terminal result is already in the checkpointed
+            // history. Treat exact matches as idempotency replays regardless
+            // of the optional doom-loop setting.
+            let checkpoint_replays: Vec<bool> = tool_calls
+                .iter()
+                .map(|call| state.is_checkpoint_replay(call))
+                .collect();
+            if checkpoint_replays.iter().any(|replayed| *replayed) {
+                on_event(AgentEvent::Notice(
+                    AgentNotice::new(
+                        NoticeKind::ProviderRetry,
+                        NoticeSeverity::Warning,
+                        "Completed tool call not repeated",
+                        NoticeSource::Harness,
+                    )
+                    .with_body(
+                        "The retried model request repeated a tool call that already completed. \
+                         The checkpointed result remains authoritative; the tool was not run again.",
+                    )
+                    .with_surface(NoticeSurface::Toast),
+                ));
+            }
+
             // Pre-dispatch doom-loop check (the decisive intervention). Before
             // any tool runs this round, ask the doom guard whether any call is a
             // repeat of one already issued this turn. A repeat is blocked here
@@ -2311,7 +2652,9 @@ impl Agent {
             // user message so the model learns the call is refused.
             let doom_calls: Vec<(&str, &str)> = tool_calls
                 .iter()
-                .map(|c| (c.name.as_str(), c.arguments.as_str()))
+                .zip(&checkpoint_replays)
+                .filter(|(_, replayed)| !**replayed)
+                .map(|(call, _)| (call.name.as_str(), call.arguments.as_str()))
                 .collect();
             let doom_action = state.guards.check_doom_ahead(&doom_calls);
             let doom_message: Option<String> = match &doom_action {
@@ -2373,13 +2716,37 @@ impl Agent {
                      if you cannot proceed, say so explicitly or call `abort`."
                 ))
             };
+            let checkpoint_output = |name: &str| {
+                ToolOutput::Text(format!(
+                    "[retry checkpoint] This exact {name} call already completed before the \
+                     provider retry. Its result is present earlier in the conversation and \
+                     remains authoritative. The tool was not executed again."
+                ))
+            };
             let mut results: Vec<Option<(ToolOutput, u64)>> =
                 (0..tool_calls.len()).map(|_| None).collect();
             let exec_indices: Vec<usize> = tool_calls
                 .iter()
                 .enumerate()
                 .filter(|(idx, c)| {
-                    if state.guards.is_blocked(&c.name, &c.arguments) {
+                    if checkpoint_replays[*idx] {
+                        tracing::warn!(
+                            tool = %c.name,
+                            args = %c.arguments,
+                            "provider retry repeated a completed tool call"
+                        );
+                        let output = checkpoint_output(&c.name);
+                        let id = &call_ids[*idx];
+                        on_event(AgentEvent::ToolResult {
+                            id: id.clone(),
+                            name: c.name.clone(),
+                            output: output.to_text(),
+                            structured: output.clone(),
+                            duration_ms: 0,
+                        });
+                        results[*idx] = Some((output, 0));
+                        false
+                    } else if state.guards.is_blocked(&c.name, &c.arguments) {
                         tracing::warn!(
                             tool = %c.name,
                             args = %c.arguments,
@@ -2432,6 +2799,7 @@ impl Agent {
                     .await?;
                 for (pos, &idx) in exec_indices.iter().enumerate() {
                     results[idx] = exec_results.get(pos).cloned();
+                    state.remember_completed_tool(&tool_calls[idx]);
                 }
             }
             // Flatten back to a positional Vec, matching tool_calls order.
@@ -2444,7 +2812,8 @@ impl Agent {
             let denied = results
                 .iter()
                 .any(|(result, _)| matches!(result, ToolOutput::PermissionDenied { .. }));
-            for ((call, id), (result, duration_ms)) in tool_calls.iter().zip(&call_ids).zip(results)
+            for (idx, ((call, id), (result, duration_ms))) in
+                tool_calls.iter().zip(&call_ids).zip(results).enumerate()
             {
                 self.record_tool_result(
                     call,
@@ -2453,11 +2822,14 @@ impl Agent {
                     duration_ms,
                     messages,
                     state,
+                    checkpoint_replays[idx],
                     false,
                     on_event,
                 );
-                self.run_post_tool_hooks(call, &result, duration_ms, messages)
-                    .await;
+                if !checkpoint_replays[idx] {
+                    self.run_post_tool_hooks(call, &result, duration_ms, messages)
+                        .await;
+                }
             }
             // If the user denied permission for any call, stop the turn here
             // instead of feeding the (possibly partial) results back to the
@@ -2468,22 +2840,21 @@ impl Agent {
             // what to do instead. Non-terminating: the turn continues with the
             // (now masked) signatures hard-blocked for subsequent rounds.
             if let Some(message) = doom_message {
-                messages.push(Message::injected(
-                    Role::User,
+                messages.push(crate::model_context::hidden_user(
+                    InjectionKind::LoopReviewNudge,
                     message,
-                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
                 ));
             }
             return Ok(!denied);
         }
 
         // Text-based fallback: any provider may emit a JSON tool call as text.
-        if let Some(call) = tool_call::parse_text_tool_call(&response.content) {
+        if let Some(call) = crate::tool_call::parse_text_tool_call(&response.content) {
             if streamed_text {
                 on_event(AgentEvent::AssistantDiscard);
             }
             tracing::debug!(tool = %call.name, "tool call (text fallback)");
-            tool_call::attach_fallback_tool_call(messages, &call);
+            crate::tool_call::attach_fallback_tool_call(messages, &call);
             // Classify + feed this round to the guard, mirroring the native
             // path. The text-fallback emits one call per round, so a read-only
             // round is exactly "this single call is read-tier". Without this the
@@ -2496,11 +2867,31 @@ impl Agent {
             } else {
                 state.consecutive_readonly_rounds = 0;
             }
+            let checkpoint_replay = state.is_checkpoint_replay(&call);
+            if checkpoint_replay {
+                on_event(AgentEvent::Notice(
+                    AgentNotice::new(
+                        NoticeKind::ProviderRetry,
+                        NoticeSeverity::Warning,
+                        "Completed tool call not repeated",
+                        NoticeSource::Harness,
+                    )
+                    .with_body(
+                        "The retried model request repeated a tool call that already completed. \
+                         The checkpointed result remains authoritative; the tool was not run again.",
+                    )
+                    .with_surface(NoticeSurface::Toast),
+                ));
+            }
             // Pre-dispatch doom check, mirroring the native path: catch a repeat
             // *before* the text-fallback tool runs.
-            let doom_action = state
-                .guards
-                .check_doom_ahead(&[(call.name.as_str(), call.arguments.as_str())]);
+            let doom_action = if checkpoint_replay {
+                crate::loop_guard::GuardAction::Continue
+            } else {
+                state
+                    .guards
+                    .check_doom_ahead(&[(call.name.as_str(), call.arguments.as_str())])
+            };
             let doom_message: Option<String> = match &doom_action {
                 crate::loop_guard::GuardAction::Block { message, .. } => {
                     tracing::warn!(
@@ -2522,7 +2913,28 @@ impl Agent {
             // executes (ADR-0036). Same contract as the native path — the model
             // gets an explanatory error instead of the content. Covers any tool
             // masked by either the read-loop guard or the doom guard above.
-            let result = if state.guards.is_blocked(&call.name, &call.arguments) {
+            let guard_blocked = state.guards.is_blocked(&call.name, &call.arguments);
+            let result = if checkpoint_replay {
+                tracing::warn!(
+                    tool = %call.name,
+                    args = %call.arguments,
+                    "provider retry repeated a completed text-fallback tool call"
+                );
+                let output = ToolOutput::Text(format!(
+                    "[retry checkpoint] This exact {} call already completed before the \
+                     provider retry. Its result is present earlier in the conversation and \
+                     remains authoritative. The tool was not executed again.",
+                    call.name,
+                ));
+                on_event(AgentEvent::ToolResult {
+                    id: call_id.clone(),
+                    name: call.name.clone(),
+                    output: output.to_text(),
+                    structured: output.clone(),
+                    duration_ms: 0,
+                });
+                output
+            } else if guard_blocked {
                 tracing::warn!(
                     tool = %call.name,
                     args = %call.arguments,
@@ -2563,6 +2975,9 @@ impl Agent {
                 self.execute_tool_evented(&call, &call_id, cancel, on_event)
                     .await?
             };
+            if !checkpoint_replay && !guard_blocked {
+                state.remember_completed_tool(&call);
+            }
             let denied = matches!(result, ToolOutput::PermissionDenied { .. });
             let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
             self.record_tool_result(
@@ -2572,16 +2987,18 @@ impl Agent {
                 duration_ms,
                 messages,
                 state,
+                checkpoint_replay,
                 true,
                 on_event,
             );
-            self.run_post_tool_hooks(&call, &result, duration_ms, messages)
-                .await;
+            if !checkpoint_replay {
+                self.run_post_tool_hooks(&call, &result, duration_ms, messages)
+                    .await;
+            }
             if let Some(message) = doom_message {
-                messages.push(Message::injected(
-                    Role::User,
+                messages.push(crate::model_context::hidden_user(
+                    InjectionKind::LoopReviewNudge,
                     message,
-                    InjectionOrigin::new(InjectionKind::LoopReviewNudge),
                 ));
             }
             return Ok(!denied);
@@ -2602,6 +3019,7 @@ impl Agent {
         duration_ms: u64,
         messages: &mut Vec<Message>,
         state: &mut TurnState,
+        checkpoint_replay: bool,
         emit_event: bool,
         on_event: &mut F,
     ) where
@@ -2612,21 +3030,31 @@ impl Agent {
         // the byte-estimate of its final summary, so accumulate the real
         // `TokenUsage` it reported. For every other tool the byte-estimate
         // remains the only signal we have.
-        match result.envoy_payload() {
-            Some((_sub_messages, sub_usage)) => {
-                state.token_usage.total_tokens += sub_usage.total_tokens;
-                state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
-                state.token_usage.completion_tokens += sub_usage.completion_tokens;
-                // Still count the summary bytes that the parent model will
-                // actually re-read on the next round.
-                state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
-            }
-            None => {
-                state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
-            }
+        if checkpoint_replay {
+            // The short checkpoint reference is new model-visible context,
+            // but the original tool (especially an envoy) did no new work, so
+            // do not attribute its nested usage a second time.
+            state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
+        } else if let Some((_sub_messages, sub_usage)) = result.envoy_payload() {
+            state.token_usage.total_tokens += sub_usage.total_tokens;
+            state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
+            state.token_usage.completion_tokens += sub_usage.completion_tokens;
+            // Still count the summary bytes that the parent model will
+            // actually re-read on the next round.
+            state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
+        } else {
+            state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
         }
-        tracing::info!(tool = %call.name, duration_ms, bytes = text.len(), "tool result");
-        self.emit_todos_change(call, on_event);
+        tracing::info!(
+            tool = %call.name,
+            duration_ms,
+            bytes = text.len(),
+            checkpoint_replay,
+            "tool result"
+        );
+        if !checkpoint_replay {
+            self.emit_todos_change(call, on_event);
+        }
         if emit_event {
             on_event(AgentEvent::ToolResult {
                 id: call_id.to_string(),
@@ -2674,12 +3102,11 @@ impl Agent {
         // (OpenAI-compat) / `inline_data` (Gemini), letting the model see the
         // pixels. A short textual link ties the two messages together.
         if let ToolOutput::Image { mime, data } = result {
-            let image_msg = Message::new(Role::User, format!("Image from {}", call.name))
-                .with_images(vec![ImagePart {
-                    mime: mime.clone(),
-                    data: data.clone(),
-                }]);
-            messages.push(image_msg);
+            messages.push(crate::model_context::tool_image(
+                &call.name,
+                mime.clone(),
+                data.clone(),
+            ));
         }
     }
 
@@ -2728,11 +3155,7 @@ impl Agent {
             InjectionKind::Hook(HookEventKind::PostToolUse)
         };
         for context in injected {
-            messages.push(Message::injected(
-                Role::User,
-                context,
-                InjectionOrigin::new(kind),
-            ));
+            messages.push(crate::model_context::hidden_user(kind, context));
         }
     }
 
@@ -2775,10 +3198,9 @@ impl Agent {
             )
             .await;
         for context in side.injected {
-            messages.push(Message::injected(
-                Role::User,
+            messages.push(crate::model_context::hidden_user(
+                InjectionKind::Hook(HookEventKind::Turn),
                 context,
-                InjectionOrigin::new(InjectionKind::Hook(HookEventKind::Turn)),
             ));
         }
         self.apply_scoped_disables(&side.scoped_disables);
@@ -2809,10 +3231,9 @@ impl Agent {
             )
             .await;
         for context in side.injected {
-            messages.push(Message::injected(
-                Role::User,
+            messages.push(crate::model_context::hidden_user(
+                InjectionKind::Hook(HookEventKind::RoundStart),
                 context,
-                InjectionOrigin::new(InjectionKind::Hook(HookEventKind::RoundStart)),
             ));
         }
         self.apply_scoped_disables(&side.scoped_disables);
@@ -3171,7 +3592,7 @@ impl Agent {
                     .map(str::to_string)
             })
             .unwrap_or_default();
-        if is_interactive_command(&command) {
+        if let Some(input_kind) = crate::shell_input::classify(&command) {
             // Unattended: no operator is reachable to type into the prompt, so
             // the inline input panel would deadlock. Close stdin instead — the
             // command then fails fast with a non-interactive remedy, which is
@@ -3180,7 +3601,7 @@ impl Agent {
                 tracing::info!(command = %command, "interactive command stdin closed under unattended");
                 return StdinPolicy::default();
             }
-            let secret = is_secret_command(&command);
+            let secret = input_kind.is_secret();
             let prompt = if secret {
                 "Enter the secret this command is waiting for:".to_string()
             } else {
@@ -3208,12 +3629,8 @@ impl Agent {
             .iter()
             .find(|t| t.name() == call.name)
             .cloned()
-            .or_else(|| {
-                self.mcp_tools
-                    .read()
-                    .ok()
-                    .and_then(|guard| guard.iter().find(|t| t.name() == call.name).cloned())
-            }) {
+            .or_else(|| self.dynamic_tools.find(&call.name))
+        {
             Some(t) => t,
             None => {
                 return ToolOutput::Error {
@@ -3606,15 +4023,46 @@ fn empty_response_error(response: &Message) -> HarnessError {
 /// Drop assistant messages that carry neither text nor a tool call — the model
 /// occasionally emits an empty assistant frame that would otherwise confuse
 /// the next provider request. Called from the shared
-/// `crate::prompt::Agent::prepare_turn_messages` prep funnel, which both
-/// turn loops route through (ADR-0039).
+/// [`Agent::prepare_request_messages`] prep funnel, which both turn loops route
+/// through (ADR-0039).
 pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
     messages.retain(|message| message.role != Role::Assistant || valid_assistant_response(message));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ScopedToolDisable, envoy_result_text};
+    use super::{ScopedToolDisable, TurnState, checkpoint_tool_signature, envoy_result_text};
+
+    fn tool_call(id: &str, arguments: &str) -> neenee_core::ToolCall {
+        neenee_core::ToolCall {
+            id: id.to_string(),
+            name: "write_file".to_string(),
+            arguments: arguments.to_string(),
+        }
+    }
+
+    #[test]
+    fn checkpoint_tool_identity_ignores_json_object_key_order() {
+        let first = tool_call("first", r#"{"path":"x","content":"y"}"#);
+        let retried = tool_call("retry", r#"{"content":"y","path":"x"}"#);
+        assert_eq!(
+            checkpoint_tool_signature(&first),
+            checkpoint_tool_signature(&retried)
+        );
+    }
+
+    #[test]
+    fn provider_retry_protects_only_calls_completed_before_its_checkpoint() {
+        let before_retry = tool_call("first", r#"{"path":"before"}"#);
+        let after_retry = tool_call("second", r#"{"path":"after"}"#);
+        let mut state = TurnState::default();
+        state.remember_completed_tool(&before_retry);
+        state.protect_completed_tools_for_retry();
+        state.remember_completed_tool(&after_retry);
+
+        assert!(state.is_checkpoint_replay(&before_retry));
+        assert!(!state.is_checkpoint_replay(&after_retry));
+    }
 
     /// The successful envoy result carries the `[<tool> result]:` header, the
     /// original summary verbatim, and the success re-anchor note.

@@ -65,23 +65,28 @@ pub(super) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(super) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
 /// Hint bar: a single-line status strip pinned directly below the input box
-/// that surfaces model + context-usage info. Always one row tall when visible
-/// (hidden only while an overlay modal replaces the chrome).
+/// that surfaces the next input action plus ambient model/context info. Always
+/// one row tall when visible (hidden only while an overlay modal replaces the
+/// chrome).
 pub(super) const HINT_BAR_ROWS: u16 = 1;
 /// Internal left indent of hint-bar content, matching the composer's prompt
 /// prefix feel.
 pub(super) const HINT_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the left cluster (shell pill) and the
-/// right-aligned cluster (model/context).
+/// Minimum gap between the left input-action cluster and the right-aligned
+/// model/context cluster.
 pub(super) const HINT_BAR_GAP_MIN: usize = 2;
 /// Gap between adjacent right-aligned hint segments.
 pub(super) const HINT_BAR_SEGMENT_GAP: usize = 2;
 
 pub(super) const STATUS_BAR_ROWS: u16 = 1;
-pub(super) const ENVOY_BAR_ROWS: u16 = 1;
-/// Height of the `/btw` side banner (ADR-0017): a single line at the top of
-/// the transcript viewport.
-pub(super) const SIDE_BANNER_ROWS: u16 = 1;
+/// Permanent breathing room between the transcript and footer chrome. Keeping
+/// this row even while the activity bar is idle prevents the latest response
+/// from visually running into the composer when the active row appears or
+/// disappears.
+pub(super) const FOOTER_TOP_GAP_ROWS: u16 = 1;
+/// Height of the contextual header shown on every transcript page other than
+/// Main (`/btw`, Envoy, and future focused pages).
+pub(super) const PAGE_HEADER_ROWS: u16 = 1;
 
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(super) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;
@@ -220,6 +225,6 @@ pub(super) const PANEL_BAR_INSET: u16 = 1;
 pub(super) const MIN_TERMINAL_COLS: u16 = 40;
 
 /// Minimum terminal height (rows) for a usable layout. Accounts for the
-/// viewport's top/bottom margin (2 rows), the footer chrome (status bar +
-/// composer minimum + hint bar = 5 rows), and at least one transcript row.
+/// viewport's top/bottom margin (2 rows), the footer chrome (gap + status bar
+/// + composer minimum + hint bar = 6 rows), and at least one transcript row.
 pub(super) const MIN_TERMINAL_ROWS: u16 = 12;

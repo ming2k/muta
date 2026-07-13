@@ -102,12 +102,6 @@ The project root is located by walking upward from the current directory
 looking for the first ancestor containing `.neenee`, `.git`, `Cargo.toml`,
 or `package.json`.
 
-## Bundled skills (compile-time, not on disk)
-
-System skills are embedded into the binary at build time. They have no
-on-disk location and surface as the lowest-priority discovery source. See
-[ADR-0013](../adr/0013-skills-xdg-paths-and-bundled-embed.md).
-
 ## macOS and Windows defaults
 
 The `directories` crate provides native defaults on non-Linux platforms.

@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Transient provider failures now resume from completed tool checkpoints.**
+  The retry path resends only the pending model request, preserving turn state
+  and avoiding duplicate request hooks. An exact tool call repeated by the
+  replacement completion is short-circuited instead of executing its side
+  effects again.
+
+- **Context request usage now follows the conversation's turn and round
+  structure.** The report lists one total per turn and opens each turn into
+  its model rounds, instead of grouping requests by provider and model.
+  Provider-reported values use bold styling, local estimates use underlining,
+  and mixed totals use both, with a compact source legend before the list.
+
+- **Model-context assembly now has one explicit boundary.** The agent prepares
+  provider-visible messages under `model_context`, while system composition uses
+  the specialized `SystemPromptContext`, `SystemPromptSection`, and
+  `SystemPromptRegistry` APIs. The former `PromptChannel`, `PromptContext`,
+  `PromptSection`, and `PromptRegistry` APIs and prompt-policy builder method
+  names are removed; embeddings must migrate to the `SystemPrompt*` names.
+  The `SystemPrompt*`, `ContextProjectionGate`, and
+  `PURSUIT_COMPLETE_MARKER` APIs now live in `neenee-agent`, which owns their
+  lifecycle, instead of `neenee-core`. The exported shell-input predicates and
+  `neenee_core::tool_call` compatibility module are now private agent/SDK
+  implementation details.
+
+- **Skills no longer expose an empty bundled-system tier.** The unused
+  `skills.bundled` setting, `SkillScope::System`, embedded-skill loader, and
+  `include_dir` dependency are removed. Skill priority now starts at remote
+  sources and ends at project-local sources.
+
+- **The agent now consumes its concrete tool bundle through a normal downward
+  dependency.** `TodoWriteTool`, `TodoUpdateTool`, and `TodoToolContext` live
+  in `neenee-tools`; every `Agent` automatically binds those tools to its own
+  todo and turn state. Embeddings can add product-specific tools through
+  `AgentBuilder::with_tool` / `with_tools` without repeating agent-owned
+  wiring.
+
+- **Skills and MCP now have explicit capability boundaries.** Skill discovery,
+  registries, refresh, and tool adapters live in `neenee-skills` and attach to
+  an agent through `AgentBuilder::with_skills`. MCP transport, adapters,
+  connections, and refresh live in `neenee-mcp`; the session owns the runtime
+  and publishes per-server snapshots through the connector-neutral
+  `DynamicToolSink`. The former MCP-specific shared lock and source-name
+  inference are removed.
+
 ## [0.20.3] - 2026-07-12
 
 ### Changed

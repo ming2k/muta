@@ -3,8 +3,8 @@
 //!
 //! On each refresh (every 10 minutes), every enabled server's connection is
 //! reset and re-established, and `tools/list` is re-run via [`McpRuntime`]. The
-//! refreshed tool list replaces the agent's live MCP tools (the runtime owns the
-//! shared holder) — so new tools a server exposes appear without a restart, and
+//! refreshed tool list is published through a dynamic-tool sink — so new tools
+//! a server exposes appear without a restart, and
 //! a recovered server is transparently reconnected. Individual tool calls also
 //! auto-reconnect on failure (see `McpTool::call`), and the `/mcp` modal can
 //! reconnect a single server on demand, so this periodic refresh is a
@@ -15,10 +15,10 @@ use std::time::Duration;
 
 use neenee_core::DynamicCatalog;
 
-use crate::mcp_runtime::McpRuntime;
+use crate::McpRuntime;
 
 /// A [`DynamicCatalog`] driving the shared [`McpRuntime`]. The runtime owns the
-/// server handles and the agent's live tool holder; the catalog just ticks its
+/// server handles and publication sink; the catalog just ticks its
 /// periodic `refresh_all`.
 pub struct McpCatalog {
     runtime: Arc<McpRuntime>,

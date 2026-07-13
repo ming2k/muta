@@ -10,6 +10,8 @@ neenee-core = { path = "../neenee-core" }
 neenee-store = { path = "../neenee-store" }
 neenee-providers = { path = "../neenee-providers" }
 neenee-tools = { path = "../neenee-tools" }
+neenee-skills = { path = "../neenee-skills" }
+neenee-mcp = { path = "../neenee-mcp" }
 neenee-agent = { path = "../neenee-agent" }
 neenee-auth = { path = "../neenee-auth" }
 async-trait = { workspace = true }

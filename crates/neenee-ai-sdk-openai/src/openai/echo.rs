@@ -207,7 +207,7 @@ impl ToolCallEchoFilter {
     /// classify it; otherwise keep buffering (or flush if it has grown too
     /// large to plausibly be a tool call).
     fn classify_json_prefix(&mut self, brace: usize) -> String {
-        match neenee_core::tool_call::find_balanced_json_object(&self.pending, brace) {
+        match neenee_ai_sdk_core::json::find_balanced_object(&self.pending, brace) {
             Some(end) => {
                 let candidate = &self.pending[brace..=end];
                 let is_tool_call = serde_json::from_str::<Value>(candidate)

@@ -14,8 +14,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use neenee_core::{
-    Hook, HookContext, HookEvent, HookEventKind, HookOutcome, InjectionKind, InjectionOrigin,
-    Message, PermissionRequest, RestorePoint, Role, SessionSource, UserQuestionRequest,
+    Hook, HookContext, HookEvent, HookEventKind, HookOutcome, InjectionKind, Message,
+    PermissionRequest, RestorePoint, SessionSource, UserQuestionRequest,
 };
 
 /// Evaluate a Claude-Code-style tool-name matcher against a tool name.
@@ -343,10 +343,9 @@ impl HookRegistry {
         };
         for outcome in self.fire(HookEventKind::SessionStart, None, &ctx).await {
             if let HookOutcome::Inject { context } = outcome {
-                messages.push(Message::injected(
-                    Role::User,
+                messages.push(crate::model_context::hidden_user(
+                    InjectionKind::Hook(HookEventKind::SessionStart),
                     context,
-                    InjectionOrigin::new(InjectionKind::Hook(HookEventKind::SessionStart)),
                 ));
             }
         }

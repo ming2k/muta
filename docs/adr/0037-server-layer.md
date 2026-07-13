@@ -1,6 +1,6 @@
 # 0037. Session/server layer: `neenee-server` for multi-session daemon + multi-frontend
 
-- **Status:** Accepted
+- **Status:** Accepted (dependency diagram revised by ADR-0059)
 - **Date:** 2026-07-14
 - **Builds on:** ADR-0035 (application-layer split); ADR-0005 (strict layering)
 

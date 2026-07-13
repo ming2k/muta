@@ -5,17 +5,17 @@ round. MCP server tools are appended at runtime. This is the lookup
 surface — one page per tool category. For how tools are gated (access tiers,
 capability axes, the permission broker), see [Tool access](access.md).
 
-Most built-in tools live in the `neenee-tools` crate; `envoy` and `use_skill`
-live in `neenee-agent`. The `Tool` trait is defined in
+Most built-in tools live in `neenee-tools`; skill adapters live in
+`neenee-skills`, MCP adapters in `neenee-mcp`, and `envoy` in `neenee-agent`.
+The `Tool` trait is defined in
 `crates/neenee-core/src/capability.rs`.
 
 ## Registry
 
-Registration order is the literal in `crates/neenee-code/src/main.rs`.
-`Agent::new` (`crates/neenee-agent/src/agent.rs`) appends the `todo` /
-`todo_update` tools so they share the agent's live task-list cell.
-`EnvoyTool` is pushed last so it can capture a snapshot of the assembled
-toolset.
+Most tools self-register through `inventory` and are collected into a
+`ToolSet` by the application. Agent construction automatically adds `todo` and
+`todo_update`, bound to that instance's live task-list context. `EnvoyTool` is
+assembled explicitly because it captures a snapshot of the other tools.
 
 The pursuit lifecycle has no model-facing tools: `/pursue` (entry, user), the
 stop-gate (continuation, harness), and `[NEENEE_PURSUIT_COMPLETE]` (exit, model)

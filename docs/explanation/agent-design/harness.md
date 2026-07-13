@@ -45,12 +45,13 @@ carries tool results back upstream, sends the same complete schema set
 alongside the full message history. The provider is stateless across turns.
 
 The OpenAI-compatible providers declare schemas natively: the registry
-presets (`kimi-code`, `deepseek-v4-flash`, `deepseek-v4-pro`, `zai-code`) and
-the bespoke `openai` entry all share one adapter, so they inherit native tool
-declaration. The Gemini adapter converts the same schema set into Gemini
+presets (`kimi-code`, `zai-code`) and the catalog-built `openai`/`deepseek`
+multi-model entries all share one adapter, so they inherit native tool
+declaration. The Anthropic adapter declares Anthropic-format `tools`; the
+Gemini adapter converts the same schema set into Gemini
 `functionDeclarations` and replays results as `functionResponse` parts.
-The Llama adapter does not override the default and never sends a `tools`
-field; tool calls on that provider travel only through the universal fallback
+A provider that does not override `prepare_tools` never sends a `tools`
+field; tool calls on it travel only through the universal fallback
 below.
 
 ### Observed: reasoning
@@ -143,9 +144,12 @@ bounded exponential backoff using `provider_retry_base_ms` and
 
 The TUI shows the next attempt and countdown without adding transcript noise.
 `Esc`, `/pursue stop`, session switching, or a newer request cancels the wait.
-Partial streamed assistant text is withdrawn before retry. Once any tool call
-event has occurred, retryable errors become terminal so side effects are never
-replayed.
+Partial streamed assistant text is withdrawn before retry. A completed tool
+round is a checkpoint: its results stay in history while only the pending
+provider request is retried. Request preparation, round-start hooks, and tools
+that produced the checkpoint are not replayed. If a replacement completion
+nevertheless repeats an exact pre-retry tool call, the checkpoint result remains
+authoritative and the duplicate call is not executed.
 
 ## Safety bounds
 

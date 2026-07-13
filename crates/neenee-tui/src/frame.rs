@@ -14,6 +14,8 @@
 
 use std::io;
 
+use crossterm::QueueableCommand;
+
 use crate::backend::Backend;
 use crate::diff::{self, DrawCmd};
 use crate::grid::{Fit, Grid};
@@ -165,12 +167,38 @@ impl<W: io::Write> Terminal<W> {
     }
 
     fn commit(&mut self) -> io::Result<()> {
+        // A logical frame can contain thousands of small cursor/style/text
+        // writes (an expanded edit diff is the common case). `flush()` only
+        // controls when bytes leave this process; stdout may still drain in
+        // multiple chunks and let the terminal paint a half-updated screen.
+        // DEC synchronized-update mode keeps the previous frame visible until
+        // the matching end marker, so every supported terminal presents this
+        // commit atomically. Unsupported terminals ignore the private mode.
+        //
+        // Queue the begin marker before `invalidate`: that path deliberately
+        // flushes an SGR reset on resize, and it must remain inside the same
+        // synchronized frame. Always attempt the end marker even when drawing
+        // fails so a write error cannot unnecessarily leave the terminal in a
+        // suspended-update state.
+        use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+
+        self.backend.writer().queue(BeginSynchronizedUpdate)?;
+        let commit_result = self.commit_frame();
+        let end_result = (|| {
+            self.backend.writer().queue(EndSynchronizedUpdate)?;
+            self.backend.writer().flush()
+        })();
+        commit_result.and(end_result)
+    }
+
+    /// Emit one already-rendered logical frame. [`Self::commit`] owns the
+    /// synchronized-update envelope around this method.
+    fn commit_frame(&mut self) -> io::Result<()> {
         if self.pending_clear {
             // Reconcile the SGR tracker and real terminal only when a frame is
             // actually committed. A staged layout pass may resize the grids,
             // but it must remain completely invisible.
             let _ = self.backend.invalidate();
-            use crossterm::QueueableCommand;
             let _ = self.backend.writer().queue(crossterm::terminal::Clear(
                 crossterm::terminal::ClearType::All,
             ));
@@ -192,7 +220,6 @@ impl<W: io::Write> Terminal<W> {
                 self.backend.show_cursor_at(x, y)?;
             }
         }
-        self.backend.writer().flush()?;
         Ok(())
     }
 
@@ -321,6 +348,14 @@ mod tests {
         }
 
         let rendered = String::from_utf8(output).unwrap();
+        assert!(
+            rendered.starts_with("\x1b[?2026h"),
+            "committed frame must begin synchronized update: {rendered:?}"
+        );
+        assert!(
+            rendered.ends_with("\x1b[?2026l"),
+            "committed frame must end synchronized update: {rendered:?}"
+        );
         assert!(rendered.contains("final"));
         assert!(!rendered.contains("intermediate"));
     }

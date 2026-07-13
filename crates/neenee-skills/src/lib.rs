@@ -1,9 +1,7 @@
-//! Skills system: discover, load, and inject domain-specific expertise.
+//! Skill discovery, metadata, registries, and model-facing tool adapters.
 //!
 //! Skills are markdown files with YAML frontmatter, stored (in priority order,
 //! lowest first) across:
-//!   - Bundled system skills: compile-time-embedded under
-//!     `crates/neenee-agent/skills/bundled/` (see [`bundled`]).
 //!   - Remote skill repositories fetched into `$XDG_CACHE_HOME/neenee/skills/remote/`.
 //!   - User-global skills: `$XDG_DATA_HOME/neenee/skills/` (XDG-resolved via
 //!     [`neenee_store::paths`]).
@@ -23,19 +21,21 @@
 //!   policy:
 //!     allow_implicit_invocation: true
 //!   dependencies:
-//!     tools:
-//!       - type: mcp
-//!         value: context7
+//!     - type: mcp
+//!       value: context7
 //!   ---
 //!   ```
 
-pub mod bundled;
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+mod catalog;
 pub mod discovery;
 pub mod metadata;
 pub mod remote;
 pub mod render;
 pub mod tools;
 
+pub use catalog::SkillCatalog;
 pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
 pub use neenee_core::SkillsConfig;
 pub use render::resolve_mentions;

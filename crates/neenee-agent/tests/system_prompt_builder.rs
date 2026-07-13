@@ -5,10 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
-use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{
-    Agent, AgentIdentity, InjectionKind, Message, PromptChannel, PromptContext,
-    PromptRegistryError, PromptSection, Provider, Role,
+    Agent, AgentIdentity, Message, Provider, Role, SystemPromptContext, SystemPromptRegistryError,
+    SystemPromptSection,
 };
 
 struct IdleProvider;
@@ -33,52 +32,39 @@ struct ProductPolicy {
     text: &'static str,
 }
 
-impl PromptSection for ProductPolicy {
+impl SystemPromptSection for ProductPolicy {
     fn id(&self) -> &'static str {
         self.id
-    }
-
-    fn channel(&self) -> PromptChannel {
-        PromptChannel::System
-    }
-
-    fn kind(&self) -> InjectionKind {
-        InjectionKind::SystemPrompt
     }
 
     fn rank(&self) -> u32 {
         self.rank
     }
 
-    fn render(&self, _ctx: &PromptContext) -> Option<String> {
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(self.text.to_owned())
     }
 }
 
 fn builder() -> neenee_agent::AgentBuilder {
-    Agent::builder(
-        Arc::new(IdleProvider),
-        Vec::new(),
-        SkillRegistry::empty(),
-        AgentIdentity::default(),
-    )
+    Agent::builder(Arc::new(IdleProvider), Vec::new(), AgentIdentity::default())
 }
 
 #[test]
 fn embedding_can_extend_and_disable_prompt_policy_before_build() {
     let agent = builder()
-        .register_prompt_section(ProductPolicy {
+        .register_system_prompt_section(ProductPolicy {
             id: "system.embedding.test.policy",
             rank: 15,
             text: "PRODUCT-POLICY",
         })
         .unwrap()
-        .disable_prompt_section("system.persistence")
+        .disable_system_prompt_section("system.persistence")
         .unwrap()
         .build();
 
     let mut messages = vec![Message::new(Role::User, "hello")];
-    agent.prepare_turn_messages_debug(&mut messages);
+    agent.prepare_request_messages_debug(&mut messages);
 
     assert_eq!(messages[0].role, Role::System);
     assert!(messages[0].content.contains("PRODUCT-POLICY"));
@@ -91,19 +77,19 @@ fn embedding_can_extend_and_disable_prompt_policy_before_build() {
 
 #[test]
 fn embedding_configuration_errors_are_structured() {
-    let result = builder().register_prompt_section(ProductPolicy {
+    let result = builder().register_system_prompt_section(ProductPolicy {
         id: "system.persistence",
         rank: 1,
         text: "collision",
     });
     assert!(matches!(
         result,
-        Err(PromptRegistryError::DuplicateId("system.persistence"))
+        Err(SystemPromptRegistryError::DuplicateId("system.persistence"))
     ));
 
-    let result = builder().disable_prompt_section("system.missing");
+    let result = builder().disable_system_prompt_section("system.missing");
     assert!(matches!(
         result,
-        Err(PromptRegistryError::UnknownId(id)) if id == "system.missing"
+        Err(SystemPromptRegistryError::UnknownId(id)) if id == "system.missing"
     ));
 }

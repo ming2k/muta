@@ -9,8 +9,6 @@
 //! `[NEENEE_PURSUIT_COMPLETE]` marker; there are no model-facing pursuit tools
 //! (ADR-0031).
 
-pub mod prompts;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;

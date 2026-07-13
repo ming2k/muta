@@ -1,6 +1,6 @@
 # 0013. Skills & commands: XDG paths + compile-time-embedded bundled skills
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0058
 - **Date:** 2026-06-23
 
 ## Context

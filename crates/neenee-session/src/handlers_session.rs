@@ -6,14 +6,14 @@
 //! `active_view_side`, …) so the body reads exactly as it did inline.
 
 use neenee_agent::Agent;
-use neenee_agent::skills::SkillRegistry;
 use neenee_core::AgentResponse;
+use neenee_mcp::McpRuntime;
+use neenee_skills::SkillRegistry;
 use neenee_store::{config::Config, session::SessionStore};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
-use crate::mcp_runtime::McpRuntime;
 use crate::session_view::{build_session_context, build_sessions_overview};
 use crate::side::SideSession;
 

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use neenee_core::Pursuit;
 
-use crate::pursuits;
+use crate::pursuit_prompts;
 
 /// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -135,7 +135,7 @@ impl PursuitState {
             self.disarm();
             return None;
         }
-        Some(pursuits::prompts::continuation_prompt(&pursuit))
+        Some(pursuit_prompts::continuation_prompt(&pursuit))
     }
 
     /// Append a hidden user message that asks the model to continue the active pursuit.
@@ -143,10 +143,9 @@ impl PursuitState {
         if let Some(pursuit) = self.get()
             && !pursuit.is_complete
         {
-            messages.push(neenee_core::Message::injected(
-                neenee_core::Role::User,
-                pursuits::prompts::continuation_prompt(&pursuit),
-                neenee_core::InjectionOrigin::new(neenee_core::InjectionKind::PursuitContinuation),
+            messages.push(crate::model_context::hidden_user(
+                neenee_core::InjectionKind::PursuitContinuation,
+                pursuit_prompts::continuation_prompt(&pursuit),
             ));
         }
     }
@@ -154,12 +153,9 @@ impl PursuitState {
     /// Append a hidden user message that informs the model the pursuit objective changed.
     pub fn inject_objective_updated(&self, messages: &mut Vec<neenee_core::Message>) {
         if let Some(pursuit) = self.get() {
-            messages.push(neenee_core::Message::injected(
-                neenee_core::Role::User,
-                pursuits::prompts::objective_updated_prompt(&pursuit),
-                neenee_core::InjectionOrigin::new(
-                    neenee_core::InjectionKind::PursuitObjectiveUpdated,
-                ),
+            messages.push(crate::model_context::hidden_user(
+                neenee_core::InjectionKind::PursuitObjectiveUpdated,
+                pursuit_prompts::objective_updated_prompt(&pursuit),
             ));
         }
     }

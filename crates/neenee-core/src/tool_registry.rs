@@ -9,7 +9,7 @@
 //! Tools that need runtime state (config blobs, shared registries) pull it out
 //! of an opaque [`ToolContext`]: a type-keyed service map. This keeps
 //! `neenee-core` free of dependencies on the concrete state types, which live
-//! in higher crates (e.g. `SkillRegistry` in `neenee-agent`). The map is the
+//! in higher crates (e.g. `SkillRegistry` in `neenee-skills`). The map is the
 //! only seam.
 //!
 //! A handful of "meta" tools genuinely cannot self-register — e.g. an envoy
@@ -264,6 +264,27 @@ impl ToolSet {
             });
         cap.variants.entry(variant).or_insert(tool);
         cap.recompute_default();
+    }
+
+    /// Add or replace one concrete `(name, variant)` implementation.
+    ///
+    /// Registry collection uses [`Self::insert`] so accidental duplicate
+    /// registrations remain first-wins. Runtime owners use this explicit
+    /// method when an invariant-bound implementation must take precedence.
+    pub fn upsert(&mut self, tool: Arc<dyn Tool>) -> Option<Arc<dyn Tool>> {
+        let name = tool.name().to_string();
+        let variant = tool.variant().to_string();
+        let cap = self
+            .capabilities
+            .entry(name.clone())
+            .or_insert_with(|| Capability {
+                name,
+                default_variant: variant.clone(),
+                variants: BTreeMap::new(),
+            });
+        let replaced = cap.variants.insert(variant, tool);
+        cap.recompute_default();
+        replaced
     }
 
     /// Resolve the toolset to exactly one variant per capability for the given
@@ -669,6 +690,29 @@ mod tests {
         selection.insert("cap".to_string(), "nope".to_string());
         let resolved = toolset.resolve(&selection);
         assert_eq!(resolved[0].description(), "default impl");
+    }
+
+    #[test]
+    fn upsert_replaces_one_concrete_identity() {
+        let mut toolset = toolset_with_variants();
+        let replaced = toolset.upsert(Arc::new(VariantTool {
+            variant: "default",
+            desc: "agent-owned impl",
+        }));
+
+        assert_eq!(
+            replaced.as_deref().map(Tool::description),
+            Some("default impl")
+        );
+        assert_eq!(toolset.default_view()[0].description(), "agent-owned impl");
+        assert_eq!(
+            toolset
+                .variants_of("cap")
+                .expect("capability should remain installed")
+                .variant_or_default(Some("terse"))
+                .description(),
+            "terse impl"
+        );
     }
 
     #[test]

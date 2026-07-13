@@ -2,28 +2,28 @@
 //! servers are connected, their per-server tools, and their connection status.
 //!
 //! At startup [`McpRuntime::connect_all`] connects every enabled `[mcp.<name>]`
-//! server and seeds the agent's shared tool holder. Thereafter three async
+//! server and publishes tools to a [`DynamicToolSink`]. Thereafter three async
 //! mutators keep it live:
 //!
 //! - [`McpRuntime::set_enabled`] — the `/mcp` modal's `Space` toggle: connect or
 //!   disconnect one server for the session (config.toml is not rewritten).
 //! - [`McpRuntime::reconnect`] — the modal's `r` action: re-establish one
 //!   server's connection on demand.
-//! - [`McpRuntime::refresh_all`] — the periodic [`crate::mcp_catalog::McpCatalog`]
+//! - [`McpRuntime::refresh_all`] — the periodic [`crate::McpCatalog`]
 //!   loop: reconnect every server.
 //!
-//! Every mutation rebuilds the agent's tool holder (the union of all live
-//! servers' tools) and updates a synchronously-readable status table, so the
-//! session-context snapshot ([`crate::session_view::build_session_context`])
-//! always reflects the current state.
+//! Every mutation publishes a complete snapshot for each server and updates a
+//! synchronously-readable status table, so the session-context snapshot can
+//! always reflect the current state.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use neenee_core::Tool;
 use neenee_core::mcp::{McpConnectionStatus, McpServerConfig};
-use neenee_tools::mcp::{McpServer, connect_server, reconnect_server};
+use neenee_core::{DynamicToolSink, Tool};
 use tokio::sync::Mutex;
+
+use crate::{McpServer, connect_server, reconnect_server};
 
 /// One configured server's live state. `server` is `None` while disabled or
 /// when the last connect failed; `tools` is the server's current adapters
@@ -47,21 +47,20 @@ pub struct McpRuntime {
     /// step with `entries`. The session-context snapshot is built from a sync
     /// context, so it reads this rather than the async `entries` mutex.
     statuses: RwLock<Vec<(String, McpConnectionStatus)>>,
-    /// The agent's shared MCP-tools holder. Rebuilt (union of every live entry's
-    /// tools) on any change so the model sees exactly the connected servers.
-    holder: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
+    /// Connector-neutral publication port implemented by the consuming agent.
+    sink: Arc<dyn DynamicToolSink>,
 }
 
 impl McpRuntime {
-    /// Connect every enabled configured server and seed `holder` with their
-    /// tools. Disabled servers are recorded as such without a connection.
+    /// Connect every enabled configured server and publish their tools.
+    /// Disabled servers are recorded as such without a connection.
     ///
     /// Enabled servers are connected **concurrently** (a bounded `join_all`)
     /// rather than serially, so the worst-case startup latency is the slowest
     /// single server's connect timeout, not the sum of all of them.
     pub async fn connect_all(
         configs: HashMap<String, McpServerConfig>,
-        holder: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
+        sink: Arc<dyn DynamicToolSink>,
     ) -> Self {
         let mut names: Vec<String> = configs.keys().cloned().collect();
         names.sort();
@@ -88,7 +87,7 @@ impl McpRuntime {
             configs,
             entries: Mutex::new(entries),
             statuses: RwLock::new(Vec::new()),
-            holder,
+            sink,
         };
         {
             let entries = runtime.entries.lock().await;
@@ -105,10 +104,10 @@ impl McpRuntime {
     /// The returned runtime is ready to use the instant this returns. The
     /// caller should spawn [`McpRuntime::refresh_all`] in the background to
     /// perform the real concurrent connections and publish results into the
-    /// shared tool holder + status table — without blocking the first frame.
+    /// dynamic tool sink + status table — without blocking the first frame.
     pub fn start_background(
         configs: HashMap<String, McpServerConfig>,
-        holder: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
+        sink: Arc<dyn DynamicToolSink>,
     ) -> Self {
         let mut names: Vec<String> = configs.keys().cloned().collect();
         names.sort();
@@ -132,12 +131,16 @@ impl McpRuntime {
             .map(|e| (e.name.clone(), e.status.clone()))
             .collect();
 
-        Self {
+        let runtime = Self {
             configs,
             entries: Mutex::new(entries),
             statuses: RwLock::new(statuses),
-            holder,
+            sink,
+        };
+        for name in runtime.configs.keys() {
+            runtime.sink.replace(&source_id(name), Vec::new());
         }
+        runtime
     }
 
     /// A name-sorted snapshot of every configured server's connection status,
@@ -289,15 +292,12 @@ impl McpRuntime {
         self.configs.is_empty()
     }
 
-    /// Rebuild the shared tool holder (union of live tools) and the sync status
-    /// table from the current entries. Called after every mutation.
+    /// Publish complete per-server tool snapshots and rebuild the synchronous
+    /// status table. Called after every mutation.
     fn publish(&self, entries: &[McpEntry]) {
-        let tools: Vec<Arc<dyn Tool>> = entries
-            .iter()
-            .flat_map(|e| e.tools.iter().cloned())
-            .collect();
-        if let Ok(mut guard) = self.holder.write() {
-            *guard = tools;
+        for entry in entries {
+            self.sink
+                .replace(&source_id(&entry.name), entry.tools.clone());
         }
         let statuses = entries
             .iter()
@@ -307,6 +307,18 @@ impl McpRuntime {
             *guard = statuses;
         }
     }
+}
+
+impl Drop for McpRuntime {
+    fn drop(&mut self) {
+        for name in self.configs.keys() {
+            self.sink.remove(&source_id(name));
+        }
+    }
+}
+
+fn source_id(server_name: &str) -> String {
+    format!("mcp:{server_name}")
 }
 
 /// Connect one server from config, returning a fully-populated entry whether it
@@ -328,5 +340,61 @@ async fn connect_entry(name: String, config: &McpServerConfig) -> McpEntry {
             tools: Vec::new(),
             status: McpConnectionStatus::Failed(error),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        sources: RwLock<BTreeMap<String, Vec<Arc<dyn Tool>>>>,
+    }
+
+    impl DynamicToolSink for RecordingSink {
+        fn replace(&self, source: &str, tools: Vec<Arc<dyn Tool>>) {
+            self.sources
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(source.to_string(), tools);
+        }
+
+        fn remove(&self, source: &str) {
+            self.sources
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(source);
+        }
+    }
+
+    #[test]
+    fn runtime_publishes_and_removes_per_server_sources() {
+        let sink = Arc::new(RecordingSink::default());
+        let mut configs = HashMap::new();
+        configs.insert(
+            "filesystem".to_string(),
+            McpServerConfig {
+                enabled: false,
+                ..McpServerConfig::default()
+            },
+        );
+
+        let runtime = McpRuntime::start_background(configs, sink.clone());
+        assert!(
+            sink.sources
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key("mcp:filesystem")
+        );
+
+        drop(runtime);
+        assert!(
+            sink.sources
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
     }
 }

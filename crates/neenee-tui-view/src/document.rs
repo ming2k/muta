@@ -320,6 +320,8 @@ pub enum UserMessageOrigin {
     /// the only origin the Activity modal treats as the turn's prompt.
     #[default]
     Chat,
+    /// Human input admitted at an inner boundary of an already-running round.
+    Insert,
     /// A slash command (`/review`, `/pursue …`, …). The harness handles these
     /// directly; the model never sees them as a prompt.
     Slash,
@@ -953,7 +955,7 @@ impl TranscriptMessage {
     }
 
     pub fn thinking(content: impl Into<String>) -> Self {
-        let content = content.into();
+        let content = sanitize_text(&content.into()).into_owned();
         let mut message = Self {
             id: next_message_id(),
             role: Role::Assistant,
@@ -1075,7 +1077,13 @@ impl TranscriptMessage {
     /// `TranscriptMessage::new(Role::System, format!("Error: …"))` pattern with
     /// a typed severity so the renderer can pick color/icon from one place.
     pub fn notice(severity: NoticeSeverity, raw: impl Into<String>) -> Self {
-        let raw = raw.into();
+        // Notices receive transport and harness errors directly. HTTP proxy
+        // bodies commonly use CRLF, and allowing the raw `\r` through to the
+        // terminal moves its physical cursor back to column zero while the
+        // retained grid still believes it advanced normally. The next diff
+        // then paints over unrelated transcript cells. Keep this constructor
+        // on the same sanitized boundary as ordinary and retry messages.
+        let raw = sanitize_text(&raw.into()).into_owned();
         let blocks = parse_blocks(&raw);
         Self {
             id: next_message_id(),
@@ -2920,5 +2928,19 @@ mod tests {
                 ..
             } if failure == "second failure"
         ));
+    }
+
+    #[test]
+    fn notice_strips_terminal_controls_from_crlf_http_errors() {
+        let n = TranscriptMessage::notice(
+            NoticeSeverity::Error,
+            "OpenAI HTTP 504: <html>\r\n<head>timeout</head>\x1b[2J\r\n</html>",
+        );
+
+        assert_eq!(
+            n.raw,
+            "OpenAI HTTP 504: <html>\n<head>timeout</head>[2J\n</html>"
+        );
+        assert!(!n.raw.chars().any(|c| c.is_control() && c != '\n'));
     }
 }

@@ -39,7 +39,7 @@ name = "Acme"
 
 [[providers.channels]]
 label = "default"
-transport = "OpenAiCompat"          # or "GeminiNative" or "Llama"
+transport = "OpenAiCompat"          # or "Anthropic" or "GeminiNative"
 base_url = "https://api.acme.example/v1/chat/completions"
 api_key_env = "ACME_API_KEY"        # env var wins over the inline key below
 model = "acme-1"
@@ -77,8 +77,8 @@ Per-channel fields:
 
 | Field | Meaning |
 |-------|---------|
-| `transport` | `OpenAiCompat`, `Anthropic`, `GeminiNative`, or `Llama` |
-| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), **versioned Gemini base** (native Gemini, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you), or server root (Llama) |
+| `transport` | `OpenAiCompat`, `Anthropic`, or `GeminiNative` |
+| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), or **versioned Gemini base** (native Gemini, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
 | `api_key_env` | Env var name read first; empty values fall through |
 | `api_key` | Inline key, used when `api_key_env` is unset or empty |
 | `model` | Wire model id; falls back to the entry `id` when omitted |
@@ -138,8 +138,9 @@ arms still works through its env vars.
 ## Path 3: Standalone adapter (incompatible contract)
 
 Use this path only when the provider's contract is genuinely incompatible with
-OpenAI Chat Completions. `GoogleProvider` and `LlamaServerProvider` are the
-existing examples, exposed through `crates/neenee-providers/src/`.
+OpenAI Chat Completions. `GoogleProvider` (`GeminiNative`) and
+`AnthropicMessagesProvider` (`Anthropic`) are the existing examples, exposed
+through the `neenee-ai-sdk-*` crates and re-exported by `neenee-providers`.
 
 Implement a `Provider` struct with at minimum `chat` and `stream_chat`, and
 decide explicitly for each optional method:
@@ -150,9 +151,10 @@ decide explicitly for each optional method:
 | `stream_chat_events` | Provider emits `TextDelta`, `ReasoningDelta`, `ToolCallDelta` | Provider emits only `TextDelta`; reasoning and tool-call deltas are lost |
 
 Adapters that omit `prepare_tools` should return `tool_calls: None` and
-`reasoning_content: None` from their messages, matching `LlamaServerProvider`.
-The agent then routes tool calls through `tool_call::parse_text_tool_call`
-instead of native `tool_calls`.
+`reasoning_content: None` from their messages, matching `MockProvider`. The
+agent's private compatibility path then parses text-emitted tool calls instead
+of native `tool_calls`; provider implementations do not call the fallback
+parser directly.
 
 Then wire the adapter into the two construction sites:
 
@@ -185,7 +187,7 @@ Then exercise the provider end-to-end:
 4. Run `/provider switch acme <model>` from inside the TUI and confirm the
    header updates and the new model is used.
 5. Repeat the tool-call test on a provider that uses the universal fallback
-   (`llama`, or a test adapter that omits `prepare_tools`) to confirm the new
+   (a test adapter that omits `prepare_tools`) to confirm the new
    provider behaves consistently across both transports.
 
 ## Update documentation

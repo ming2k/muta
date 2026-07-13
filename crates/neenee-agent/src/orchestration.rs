@@ -30,12 +30,11 @@ use serde::Serialize;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Agent, RequestTokenEstimate};
+use crate::{Agent, PURSUIT_COMPLETE_MARKER, RequestTokenEstimate};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
-    InjectionKind, InjectionOrigin, Message, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, PURSUIT_COMPLETE_MARKER, Provider, ProviderStreamEvent, Pursuit, Role,
-    RoundEvent,
+    InjectionKind, Message, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, Provider,
+    ProviderStreamEvent, Pursuit, Role, RoundEvent,
 };
 use neenee_store::{
     RepeatStore,
@@ -449,7 +448,7 @@ pub struct MidTurnPruneProjectionGate {
 }
 
 #[async_trait]
-impl neenee_core::ContextProjectionGate for MidTurnPruneProjectionGate {
+impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
     async fn project_context(&self, messages: Vec<Message>) -> Option<Vec<Message>> {
         let mut messages = messages;
         let outcome = neenee_core::prune_tool_results(
@@ -532,6 +531,10 @@ pub struct RoundContext {
     pub retry_max_attempts: usize,
     pub retry_base_ms: u64,
     pub retry_max_ms: u64,
+    /// Emit the frontend's natural-completion signal. Pursuit/repeat drivers
+    /// call `execute_round` internally and must not release a user's paused
+    /// next-round outbox between their own continuation iterations.
+    pub emit_round_completed: bool,
 }
 
 pub struct RoundInput {
@@ -569,6 +572,15 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         let _ = context.tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
+    for stale in context
+        .agent
+        .begin_user_input_round(context.session_id.clone(), generation)
+    {
+        let _ = context.tx.send(turn(
+            &context.session_id,
+            RoundEvent::UserInputUnavailable { input_id: stale.id },
+        ));
+    }
     let _ = context.tx.send(turn(
         &context.session_id,
         RoundEvent::Activity("starting request".to_string()),
@@ -587,10 +599,19 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                 retry_max_attempts: context.retry_max_attempts,
                 retry_base_ms: context.retry_base_ms,
                 retry_max_ms: context.retry_max_ms,
+                emit_round_completed: true,
             },
             input,
         )
         .await;
+        for pending in context.agent.close_user_input_round(generation) {
+            let _ = context.tx.send(turn(
+                &context.session_id,
+                RoundEvent::UserInputUnavailable {
+                    input_id: pending.id,
+                },
+            ));
+        }
         let is_current = context.generation_counter.load(Ordering::SeqCst) == generation;
         match result {
             Ok(_) => {}
@@ -630,6 +651,7 @@ pub async fn execute_round(
         retry_max_attempts,
         retry_base_ms,
         retry_max_ms,
+        emit_round_completed,
     } = context;
     // Bind accounting to the session that admitted this turn. The principal
     // agent survives `/session open` and `/resume`, so its construction-time
@@ -687,11 +709,7 @@ pub async fn execute_round(
     let mut turn_history = {
         let mut th = session.model_window().await;
         th.push(if input.hidden {
-            Message::injected(
-                Role::User,
-                input.prompt,
-                InjectionOrigin::new(InjectionKind::HiddenTurnInput),
-            )
+            crate::model_context::hidden_user(InjectionKind::HiddenTurnInput, input.prompt)
         } else {
             let message = Message::new(Role::User, input.prompt);
             let message = match input.display_prompt {
@@ -784,6 +802,11 @@ pub async fn execute_round(
     let mut attempt: usize = 0;
     let retry_limit = retry_max_attempts.clamp(1, 10);
     let mut compacted_after_overflow = false;
+    // Keep the ReAct turn alive across network attempts. Completed tool rounds
+    // are already durably checkpointed above; retaining this state means a
+    // retry resumes the pending provider request with the same history, guard
+    // registry, hooks, and accounting instead of replaying the turn.
+    let mut streaming_turn = agent.begin_streaming_turn();
     let result = loop {
         attempt += 1;
         let activity_for_run = tool_activity.clone();
@@ -792,7 +815,7 @@ pub async fn execute_round(
         let accounting_session = Arc::clone(&session);
         let accounting_session_id = session_id.clone();
         let result = agent
-            .run_streaming_with_events(&mut turn_history, &token, |event| {
+            .resume_streaming_with_events(&mut turn_history, &token, &mut streaming_turn, |event| {
                 if matches!(event, AgentEvent::ToolCall { .. }) {
                     activity_for_run.store(true, Ordering::SeqCst);
                 }
@@ -863,18 +886,6 @@ pub async fn execute_round(
         else {
             break Err(error);
         };
-        // Distinguish the two give-up reasons so the surfaced error explains
-        // what happened instead of looking identical to a fresh failure that
-        // was never retried. The tool-activity guard is intentional: once a
-        // tool has run this turn the history may carry side effects we cannot
-        // safely replay, so we stop rather than risk repeating them.
-        if tool_activity.load(Ordering::SeqCst) {
-            break Err(HarnessError::Other(format!(
-                "{message}\n\nNot retried automatically because a tool already ran \
-                 this turn and re-running could repeat its side effects. Resend \
-                 the message to try again."
-            )));
-        }
         if attempt >= retry_limit {
             break Err(HarnessError::Other(format!(
                 "{message}\n\nGave up after {retry_limit} attempt(s); the upstream \
@@ -898,8 +909,14 @@ pub async fn execute_round(
             max_attempts = retry_limit,
             delay_ms,
             base_ms,
+            resumed_after_tools = tool_activity.load(Ordering::SeqCst),
             "retrying after transient provider error"
         );
+        let checkpoint_note = if tool_activity.load(Ordering::SeqCst) {
+            " Completed tool results are preserved; this retries only the pending model request."
+        } else {
+            ""
+        };
         let _ = tx.send(turn(
             &session_id,
             RoundEvent::Notice(
@@ -910,9 +927,10 @@ pub async fn execute_round(
                     NoticeSource::Harness,
                 )
                 .with_body(format!(
-                    "Waiting {}s before retrying: {}",
+                    "Waiting {}s before retrying: {}{}",
                     delay_ms.div_ceil(1_000),
-                    public_retry_reason(&message)
+                    public_retry_reason(&message),
+                    checkpoint_note,
                 ))
                 .with_surface(NoticeSurface::Toast),
             ),
@@ -1096,6 +1114,9 @@ pub async fn execute_round(
         tracing::warn!(error = %err, "could not persist pursuit runtime");
     }
 
+    if emit_round_completed {
+        let _ = tx.send(turn(&session_id, RoundEvent::RoundCompleted));
+    }
     Ok(completed)
 }
 
@@ -1212,6 +1233,9 @@ pub fn relay_agent_event(
         }
         AgentEvent::ContextTokens(snapshot) => {
             turn(session_id, RoundEvent::ContextTokens(snapshot))
+        }
+        AgentEvent::UserInputInserted(input) => {
+            turn(session_id, RoundEvent::UserInputInserted(input))
         }
         AgentEvent::AssistantDelta { delta, start } => {
             if start {
@@ -1479,6 +1503,7 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
                 retry_max_attempts: context.retry_max_attempts,
                 retry_base_ms: context.retry_base_ms,
                 retry_max_ms: context.retry_max_ms,
+                emit_round_completed: false,
             },
             RoundInput {
                 prompt,

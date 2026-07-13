@@ -23,19 +23,22 @@ Three capability surfaces matter for tool-using agents:
 |----------|--------------|-----------|----------------------|--------|
 | `OpenAiCompatProvider` | yes | yes | yes | `neenee-ai-sdk-openai` |
 | OpenAI-compatible registry presets | yes | yes | yes | `OpenAiProviderSpec` (delegates to `OpenAiCompatProvider`) |
+| `ResponsesProvider` (`OpenAiResponses`) | yes | yes | yes | `neenee-ai-sdk-openai` |
+| `AnthropicMessagesProvider` (`Anthropic`) | yes | yes | yes | `neenee-ai-sdk-anthropic` |
 | `GoogleProvider` (`GeminiNative`) | yes | no | yes | `neenee-ai-sdk-google` |
-| `LlamaServerProvider` | no | no | no | `llama.rs` |
-| `MockProvider` | no | no | no | `mock.rs` |
+| `MockProvider` | no | no | no | `neenee-providers/src/mock.rs` |
 
-The four OpenAI-compatible presets in `OPENAI_PROVIDER_SPECS`
-(`kimi-code`, `deepseek-v4-flash`, `deepseek-v4-pro`, `zai-code`) are built by
-`OpenAiProviderSpec::build`, which returns an `OpenAiCompatProvider` with its
-`id` field set to the preset identifier. They therefore inherit every
-capability of `OpenAiCompatProvider`. `GoogleProvider` is a standalone
+The two OpenAI-compatible presets in `OPENAI_PROVIDER_SPECS` (`kimi-code`,
+`zai-code`) are built by `OpenAiProviderSpec::build`, which returns an
+`OpenAiCompatProvider` with its `id` field set to the preset identifier. They
+therefore inherit every capability of `OpenAiCompatProvider`. Multi-model
+catalog entries (`deepseek`, `openai`) are materialized the same way from the
+catalog layer, not the preset table. `GoogleProvider` is a standalone
 Gemini-native adapter: it converts the same internal tool schemas into Gemini
 `functionDeclarations`, parses `functionCall` parts, and replays tool results
-as `functionResponse` parts. `LlamaServerProvider` remains text-only; tool
-calls on that provider travel through the universal fallback.
+as `functionResponse` parts. `AnthropicMessagesProvider` speaks the
+Anthropic `/messages` wire format; `ResponsesProvider` speaks the OpenAI
+Responses API used by the ChatGPT subscription backend.
 
 ## Provider catalog
 
@@ -53,46 +56,49 @@ env vars are data in that table, not hard-coded per struct.
 | `default_provider` | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|----------|-------------|-----------|--------------------------|
 | `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `MOONSHOT_API_KEY` | `MOONSHOT_MODEL` | `kimi-k2.7-code` (pinned to the latest K2.7 Code weights) |
-| `deepseek-v4-flash` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_FLASH_MODEL` | `deepseek-v4-flash` |
-| `deepseek-v4-pro` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_PRO_MODEL` | `deepseek-v4-pro` |
 | `zai-code` | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `ZAI_API_KEY` | `ZAI_MODEL` | `glm-5.2` (default), `glm-5.1`, `glm-4.7` |
 
 ### Bespoke providers
 
 | `default_provider` | Struct | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|--------|----------|-------------|-----------|--------------------------|
-| `openai` | `OpenAiCompatProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-4o`, `gpt-4o-mini` |
+| `openai` | `OpenAiCompatProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
+| `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | `claude-opus-4-8` (default), `claude-fable-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
 | `gemini` | `GoogleProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../crates/neenee-providers/src/registry.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
-| `llama` | `LlamaServerProvider` | `${LLAMA_BASE_URL}/v1/chat/completions` | none | `LLAMA_MODEL` | user-supplied |
+| `deepseek` | `OpenAiCompatProvider` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_FLASH_MODEL` / `DEEPSEEK_PRO_MODEL` | `deepseek-v4-flash`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
 
 Notes:
 
-- `deepseek-v4-flash` and `deepseek-v4-pro` share one API key (`DEEPSEEK_API_KEY`)
-  and one endpoint; both target the V4 model family (1M context, thinking +
-  non-thinking modes).
+- `deepseek` is a multi-model catalog entry: `deepseek-v4-flash` and
+  `deepseek-v4-pro` share one API key (`DEEPSEEK_API_KEY`) and one endpoint.
+  It is materialized by the catalog layer, not by `OPENAI_PROVIDER_SPECS`.
 - `zai-code` targets the Z.AI (Zhipu) coding-plan platform and serves the
   GLM-5 family; it sends a `opencode/1.17.10` User-Agent so the platform
   recognises a coding agent.
-- `llama` is the only provider that reads a base URL; the
-  registry presets hard-code their endpoint inside `OPENAI_PROVIDER_SPECS`.
-- `llama` always reports as ready in the API-key status check
-  (`provider_key_status` in `main.rs`); the rest require their API key env
-  var to be set.
+- `kimi-code` pins a single model id (`kimi-k2.7-code`); overrides are
+  ignored.
+- `opencode-go` is a runtime-derived entry whose model list is built from
+  `KNOWN_MODELS` at startup, spanning OpenAI- and Anthropic-compatible
+  models (e.g. MiniMax, Qwen) behind opencode-go's endpoints.
 
 ## Dispatch sites
 
-Provider construction is centralized in the model catalog
-(`catalog::build_provider_for` / `catalog::build_catalog` in
-`crates/neenee-agent/src/catalog.rs`). Every provider id — registry preset or
-bespoke — is materialized into a `Channel` carrying fully resolved
+Provider construction is split across two layers. The catalog
+(`build_catalog` in `crates/neenee-agent/src/catalog.rs`) materializes every
+provider id — registry preset, built-in multi-model entry, or user-defined
+`[[providers]]` instance — into a `Channel` carrying fully resolved
 credentials, model id, and transport, so startup and runtime switching share
-one source of truth for the env-var-then-config resolution rules.
+one source of truth for the env-var-then-config resolution rules. The
+concrete `Provider` is then built by `build_provider_for_channel` in
+`crates/neenee-providers/src/registry.rs`, which matches on `Transport`.
 
 1. The registry presets are built from `OPENAI_PROVIDER_SPECS` via
    `OpenAiProviderSpec::build`, yielding an `OpenAiCompatProvider` with its
    `id` field set to the preset identifier.
-2. The bespoke providers (`openai`, `gemini`, `llama`) get their own
-   one-channel entries; an unknown id resolves to an internal `MockProvider`
+2. Multi-model built-ins (`openai`, `google`, `deepseek`, `anthropic`,
+   `kimi-code`, `zai-code`) are seeded by the legacy-instance migration in
+   `migrate_legacy_provider_instances`; `opencode-go` is derived at runtime
+   from `KNOWN_MODELS`. An unknown id resolves to an internal `MockProvider`
    fallback (not user-visible).
 
 | Site | Function | Purpose |

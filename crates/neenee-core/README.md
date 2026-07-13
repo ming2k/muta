@@ -1,23 +1,31 @@
 # neenee-core
 
-Pure domain vocabulary for the neenee agent stack.
+Shared domain and wire contracts for the neenee agent stack.
 
 This crate is the **zero-I/O domain core** (ADR-0005): no `rusqlite`, no
-filesystem, no network. It holds only the domain shapes and traits the rest of
-the stack is built on:
+filesystem, no network. It is the dependency-inversion boundary used by
+independent providers, tools, persistence, sessions, SDK adapters, and
+frontends:
 
 - the [`Provider`] and [`Tool`] capability traits (in [`capability.rs`][cap]);
-- conversation and tool-output types, the context-pressure model;
+- conversation, event, and tool-output protocol types;
+- shared value policy such as capability scopes and context budgets;
 - pursuit / repeat / todo domain types, envoy profiles, skills/MCP config
   schemas;
 - the wire events the harness and frontends exchange.
 
-Frontends and sibling services depend on `neenee-core` for these traits and add
-their own I/O layer on top. Anything that touches SQLite, the filesystem, or the
-network belongs in [`neenee-store`](../neenee-store) instead.
+Code belongs here only when multiple layers exchange it or when the contract is
+needed to prevent a dependency cycle. Pure agent behavior does not belong here
+merely because it performs no I/O; orchestration policy, prompt composition,
+and agent-owned runtime state live in [`neenee-agent`](../neenee-agent).
 
-See the architecture overview in [`docs/`](../../docs/) and ADR-0005 for the
-zero-I/O boundary rationale.
+Frontends and sibling services depend on `neenee-core` for contracts and add
+their own behavior or I/O above it. Persistence belongs in
+[`neenee-store`](../neenee-store), provider transports in the AI SDK/provider
+crates, and orchestration in `neenee-agent`.
+
+See the architecture overview in [`docs/`](../../docs/), ADR-0005 for the
+zero-I/O dependency rule, and ADR-0057 for the contract-only admission rule.
 
 [`Provider`]: src/capability.rs
 [`Tool`]: src/capability.rs

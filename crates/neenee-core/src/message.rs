@@ -77,13 +77,25 @@ pub enum InjectionKind {
     /// codex `inject_if_running` analogue). Site: `Agent::drain_inbox`.
     /// Lands as a *visible* user message, hence distinct from `InterAgent`.
     EnvoySteer,
+    /// Visible human-authored steering input admitted into the principal (or a
+    /// side conversation) at a safe turn boundary. Unlike `EnvoySteer`, the
+    /// author is the user; the origin records its mid-round placement so a
+    /// restored transcript can render it as an insert rather than a new round.
+    UserSteer,
+    /// The initial visible task handed to a newly spawned envoy. Unlike
+    /// `EnvoySteer`, this opens the child transcript rather than steering an
+    /// already-running child. Site: `EnvoyTool::run`.
+    EnvoyTask,
+    /// The visible transcript snapshot handed to the bounded session-review
+    /// envoy. Site: `Agent::run_session_review`.
+    SessionReviewInput,
     /// Implicit skill auto-load: the latest user turn mentioned a skill name,
     /// so the skill body was injected in-context. Site:
-    /// `Agent::inject_implicit_skills`.
+    /// `neenee-agent`'s model-context skill injection policy.
     ImplicitSkill,
     /// System-prompt assembly: the harness rebuilt the head system message
-    /// from the live pursuit, tool list, and skills index. Site:
-    /// `Agent::{build_system_message, ensure_system_prompt}`.
+    /// from live identity, pursuit, model/provider, and tool state. Site:
+    /// `SystemPromptRegistry::build_message` / `Agent::ensure_system_message`.
     SystemPrompt,
     /// Built-in anti-anchoring nudge fired by the deterministic read-loop guard
     /// when the model repeats the same read (a single page or a two-page thrash)
@@ -97,9 +109,9 @@ pub enum InjectionKind {
     /// Context-compaction checkpoint: an LLM summary of archived turns wrapped
     /// under the stable checkpoint header. Site: `checkpoint_message`.
     CompactionCheckpoint,
-    /// A harness-internal prompt admitted as a hidden user turn (resume/replay,
-    /// envoy tasking, `/review` re-runs). Site: `execute_round`
-    /// `input.hidden` branch.
+    /// A harness-internal prompt admitted through the orchestration layer as a
+    /// hidden user turn (for example resume/replay input). Site:
+    /// `execute_round`'s `input.hidden` branch.
     HiddenTurnInput,
     /// A non-driving command echo: the literal text of a user invocation that
     /// is recorded in the durable transcript for resume/export/audit
@@ -108,9 +120,12 @@ pub enum InjectionKind {
     /// harness handles directly without an LLM roundtrip. Distinct from
     /// `HiddenTurnInput` (which *is* a driving hidden prompt): a `CommandEcho`
     /// carries no instruction for the model. Projected out before the wire by
-    /// `prepare_turn_messages`. Site: `handlers_slash::dispatch` and
+    /// `prepare_request_messages`. Site: `handlers_slash::dispatch` and
     /// `shell::run_shell_command`. (ADR-0050.)
     CommandEcho,
+    /// A user-role image companion projected from a tool result for providers
+    /// that accept image inputs. Site: `model_context::messages::tool_image`.
+    ToolImage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,7 +319,7 @@ impl Message {
     /// Construct a **non-driving** command echo: a visible (`hidden = false`)
     /// user message stamped with the `CommandEcho` provenance. Recorded in the
     /// durable transcript for resume/export/audit faithfulness but projected
-    /// out before the provider wire (see `prepare_turn_messages`, ADR-0050).
+    /// out before the provider wire (see `prepare_request_messages`, ADR-0050).
     /// Unlike [`Message::injected`] it is *visible* — the echo must show on
     /// resume — and unlike a driving prompt it never reaches the model.
     pub fn command_echo(text: impl Into<String>) -> Self {
@@ -669,12 +684,15 @@ mod tests {
             InjectionKind::PursuitObjectiveUpdated,
             InjectionKind::InterAgent,
             InjectionKind::EnvoySteer,
+            InjectionKind::EnvoyTask,
+            InjectionKind::SessionReviewInput,
             InjectionKind::ImplicitSkill,
             InjectionKind::SystemPrompt,
             InjectionKind::CompactionCheckpoint,
             InjectionKind::HiddenTurnInput,
             InjectionKind::LoopReviewNudge,
             InjectionKind::CommandEcho,
+            InjectionKind::ToolImage,
         ];
         let mut forms = Vec::new();
         for kind in cases {

@@ -1,11 +1,10 @@
 //! Foundational capability traits: how the harness talks to a model
 //! ([`Provider`]) and to tools ([`Tool`]), the stream events a provider emits
-//! ([`ProviderStreamEvent`]), and the mid-turn model-context projection hook
-//! ([`ContextProjectionGate`]).
+//! ([`ProviderStreamEvent`]).
 
 use crate::pursuits::TokenUsage;
 use crate::tool_output::StdinPolicy;
-use crate::{EnvoyEvent, Message, ProviderPromptHints, ToolOutput, ToolStream};
+use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
@@ -27,6 +26,17 @@ use std::sync::Arc;
 /// Envoy profiles carry their own static selection (see
 /// [`crate::EnvoyProfile`]).
 pub type VariantSelection = HashMap<String, String>;
+
+/// Narrow prompt hints exposed by a concrete provider implementation.
+///
+/// The provider owns protocol facts (for example, how tool results or
+/// thinking replay are represented on its wire surface), while the agent owns
+/// whether and where those facts are inserted into model context. Empty by
+/// default for test providers and simple adapters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderPromptHints {
+    pub system_guidance: &'static str,
+}
 
 /// A shared empty [`VariantSelection`] map, handy as a default borrow target so
 /// callers can always hand out `&VariantSelection` without an `Option`.
@@ -107,7 +117,7 @@ pub trait Provider: Send + Sync {
     ///
     /// This is not the agent's behavior contract. Providers should expose only
     /// narrow facts about their wire format or replay requirements; the agent's
-    /// prompt registry decides if and how those hints are rendered.
+    /// system-prompt policy decides if and how those hints are rendered.
     fn prompt_hints(&self) -> ProviderPromptHints {
         ProviderPromptHints::default()
     }
@@ -177,17 +187,6 @@ pub trait Provider: Send + Sync {
     fn take_last_provider_meta(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
         None
     }
-}
-
-/// Mid-turn model-context projection hook. After each tool round, when context
-/// pressure crosses the configured budget, the harness hands the live message
-/// list to the gate and asks it to produce the next model-visible window. A
-/// `Some(replacement)` swaps the live message list; `None` leaves it untouched.
-/// The gate owns durability policy: original content is archived before the
-/// replacement takes effect.
-#[async_trait]
-pub trait ContextProjectionGate: Send + Sync {
-    async fn project_context(&self, messages: Vec<Message>) -> Option<Vec<Message>>;
 }
 
 #[async_trait]

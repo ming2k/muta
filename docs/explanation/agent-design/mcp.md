@@ -1,12 +1,13 @@
 # MCP servers
 
 neenee connects to local stdio [Model Context Protocol][mcp] servers and exposes
-their tools alongside the built-in ones, using the same execution path. A shared
-**MCP runtime** owns the live connections: it connects every configured server at
-startup, keeps the agent's tool list in sync, and recovers crashed servers. This
+their tools alongside the built-in ones, using the same execution path. A
+session-owned **MCP runtime** from `neenee-mcp` owns the live connections: it
+connects every configured server at startup, publishes per-server tool snapshots
+to the agent, and recovers crashed servers. This
 page covers the runtime and its recovery model, the tool wrapper, the `/mcp`
-manager, and how MCP tools interact with [envoy admission](envoys.md) and
-the permission broker. For the per-tool parameter surface, see
+manager, the explicit delegation boundary, and the permission broker. For the
+per-tool parameter surface, see
 [Built-in tools](../../reference/tools/index.md).
 
 [mcp]: https://modelcontextprotocol.io/
@@ -19,7 +20,8 @@ a private API client, a custom linter. The integration is deliberately narrow:
 
 1. **Same execution path.** An MCP tool shares the `Tool` trait, the
    permission broker, the [tool-turn](rounds-and-turns.md) loop, and the TUI step
-   renderer with every built-in. The agent does not treat MCP tools specially.
+   renderer with every built-in. The agent consumes a generic dynamic tool
+   source and has no MCP protocol dependency.
 2. **Local stdio only.** neenee speaks JSON-RPC over a spawned child's
    stdin/stdout. No HTTP, no remote servers — the server runs under the user's
    account and filesystem.
@@ -43,7 +45,7 @@ read_only = false
 | `command` | — | argv; first element is the program |
 | `environment` | empty | Env vars applied at spawn |
 | `enabled` | `true` | When `false`, the server is recorded as disabled and not spawned at startup (still enableable live from `/mcp`) |
-| `read_only` | `false` | Sets the tool's access tier; gates [envoy admission](#access-tier-and-envoy-admission) and the permission broker |
+| `read_only` | `false` | Sets each wrapped tool's `ToolAccess` tier for permission policy and explicit capability delegation |
 
 `command` is argv-style, not a shell string — users pre-split it
 (`["npx", "-y", "..."]`). The map key is the server name, which becomes the
@@ -52,11 +54,12 @@ first segment of the public tool name.
 ## The runtime
 
 The MCP runtime is the single source of truth for which servers are connected,
-their per-server tools, and their status. It owns the agent's shared **tool
-holder** — the live list the model sees — and rewrites it (the union of every
-connected server's tools) on every change. So enabling, disabling, reconnecting,
-or a periodic refresh all flow through one place, and the agent always sees
-exactly the servers that are up.
+their per-server tools, and their status. On every change it publishes a
+complete snapshot under a source id such as `mcp:filesystem` through
+`DynamicToolSink`. The agent owns synchronization, merges these sources with
+its static tools, and removes a source when the runtime shuts down. Enabling,
+disabling, reconnecting, and periodic refresh therefore flow through one
+runtime without exposing an agent-owned lock.
 
 At startup the runtime connects every enabled server, sorted by name for
 deterministic order:
@@ -74,13 +77,13 @@ for each name:
 ```
 
 The 8-second connect timeout bounds the whole spawn + initialize + `tools/list`
-sequence. There is **no per-call timeout** on `tools/call` — a hung server
-blocks that one tool call indefinitely.
+sequence. Each `tools/call` request has a 120-second timeout; a server that
+accepts a request but never answers cannot pin the agent indefinitely.
 
 Connecting never returns a single `Result`: neenee always starts, with whatever
-tools came up. MCP tools sit in the toolset after the built-ins and before the
-envoy tool, so they are visible to [envoys](envoys.md) when the
-server is `read_only`.
+tools came up. The runtime publishes them directly to the principal Agent's
+dynamic registry; it does not mutate the static tool set used to construct
+envoys or side agents.
 
 ## The tool wrapper
 
@@ -91,8 +94,8 @@ transformations happen at wrap time:
    sanitizer keeps ASCII alphanumerics and `_`, replacing everything else
    (including `-`, `.`, `/`) with `_`. This is required because the name
    becomes a provider function name, and providers reject names with slashes
-   or spaces. Collisions are possible (`read-file` and `read.file` both become
-   `read_file`) and not detected at load time.
+   or spaces. Sanitized collisions (`read-file` and `read.file` both becoming
+   `read_file`) are disambiguated deterministically.
 2. **Schema.** The server's `inputSchema` is used verbatim, falling back to
    `{"type":"object"}` when absent so the OpenAI function definition stays
    valid.
@@ -138,8 +141,8 @@ A down server does not stay down. Four recovery paths overlap, cheapest first:
    selected server immediately, for when you don't want to wait for the refresh.
 4. **Restart.** Always available; rereads `config.toml` from scratch.
 
-Because the runtime rewrites the agent's tool holder on every one of these, the
-model's visible toolset tracks the live connection state automatically.
+Because the runtime replaces each named dynamic source on every one of these,
+the model's visible toolset tracks the live connection state automatically.
 
 ## The `/mcp` manager
 
@@ -163,20 +166,28 @@ Two per-row actions drive the runtime live, without rewriting `config.toml`:
 `/mcp` shows each server's status and tool count as a glanceable list, and is
 the surface for acting on it.
 
-## Access tier and envoy admission
+## Access tier and delegation boundary
 
-An MCP tool's `read_only` flag sets its `ToolAccess` tier, which an envoy
-profile admits by capability axis (ADR-0011). Every built-in envoy profile
-carries a `Read` ceiling, so only `read_only = true` MCP servers are usable
-inside an envoy; a server that needs to run inside one must declare
-`read_only = true`. Outside envoys the main agent is unrestricted, so an
-MCP tool's tier only gates its *envoy* admission and the permission broker
-(below), never the main agent.
+An MCP server's `read_only` flag classifies every wrapped tool as
+`ToolAccess::Read` or `ToolAccess::Write`. This feeds the permission broker and
+would constrain any explicit role-profile delegation, but it does **not** by
+itself grant the connector to another agent.
 
-- `read_only = true` server → `Read` → admitted by every built-in profile.
-- `read_only = false` server (the default) → `Write` → admitted only by a
-  profile that grants writes (then scoped by `WriteScope`); no built-in
-  profile does today.
+The session attaches its MCP runtime to the principal Agent only. Envoys and
+`/btw` side agents are constructed from a static capability snapshot and do
+not implicitly inherit session-scoped external connections. This separates
+two decisions that must not be conflated:
+
+1. **What may the tool do?** `read_only` answers this access-classification
+   question.
+2. **Which agent receives the capability?** The application must answer this
+   explicitly by attaching a dynamic source or supplying the tool in that
+   agent's static capability set.
+
+This least-privilege default prevents a database or private API connection
+from spreading to every temporary agent merely because the server labels it
+read-only. A future embedding can deliberately delegate such a tool; its envoy
+profile and model capability filters still apply after delegation.
 
 ## Permission broker
 
@@ -202,7 +213,7 @@ is no graceful `shutdown` JSON-RPC exchange — the child is sent `SIGKILL`.
 
 - [Built-in tools](../../reference/tools/index.md) — `mcp__<server>__<tool>`
   parameter surface and the MCP tools subsection
-- [Envoys](envoys.md) — why `read_only` MCP servers are visible
-  to envoys and write servers are not
+- [Envoys](envoys.md) — role-profile admission for capabilities that are
+  explicitly supplied to an envoy
 - [Harness architecture](harness.md) — the 8-second MCP init bound and the
   tool permission broker

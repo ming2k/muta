@@ -198,7 +198,6 @@ mod tests {
         let agent = Agent::new(
             provider.clone(),
             Vec::new(),
-            crate::skills::SkillRegistry::empty(),
             crate::AgentIdentity::default(),
         );
         (agent, provider)

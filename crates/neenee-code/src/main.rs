@@ -5,9 +5,13 @@ use neenee_agent::catalog;
 use neenee_agent::orchestration::{
     MidTurnPruneProjectionGate, ProxyProvider, refresh_agent_pursuit, start_repeat_scheduler, turn,
 };
-use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{Agent, EnvoyTool};
-use neenee_core::{AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Provider, RoundEvent};
+use neenee_core::{
+    AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Provider, RoundEvent,
+    ToolContextBuilder, ToolSet, collect_toolset,
+};
+use neenee_mcp::{McpCatalog, McpRuntime};
+use neenee_skills::{SkillCatalog, SkillRegistry};
 use neenee_store::{
     RepeatStore,
     config::Config,
@@ -20,10 +24,7 @@ mod identity;
 mod showcase;
 mod tui;
 
-use mcp_runtime::McpRuntime;
-pub(crate) use neenee_session::{
-    agent_setup, hooks, mcp_catalog, mcp_runtime, pursuits, side, startup,
-};
+pub(crate) use neenee_session::{agent_setup, hooks, pursuits, side, startup};
 
 /// This CLI's identity, handed to the engine as its opening system prompt.
 /// Lives here (not in `neenee-agent`) so the engine stays identity-agnostic
@@ -252,40 +253,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // across the skill tools, the envoy profile, and the TUI, so once the
     // background load lands they all observe the populated state.
     let skills_registry = Arc::new(SkillRegistry::empty_with_config(&config.skills));
-    neenee_agent::dynamic::spawn_refresh(neenee_agent::dynamic::SkillCatalog::new(
-        (*skills_registry).clone(),
-    ));
+    neenee_agent::dynamic::spawn_refresh(SkillCatalog::new((*skills_registry).clone()));
 
-    // Built-in tools self-register via `inventory` (each tool carries a
+    // Built-in tools self-register via `inventory` (most tools carry a
     // `register_tool!` submission at its definition site) and are collected
     // here from a single opaque context. Tools that need runtime state (the web
     // tools' search config, the shared skill registry, the embedding index +
     // session store) pull it out of the context by type — see
-    // `neenee_core::tool_registry`. Meta-tools that genuinely depend on the
+    // `neenee_core::tool_registry`. Stateful/meta tools that genuinely depend on the
     // *rest* of the toolset (the envoy dispatch `task`) cannot
     // self-register and are assembled explicitly below. MCP tools are
-    // discovered at runtime from configured servers and layered on last.
+    // discovered at runtime and published directly to the principal Agent;
+    // they are not part of this static capability set.
     let tool_ctx = {
-        let mut builder = neenee_core::ToolContextBuilder::new();
+        let mut builder = ToolContextBuilder::new();
         builder.provide(config.websearch.clone());
         builder.provide(skills_registry.clone());
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
         builder.build()
     };
-    let mut toolset: neenee_core::ToolSet = neenee_core::collect_toolset(&tool_ctx);
-    // MCP tools are NOT layered into the toolset here; they go into the agent's
-    // dynamically-refreshable `mcp_tools` holder after Agent::new, so the
-    // background McpCatalog can reconnect/re-discover them at runtime.
+    let mut toolset: ToolSet = collect_toolset(&tool_ctx);
+    // MCP tools are discovered after Agent construction and published through
+    // its connector-neutral dynamic-tool sink. The MCP runtime owns protocol
+    // and connection state; the agent owns advertisement and dispatch.
     // Snapshot of the shared toolset (built-in default variants) before the
     // `EnvoyTool` is layered on. A `/btw` side session (ADR-0017) rebuilds
-    // its `Agent` from this same snapshot — minus its own `EnvoyTool`,
-    // mirroring the envoy profile filter so a side chat can recurse no
-    // further than the primary.
+    // its `Agent` from this same snapshot — minus its own `EnvoyTool` and
+    // without inheriting the principal's session-scoped connector sources.
     let base_tools: Arc<Vec<Arc<dyn neenee_core::Tool>>> = Arc::new(toolset.default_view());
-    // EnvoyTool gets the full capability set (excluding itself) so spawned
-    // envoys cannot recurse and inherit the live provider. It binds the
-    // EXPLORE profile (read-only / non-interactive / non-recursive).
+    // EnvoyTool gets the static capability set (excluding itself) so spawned
+    // envoys cannot recurse and inherit the live provider. Dynamic connector
+    // sources are principal-only unless a future policy explicitly delegates
+    // them. It binds the EXPLORE profile (read-only / non-interactive /
+    // non-recursive).
     let envoy_tool = Arc::new(EnvoyTool::new(
         agent_provider.clone(),
         toolset.clone(),
@@ -302,12 +303,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // underlying `Arc<EnvoyTool>` is what gets layered into the toolset.
     let envoy_tool_handle = envoy_tool.clone();
     toolset.insert(envoy_tool);
-    let agent = Arc::new(Agent::from_toolset(
-        agent_provider,
-        toolset,
-        (*skills_registry).clone(),
-        neenee_identity(),
-    ));
+    let agent = Arc::new(
+        Agent::builder_from_toolset(agent_provider, toolset, neenee_identity())
+            .with_skills((*skills_registry).clone())
+            .build(),
+    );
     // Override axis (model): envoys are agents on the same model, so they
     // inherit the parent's tool-variant selection. The profile still owns the
     // orthogonal scope axis.
@@ -324,18 +324,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // server (8s connect timeout each) never delays the first frame. The
     // runtime is ready immediately with every enabled server in `Connecting`;
     // a spawned task performs the real concurrent connects and seeds the
-    // agent's shared tool holder as each comes online. The TUI's status
+    // agent's dynamic tool sink as each comes online. The TUI's status
     // snapshot (taken below) reflects this transient state, and the periodic
     // McpCatalog refresh keeps it live thereafter.
     let mcp_runtime = Arc::new(McpRuntime::start_background(
         config.mcp.clone(),
-        agent.mcp_tools_holder(),
+        agent.dynamic_tool_sink(),
     ));
     let mcp_runtime_for_bg = Arc::clone(&mcp_runtime);
     tokio::spawn(async move {
         mcp_runtime_for_bg.refresh_all().await;
     });
-    neenee_agent::dynamic::spawn_refresh(crate::mcp_catalog::McpCatalog::new(mcp_runtime.clone()));
+    neenee_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
     if unattended_at_start {
         agent.set_unattended(true);
         let _ = resp_tx.send(turn(

@@ -92,11 +92,10 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 |------|------------|
 | **skill** | On-demand domain expertise: a Markdown document with a small YAML header whose body is injected into the conversation when needed. Not a tool — carries no executable code. [Skills](../explanation/agent-design/skills.md) |
 | **`SKILL.md`** | The skill file inside its own directory (so it can carry auxiliary files); YAML frontmatter declares identity/behavior. [Skills](../explanation/agent-design/skills.md) |
-| **catalog channel** | Each enabled skill's name and one-line description, placed in the system prompt every round at near-zero cost. [Skills](../explanation/agent-design/skills.md) |
-| **body channel** | The full Markdown expertise document, delivered on demand only. [Skills](../explanation/agent-design/skills.md) |
-| **skill scope** | The ordered source priority cascade (lowest→highest): System, Remote, User, Extra, Repo. Higher scope overrides a same-named lower scope. [Skills](../explanation/agent-design/skills.md) |
-| **bundled skills** | Compile-time-embedded into the binary; never on disk, no install step. [ADR-0013](../adr/0013-skills-xdg-paths-and-bundled-embed.md) |
-| **implicit invocation** | Mention detection: the harness scans the latest user message for skill mentions and loads allowed skills as a hidden user message. [Skills](../explanation/agent-design/skills.md) |
+| **skill discovery** | On-demand skill metadata returned by the `list_skills` tool; the system prompt carries no skills catalog. [Skills](../explanation/agent-design/skills.md) |
+| **skill body** | The full Markdown expertise document, delivered on demand through `use_skill` or an explicit implicit-invocation marker. [Skills](../explanation/agent-design/skills.md) |
+| **skill scope** | The ordered source priority cascade (lowest→highest): Remote, User, Extra, Repo. Higher scope overrides a same-named lower scope. [Skills](../explanation/agent-design/skills.md) |
+| **implicit invocation** | Explicit mention detection: the harness recognizes `@skill-name` or `skill://…` and loads allowed skills as a hidden user message. Plain name occurrences do not trigger loading. [Skills](../explanation/agent-design/skills.md) |
 
 ## Context projection
 
@@ -120,7 +119,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 |------|------------|
 | **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/provider` switch. [Providers](providers.md) |
 | **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, and transport; one per `[[providers.channels]]` entry. [Providers](providers.md) |
-| **transport** | The wire protocol a channel uses (`openai_compat`, `gemini_native`, `llama`). [Configuration](configuration.md) |
+| **transport** | The wire protocol a channel uses (`OpenAiCompat`, `Anthropic`, `GeminiNative`). [Configuration](configuration.md) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[NEENEE_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
@@ -149,25 +148,28 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **prompt channel** | One of the two composition targets for harness-assembled text: `System` (the head system message) and `User` (any harness-injected user-role message). [ADR-0039](../adr/0039-unified-prompt-registry.md) |
-| **`PromptSection`** | A declarative, self-contained prompt fragment: an id, a channel, an `InjectionKind`, a `rank`, an `is_active` predicate, and a `render`. One section == one injection path == one `InjectionKind` variant. [ADR-0039](../adr/0039-unified-prompt-registry.md) |
-| **prompt registry** | The single entry point that collects `PromptSection`s per channel, sorts by `rank`, renders, and stamps `InjectionOrigin` — replacing the per-site `format!`/`push_str`/`Vec::join` assembly. [ADR-0039](../adr/0039-unified-prompt-registry.md) |
-| **`PromptContext`** | The read-only view (identity preamble, pursuit, tool names, skills index, last user text) a section's `render` draws from; plain owned data so it lives in core without a reverse edge into `neenee-agent`. [ADR-0039](../adr/0039-unified-prompt-registry.md) |
+| **model-context assembly** | The pre-provider boundary that prepares model-visible messages, rebuilds the system message, removes non-driving command echoes, and injects explicitly mentioned skills. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **`SystemPromptSection`** | An agent-owned declarative system-prompt fragment with a stable id, rank, activation predicate, and renderer. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message. It does not construct user-role context. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, pursuit, admitted tool names, model/provider guidance, and unattended state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **harness context message** | A model-visible user-role message inserted by the harness rather than authored by the user. Common constructors enforce role, visibility, and provenance; lifecycle owners decide payload and insertion time. [Prompt and message assembly](../explanation/agent-design/prompt-assembly.md) |
 
 ## Architecture
 
 | Term | Definition |
 |------|------------|
-| **`neenee-core`** | Pure domain crate: `ToolAccess`, `Provider`/`Tool` traits, `EnvoyProfile`/`ToolPolicy`, `WriteScope`, config-schema types, value types. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`neenee-core`** | Zero-I/O contract crate: shared provider/tool traits, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
 | **`neenee-store`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| **`neenee-providers`** | Provider implementations and the `build_provider_for_channel` factory; a peer of tools/store, depending only on core. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| **`neenee-tools`** | Built-in domain tools depending only on core; a peer of providers/store. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`neenee-providers`** | Provider implementations and the `build_provider_for_channel` factory, built on the shared AI SDK substrate and protocol-specific SDK crates. [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-tools`** | Built-in domain tools; filesystem/web/todo tools implement core contracts, while project/search facilities also consume store-owned services. It never depends on agent orchestration. [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
+| **`neenee-mcp`** | MCP transport, server processes, tool adapters, live runtime, and refresh catalog. Session owns runtime instances; Agent sees only dynamically published tools. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`SessionDriver`** | The server-side owner of one live session's request receiver, runtime state, and dispatch loop; external clients interact through a `SessionHandle`. [Crate layering](../explanation/crate-layering.md) |
-| **`neenee-agent`** | The orchestration layer; primary export is the `Agent` struct. Re-exports all of `neenee-core`. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`neenee-agent`** | The orchestration layer; primary export is the `Agent` struct. Owns turn behavior and agent-specific policy, consumes built-in tools and optional skills through downward dependencies, and accepts connector tools through `DynamicToolSink`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`neenee-code`** | The crate producing the `neenee-code` binary; assembles concrete tool/provider instances and contains the TUI. The *coding* application. [ADR-0035](../adr/0035-application-layer-split.md) |
-| **`neenee-quant`** | The *quantitative-trading* application crate, a peer of `neenee-code` at the application layer; depends on `neenee-agent` and provides its own quant domain tools (and a future GUI). Application-layer: core ← {providers, tools, store} ← agent ← {code, quant}. [ADR-0035](../adr/0035-application-layer-split.md) |
-| **`Agent`** | The central type in `neenee-agent`; owns the turn/round loop, gates, pursuit cell, permission broker, and `WriteScope`. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| **strict layering** | The dependency graph is strictly layered with zero reverse edges: core ← {providers, tools, store} ← agent ← {code, quant}. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`neenee-quant`** | The quantitative-trading domain/tool crate; depends on core and agent contracts, with `neenee-quant-gui` as its current application surface. [ADR-0035](../adr/0035-application-layer-split.md) |
+| **`Agent`** | The central type in `neenee-agent`; owns the turn/round loop, gates, pursuit state, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **strict layering** | An acyclic dependency rule: shared contracts point toward core, concrete implementations point only downward, orchestration may consume implementations, and session/application layers never acquire reverse edges. [Crate layering](../explanation/crate-layering.md) |
 | **`QUANT` profile** | A bounded envoy profile admitting read-only quant tools (`market_data`, `backtest`, `list_positions`) plus shared read-only inspection, while excluding live trading (`place_order`) and all coding write/edit/exec tools — domain isolation between the coding and quant applications. [ADR-0035](../adr/0035-application-layer-split.md) |
 | **MCP server** | A local stdio MCP server exposing dynamically discovered tools; surfaces as `mcp__<server>__<tool>`. [MCP servers](../explanation/agent-design/mcp.md) |
 
@@ -190,6 +192,7 @@ documentation and ADRs.
 | `PLAN` / `VERIFY` profiles | removed | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
 | verify-nudge / todo-continuation nudge | stop-gate (pursue + `Stop` hooks) | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
 | stall detector | session-review diagnostic | [ADR-0009](../adr/0009-uncapped-agentic-loop.md) |
+| `PromptChannel` / `PromptSection` / `PromptRegistry` / `PromptContext` | specialized `SystemPrompt*` vocabulary plus model-context message constructors | [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 
 ## See also
 

@@ -12,7 +12,7 @@ The live editable prompt at the bottom of the frame.
 
 | Attribute | Value |
 |-----------|-------|
-| Background | `panel_bg` (22, 24, 35) — brighter = "editable" |
+| Background | `input_bg` (18, 19, 19) — brighter = "editable" |
 | Left/right margin | 2 cols of `app_bg` |
 | Accent bar | `┃` in `accent` (Build mode) or Plan-mode blue |
 | Text color | `text` (brighter than sent messages) |

@@ -12,6 +12,7 @@ mod markdown_table;
 mod message_body;
 mod notice;
 pub mod overlays;
+mod page_header;
 mod primitives;
 mod text_layout;
 mod theme;
@@ -31,13 +32,16 @@ pub use composer::{INPUT_MSG_IDX, cursor_screen_pos, draw_composer};
 use design::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
     COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
-    COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, ENVOY_BAR_ROWS, FOOTER_H_INSET,
-    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, SIDE_BANNER_ROWS, STATUS_BAR_ROWS, STEP_MIN_WIDTH,
-    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
-    TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
+    COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS,
+    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS,
+    STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
-use disclosure::{StickyStep, draw_envoy_bar, draw_side_banner, draw_sticky_summary_if_needed};
+use disclosure::{StickyStep, draw_sticky_summary_if_needed};
+/// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
+/// Re-exported so the app shell selects the variant and the renderer paints it.
+pub use empty_state::EmptyStateGuidance;
 /// Parse a raw logo file into clamped display lines for the empty-state hero.
 /// Re-exported so the startup loader and the renderer share one clamp rule.
 pub use empty_state::parse_logo;
@@ -53,8 +57,9 @@ pub use overlays::{
     draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
     draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
     draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_turn_count,
 };
+use page_header::{PageHeader, draw_page_header};
 pub use primitives::recess_backdrop;
 use primitives::viewport_rect;
 #[cfg(test)]
@@ -80,11 +85,11 @@ use std::collections::HashMap;
 
 /// Inner rect of a transcript-area region after reserving the uniform
 /// [`TRANSCRIPT_H_INSET`] left+right `app_bg` gutters. This is the **single
-/// point** where the horizontal inset is applied — called exactly three times
-/// in `draw_transcript`: once for the content stream (the `band` every
-/// downstream component receives), and once each for the envoy bar and side
-/// banner rects so they align with the content band. Individual components no
-/// longer clip or hand-pad their own gutter; they trust the rect they receive.
+/// point** where the horizontal inset is applied — once for the content stream
+/// (the `band` every downstream component receives), and, on non-Main pages,
+/// once for the contextual page-header rect so it aligns with the content
+/// band. Individual components no longer clip or hand-pad their own gutter;
+/// they trust the rect they receive.
 pub(super) fn transcript_band_rect(area: Rect) -> Rect {
     Rect::new(
         area.x + TRANSCRIPT_H_INSET,
@@ -148,7 +153,7 @@ pub struct TranscriptView<'a> {
     /// Empty / "idle" means the status bar is hidden; every other value
     /// (including "responding") keeps the bar up for the full turn lifecycle.
     pub activity: &'a str,
-    /// Spinner animation phase (cycles through braille frames while active).
+    /// Animation phase for the breathing dot and status-text shimmer.
     pub spinner_phase: usize,
     /// The current input-box text (masked while the API-key modal is open). The
     /// transcript layout reads this so the input box can grow to fit its wrapped text.
@@ -160,12 +165,12 @@ pub struct TranscriptView<'a> {
     pub byte_cursor: usize,
     /// When true, the hint bar and input box are hidden (overlay modal open).
     pub chrome_hidden: bool,
-    /// When set, the view is zoomed into an envoy task: a navigation bar is
-    /// rendered and `messages` is the focused task's child stream.
+    /// When set, the view is zoomed into an envoy task: a contextual page
+    /// header is rendered and `messages` is the focused task's child stream.
     pub envoy_bar: Option<EnvoyBarInfo>,
     /// When set, the view is inside a `/btw` side conversation (ADR-0017): a
-    /// top banner is rendered reading `Side from main · <status> · Esc back`.
-    /// Carries the coarse primary-session status to surface.
+    /// contextual page header is rendered with the coarse primary-session
+    /// status and the return action.
     pub side_banner: Option<neenee_core::ParentStatus>,
     /// Active pursuit, if any. Surfaced on the activity bar as a `⟴ <objective>`
     /// badge so the user can tell at a glance the turn is part of a larger goal.
@@ -180,6 +185,8 @@ pub struct TranscriptView<'a> {
     /// Wall-clock instant the current turn started, or `None` between turns.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub turn_started_at: Option<std::time::Instant>,
+    /// Session policy indicator pinned to the activity row's right edge.
+    pub unattended: bool,
     /// Message index of the step (tool step or reasoning trace) whose header
     /// currently rests under the mouse pointer (inline or sticky pinned), so
     /// the next draw lights it up to the intermediate hover tone as a click
@@ -197,6 +204,11 @@ pub struct TranscriptView<'a> {
     /// no user logo is configured; the hero falls back to the built-in art.
     /// Ignored entirely when the transcript is non-empty.
     pub logo: Option<&'a [String]>,
+    /// Which guidance variant the empty-state hero renders beneath the logo
+    /// (ADR-0057). The app shell computes this from its onboarding + provider
+    /// state; the view layer only paints what it is handed. Ignored entirely
+    /// when the transcript is non-empty.
+    pub guidance: EmptyStateGuidance,
     pub theme: &'a Theme,
     /// Which layout strategy to arrange messages with. Selectable via
     /// `[tui] transcript_layout`; defaults to [`layout::Strategy::Default`].
@@ -299,7 +311,7 @@ impl HeightCache {
     }
 }
 
-/// Info for the envoy navigation bar (shown when zoomed into a task).
+/// Page-header context for an Envoy view (shown when zoomed into a task).
 pub struct EnvoyBarInfo {
     /// Label for the focused envoy (its task description).
     pub label: String,
@@ -367,9 +379,11 @@ pub fn draw_transcript(
         todos,
         review_alert,
         turn_started_at,
+        unattended,
         hovered_step,
         focused_target,
         logo,
+        guidance,
         theme,
         layout,
         height_cache,
@@ -415,13 +429,23 @@ pub fn draw_transcript(
 
     let size = viewport;
 
+    // Resolve all non-Main transcript modes to one page-header model. Envoy
+    // and `/btw` are mutually exclusive in the app; preferring Envoy here is a
+    // defensive fallback that keeps rendering deterministic if a malformed
+    // caller supplies both.
+    let page_header = envoy_bar
+        .as_ref()
+        .map(PageHeader::Envoy)
+        .or_else(|| side_banner.map(PageHeader::Btw));
+
     // When zoomed into an envoy task, the footer (status bar, plan panel,
     // input box, hint bar) is hidden: the task detail page is a read-only view
-    // whose only chrome is the envoy navigation bar.
+    // whose only chrome is its page header.
     let in_envoy = envoy_bar.is_some();
 
     // The status bar (animated spinner + activity text) sits on its own line
-    // directly above the input box. It is shown for every active phase —
+    // above the input box, after a permanent one-row transcript gap. It is
+    // shown for every active phase —
     // including streaming ("responding"), which is the longest phase and the
     // one where the breathing dot's liveness signal matters most — and hidden
     // only when the harness is idle, so the row returns to the transcript.
@@ -430,7 +454,8 @@ pub fn draw_transcript(
     // even when the harness is idle, so an active task list is always visible
     // — not only while a turn is running.
     let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
-    let activity_row_needed = status_active || (has_visible_todos && !chrome_hidden && !in_envoy);
+    let activity_row_needed =
+        status_active || ((has_visible_todos || unattended) && !chrome_hidden && !in_envoy);
     let status_height: u16 = if activity_row_needed {
         STATUS_BAR_ROWS
     } else {
@@ -456,8 +481,8 @@ pub fn draw_transcript(
         desired_input_height.min(max_input_height)
     };
     // The hint bar is a single-line status strip pinned directly below the
-    // input box. It carries the model + context-usage info. Hidden alongside
-    // the rest of the chrome while an overlay modal is open.
+    // input box. It carries the next Enter action plus ambient model/context
+    // info. Hidden alongside the rest of the chrome while an overlay is open.
     let hint_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
@@ -466,53 +491,44 @@ pub fn draw_transcript(
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        status_height + input_box_height + hint_height
+        FOOTER_TOP_GAP_ROWS + status_height + input_box_height + hint_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),                // Transcript (header was here, now removed)
+            Constraint::Min(0),                // Transcript page
             Constraint::Length(footer_height), // Status? + input box + hint bar
         ])
         .split(size);
 
     // 1. Transcript History
-    // When zoomed into an envoy, reserve a 1-line navigation band at the
-    // bottom of the transcript viewport for the envoy bar.
-    let (mut transcript_area, envoy_bar_rect) = if envoy_bar.is_some() {
+    // Every non-Main page gets the same one-line header at the TOP of the
+    // viewport. The current context is therefore visible before its content,
+    // and `/btw`, Envoy, and future focused pages share one stable chrome slot.
+    let (transcript_area, page_header_rect) = if page_header.is_some() {
         let sub = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(ENVOY_BAR_ROWS)])
+            .constraints([Constraint::Length(PAGE_HEADER_ROWS), Constraint::Min(0)])
             .split(chunks[0]);
         (
-            sub[0],
-            // The bar spans the inset band so it aligns with the transcript
+            sub[1],
+            // The header spans the inset band so it aligns with the transcript
             // content rather than edge-to-edge.
-            Some(transcript_band_rect(sub[1])),
+            Some(transcript_band_rect(sub[0])),
         )
     } else {
         (chunks[0], None)
     };
-    // `/btw` side banner (ADR-0017): a 1-line band at the TOP of the
-    // transcript viewport reading `Side from main · <status> · Esc back`.
-    // The side view keeps the footer (composer), unlike the envoy zoom,
-    // so only this top band is carved off.
-    if let Some(status) = side_banner {
-        let sub = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(SIDE_BANNER_ROWS), Constraint::Min(0)])
-            .split(transcript_area);
-        // The banner spans the inset band, matching the transcript content.
-        draw_side_banner(frame, transcript_band_rect(sub[0]), status, theme);
-        transcript_area = sub[1];
+    if let (Some(header), Some(rect)) = (page_header.as_ref(), page_header_rect) {
+        draw_page_header(frame, rect, header, theme);
     }
     // Apply the uniform horizontal inset (`TRANSCRIPT_H_INSET` on each side)
     // exactly once, here at the transcript-stream entry point. Every
     // downstream component receives `band` — an already-inset rect — so none
     // of them re-clips or hand-pads a leading gutter. The empty-state hero is
     // the sole exception: it centers across the full viewport, so it keeps
-    // `transcript_area` (un-inset). Banners and bars are rendered from their
-    // own layout-split rects before this point, so they are unaffected.
+    // `transcript_area` (un-inset). The page header is rendered from its own
+    // layout-split rect before this point, so it is unaffected.
     let band = transcript_band_rect(transcript_area);
     let mut current_y = band.y;
     // Account for scroll. Owned by the layout `Stream` once the loop runs; not
@@ -537,10 +553,10 @@ pub fn draw_transcript(
     let show_empty_state = messages.is_empty() && envoy_bar.is_none() && side_banner.is_none();
 
     if show_empty_state {
-        empty_state::draw_empty_state(frame, transcript_area, logo, theme);
+        empty_state::draw_empty_state(frame, transcript_area, logo, guidance, theme);
         // Account for the hero so the app loop does not treat the session as a
         // zero-height stream (which would mis-pin the scroll position).
-        content_lines = empty_state::empty_state_content_lines(logo);
+        content_lines = empty_state::empty_state_content_lines(logo, guidance);
     } else {
         // Stage 2: heights are wrap-width-dependent, so drop the cache on a
         // resize. Within a stable width + unchanged transcript every entry
@@ -615,23 +631,17 @@ pub fn draw_transcript(
         }
     }
 
-    // Envoy navigation band, drawn across the full transcript width (inside the
-    // app_bg gutters) so it reads as a continuous bar pinned above the input.
-    if let (Some(bar), Some(rect)) = (envoy_bar.as_ref(), envoy_bar_rect) {
-        draw_envoy_bar(frame, rect, bar, theme);
-    }
-
-    // The footer stacks, from top to bottom: the transient activity bar (when
-    // active), the input box, and the persistent hint bar. The activity bar
-    // sits directly above the input so the live transcript progress reads as
-    // "what is happening right now" right next to where the user types, and it
-    // doubles as the click target that opens the Activity modal (the pursuit and
-    // plan summaries that used to live here now scroll inside that modal and
-    // as inline notices in the transcript).
+    // The footer stacks, from top to bottom: a permanent blank separator, the
+    // transient activity bar (when active), the input box, and the persistent
+    // hint bar. The separator keeps the latest response visually distinct from
+    // the controls even when the activity row appears or disappears. The
+    // activity bar doubles as the click target that opens the Activity modal
+    // (the pursuit and plan summaries that used to live here now scroll inside
+    // that modal and as inline notices in the transcript).
     let footer_x = chunks[1].x + FOOTER_H_INSET;
     let footer_w = chunks[1].width.saturating_sub(2 * FOOTER_H_INSET);
 
-    let status_y = chunks[1].y;
+    let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
 
     // The transient activity bar sits directly above the input box. It stays
     // up for the entire active turn lifecycle (queued → responding → tool
@@ -653,6 +663,7 @@ pub fn draw_transcript(
             turn_started_at,
             activity,
             spinner_phase,
+            unattended,
             theme,
         )
         .map(|hit| (Some(hit.bar_rect), hit.todos_rect))
@@ -670,9 +681,9 @@ pub fn draw_transcript(
         input_box_height,
     );
 
-    // The hint bar sits directly below the input box and carries the model
-    // and context-usage info. Rendered last so its rect is computed even
-    // though its draw call is delegated to the app loop (which owns the
+    // The hint bar sits directly below the input box and carries the input
+    // action plus model/context info. Rendered last so its rect is computed
+    // even though its draw call is delegated to the app loop (which owns the
     // masked input state).
     let hint_rect = if hint_height > 0 {
         Rect::new(
@@ -750,11 +761,13 @@ mod tests {
                         todos: None,
                         review_alert: String::new(),
                         turn_started_at: None,
+                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
+                        guidance: EmptyStateGuidance::None,
                         theme: &theme,
-                    layout: crate::render::layout::Strategy::default(),
+                        layout: crate::render::layout::Strategy::default(),
                         height_cache: None,
                     },
                 );
@@ -947,8 +960,8 @@ mod tests {
         });
     }
 
-    /// Render both the compact envoy step (root view) and the zoomed-in
-    /// envoy view with its navigation bar, ensuring no layout panics.
+    /// Render both the compact Envoy step (root view) and the zoomed-in
+    /// Envoy view with its page header, ensuring no layout panics.
     #[test]
     fn envoy_step_and_view_render_without_panicking() {
         let theme = Theme::default();
@@ -997,9 +1010,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -1007,8 +1022,8 @@ mod tests {
             );
         });
 
-        // Zoomed-in envoy view: the task's children are the message stream
-        // and the navigation bar is shown.
+        // Zoomed-in Envoy view: the task's children are the message stream
+        // and the contextual header is shown on the first row.
         let children = root_messages[1].envoy_children().unwrap().to_vec();
         terminal.draw(|f| {
             let mut layout_map = LayoutMap::new();
@@ -1035,15 +1050,29 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
                 },
             );
         });
+
+        let width = terminal.buffer().area().width as usize;
+        let first_viewport_row: String = terminal.buffer().content[width..2 * width]
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            first_viewport_row
+                .trim_start()
+                .starts_with("Envoy explore the codebase · 1 of 1"),
+            "Envoy context should occupy the first viewport row: {first_viewport_row:?}"
+        );
     }
 
     #[test]
@@ -1098,9 +1127,11 @@ mod tests {
                         todos: None,
                         review_alert: String::new(),
                         turn_started_at: None,
+                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
+                        guidance: EmptyStateGuidance::None,
                         theme: &theme,
                         layout: crate::render::layout::Strategy::default(),
                         height_cache: Some(cache),
@@ -1314,9 +1345,11 @@ mod tests {
                         todos: None,
                         review_alert: String::new(),
                         turn_started_at: None,
+                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
+                        guidance: EmptyStateGuidance::None,
                         theme,
                         layout: crate::render::layout::Strategy::default(),
                         height_cache: None,
@@ -1342,6 +1375,71 @@ mod tests {
         );
         // ...but never more than half the terminal.
         assert!(tall.height <= 12);
+    }
+
+    #[test]
+    fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
+        fn assert_gap(activity: &str) {
+            let theme = Theme::default();
+            let messages = vec![TranscriptMessage::new(
+                neenee_core::Role::Assistant,
+                "A finished response above the footer.",
+            )];
+            let mut terminal = neenee_tui::TestTerminal::new(60, 20);
+            let mut footer_anchor_y = 0;
+            let mut transcript_height = 0;
+
+            terminal.draw(|frame| {
+                let mut layout_map = LayoutMap::new();
+                let rendered = draw_transcript(
+                    frame,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll: 0,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity,
+                        spinner_phase: 0,
+                        input: "",
+                        byte_cursor: 0,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::render::layout::Strategy::default(),
+                        height_cache: None,
+                    },
+                );
+                footer_anchor_y = rendered
+                    .activity_rect
+                    .map(|rect| rect.y)
+                    .unwrap_or(rendered.input_rect.y);
+                transcript_height = rendered.view_height;
+            });
+
+            assert_eq!(footer_anchor_y, 1 + transcript_height + FOOTER_TOP_GAP_ROWS);
+            let separator_y = footer_anchor_y - FOOTER_TOP_GAP_ROWS;
+            let width = terminal.buffer().area().width as usize;
+            let row_start = separator_y as usize * width;
+            let separator = &terminal.buffer().content[row_start..row_start + width];
+            assert!(
+                separator.iter().all(|cell| cell.symbol() == " "),
+                "separator row must stay blank while activity={activity:?}"
+            );
+        }
+
+        assert_gap("responding");
+        assert_gap("idle");
     }
 
     /// When the terminal is resized below the usable minimum,
@@ -1376,9 +1474,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -1891,9 +1991,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2034,9 +2136,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2111,9 +2215,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2557,9 +2663,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2611,9 +2719,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2674,9 +2784,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: Some(&logo),
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2724,9 +2836,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2799,9 +2913,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2870,9 +2986,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,
@@ -2943,9 +3061,11 @@ mod tests {
                     todos: None,
                     review_alert: String::new(),
                     turn_started_at: None,
+                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
+                    guidance: EmptyStateGuidance::None,
                     theme: &theme,
                     layout: crate::render::layout::Strategy::default(),
                     height_cache: None,

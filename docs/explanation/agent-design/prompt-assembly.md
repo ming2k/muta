@@ -1,11 +1,11 @@
 # Prompt and Message Assembly
 
-A model never sees a raw transcript. Every round the harness composes what the
-model actually reads from three independent channels, each with its own rules
-for what it carries, when it is rebuilt, and how it reaches the provider. This
-page is the integrating view of those channels. The individual mechanisms each
-has its own deep-dive; this page ties them together and covers the discipline
-that makes the whole assembly auditable.
+A model never sees a raw transcript. Before every provider request the harness
+composes what the model actually reads from three independent channels, each
+with its own rules for what it carries, when it is rebuilt, and how it reaches
+the provider. This page is the integrating view of those channels. The
+individual mechanisms each has its own deep-dive; this page ties them together
+and covers the discipline that makes the whole assembly auditable.
 
 For the request-scoped context that consumes the assembled prompt, see
 [Model context](model-context.md). For the round that sends that context, see
@@ -18,22 +18,22 @@ in parallel:
 
 | Channel | What it carries | Rebuilt when | How it reaches the model |
 |---------|-----------------|--------------|--------------------------|
-| **System** | Identity, neutral behavior, and live context (pursuit, skills catalog) | Every round, from scratch | A single head system message |
+| **System** | Identity, behavioral policy, and live state such as the pursuit | Every request, from scratch | A single head system message |
 | **User** | Genuine user input, plus harness-injected steering notes | Appended as the round proceeds | User-role messages |
-| **Tools** | Each tool's name, description, and parameter schema | Every round | The native function-calling `tools` field, outside the conversation |
+| **Tools** | Each tool's name, description, and parameter schema | Every request | The native function-calling `tools` field, outside the conversation |
 
 Keeping the channels separate is the central design idea. The system message is
-*recomposed* each round from live state, so it can never drift stale. The user
-channel carries both real input and harness steering, but never the two
+*recomposed* before each request from live state, so it can never drift stale.
+The user channel carries both real input and harness steering, but never the two
 confused — every harness insertion is stamped so a persisted transcript can say
 exactly what was injected and why. Tools are advertised through the provider's
 own schema surface, not described in prose, so the two never contradict.
 
 ## The system message
 
-The system message is rebuilt from scratch at the start of every round, not
-stored. It is assembled in a fixed reading order, each section present only when
-its precondition holds:
+The system message is rebuilt from scratch before every provider request, not
+stored as durable policy. It is assembled in a fixed reading order, each
+section present only when its precondition holds:
 
 1. **Identity preamble.** Who this agent is — a name and a mission composed into
    one opening sentence. The engine itself is identity-agnostic: it does not
@@ -43,37 +43,36 @@ its precondition holds:
    a third form: its identity *is* its role's full system prompt, injected
    verbatim as the preamble, ignoring name and mission. See
    [Envoys](envoys.md).
-2. **Neutral behavior.** Mission-independent guidance that applies regardless of
-   identity: output tone (concise, direct, no unsolicited recaps), task tracking
-   via the todo tools, and how to use `ask_user`. These lines never change with
-   persona or mission, which is why they live in the engine rather than the
-   embedding.
-3. **Active pursuit.** When a session has an active pursuit, its objective is
+2. **Model and provider guidance.** Narrow behavioral or protocol facts may be
+   supplied by the selected model and provider. Empty guidance contributes no
+   section.
+3. **Persistence and autonomy.** Mission-independent policy tells the agent to
+   carry work through implementation and verification. An unattended session
+   adds the stronger rule that no human is reachable and ambiguity must be
+   resolved without waiting for input.
+4. **Active pursuit.** When a session has an active pursuit, its objective is
    inlined into the system message as live context. See [Pursuits](pursuits.md).
-4. **Conditional tool guidance.** Tool schemas are declared natively (see
-   [Tools](#tools-declared-not-described)), but some guidance exceeds what a
-   schema can express. That guidance is injected only when the tool it concerns
-   is actually present — for example, the `ask_user` behavioral note appears
-   only when `ask_user` is in the tool list.
-5. **Skills catalog.** A compact one-line-per-skill index of every enabled
-   skill, telling the model what expertise exists without paying for the full
-   bodies. See [Skills](skills.md).
+5. **Conditional workflow guidance.** Tool schemas are declared natively (see
+   [Tools](#tools-declared-not-described)), but cross-tool workflow policy may
+   exceed what one schema can express. Delegation and dedicated file-editing
+   guidance appear only when a matching capability is admitted.
 
-The catalog is the only skills content in the system message; skill bodies
-reach the model through the user channel on demand. Likewise, tools are never
-listed in the system message — their names and schemas travel the dedicated
-`tools` field.
+Skills content is not placed in the system message. The model discovers skill
+metadata through `list_skills`; bodies arrive through `use_skill` or an explicit
+implicit-invocation marker. Likewise, tools are never listed in the system
+message — their names and schemas travel the dedicated `tools` field.
 
-Each section is a declarative entry in a prompt registry (`PromptRegistry` in
-`neenee-core`), not a hardcoded `push` in an imperative method. A section
-carries a stable id, a rank that fixes its reading order, an `is_active`
-precondition, and a `render`; the registry composes the active sections in
-rank order and stamps the channel's canonical origin. That makes each
-section individually unit-testable and individually re-orderable or
-disable-able without editing the others. The same engine serves an envoy:
-its registry is seeded from its profile so the composed system message is the
-role's persona plus the neutral sections. See
-[ADR-0039](../../adr/0039-unified-prompt-registry.md).
+Each section is a declarative `SystemPromptSection`, not a hardcoded push in an
+imperative method. A section carries a stable id, a rank that fixes its reading
+order, an activation precondition, and a renderer. The system-prompt registry
+composes active sections in rank order and stamps the singleton message's
+canonical origin. That makes each section independently testable,
+reorderable, or disable-able. The same engine serves an envoy: its role persona
+becomes the identity preamble and composes with the applicable shared policy.
+The registry and context snapshot are agent-owned policy; only the provider's
+narrow prompt-hints value crosses the shared contract boundary. See
+[ADR-0056](../../adr/0056-model-context-assembly-boundary.md) and
+[ADR-0057](../../adr/0057-contract-only-core-boundary.md).
 
 ## Conditional injections
 
@@ -91,6 +90,8 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 | **Implicit skill** | The latest user message mentions a skill name | Load the skill body so the model behaves as if it had explicitly invoked it. See [Skills](skills.md) |
 | **Hook output** | A configured lifecycle hook returns injected context | Let user practice (lint failures, CI gates, reminders) re-enter the conversation. See [Lifecycle hooks](hooks.md) |
 | **Envoy steering** | A parent agent steers a running child | Land a visible user message directing the envoy, or a hidden inter-agent note. See [Envoys](envoys.md) |
+| **Envoy task** | The harness starts an envoy or a session-review diagnostic | Open the child transcript with its delegated task or review input while retaining its non-user provenance |
+| **Tool image** | A tool returns an image that must travel as a user-role companion message | Preserve the image attachment and identify the protocol projection as harness-authored context |
 
 A defining property is that none of these are semantic guesses. The read-loop
 nudge, in particular, fires on *provable* waste — an identical read returns
@@ -115,10 +116,11 @@ structurally distinct:
 
 - **Genuine user input** — what the user typed, plus images. This is the real
   conversation.
-- **Harness-injected messages** — the steering notes from the table above. They
-  are marked **hidden**: they steer the model but are not rendered as part of
-  the visible transcript, so the user sees a clean conversation while the model
-  receives the guidance it needs.
+- **Harness context messages** — the steering notes and protocol projections
+  from the table above. Internal nudges are hidden so they do not clutter the
+  transcript; child tasks, explicit steering, review inputs, and tool-image
+  companions remain visible where their lifecycle requires it. All carry
+  structured provenance.
 
 Because both share `Role::User`, the only reliable way to tell them apart is the
 provenance stamp every injection carries. A genuine message has none; an
@@ -165,22 +167,23 @@ reopened later reconstructs the exact live round. This is the contract that lets
 resume, replay, and audit all trust the transcript: nothing was silently
 inserted, and everything that was inserted is identifiable.
 
-The same closed classifier does double duty as the registration key for the
-system channel's prompt sections: what a transcript records as an injection's
-*source* is what the registry knows as a section's *identity*, so provenance
-and composition stay in lockstep rather than drifting into two vocabularies.
+System sections use stable string ids for policy configuration. Their composed
+message carries the single `SystemPrompt` provenance kind; event-driven user
+context carries the kind specific to its lifecycle source.
 
 ## Decision history
 
-- [ADR-0039](../../adr/0039-unified-prompt-registry.md) — the system-prompt
-  sections become declarative `PromptRegistry` entries keyed by
-  `InjectionKind`, replacing the ad-hoc `format!`/`push_str` assembly. The
-  same change fixed a latent defect where an envoy system message
-  pre-seeded before the round loop was clobbered on turn 1.
+- [ADR-0056](../../adr/0056-model-context-assembly-boundary.md) — model-context
+  assembly becomes the provider-facing boundary; system sections use the
+  specialized `SystemPrompt*` vocabulary while harness-authored user context
+  shares message-construction invariants.
+- [ADR-0039](../../adr/0039-unified-prompt-registry.md) — introduced ranked
+  system-prompt composition and fixed latent system-message clobber defects;
+  superseded by ADR-0056 for the cross-channel abstraction boundary.
 - [ADR-0034](../../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md)
   — the deterministic read-loop guard and why a frequency window replaces a
   consecutive counter.
-- [ADR-0030](../../adr/0030-early-loop-intervention-and-turn-hook.md) — early
+- [ADR-0030](../../adr/0030-early-loop-intervention-and-round-hook.md) — early
   loop intervention, including the turn-hook axis that later fed hook-driven
   injection.
 - [ADR-0019](../../adr/0019-model-relative-context-compaction.md) — the

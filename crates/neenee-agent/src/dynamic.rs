@@ -38,33 +38,3 @@ pub fn spawn_refresh(catalog: impl DynamicCatalog + 'static) {
         }
     });
 }
-
-/// A [`DynamicCatalog`] that periodically re-scans skill sources (local dirs,
-/// remote repos, bundled). Wraps a [`SkillRegistry`](crate::skills::SkillRegistry)
-/// clone — the registry is `Arc<RwLock<…>>` internally, so the clone shares the
-/// same live state. On refresh it calls `reload()`, which re-runs discovery
-/// (including re-fetching remote repos, now with cache-as-fallback).
-pub struct SkillCatalog {
-    registry: crate::skills::SkillRegistry,
-}
-
-impl SkillCatalog {
-    pub fn new(registry: crate::skills::SkillRegistry) -> Self {
-        Self { registry }
-    }
-}
-
-impl DynamicCatalog for SkillCatalog {
-    fn id(&self) -> &'static str {
-        "skills"
-    }
-
-    async fn refresh(&self) -> Result<(), String> {
-        self.registry.reload().await;
-        Ok(())
-    }
-
-    fn refresh_period(&self) -> Duration {
-        Duration::from_secs(60 * 60)
-    }
-}

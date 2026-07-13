@@ -1,45 +1,13 @@
-//! Parsing of text-emitted tool calls.
+//! Agent compatibility path for text-emitted tool calls.
 //!
 //! Providers without native function calling (or ones that mirror a native
 //! call as text) emit a JSON object such as `{"tool":"bash","arguments":{...}}`,
 //! optionally wrapped in ChatML/Hermes sentinel tokens.
 //! [`parse_text_tool_call`] recovers a [`ToolCall`] from such prose-embedded
-//! JSON, and [`find_balanced_json_object`] is the shared brace-scanner both it
-//! and the provider echo-filter build on.
+//! JSON. Provider-native framing remains in the protocol SDKs.
 
 use crate::{Message, Role, ToolCall};
-
-/// Given the byte index of an opening `{` in `text`, return the byte index of
-/// the matching closing `}` at the same nesting depth. String literals and
-/// escapes are respected, so braces inside strings do not affect nesting.
-/// Returns `None` if the braces never balance.
-pub fn find_balanced_json_object(text: &str, start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut escape = false;
-    for (i, &byte) in bytes.iter().enumerate().skip(start) {
-        if in_str {
-            if escape {
-                escape = false;
-            } else if byte == b'\\' {
-                escape = true;
-            } else if byte == b'"' {
-                in_str = false;
-            }
-        } else if byte == b'"' {
-            in_str = true;
-        } else if byte == b'{' {
-            depth += 1;
-        } else if byte == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i);
-            }
-        }
-    }
-    None
-}
+use neenee_ai_sdk_core::json::find_balanced_object;
 
 /// Parse a tool call from assistant response text.
 ///
@@ -50,11 +18,11 @@ pub fn find_balanced_json_object(text: &str, start: usize) -> Option<usize> {
 /// tool identifier is used, so any text around the JSON is ignored. Both the
 /// `"tool"` key and the OpenAI/MCP `"name"` key are accepted as the tool
 /// identifier.
-pub fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
+pub(crate) fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
     let mut start = 0;
     while let Some(offset) = text[start..].find('{') {
         let brace_at = start + offset;
-        if let Some(end) = find_balanced_json_object(text, brace_at) {
+        if let Some(end) = find_balanced_object(text, brace_at) {
             let candidate = &text[brace_at..=end];
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(candidate) {
                 let tool_name = json
@@ -78,9 +46,10 @@ pub fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
             // text may carry the tool identifier.
             start = end + 1;
         } else {
-            // Unbalanced `{` with no matching close: nothing later can form a
-            // complete object either, so stop.
-            break;
+            // A malformed opening brace does not rule out a later, independent
+            // object. Advance one byte so that nested/later candidates are
+            // still considered.
+            start = brace_at + 1;
         }
     }
     None
@@ -92,7 +61,7 @@ pub fn parse_text_tool_call(text: &str) -> Option<ToolCall> {
 /// every tool result to reference an assistant tool call), while non-native
 /// providers simply ignore the `tool_calls` field and keep using the message
 /// `content`.
-pub fn attach_fallback_tool_call(messages: &mut [Message], call: &ToolCall) {
+pub(crate) fn attach_fallback_tool_call(messages: &mut [Message], call: &ToolCall) {
     if let Some(last) = messages.last_mut()
         && last.role == Role::Assistant
         && last.tool_calls.is_none()
@@ -161,6 +130,14 @@ mod tests {
         let call =
             parse_text_tool_call("{\"note\":\"thinking\"}{\"tool\":\"alpha\",\"arguments\":{}}")
                 .expect("later object has the tool key");
+        assert_eq!(call.name, "alpha");
+    }
+
+    #[test]
+    fn parse_text_tool_call_skips_an_unbalanced_prefix() {
+        let call =
+            parse_text_tool_call("broken { prose before {\"tool\":\"alpha\",\"arguments\":{}}")
+                .expect("later balanced object has the tool key");
         assert_eq!(call.name, "alpha");
     }
 }

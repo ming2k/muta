@@ -168,7 +168,7 @@ truncated with `…` when it would collide with the meta column.
 
 Interactive tool manager, opened by `/tools` (or `t`/`Enter` from the Session
 dashboard's `TOOLS` line). A centered, scrollable list of every tool available
-to the live session — builtins, `mcp:<server>`, `pursuit`, `plan` — each with
+to the live session — builtins and `mcp:<server>` tools — each with
 its source, a short description, and an `[on]`/`[off]` badge. `Space` toggles a
 tool; the harness applies it and replies with a fresh snapshot that re-renders
 the list. Data comes from the session-context snapshot.

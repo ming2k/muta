@@ -13,9 +13,10 @@
 
 use neenee_agent::catalog;
 use neenee_agent::orchestration::{send_harness_state, turn};
-use neenee_agent::skills::SkillRegistry;
 use neenee_agent::{Agent, EnvoyRegistry};
 use neenee_core::{AgentRequest, AgentResponse, Provider, Tool};
+use neenee_mcp::McpRuntime;
+use neenee_skills::SkillRegistry;
 use neenee_store::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
@@ -31,7 +32,6 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::UiBridge;
-use crate::mcp_runtime::McpRuntime;
 use crate::session_view::{build_sessions_overview, provider_key_status};
 use crate::side::SideSession;
 use crate::startup::StartupMode;
@@ -550,6 +550,35 @@ impl SessionDriver {
                         text,
                         images,
                         sent_at_ms,
+                    )
+                    .await;
+                }
+                AgentRequest::InsertUserInput { session_id, input } => {
+                    crate::handlers_chat::insert_user_input(
+                        &side, &agent, &session, &resp_tx, session_id, input,
+                    )
+                    .await;
+                }
+                AgentRequest::CancelInsertedInput {
+                    session_id,
+                    input_id,
+                } => {
+                    crate::handlers_chat::cancel_inserted_input(
+                        &side, &agent, &session, &resp_tx, session_id, input_id,
+                    )
+                    .await;
+                }
+                AgentRequest::ChatToSession { session_id, input } => {
+                    crate::handlers_chat::chat_to_session(
+                        &side,
+                        &agent,
+                        &session,
+                        &ctt_clone,
+                        &generation_clone,
+                        &resp_tx,
+                        &config,
+                        session_id,
+                        input,
                     )
                     .await;
                 }

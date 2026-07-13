@@ -1220,25 +1220,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "include_dir"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
-dependencies = [
- "include_dir_macros",
-]
-
-[[package]]
-name = "include_dir_macros"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1595,16 +1576,14 @@ version = "0.20.3"
 dependencies = [
  "async-trait",
  "chrono",
- "dirs",
  "fastrand",
  "futures",
- "glob",
- "include_dir",
- "inventory",
  "mockito",
+ "neenee-ai-sdk-core",
  "neenee-auth",
  "neenee-core",
  "neenee-providers",
+ "neenee-skills",
  "neenee-store",
  "neenee-tools",
  "regex",
@@ -1616,8 +1595,6 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
- "walkdir",
- "yaml_serde",
 ]
 
 [[package]]
@@ -1701,8 +1678,10 @@ dependencies = [
  "insta",
  "neenee-agent",
  "neenee-core",
+ "neenee-mcp",
  "neenee-providers",
  "neenee-session",
+ "neenee-skills",
  "neenee-store",
  "neenee-tools",
  "neenee-tui",
@@ -1750,6 +1729,18 @@ dependencies = [
  "iris",
  "pkg-config",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "neenee-mcp"
+version = "0.20.3"
+dependencies = [
+ "async-trait",
+ "futures",
+ "neenee-core",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1805,7 +1796,9 @@ dependencies = [
  "neenee-agent",
  "neenee-auth",
  "neenee-core",
+ "neenee-mcp",
  "neenee-providers",
+ "neenee-skills",
  "neenee-store",
  "neenee-tools",
  "serde",
@@ -1819,6 +1812,25 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "neenee-skills"
+version = "0.20.3"
+dependencies = [
+ "async-trait",
+ "dirs",
+ "inventory",
+ "neenee-core",
+ "neenee-store",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "walkdir",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1854,7 +1866,6 @@ dependencies = [
  "base64",
  "chrono",
  "dirs",
- "futures",
  "glob",
  "image",
  "inventory",
@@ -1866,7 +1877,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml",
- "tracing",
  "uuid",
  "walkdir",
  "yaml_serde",

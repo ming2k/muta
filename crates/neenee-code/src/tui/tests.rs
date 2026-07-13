@@ -75,6 +75,46 @@ fn transcript_patch_updates_only_the_live_message() {
 }
 
 #[test]
+fn streamed_text_is_appended_only_to_the_current_round() {
+    let mut messages = vec![TranscriptMessage::new(Role::Assistant, "older").with_turn(1)];
+    let older_id = messages[0].id;
+
+    assert_eq!(
+        append_stream_text_delta(&mut messages, Some(2), "new"),
+        None
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "a new round requires structural insertion"
+    );
+    assert_eq!(messages[0].raw, "older");
+
+    messages.push(TranscriptMessage::new(Role::Assistant, "first").with_turn(2));
+    let current_id = messages[1].id;
+    assert_eq!(
+        append_stream_text_delta(&mut messages, Some(2), " second"),
+        Some(current_id)
+    );
+    assert_eq!(messages[0].id, older_id);
+    assert_eq!(messages[0].raw, "older");
+    assert_eq!(messages[1].raw, "first second");
+}
+
+#[test]
+fn hidden_reasoning_needs_no_assistant_placeholder() {
+    // StreamStart is lifecycle-only. If a hidden-chain reasoning delta is
+    // ignored, the transcript remains exactly as it was: no zero-height message
+    // can introduce a second semantic separator before the next visible item.
+    let mut messages = vec![TranscriptMessage::new(Role::User, "question").with_turn(1)];
+    let before = messages[0].id;
+
+    begin_stream(&mut messages);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, before);
+}
+
+#[test]
 fn restored_history_hides_harness_messages() {
     assert!(transcript_message_from_core(Message::hidden(Role::User, "internal")).is_none());
     assert!(transcript_message_from_core(Message::new(Role::System, "system")).is_none());
@@ -157,6 +197,21 @@ fn restored_user_message_origin_inferred_from_shape() {
     let path_like =
         transcript_message_from_core(Message::new(Role::User, "/etc is a path")).unwrap();
     assert_eq!(path_like.origin, UserMessageOrigin::Chat);
+}
+
+#[test]
+fn restored_user_insert_keeps_mid_round_origin_and_next_turn_stamp() {
+    use crate::tui::document::UserMessageOrigin;
+    let first = Message::new(Role::Assistant, "first answer");
+    let inserted = Message::new(Role::User, "one more constraint").with_origin(
+        neenee_core::InjectionOrigin::new(neenee_core::InjectionKind::UserSteer),
+    );
+    let second = Message::new(Role::Assistant, "revised answer");
+
+    let restored =
+        transcript_messages_from_core(vec![first, inserted, second], &config::TuiConfig::default());
+    assert_eq!(restored[1].origin, UserMessageOrigin::Insert);
+    assert_eq!(restored[1].turn, Some(2));
 }
 
 #[test]
@@ -907,6 +962,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
+        send_target: crate::tui::app::SendTarget::Insert,
+        naturally_completed_sessions: std::collections::HashSet::new(),
+        idle_sessions: std::collections::HashSet::new(),
+        running_sessions: std::collections::HashSet::new(),
         selection: SelectionState::None,
         drag: SelectionDrag::default(),
         layout_map: LayoutMap::new(),
@@ -1550,14 +1609,18 @@ fn manual_walk_returns_files_and_synthesized_dirs() {
     assert!(!entries.iter().any(|e| e.starts_with(".git")));
 }
 
-use crate::tui::app::QueuedDispatch;
-use crate::tui::document::DeliveryStatus;
+use crate::tui::app::{QueuedDispatch, QueuedDispatchState, RecallQueued, SendTarget};
 
-/// Build a transcript Vec mimicking what the live SendChat handler
-/// produces for a queued user message: a `Role::User` message carrying
-/// `DeliveryStatus::Queued`. Used by the queue-semantics tests below.
-fn queued_user_message(text: &str) -> TranscriptMessage {
-    TranscriptMessage::new(Role::User, text).queued()
+fn queued_dispatch(id: &str, session_id: &str, text: &str, target: SendTarget) -> QueuedDispatch {
+    QueuedDispatch {
+        id: id.to_string(),
+        session_id: session_id.to_string(),
+        target,
+        state: QueuedDispatchState::Waiting,
+        text: text.to_string(),
+        images: Vec::new(),
+        text_pastes: Vec::new(),
+    }
 }
 
 #[test]
@@ -1566,6 +1629,10 @@ fn queued_dispatch_carries_text_and_images() {
     // SendChat and recall paths. Locks the field names + types so a
     // refactor can't quietly drop the images payload.
     let d = QueuedDispatch {
+        id: "message-1".to_string(),
+        session_id: "session-a".to_string(),
+        target: SendTarget::Insert,
+        state: QueuedDispatchState::Waiting,
         text: "hello".to_string(),
         images: vec![neenee_core::ImagePart {
             mime: "image/png".to_string(),
@@ -1579,44 +1646,74 @@ fn queued_dispatch_carries_text_and_images() {
 }
 
 #[test]
-fn recall_queued_is_lifo_and_restores_input() {
-    // Two messages staged in FIFO dispatch order; recall pops them in
-    // reverse (LIFO undo), restores each one's text into the input box,
-    // and removes the matching transcript marker each time. After both
-    // recalls the queue is empty and recall returns false.
+fn outbox_counts_and_fifo_dispatch_are_session_scoped() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(QueuedDispatch {
-        text: "first".to_string(),
-        images: Vec::new(),
-        text_pastes: Vec::new(),
-    });
-    app.pending_dispatch.push_back(QueuedDispatch {
-        text: "second".to_string(),
-        images: Vec::new(),
-        text_pastes: Vec::new(),
-    });
-    let mut messages = vec![queued_user_message("first"), queued_user_message("second")];
+    app.pending_dispatch.push_back(queued_dispatch(
+        "a-insert",
+        "session-a",
+        "insert",
+        SendTarget::Insert,
+    ));
+    app.pending_dispatch.push_back(queued_dispatch(
+        "b-next",
+        "session-b",
+        "other",
+        SendTarget::NextRound,
+    ));
+    app.pending_dispatch.push_back(queued_dispatch(
+        "a-next",
+        "session-a",
+        "follow up",
+        SendTarget::NextRound,
+    ));
+
+    assert_eq!(app.pending_counts("session-a"), (1, 1));
+    assert_eq!(app.pending_counts("session-b"), (0, 1));
+    let dispatch = app
+        .begin_next_round_dispatch("session-a")
+        .expect("session-a follow-up");
+    assert_eq!(dispatch.id, "a-next");
+    assert_eq!(app.pending_dispatch[1].id, "b-next");
+}
+
+#[test]
+fn recall_queued_is_lifo_and_restores_input() {
+    // Next-round entries are local-only, so recall can pop them immediately
+    // in LIFO order and restore them without touching transcript history.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch.push_back(queued_dispatch(
+        "1",
+        "session-a",
+        "first",
+        SendTarget::NextRound,
+    ));
+    app.pending_dispatch.push_back(queued_dispatch(
+        "2",
+        "session-a",
+        "second",
+        SendTarget::NextRound,
+    ));
 
     // First recall: most-recently-queued = "second".
-    assert!(app.recall_queued(&mut messages));
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore");
+    };
+    app.restore_dispatch(dispatch);
     assert_eq!(app.input, "second");
     assert_eq!(app.cursor_position, "second".chars().count());
     assert_eq!(
         app.history_index, None,
         "history cursor must be cleared so ↓ returns to empty input"
     );
-    // The matching transcript marker is removed.
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].raw, "first");
-    assert_eq!(messages[0].delivery, DeliveryStatus::Queued);
-
     // Second recall: now "first".
-    assert!(app.recall_queued(&mut messages));
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore");
+    };
+    app.restore_dispatch(dispatch);
     assert_eq!(app.input, "first");
-    assert!(messages.is_empty(), "all queued markers drained");
 
-    // Third recall: queue empty → no-op, returns false.
-    assert!(!app.recall_queued(&mut messages));
+    // Third recall: queue empty → no-op.
+    assert!(app.recall_queued("session-a").is_none());
     assert_eq!(
         app.input, "first",
         "input must be untouched when the queue is empty"
@@ -1633,14 +1730,14 @@ fn recall_queued_restores_staged_images() {
         mime: "image/png".to_string(),
         data: "abc".to_string(),
     };
-    app.pending_dispatch.push_back(QueuedDispatch {
-        text: "look at this".to_string(),
-        images: vec![image.clone()],
-        text_pastes: Vec::new(),
-    });
-    let mut messages = vec![queued_user_message("look at this")];
+    let mut dispatch = queued_dispatch("1", "session-a", "look at this", SendTarget::NextRound);
+    dispatch.images = vec![image.clone()];
+    app.pending_dispatch.push_back(dispatch);
 
-    assert!(app.recall_queued(&mut messages));
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore");
+    };
+    app.restore_dispatch(dispatch);
     assert_eq!(app.input, "look at this");
     assert_eq!(
         app.pending_images.len(),
@@ -1651,26 +1748,24 @@ fn recall_queued_restores_staged_images() {
 }
 
 #[test]
-fn recall_queued_skips_delivered_markers() {
-    // Only Queued markers are eligible for recall. A delivered user
-    // message in the transcript (e.g. one that already shipped) is
-    // never removed even if the queue somehow holds an extra entry —
-    // the rposition predicate filters by `DeliveryStatus::Queued`.
+fn recall_insert_waits_for_authoritative_cancel() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(QueuedDispatch {
-        text: "queued".to_string(),
-        images: Vec::new(),
-        text_pastes: Vec::new(),
-    });
-    let delivered = TranscriptMessage::new(Role::User, "already sent");
-    let queued = queued_user_message("queued");
-    // Delivered user message precedes the queued one in transcript order.
-    let mut messages = vec![delivered, queued];
+    app.pending_dispatch.push_back(queued_dispatch(
+        "insert-1",
+        "session-a",
+        "queued",
+        SendTarget::Insert,
+    ));
 
-    assert!(app.recall_queued(&mut messages));
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].raw, "already sent");
-    assert_eq!(messages[0].delivery, DeliveryStatus::Delivered);
+    assert!(matches!(
+        app.recall_queued("session-a"),
+        Some(RecallQueued::CancelInsert { input_id }) if input_id == "insert-1"
+    ));
+    assert!(app.input.is_empty(), "cancel has not been acknowledged yet");
+    assert_eq!(
+        app.pending_dispatch.front().map(|item| item.state),
+        Some(QueuedDispatchState::Cancelling)
+    );
 }
 
 #[test]
@@ -1681,14 +1776,17 @@ fn recall_queued_latches_completion_dismissal() {
     // slash-completion popup — a spurious "complete" step the user never asked
     // for. Mirrors the latch in the history-navigation paths.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(QueuedDispatch {
-        text: "/help".to_string(),
-        images: Vec::new(),
-        text_pastes: Vec::new(),
-    });
-    let mut messages = vec![queued_user_message("/help")];
+    app.pending_dispatch.push_back(queued_dispatch(
+        "1",
+        "session-a",
+        "/help",
+        SendTarget::NextRound,
+    ));
 
-    assert!(app.recall_queued(&mut messages));
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore");
+    };
+    app.restore_dispatch(dispatch);
     assert_eq!(app.input, "/help");
     assert!(
         app.completion_dismissed,

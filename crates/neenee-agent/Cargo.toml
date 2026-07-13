@@ -7,8 +7,11 @@ license.workspace = true
 
 [dependencies]
 neenee-core = { path = "../neenee-core" }
+neenee-ai-sdk-core = { path = "../neenee-ai-sdk-core" }
 neenee-store = { path = "../neenee-store" }
 neenee-providers = { path = "../neenee-providers" }
+neenee-tools = { path = "../neenee-tools" }
+neenee-skills = { path = "../neenee-skills" }
 neenee-auth = { path = "../neenee-auth" }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -19,18 +22,11 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
-walkdir = { workspace = true }
-glob = { workspace = true }
-serde_yaml = { workspace = true }
 uuid = { workspace = true }
-dirs = { workspace = true }
-include_dir = "0.7"
-inventory = { workspace = true }
 regex = "1"
 fastrand = { workspace = true }
 
 [dev-dependencies]
-neenee-tools = { path = "../neenee-tools" }
 tokio = { workspace = true, features = ["test-util"] }
 toml = { workspace = true }
 mockito = { workspace = true }

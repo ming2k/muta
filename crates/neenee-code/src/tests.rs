@@ -10,36 +10,41 @@ use neenee_agent::orchestration::{
     ContextProjectionSettings, ProxyProvider, RoundContext, RoundInput, apply_jitter_ms,
     execute_round, retry_delay_ms,
 };
-use neenee_agent::skills::SkillRegistry;
-use neenee_core::{AgentResponse, Message, Provider, ProviderStreamEvent, RoundEvent, async_trait};
+use neenee_core::{
+    AgentResponse, Message, Provider, ProviderStreamEvent, RoundEvent, ToolContextBuilder,
+    async_trait, collect_toolset,
+};
 use neenee_providers::MockProvider;
+use neenee_skills::SkillRegistry;
 use neenee_store::session::SessionStore;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use futures::stream;
 
 struct RetryOnceProvider(AtomicUsize);
-struct ToolThenRetryProvider(AtomicUsize);
+struct PartialToolRetryProvider(AtomicUsize);
+struct ToolThenRetryProvider {
+    attempts: AtomicUsize,
+    requests: Arc<Mutex<Vec<String>>>,
+}
 struct AlwaysRetryableProvider;
-struct RetryReadTool;
+struct RetryReadTool(Arc<AtomicUsize>);
 
-/// Built-in tools self-register via `inventory` across the neenee-tools,
+/// Most built-in tools self-register via `inventory` across the neenee-tools,
 /// neenee-agent, and neenee-store crates. This test guards the one real
 /// risk of that approach — that a crate's `inventory::submit!` nodes get
 /// dropped by the linker — by asserting the assembled set contains every
 /// expected built-in tool name.
 #[test]
 fn registry_collects_all_self_registered_tools() {
-    let mut builder = neenee_core::ToolContextBuilder::new();
-    builder.provide(std::sync::Arc::new(
-        neenee_agent::skills::SkillRegistry::empty(),
-    ));
+    let mut builder = ToolContextBuilder::new();
+    builder.provide(Arc::new(SkillRegistry::empty()));
     builder.provide(neenee_agent::AgentIdentity::default());
     let ctx = builder.build();
-    let collected = neenee_core::collect_toolset(&ctx);
+    let collected = collect_toolset(&ctx);
     let names: std::collections::HashSet<&str> = collected.capability_names().collect();
     for expected in [
         "bash",
@@ -96,7 +101,7 @@ impl Provider for RetryOnceProvider {
 }
 
 #[async_trait]
-impl Provider for ToolThenRetryProvider {
+impl Provider for PartialToolRetryProvider {
     async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
@@ -114,18 +119,61 @@ impl Provider for ToolThenRetryProvider {
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("partial-call".to_string()),
+                    name: Some("retry_read".to_string()),
+                    arguments: "{".to_string(),
+                }),
+                Err(neenee_core::retryable_error("stream dropped", None)),
+            ])))
+        } else {
             Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::TextDelta("done".to_string()),
+            )])))
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for ToolThenRetryProvider {
+    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+        Err("non-streaming path should not be used".to_string())
+    }
+
+    async fn stream_chat(
+        &self,
+        _messages: Vec<Message>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn stream_chat_events(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
+    {
+        self.requests
+            .lock()
+            .expect("request log lock poisoned")
+            .push(serde_json::to_string(&messages).expect("messages should serialize"));
+        let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+        match attempt {
+            0 | 2 => Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ToolCallDelta {
                     index: 0,
-                    id: Some("call".to_string()),
+                    id: Some(if attempt == 0 { "call" } else { "retry-call" }.to_string()),
                     name: Some("retry_read".to_string()),
                     arguments: "{}".to_string(),
                 },
-            )])))
-        } else {
-            Ok(Box::pin(stream::iter(vec![Err(
+            )]))),
+            1 => Ok(Box::pin(stream::iter(vec![Err(
                 neenee_core::retryable_error("upstream unavailable", None),
-            )])))
+            )]))),
+            _ => Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::TextDelta("done".to_string()),
+            )]))),
         }
     }
 }
@@ -171,6 +219,7 @@ impl neenee_core::Tool for RetryReadTool {
     }
 
     async fn call(&self, _arguments: &str) -> Result<String, String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
         Ok("read".to_string())
     }
 }
@@ -207,7 +256,6 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let agent = Arc::new(Agent::new(
         Arc::new(RetryOnceProvider(AtomicUsize::new(0))),
         Vec::new(),
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let ledger = neenee_core::TokenSourceLedger::shared();
@@ -232,6 +280,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             retry_max_attempts: 3,
             retry_base_ms: 1,
             retry_max_ms: 10,
+            emit_round_completed: false,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -304,25 +353,27 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
 }
 
 #[tokio::test]
-async fn turn_does_not_retry_after_tool_activity() {
-    let directory =
-        std::env::temp_dir().join(format!("neenee-retry-tool-{}", uuid::Uuid::new_v4()));
+async fn partial_tool_stream_is_not_executed_before_provider_retry() {
+    let directory = std::env::temp_dir().join(format!(
+        "neenee-retry-partial-tool-{}",
+        uuid::Uuid::new_v4()
+    ));
     let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(
-        Arc::new(ToolThenRetryProvider(AtomicUsize::new(0))),
-        vec![Arc::new(RetryReadTool)],
-        SkillRegistry::empty(),
+        Arc::new(PartialToolRetryProvider(AtomicUsize::new(0))),
+        vec![Arc::new(RetryReadTool(tool_calls.clone()))],
         neenee_agent::AgentIdentity::default(),
     ));
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    let error = execute_round(
+    let completed = execute_round(
         RoundContext {
             agent,
             tx,
             token: CancellationToken::new(),
             session_id: session.id().await,
-            session,
+            session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
                 preserve_turns: 6,
@@ -330,9 +381,10 @@ async fn turn_does_not_retry_after_tool_activity() {
                 prune: false,
                 prune_protect_chars: 0,
             },
-            retry_max_attempts: 4,
+            retry_max_attempts: 3,
             retry_base_ms: 1,
             retry_max_ms: 10,
+            emit_round_completed: false,
         },
         RoundInput {
             prompt: "work".to_string(),
@@ -343,22 +395,102 @@ async fn turn_does_not_retry_after_tool_activity() {
         },
     )
     .await
-    .unwrap_err();
+    .unwrap();
 
-    let error_string = error.to_string();
+    assert!(!completed);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
     assert!(
-        error_string.starts_with("upstream unavailable"),
-        "should surface the provider message: {error_string}"
+        session
+            .model_window()
+            .await
+            .iter()
+            .any(|message| message.content == "done")
+    );
+    let responses = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(responses.iter().any(|response| matches!(
+        response,
+        AgentResponse::Round {
+            event: RoundEvent::RetryScheduled { attempt: 2, .. },
+            ..
+        }
+    )));
+    assert!(!responses.iter().any(|response| matches!(
+        response,
+        AgentResponse::Round {
+            event: RoundEvent::ToolCall { .. },
+            ..
+        }
+    )));
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn turn_resumes_provider_request_after_completed_tool_activity() {
+    let directory =
+        std::env::temp_dir().join(format!("neenee-retry-tool-{}", uuid::Uuid::new_v4()));
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let agent = Arc::new(Agent::new(
+        Arc::new(ToolThenRetryProvider {
+            attempts: AtomicUsize::new(0),
+            requests: requests.clone(),
+        }),
+        vec![Arc::new(RetryReadTool(tool_calls.clone()))],
+        neenee_agent::AgentIdentity::default(),
+    ));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    let completed = execute_round(
+        RoundContext {
+            agent,
+            tx,
+            token: CancellationToken::new(),
+            session_id: session.id().await,
+            session: session.clone(),
+            projection: ContextProjectionSettings {
+                budget: neenee_core::CompactionPolicy::default().resolve(100_000),
+                preserve_turns: 6,
+                summarize: false,
+                prune: false,
+                prune_protect_chars: 0,
+            },
+            retry_max_attempts: 4,
+            retry_base_ms: 1,
+            retry_max_ms: 10,
+            emit_round_completed: false,
+        },
+        RoundInput {
+            prompt: "work".to_string(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(!completed);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        session
+            .model_window()
+            .await
+            .iter()
+            .any(|message| message.content == "done")
+    );
+    let requests = requests.lock().expect("request log lock poisoned");
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[1], requests[2],
+        "the retry must resend the exact request checkpoint after the tool result"
     );
     assert!(
-        error_string.contains("Not retried automatically"),
-        "should explain why retry was skipped: {error_string}"
-    );
-    assert!(
-        !std::iter::from_fn(|| rx.try_recv().ok()).any(|response| matches!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|response| matches!(
             response,
             AgentResponse::Round {
-                event: RoundEvent::RetryScheduled { .. },
+                event: RoundEvent::RetryScheduled { attempt: 2, .. },
                 ..
             }
         ))
@@ -374,7 +506,6 @@ async fn turn_exhaustion_message_explains_retry_budget() {
     let agent = Arc::new(Agent::new(
         Arc::new(AlwaysRetryableProvider),
         Vec::new(),
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -396,6 +527,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             retry_max_attempts: 3,
             retry_base_ms: 1,
             retry_max_ms: 10,
+            emit_round_completed: false,
         },
         RoundInput {
             prompt: "work".to_string(),

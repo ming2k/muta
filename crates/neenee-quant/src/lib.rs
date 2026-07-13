@@ -6,7 +6,8 @@
 //! backtesting, order placement — plus a future GUI. Layering:
 //!
 //! ```text
-//! neenee-core ← {providers, tools, store} ← neenee-agent ← {neenee-code, neenee-quant}
+//! neenee-core ← store ← neenee-tools ← neenee-agent ← {neenee-code, neenee-quant}
+//!      ↖ providers ────────────────────┘
 //! ```
 //!
 //! ## Why these tools are *not* self-registered

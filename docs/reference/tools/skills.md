@@ -9,7 +9,7 @@ session history. All are `Read` and bypass the permission broker.
 |-----------|------|----------|-------|
 | `name` | string | yes | Skill name from frontmatter |
 
-`UseSkillTool` (`crates/neenee-agent/src/skills/tools.rs`) loads the skill body
+`UseSkillTool` (`crates/neenee-skills/src/tools.rs`) loads the skill body
 into the conversation.
 
 ## `list_skills`
@@ -53,30 +53,28 @@ tags: [rust]
 policy:
   allow_implicit_invocation: true
 dependencies:
-  tools:
-    - type: mcp
-      value: context7
+  - type: mcp
+    value: context7
 ---
 Skill body injected into the context on demand.
 ```
 
 ## Discovery
 
-The skill registry (`crates/neenee-agent/src/skills/discovery.rs`) discovers
+The skill registry (`crates/neenee-skills/src/discovery.rs`) discovers
 skills from, in priority order (later sources override earlier ones):
 
-1. **Bundled system skills** — compile-time-embedded under
-   `crates/neenee-agent/skills/bundled/`; baked into the binary, never on
-   disk. (See ADR-0013.)
-2. **Remote skill repositories** configured under `[skills] urls` in
+1. **Remote skill repositories** configured under `[skills] urls` in
    `config.toml`, cached under `$XDG_CACHE_HOME/neenee/skills/remote/`.
+2. **External user-global formats** — `~/.agents/skills/`, `~/.claude/skills/`
+   (someone else's app convention).
 3. **User-global skills (XDG)** — `$XDG_DATA_HOME/neenee/skills/`
    (`~/.local/share/neenee/skills/` on Linux by default).
-4. **External user-global formats** — `~/.agents/skills/`, `~/.claude/skills/`
-   (someone else's app convention).
-5. **Extra local paths** configured under `[skills] paths` in `config.toml`.
-6. **Project-repo skills** — `.neenee/skills/`, `.agents/skills/`,
-   `.claude/skills/` in the project root (highest priority).
+4. **Extra local paths** configured under `[skills] paths` in `config.toml`.
+5. **External project formats** — `.agents/skills/`, `.claude/skills/` in the
+   project root.
+6. **Project-local neenee skills** — `.neenee/skills/` in the project root
+   (highest priority).
 
 All user-level paths resolve through the central `Dirs` layer
 (`crates/neenee-store/src/paths.rs`) and honour the standard XDG overrides
@@ -87,5 +85,5 @@ layout](../../explanation/persistence.md) for the conceptual model.
 
 The catalog is **not** injected into the system prompt. Skills are discovered
 on demand via `list_skills` and loaded via `use_skill`. Skills whose names are
-mentioned in a user message are auto-loaded by `Agent::inject_implicit_skills`
-when their policy allows implicit invocation.
+explicitly mentioned with `@skill-name` or a `skill://` URI are auto-loaded
+during model-context preparation when their policy allows implicit invocation.

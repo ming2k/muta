@@ -12,26 +12,18 @@ body reaches the model. For the lookup-oriented file layout, see
 [Paths](../../reference/paths.md); for the `use_skill` tool contract, see
 [Skills and `use_skill`](../../reference/tools/skills.md).
 
-## The two-channel model
+## On-demand discovery and loading
 
-A skill crosses the model's context boundary through two independent channels.
-Keeping them separate is the central design idea:
+Skill metadata and skill bodies enter model context only when needed:
 
-| Channel | What it carries | Where it lands | When |
-|---------|-----------------|----------------|------|
-| **Catalog** | Each enabled skill's name and one-line description | The system prompt | Every round, rebuilt from the live registry |
-| **Body** | The full Markdown expertise document | A tool result, or a hidden user message | On demand only |
+| Path | What it carries | Where it lands | When |
+|------|-----------------|----------------|------|
+| **Discovery** | Skill names, scopes, descriptions, and enabled state | A `list_skills` tool result | When the model asks what is available |
+| **Body** | The full Markdown expertise document | A `use_skill` tool result or hidden user message | When explicitly loaded or mentioned |
 
-The catalog is cheap and always present: it tells the model what expertise
-exists without paying for the full text. The body is expensive and loaded only
-when a skill is actually relevant. This is why a skills index can list dozens of
-skills in the system prompt at near-zero cost, while their full bodies never
-enter context until invoked.
-
-Each round the harness rebuilds the system message from the live mode, pursuit,
-tool list, and skills catalog. The catalog is the only skills-related content
-that lives in the system prompt; everything else is delivered as a round-scoped
-message.
+The system prompt carries neither metadata nor skill bodies. Discovery is
+delegated to the tool surface, avoiding a repeated catalog cost on every
+provider request. Bodies remain lazy and are cached after their first load.
 
 ## Sources and priority
 
@@ -41,24 +33,17 @@ lower-priority scope when two skills share a name.
 
 | Scope | Source | Priority |
 |-------|--------|----------|
-| **System** | Bundled skills, compile-time-embedded into the binary (never on disk) | Lowest |
-| **Remote** | Skill repositories fetched from `[skills] urls` and cached locally | |
+| **Remote** | Skill repositories fetched from `[skills] urls` and cached locally | Lowest |
 | **User** | User-global skills: the XDG data dir, plus external application conventions (`~/.agents/skills/`, `~/.claude/skills/`) | |
 | **Extra** | Extra paths configured under `[skills] paths` | |
 | **Repo** | Project-local skills in the project working tree (`.neenee/skills/`, `.agents/skills/`, `.claude/skills/`) | Highest |
 
 The intent of the cascade is that the most specific source wins: a skill
 checked into a project overrides a user-global skill with the same name, which
-in round overrides a bundled one. Bundled skills sit at the bottom so that
-anything a user or project defines always takes precedence over what ships with
-neenee.
+in turn overrides a remote one.
 
 Two design notes worth calling out:
 
-- **Bundled skills are embedded, not installed.** They are baked into the
-  binary at build time and have no on-disk location. This avoids writing
-  read-only shipped data into a user-writable tree and needs no install or sync
-  step. See [ADR-0013](../../adr/0013-skills-xdg-paths-and-bundled-embed.md).
 - **External directories are read-only.** `~/.agents/skills/` and
   `~/.claude/skills/` (and their project-local `.agents/skills/`,
   `.claude/skills/` counterparts) are other tools' conventions. neenee reads
@@ -91,8 +76,7 @@ its name is derived from the directory.
 
 ## How a skill is invoked
 
-There are two paths from "the catalog mentions a skill" to "the body is in
-context", and they differ only in the message shape they produce:
+There are two paths from identifying a skill to placing its body in context:
 
 1. **Explicit — `use_skill`.** The model calls the `use_skill` tool with a
    skill name. The tool looks up the skill, returns its body as a tool result,
@@ -105,29 +89,28 @@ context", and they differ only in the message shape they produce:
 2. **Implicit — mention detection.** Before a round runs, the harness scans the
    latest visible user message for skill mentions. A mention is one of:
    - an `@skill-name` reference,
-   - a `skill://skill-name` URI,
-   - the plain skill name as a standalone token (exact match; substrings do not
-     count, so a skill named `rust` is not triggered by `rust-expert`).
+   - a `skill://skill-name` or source-path URI.
 
    Each mentioned skill whose policy allows implicit invocation is loaded as a
    **hidden user message** carrying the same `[Skill '<name>' loaded]` marker
    the explicit path uses. Hidden means it steers the model but is not rendered
-   as part of the visible transcript. Already-loaded skills are not re-injected.
+   as part of the visible transcript. A plain name occurrence is deliberately
+   ignored because common words would otherwise pull large bodies into context
+   accidentally. Already implicitly loaded skills are not re-injected.
 
-Because both paths emit the same marker, implicit loading de-duplicates against
-explicit loading: if the model already called `use_skill('foo')`, mentioning
-`foo` later in the same round does not inject it a second time.
+Both paths emit the same marker, so persisted context remains auditable even
+though one path is a tool result and the other is harness-authored user context.
 
 ## Policy and enabled state
 
 Two flags govern visibility:
 
-- **`enabled`** (default true). A disabled skill is dropped from the catalog
-  and is never auto-loaded on mention. It can still be requested explicitly via
-  `use_skill`, which lets the model surface it and explain why it is inactive.
-  Skills can be disabled through configuration (`[skills] disable`).
-- **`allow_implicit_invocation`** (default true). When false, the skill appears
-  in the catalog and responds to `use_skill`, but mention detection skips it.
+- **`enabled`** (default true). A disabled skill remains visible through
+  `list_skills` with its disabled state and is never auto-loaded on mention. It
+  can still be requested explicitly via `use_skill`. Skills can be disabled
+  through configuration (`[skills] disable`).
+- **`allow_implicit_invocation`** (default true). When false, the skill remains
+  discoverable and responds to `use_skill`, but mention detection skips it.
   Use this for skills that should only be loaded deliberately.
 
 A skill participates in implicit invocation only when it is both enabled and
@@ -142,16 +125,16 @@ is also bound to the `r` key in the `/skills` modal.)
 
 ## Decision history
 
-- [ADR-0013](../../adr/0013-skills-xdg-paths-and-bundled-embed.md) — XDG paths
-  for user skills/commands and compile-time-embedded bundled skills.
+- [ADR-0058](../../adr/0058-remove-bundled-skill-tier.md) — retain XDG skill
+  paths while removing the unused bundled-system tier.
 - [ADR-0014](../../adr/0014-xdg-persistence-architecture.md) — the unified XDG
   persistence architecture that all skill paths resolve through.
 
 ## Adjacent layers
 
 Skills are an **extension surface** of the harness, alongside MCP servers (which
-add tools, not instructions). The harness refreshes the skills catalog when it
-rebuilds the system prompt each round; see [Harness
-architecture](harness.md). Skill invocation is a special case of a tool turn,
-so [Tool rounds](rounds-and-turns.md) describes the execution path an explicit
-`use_skill` call takes.
+add tools, not instructions). Skill discovery and explicit loading use the tool
+surface; implicit loading enters through model-context preparation. See
+[Prompt and message assembly](prompt-assembly.md). Skill invocation is a
+special case of a tool turn, so [Tool rounds](rounds-and-turns.md) describes the
+execution path an explicit `use_skill` call takes.

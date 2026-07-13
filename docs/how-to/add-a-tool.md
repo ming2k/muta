@@ -8,9 +8,11 @@ to call tools, see [Tool rounds](../explanation/agent-design/rounds-and-turns.md
 Most built-in tools live in the `neenee-tools` crate. Pick the module that
 matches the tool's domain: filesystem and web tools go in
 `crates/neenee-tools/src/lib.rs`, project scaffolding tools go in
-`crates/neenee-tools/src/project.rs`, MCP integration lives in
-`crates/neenee-tools/src/mcp.rs`. `use_skill` and `envoy` are the exceptions —
-they live in `crates/neenee-agent/src/` because they need orchestration state.
+`crates/neenee-tools/src/project.rs`, MCP adapters live in `crates/neenee-mcp`,
+and skill tools live in `crates/neenee-skills`. `envoy` is the exception: it
+lives in `crates/neenee-agent/src/` because it constructs agents.
+Todo tools still live in `neenee-tools`: the agent's private integration module
+injects their agent-owned state through `TodoToolContext`.
 
 ## Implement the `Tool` trait
 
@@ -180,30 +182,39 @@ narrow.
 
 ## Register the tool
 
-Add the tool to the literal registry in `crates/neenee-code/src/main.rs` (the
-`let mut tools: Vec<Arc<dyn neenee_core::Tool>> = vec![ … ]` block),
-preserving the existing order (write tools first, then read tools, then
-`use_skill`, then MCP extension).
+Register a context-free tool beside its implementation. The application
+collects these submissions through `inventory`, so no central tool list needs
+editing.
 
 ```rust
-let mut tools: Vec<Arc<dyn neenee_core::Tool>> = vec![
-    Arc::new(BashTool),
-    Arc::new(ReadFileTool),
-    // ...
-    Arc::new(CountLinesTool),  // new
-];
+neenee_core::register_tool!(CountLinesFactory => CountLinesTool);
 ```
 
-Tools added before `tools.extend(mcp.tools)` are visible to the `envoy`
-envoy, which snapshots the assembled toolset at construction and then
-admits tools via the bound `EXPLORE` profile
-(`crates/neenee-core/src/envoy.rs`). Admission is by capability axis, not
-position: a tool is envoy-callable when `ToolPolicy::admits` accepts it —
-`access() == Read`, not `requires_user()`, and not `spawns_envoy()`. Tools
-added after that line (the dispatch tool itself, the history tool) are not in
-the snapshot at all. Place new read-only, non-interactive tools before the MCP
-extension to make them envoy-callable; write tools and `requires_user()`
-tools are excluded by the profile regardless of where they sit. See
+If a tool needs runtime services, use the context-aware macro form and return
+`None` when the service is unavailable. A tool that needs state created inside
+the agent still belongs in `neenee-tools` when it only consumes that state;
+construct it in `neenee-agent::tool_integration` so every agent lifecycle gets
+the same binding. Tools that create or control agents remain in
+`neenee-agent`.
+
+An embedding can add a runtime-selected or product-specific tool while
+constructing an agent:
+
+```rust
+let agent = Agent::builder(provider, tools, identity)
+    .with_tool(Arc::new(MyProductTool::new(service)))
+    .with_skills(skills)
+    .build();
+```
+
+Use `with_tools` for an iterator. Agent-owned tool identities take precedence
+over caller-supplied tools with the same name and variant, so an embedding
+cannot accidentally detach `todo` from that agent's state.
+
+Tools collected before `EnvoyTool` construction are available for its
+snapshot. Admission is by capability axis: read-only, non-interactive tools
+can enter the `EXPLORE` profile, while write tools and user-interactive tools
+are excluded. See
 [Envoys → Tool admission](../explanation/agent-design/envoys.md#tool-admission)
 and [ADR-0011](../adr/0011-subagent-profiles.md).
 
@@ -225,8 +236,8 @@ Then exercise the tool manually:
    result.
 4. Switch to `GoogleProvider` (`GeminiNative`) and repeat to confirm a second
    native tool-call wire format works.
-5. Switch to `LlamaServerProvider`, or another provider that omits
-   `prepare_tools`, and repeat. The model should emit the universal fallback
+5. Switch to a provider that omits `prepare_tools` (e.g. a `MockProvider`
+   test adapter), and repeat. The model should emit the universal fallback
    JSON and the tool should still execute through `parse_tool_call`.
 
 If the tool is `Write`, also confirm the permission modal appears on first

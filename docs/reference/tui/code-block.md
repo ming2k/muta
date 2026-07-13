@@ -14,8 +14,8 @@ Fenced code in the transcript.
 | Attribute | Value |
 |-----------|-------|
 | Accent bar | `┃` in `accent` at column 2 (2-char indent) |
-| Background | `code_bg` (22, 24, 35) full-width band |
-| Text color | `code_fg` (148, 226, 213) |
+| Background | `code_bg` (17, 19, 18) full-width band |
+| Text color | `code_fg` (166, 178, 163) |
 | Line-number gutter | Right-aligned, min width 2, `dim_fg` |
 | Language label | Own dim line under the `┃` bar |
 

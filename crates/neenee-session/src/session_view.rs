@@ -6,10 +6,10 @@
 
 use neenee_agent::Agent;
 use neenee_agent::catalog;
-use neenee_agent::skills::SkillRegistry;
 use neenee_core::{
     McpConnectionStatus, McpServerInfo, Message, ModelInfo, SessionContextSnapshot, SessionOverview,
 };
+use neenee_skills::SkillRegistry;
 use neenee_store::{config::Config, session::SessionStore};
 
 /// Resume a session by id (or the active one when `id` is `None`). The session

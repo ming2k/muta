@@ -16,12 +16,12 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc};
 
 use neenee_core::{
     AgentRequest, AgentResponse, ChannelAuth, ImagePart, ParentStatus, PermissionRequest,
-    ProviderPickerSnapshot, Pursuit, Role, SessionOverview, TodoList,
+    ProviderPickerSnapshot, Pursuit, SessionOverview, TodoList,
 };
 
 use crate::tui::completion::{CompletionItemKind, PathScan};
 use crate::tui::composer_attachments;
-use crate::tui::document::{DeliveryStatus, TranscriptMessage};
+use crate::tui::document::TranscriptMessage;
 use crate::tui::event_loop::resolve_focused_mut;
 use crate::tui::fuzzy;
 use crate::tui::layout::{InteractiveTarget, LayoutMap, ModalHitMap};
@@ -35,24 +35,39 @@ use crate::tui::{ActivityTab, Modal};
 
 use std::collections::{HashMap, VecDeque};
 
-/// A user message staged in the send queue, waiting for the in-flight turn
-/// to finish before it is dispatched to the agent.
-///
-/// The queue is the single source of truth for *what* to send when the
-/// harness returns to idle; the matching visual marker lives on the
-/// [`TranscriptMessage`] (carrying [`crate::tui::document::DeliveryStatus::Queued`]).
-/// The two are kept in sync by the event loop:
-///
-/// - Send-while-busy pushes one of these **and** a queued transcript message.
-/// - Idle dispatch pops the front of this queue **and** flips the first
-///   queued transcript message to `Delivered`.
-/// - Up-arrow recall pops the back of this queue **and** removes the last
-///   queued transcript message.
-///
-/// FIFO dispatch + LIFO recall never collide because both pop directions
-/// match the corresponding transcript message in transcript order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendTarget {
+    /// Admit at the next safe model/tool boundary of the running round.
+    Insert,
+    /// Wait for the running round to finish naturally, then start a new one.
+    NextRound,
+}
+
+impl SendTarget {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Insert => Self::NextRound,
+            Self::NextRound => Self::Insert,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedDispatchState {
+    Waiting,
+    Cancelling,
+    Dispatching,
+}
+
+/// A user message owned by the compact outbox. It is intentionally absent
+/// from the transcript until the harness admits or dispatches it, so pending
+/// state never scrolls away or masquerades as conversation history.
 #[derive(Debug, Clone)]
 pub struct QueuedDispatch {
+    pub id: String,
+    pub session_id: String,
+    pub target: SendTarget,
+    pub state: QueuedDispatchState,
     /// The user's literal prompt text, sent verbatim to the agent on dispatch.
     pub text: String,
     /// Pasted images staged for this message (Ctrl+V). Empty for plain text.
@@ -61,6 +76,11 @@ pub struct QueuedDispatch {
     /// chips inside `text`. Empty for plain-text drafts. Order matches the
     /// chip numbering, so the Nth chip expands to `pending_text_pastes[N-1]`.
     pub text_pastes: Vec<String>,
+}
+
+pub enum RecallQueued {
+    Restored(QueuedDispatch),
+    CancelInsert { input_id: String },
 }
 
 /// Which surface owns the terminal cursor right now — the single source of
@@ -175,8 +195,8 @@ pub struct App {
     pub context_tokens: Option<neenee_core::ContextTokenSnapshot>,
     /// Scroll offset of the TokenReport modal body.
     pub token_report_scroll: usize,
-    /// `true` when the TokenReport modal is drilled into a single provider/model
-    /// detail (per-round line items + cache efficiency); `false` = the bill list.
+    /// `true` when the TokenReport modal is drilled into one turn's model-round
+    /// usage; `false` when it shows the session's turn list.
     pub token_report_detail: bool,
     /// Screen rect of the `todos d/t` segment on the activity bar, so a click
     /// on it opens the Activity modal directly on the Todos section. `None`
@@ -413,13 +433,18 @@ pub struct App {
     /// the matching chip in the input is just a short label so the input
     /// box stays compact. Order matches the chip numbering.
     pub pending_text_pastes: Vec<String>,
-    /// FIFO of user messages staged while a turn was in flight. Each entry
-    /// has a matching [`TranscriptMessage`] carrying
-    /// [`crate::tui::document::DeliveryStatus::Queued`] in [`App::messages`].
-    /// The event loop drains the front whenever the harness returns to idle,
-    /// and the Up-arrow handler pops the back to recall the most-recent
-    /// queued draft for editing. See [`QueuedDispatch`] for the sync rules.
+    /// Session-affine compact outbox. Pending items are never appended to the
+    /// transcript; the footer shows counts and ↑ recalls the newest item.
     pub pending_dispatch: VecDeque<QueuedDispatch>,
+    /// Target used by the next busy Enter. It resets to `Insert` after send;
+    /// Tab is therefore a one-message modifier for the less-common path.
+    pub send_target: SendTarget,
+    /// Sessions whose last interactive round reached its natural completion
+    /// event and whose harness has subsequently reported idle. Both facts are
+    /// tracked separately so errors/interrupts never auto-run follow-ups.
+    pub naturally_completed_sessions: std::collections::HashSet<String>,
+    pub idle_sessions: std::collections::HashSet<String>,
+    pub running_sessions: std::collections::HashSet<String>,
     /// Semantic selection state.
     pub selection: SelectionState,
     /// Drag gesture state.
@@ -733,35 +758,77 @@ impl App {
         self.input = new_input;
     }
 
-    /// Replace every `[Pasted text #N +M lines]` chip in `text` with the
-    /// matching staged full paste, leaving image chips in place as
-    /// positional labels for the model. Used at submit time so the agent
-    /// receives the real paste contents instead of the chip label.
-    /// Recall the most-recently-queued message: pop it off the back of the
-    /// send queue (LIFO undo), remove its visual marker from the shared
-    /// transcript, and load its text + any pasted images back into the
-    /// composer so the user can edit and resend.
-    ///
-    /// `messages` is the shared transcript (the event loop's
-    /// `runtime.messages`, already locked). Passed in by the caller so the
-    /// lock scope stays explicit and the recall logic is unit-testable
-    /// against a plain `Vec`.
-    ///
-    /// Returns `true` if a queued entry was actually recalled; `false` if
-    /// the queue was empty (no-op).
-    pub fn recall_queued(&mut self, messages: &mut Vec<TranscriptMessage>) -> bool {
-        let Some(dispatch) = self.pending_dispatch.pop_back() else {
-            return false;
-        };
-        // Drop the matching visual marker. The queue's back pairs with the
-        // last transcript message still carrying `DeliveryStatus::Queued`,
-        // so rposition is the correct match.
-        if let Some(pos) = messages
+    pub fn pending_counts(&self, session_id: &str) -> (usize, usize) {
+        self.pending_dispatch
             .iter()
-            .rposition(|m| m.role == Role::User && m.delivery == DeliveryStatus::Queued)
+            .filter(|item| item.session_id == session_id)
+            .fold((0, 0), |(insert, next), item| match item.target {
+                SendTarget::Insert => (insert + 1, next),
+                SendTarget::NextRound => (insert, next + 1),
+            })
+    }
+
+    pub fn remove_dispatch(&mut self, session_id: &str, input_id: &str) -> Option<QueuedDispatch> {
+        let position = self
+            .pending_dispatch
+            .iter()
+            .position(|item| item.session_id == session_id && item.id == input_id)?;
+        self.pending_dispatch.remove(position)
+    }
+
+    pub fn promote_to_next_round(&mut self, session_id: &str, input_id: &str) {
+        if let Some(item) = self
+            .pending_dispatch
+            .iter_mut()
+            .find(|item| item.session_id == session_id && item.id == input_id)
         {
-            messages.remove(pos);
+            item.target = SendTarget::NextRound;
+            item.state = QueuedDispatchState::Waiting;
         }
+    }
+
+    pub fn cancel_failed(&mut self, session_id: &str, input_id: &str) {
+        if let Some(item) = self
+            .pending_dispatch
+            .iter_mut()
+            .find(|item| item.session_id == session_id && item.id == input_id)
+        {
+            item.state = QueuedDispatchState::Waiting;
+        }
+    }
+
+    /// FIFO next-round dispatch within one session. The entry remains in the
+    /// outbox until its fresh round has actually started; route failure can
+    /// therefore return it to `Waiting` without reconstructing user content.
+    pub fn begin_next_round_dispatch(&mut self, session_id: &str) -> Option<QueuedDispatch> {
+        let item = self.pending_dispatch.iter_mut().find(|item| {
+            item.session_id == session_id
+                && item.target == SendTarget::NextRound
+                && item.state == QueuedDispatchState::Waiting
+        })?;
+        item.state = QueuedDispatchState::Dispatching;
+        Some(item.clone())
+    }
+
+    /// LIFO undo for the viewed session. Next-round items can be restored
+    /// immediately; inserts first ask the agent to cancel and are restored
+    /// only after the authoritative cancellation event wins the race.
+    pub fn recall_queued(&mut self, session_id: &str) -> Option<RecallQueued> {
+        let position = self.pending_dispatch.iter().rposition(|item| {
+            item.session_id == session_id && item.state == QueuedDispatchState::Waiting
+        })?;
+        if self.pending_dispatch[position].target == SendTarget::Insert {
+            self.pending_dispatch[position].state = QueuedDispatchState::Cancelling;
+            return Some(RecallQueued::CancelInsert {
+                input_id: self.pending_dispatch[position].id.clone(),
+            });
+        }
+        self.pending_dispatch
+            .remove(position)
+            .map(RecallQueued::Restored)
+    }
+
+    pub fn restore_dispatch(&mut self, dispatch: QueuedDispatch) {
         self.input = dispatch.text;
         self.set_cursor_end();
         if !dispatch.images.is_empty() {
@@ -778,7 +845,6 @@ impl App {
         // popup until the next real edit (InsertChar/Backspace clears it).
         self.suggestion_index = None;
         self.completion_dismissed = true;
-        true
     }
 
     /// Splice the `idx`-th live completion's label into [`App::input`] over

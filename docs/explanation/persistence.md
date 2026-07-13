@@ -96,10 +96,6 @@ Two categories of file deliberately live outside XDG:
   `~/.agents/skills/`, `~/.claude/skills/`
   because those are other tools' locations. neenee never writes to them.
 
-The bundled system skills are not on disk at all — they are
-compile-time-embedded into the binary. See
-[ADR-0013](../adr/0013-skills-xdg-paths-and-bundled-embed.md).
-
 ## Override precedence
 
 XDG categories answer *where*. The override stack answers *who decides*.

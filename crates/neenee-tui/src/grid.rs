@@ -198,12 +198,24 @@ impl Grid {
 
         for piece in graphemes(text) {
             let grapheme = piece.text;
-            if grapheme == "\n" {
+            // Unicode segmentation treats CRLF as one grapheme. Accept it as
+            // the same structural hard break as LF, even though document
+            // inputs normally normalize the CR away before reaching the grid.
+            if grapheme == "\n" || grapheme == "\r\n" {
                 cy = match cy.checked_add(1) {
                     Some(next) if next < self.height => next,
                     _ => break,
                 };
                 cx = 0;
+                continue;
+            }
+            // The backend must never print payload-owned terminal controls.
+            // A missed sanitizer on an HTTP/tool/error path would otherwise
+            // let CR, ESC, backspace, or tabs mutate the real cursor without
+            // mutating our retained cursor model, producing cross-frame
+            // overlays and stale cells. Newlines are handled structurally
+            // above; every other control grapheme is non-rendering.
+            if grapheme.chars().any(char::is_control) {
                 continue;
             }
             let w = grapheme_width(grapheme);
@@ -490,6 +502,24 @@ mod tests {
         assert_eq!(g.get(1, 0).unwrap().symbol, "b");
         assert_eq!(g.get(0, 1).unwrap().symbol, "c");
         assert_eq!(g.get(1, 1).unwrap().symbol, "d");
+    }
+
+    #[test]
+    fn put_treats_crlf_as_a_break_and_drops_terminal_controls() {
+        let mut g = Grid::new(8, 2);
+        g.put(0, 0, Fit::Clip, Style::default(), "ab\r\ncd\x1b[2J\u{8}\te");
+
+        assert_eq!(g.get(0, 0).unwrap().symbol, "a");
+        assert_eq!(g.get(1, 0).unwrap().symbol, "b");
+        let second_row: String = (0..7)
+            .map(|x| g.get(x, 1).unwrap().symbol.as_str())
+            .collect();
+        assert_eq!(second_row, "cd[2Je ");
+        assert!(
+            g.content
+                .iter()
+                .all(|cell| { !cell.symbol.chars().any(char::is_control) })
+        );
     }
 
     #[test]

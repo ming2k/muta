@@ -17,7 +17,6 @@ use neenee_core::{EnvoyProfile, Tool};
 use serde_json::json;
 
 use crate::agent::{Agent, EnvoyHandle};
-use crate::skills::SkillRegistry;
 
 /// Live envoy handles keyed by the parent tool-call id — the lookup table
 /// that lets the harness route a down-direction reply (a permission decision
@@ -325,12 +324,7 @@ impl EnvoyTool {
         // persona/mission framing for this role (e.g. EXPLORE's research
         // framing). `from_persona` injects it verbatim as the preamble.
         let identity = crate::AgentIdentity::from_persona(self.profile.system_prompt);
-        let envoy = Arc::new(Agent::new(
-            self.provider.clone(),
-            sub_tools,
-            SkillRegistry::empty(),
-            identity,
-        ));
+        let envoy = Arc::new(Agent::new(self.provider.clone(), sub_tools, identity));
         if let Some(accounting) = self
             .accounting
             .lock()
@@ -396,20 +390,20 @@ impl EnvoyTool {
 
         // The envoy's transcript opens with just the task as the user
         // message. The head system message is rebuilt every round by
-        // `prepare_turn_messages` from the profile persona (carried via
+        // `prepare_request_messages` from the profile persona (carried via
         // `AgentIdentity`, set above) composed with the mission-neutral
-        // sections (tone, todo) through the prompt registry — see ADR-0039.
+        // system-prompt policy — see ADR-0056.
         //
         // An earlier `Task: {description}` system message here was dead code:
-        // `ensure_system_prompt` replaces any leading system message on round
+        // `ensure_system_message` replaces any leading system message on round
         // 1, so it was clobbered before the first model request and the
         // persona (also vying for index 0) was what actually reached the
         // model. Dropping it makes the single-message path honest. The task
         // itself is the user message; `description` remains a required label
         // arg (validated above) for the parent / TUI.
-        let mut messages = vec![neenee_core::Message::new(
-            neenee_core::Role::User,
-            prompt.to_string(),
+        let mut messages = vec![crate::model_context::visible_user(
+            neenee_core::InjectionKind::EnvoyTask,
+            prompt,
         )];
         // The envoy runs with its own (never-cancelled) token. When the
         // parent turn is interrupted, the parent's dispatch drops this future
@@ -674,9 +668,9 @@ mod tests {
     }
 
     /// Regression for ADR-0039 stage 3: the envoy's head system message is
-    /// the registry-composed persona + mission-neutral sections (tone, todo).
+    /// the registry-composed persona plus mission-neutral policy sections.
     /// The legacy `Task: {description}` system message was dead code —
-    /// `ensure_system_prompt` clobbered index 0 on round 1 — and has been
+    /// `ensure_system_message` clobbered index 0 on round 1 — and has been
     /// removed; the task lives in the user message alone.
     #[tokio::test]
     async fn envoy_head_system_message_has_no_dead_task_line() {
@@ -713,6 +707,13 @@ mod tests {
         // The task is the user message, untouched by the system assembly.
         assert_eq!(outcome.messages[1].role, neenee_core::Role::User);
         assert_eq!(outcome.messages[1].content, "where are the handlers?");
+        assert_eq!(
+            outcome.messages[1]
+                .origin
+                .as_ref()
+                .map(|origin| origin.kind),
+            Some(neenee_core::InjectionKind::EnvoyTask)
+        );
     }
 
     #[tokio::test]

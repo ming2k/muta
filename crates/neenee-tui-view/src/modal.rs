@@ -117,10 +117,10 @@ pub enum Modal {
     /// status. Opened by clicking the activity bar. The body scrolls via
     /// `App::activity_scroll`.
     Activity,
-    /// Token-source report: a read-only breakdown of how many tokens each
-    /// provider+model reported authoritatively (upstream `usage`) vs. how many
-    /// were filled in by the local char-class estimator. Opened by clicking
-    /// the context meter in the hint bar. Esc / outside-click closes.
+    /// Context-usage report: current AI-visible context plus request totals by
+    /// user turn, with a model-round drill-down. Value styling distinguishes
+    /// provider-reported counts from local estimates. Opened by clicking the
+    /// context meter in the hint bar. Esc / outside-click closes.
     TokenReport,
     /// Interactive-input injection panel (L3.5 β): shown when a `bash` command
     /// is classified interactive and the agent cannot supply its own input.

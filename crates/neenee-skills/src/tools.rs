@@ -1,8 +1,8 @@
 //! Tools for interacting with the skill registry.
 
 use super::SkillRegistry;
-use crate::Tool;
 use async_trait::async_trait;
+use neenee_core::Tool;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -140,7 +140,7 @@ neenee_core::register_tool!(ListSkillsFactory => |ctx| {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::skills::SkillRegistry;
+    use crate::SkillRegistry;
 
     #[tokio::test]
     async fn use_skill_returns_not_found_for_missing_skill() {

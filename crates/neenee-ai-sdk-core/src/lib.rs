@@ -8,6 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod endpoint;
+pub mod json;
 pub mod sse;
 
 pub use endpoint::{Endpoint, NEENEE_USER_AGENT, TurnState};
@@ -47,13 +48,46 @@ pub async fn ensure_success(
         return Ok(response);
     }
     let retry_after = retry_after_ms(response.headers());
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let body = response.text().await.unwrap_or_default();
-    let message = format!("{} HTTP {}: {}", provider, status, body);
+    let message = match http_error_body_detail(content_type.as_deref(), &body) {
+        Some(detail) => format!("{provider} HTTP {status}: {detail}"),
+        None => format!("{provider} HTTP {status}"),
+    };
     if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
         Err(retryable_error(message, retry_after))
     } else {
         Err(message)
     }
+}
+
+/// Keep structured provider diagnostics, but do not surface a reverse
+/// proxy's HTML error document as transcript content. Besides being noise,
+/// those pages commonly carry CRLF/control bytes and can be surprisingly
+/// large. The HTTP status already contains the useful gateway failure.
+fn http_error_body_detail(content_type: Option<&str>, body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let looks_html = content_type.is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/html"))
+    }) || {
+        let lower = trimmed
+            .chars()
+            .take(32)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        lower.starts_with("<!doctype html") || lower.starts_with("<html")
+    };
+    (!looks_html).then(|| body_preview(trimmed))
 }
 
 fn is_transient_io_kind(kind: std::io::ErrorKind) -> bool {
@@ -254,5 +288,24 @@ mod tests {
         let chars = "日".repeat(DECODE_ERROR_BODY_PREVIEW + 10);
         let preview = body_preview(&chars);
         assert!(!preview.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn http_error_body_hides_html_gateway_pages() {
+        let body = "<html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n</html>";
+        assert_eq!(
+            http_error_body_detail(Some("text/html; charset=utf-8"), body),
+            None
+        );
+        assert_eq!(http_error_body_detail(None, body), None);
+    }
+
+    #[test]
+    fn http_error_body_keeps_bounded_structured_diagnostics() {
+        let body = "{\"error\":{\"message\":\"rate limited\"}}\r\n";
+        assert_eq!(
+            http_error_body_detail(Some("application/json"), body),
+            Some("{\"error\":{\"message\":\"rate limited\"}}".to_string())
+        );
     }
 }

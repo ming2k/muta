@@ -35,9 +35,12 @@
 //! # Dependency posture
 //!
 //! `neenee-session` depends on `neenee-agent` (orchestration), `neenee-store`
-//! (persistence), `neenee-providers` + `neenee-tools` (concrete impls the
-//! session assembles), and `neenee-core` (vocabulary). It does **not** depend
-//! on `neenee-code` — frontends depend on this crate, never the reverse.
+//! (persistence), `neenee-providers`, `neenee-tools` (shell, project, and
+//! command services), `neenee-skills`, `neenee-mcp`, and `neenee-core`
+//! (vocabulary). It owns each live MCP runtime while the protocol remains in
+//! its dedicated crate. Agent-owned stateful tools are assembled inside
+//! `neenee-agent`. This crate does **not** depend on `neenee-code` — frontends
+//! depend on this crate, never the reverse.
 //!
 //! # Identity posture
 //!
@@ -59,8 +62,6 @@ pub mod handlers_provider;
 pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
-pub mod mcp_catalog;
-pub mod mcp_runtime;
 pub mod pursuits;
 pub mod registry;
 pub mod review;

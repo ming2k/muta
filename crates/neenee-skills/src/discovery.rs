@@ -1,7 +1,6 @@
-//! Skill discovery across project, user, configured, remote, and system sources.
+//! Skill discovery across project, user, configured, and remote sources.
 
 use super::SkillsConfig;
-use super::bundled;
 use super::metadata::{Skill, SkillScope, parse_skill_metadata};
 use super::remote::{cached_remote_roots, fetch_remote_repo};
 use neenee_store::paths;
@@ -25,25 +24,13 @@ pub struct DiscoveryResult {
 /// Discover all skills using the provided configuration.
 ///
 /// Sources are scanned from lowest to highest priority so that higher-priority
-/// skills override lower-priority skills with the same name. The bundled
-/// system skills (compile-time-embedded) are returned first; everything else
-/// is filesystem-derived.
+/// skills override lower-priority skills with the same name.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
     let mut result = DiscoveryResult::default();
     // name -> position in `result.skills`. Scanning runs lowest- to
     // highest-priority; `upsert_skill` makes the last claimant of a name win
     // while preserving the first-seen position for stable catalog ordering.
     let mut index: HashMap<String, usize> = HashMap::new();
-
-    // 0. Bundled system skills (compile-time embedded; lowest priority).
-    if config.bundled {
-        for mut skill in bundled::discover() {
-            if config.is_disabled(&skill.name) {
-                skill.enabled = false;
-            }
-            upsert_skill(&mut result.skills, &mut index, skill);
-        }
-    }
 
     for source in skill_sources(config).await {
         match source {
@@ -76,7 +63,7 @@ async fn skill_sources(config: &SkillsConfig) -> Vec<SkillSource> {
     let mut sources: Vec<SkillSource> = Vec::new();
     let dirs = paths::get();
 
-    // 1. Remote skill repositories (priority just above bundled system).
+    // 1. Remote skill repositories (lowest priority).
     //    When a fetch fails (network down, server error), fall back to the
     //    last successful download's cache so a transient outage never silently
     //    removes skills — the same cache-as-fallback pattern models.dev uses.

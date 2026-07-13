@@ -1,15 +1,15 @@
-use super::Pursuit;
+use neenee_core::Pursuit;
 
 pub fn continuation_prompt(pursuit: &Pursuit) -> String {
     render(
-        include_str!("prompts/continuation.md"),
+        include_str!("pursuit_prompts/continuation.md"),
         &TemplateValues::from(pursuit),
     )
 }
 
 pub fn objective_updated_prompt(pursuit: &Pursuit) -> String {
     render(
-        include_str!("prompts/objective_updated.md"),
+        include_str!("pursuit_prompts/objective_updated.md"),
         &TemplateValues::from(pursuit),
     )
 }

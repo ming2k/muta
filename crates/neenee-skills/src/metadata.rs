@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 /// scopes when two skills share the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkillScope {
-    /// Bundled system skills shipped with neenee (compile-time embedded).
-    System,
     /// Skills downloaded from a remote skill repository.
     Remote,
     /// User-global skills: XDG (`$XDG_DATA_HOME/neenee/skills`), external
@@ -26,11 +24,10 @@ impl SkillScope {
     /// Priority rank: higher numbers win.
     pub fn priority(self) -> u8 {
         match self {
-            SkillScope::System => 0,
-            SkillScope::Remote => 1,
-            SkillScope::User => 2,
-            SkillScope::Extra => 3,
-            SkillScope::Repo => 4,
+            SkillScope::Remote => 0,
+            SkillScope::User => 1,
+            SkillScope::Extra => 2,
+            SkillScope::Repo => 3,
         }
     }
 }
@@ -38,7 +35,6 @@ impl SkillScope {
 impl fmt::Display for SkillScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SkillScope::System => write!(f, "system"),
             SkillScope::Remote => write!(f, "remote"),
             SkillScope::User => write!(f, "user"),
             SkillScope::Extra => write!(f, "extra"),
@@ -115,7 +111,7 @@ impl Skill {
     ///
     /// The body is stripped of its YAML frontmatter and trimmed. Discovery
     /// leaves [`Skill::content`] empty deliberately; call this (typically via
-    /// [`SkillRegistry::body_for`](crate::skills::SkillRegistry), which caches
+    /// [`SkillRegistry::body_for`](crate::SkillRegistry), which caches
     /// the result) when the body is actually needed. For an in-memory/embedded
     /// skill whose `source` is not a real path, this returns `Ok(String::new())`.
     pub fn load_body(&self) -> Result<String, String> {
@@ -146,7 +142,7 @@ struct SkillFrontmatter {
 /// Parse a skill file's frontmatter into a [`Skill`] without reading its body.
 ///
 /// The body is loaded lazily on demand via [`Skill::load_body`] (typically
-/// through [`SkillRegistry::body_for`](crate::skills::SkillRegistry)) — so
+/// through [`SkillRegistry::body_for`](crate::SkillRegistry)) — so
 /// discovering a large catalog costs only the frontmatter reads, and body text
 /// enters memory only when a skill is actually used.
 ///

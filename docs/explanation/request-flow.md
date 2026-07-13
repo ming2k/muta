@@ -49,8 +49,8 @@ schemas:
 Providers with a different native contract convert the same cached schema set
 at the adapter boundary. `GoogleProvider` sends Gemini
 `functionDeclarations` instead of OpenAI `tools`/`tool_choice`.
-Providers with no native function calling, such as `LlamaServerProvider`, send
-no tool declaration and rely on the universal text fallback. See
+Providers with no native function calling send no tool declaration and rely
+on the universal text fallback. See
 [Tool rounds](agent-design/rounds-and-turns.md) for the fallback.
 
 Orphan `tool` messages whose `tool_call_id` has no matching preceding
@@ -144,7 +144,7 @@ The loop runs identically for interactive (streaming) and headless
 
 ```mermaid
 flowchart TD
-    A["prepare_tools"] --> C["prepare_turn_messages<br/>(rebuild system msg +<br/>load implicit skills)"]
+    A["prepare_tools"] --> C["prepare_request_messages<br/>(rebuild system msg +<br/>load implicit skills)"]
     C --> D["stream_chat_events"]
     D --> E["accumulate text / reasoning / tool_calls"]
     E --> F["push assistant message"]

@@ -80,7 +80,7 @@ mod tests {
             name: name.to_string(),
             description: "desc".to_string(),
             short_description: None,
-            scope: crate::skills::SkillScope::Repo,
+            scope: crate::SkillScope::Repo,
             source: PathBuf::from(format!("skills/{}/SKILL.md", name)),
             root: PathBuf::from(format!("skills/{}", name)),
             content: "body".to_string(),

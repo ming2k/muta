@@ -95,28 +95,29 @@ reasoning channel.
 neenee's provider adapters encode an opinionated mapping between the three
 layers:
 
-- **OpenAI-compatible registry presets** (`kimi-code`, `deepseek-v4-flash`,
-  `deepseek-v4-pro`, `zai-code`, plus the bespoke `openai` entry, all backed
-  by one shared OpenAI-compatible adapter) assume a runtime that fully
+- **OpenAI-compatible registry presets** (`kimi-code`, `zai-code`, plus the
+  catalog-built `openai`/`deepseek` multi-model entries, all backed by one
+  shared OpenAI-compatible adapter) assume a runtime that fully
   implements the OpenAI Chat Completions contract including `tools`,
   `tool_choice`, `reasoning_content`, and SSE tool-call deltas. The registry
   presets are pure data, so they inherit every capability from that one
   shared implementation.
+- **Anthropic** (`AnthropicMessagesProvider`) speaks the `/messages` wire
+  format with `x-api-key` auth; neenee converts the internal tool schema
+  into Anthropic `tools` and replays results as `tool_result` blocks.
 - **Gemini** (`GoogleProvider`) speaks a different request shape
   (`systemInstruction`, `model`/`user` roles, and
   `tools[].functionDeclarations`). neenee bridges Gemini's native
   function-calling API by converting the internal OpenAI-shaped tool schema
   into Gemini declarations, reading `functionCall` parts, and replaying tool
   results as `functionResponse` parts.
-- **LlamaServer** (`LlamaServerProvider`) targets an OpenAI-compatible
-  endpoint but does not implement `prepare_tools` or `stream_chat_events`.
-  The adapter treats the server as a text-only channel even when the
-  underlying runtime (typically vLLM) could accept `tools`. Tool calls
-  therefore fall through to the universal text protocol.
+- **ChatGPT Responses** (`ResponsesProvider`) speaks the OpenAI Responses
+  API (`/responses` endpoint, `response.*` SSE events) used by the ChatGPT
+  subscription backend.
 
-The practical consequence: Gemini and OpenAI-compatible providers can use
-native structured tool calls. On LlamaServer, or any future provider that
-omits native tool support, the model must emit
+The practical consequence: OpenAI-compatible, Anthropic, and Gemini providers
+can use native structured tool calls. On any provider that omits native tool
+support, the model must emit
 `{"tool": "<name>", "arguments": {…}}` as ordinary assistant text, which the
 client parses back into a tool call after the fact. See
 [Tool rounds](agent-design/rounds-and-turns.md) for the fallback mechanics.

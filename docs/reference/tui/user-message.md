@@ -12,7 +12,7 @@ Sent user prompts displayed in the transcript.
 
 | Attribute | Value |
 |-----------|-------|
-| Background | `user_panel_bg` (18, 20, 30) — dimmer than input |
+| Background | `user_panel_bg` (17, 22, 19) — dimmer than input |
 | Left/right margin | 2 cols of `app_bg` |
 | Accent bar | `┃` in `accent` at column 2 |
 | Text color | `text_muted` — signals "read-only, already sent" |
@@ -28,7 +28,7 @@ Character-level semantic selection — only the dragged substring gets
 
 | Property | User message | Input box |
 |----------|-------------|-----------|
-| Background | `user_panel_bg` (dimmer) | `panel_bg` (brighter) |
+| Background | `user_panel_bg` (dimmer) | `input_bg` (brighter) |
 | Text color | `text_muted` | `text` |
 | Editable | No | Yes |
 

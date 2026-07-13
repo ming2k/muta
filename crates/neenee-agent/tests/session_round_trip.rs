@@ -25,7 +25,6 @@ use neenee_agent::Agent;
 use neenee_agent::orchestration::{
     ContextProjectionSettings, RoundContext, RoundInput, execute_round,
 };
-use neenee_agent::skills::SkillRegistry;
 use neenee_core::Role;
 use neenee_providers::MockProvider;
 use neenee_store::session::SessionStore;
@@ -46,7 +45,6 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
     let agent = Arc::new(Agent::new(
         Arc::new(MockProvider),
         Vec::new(),
-        SkillRegistry::empty(),
         neenee_agent::AgentIdentity::default(),
     ));
     let (tx, _rx) = mpsc::unbounded_channel();
@@ -70,6 +68,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             retry_max_attempts: 1,
             retry_base_ms: 1,
             retry_max_ms: 1,
+            emit_round_completed: false,
         },
         RoundInput {
             prompt: prompt.to_string(),

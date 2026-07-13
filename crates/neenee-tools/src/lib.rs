@@ -1,15 +1,14 @@
-//! Built-in tools (filesystem, shell, web, ask-user).
+//! Built-in tools (filesystem, shell, web, ask-user, todo).
 //!
-//! Each tool lives in its own module and self-registers via
+//! Most tools self-register from their own module via
 //! [`neenee_core::register_tool!`] (collected by `inventory` at link time).
-//! The binary assembles concrete instances from the registry at startup;
-//! this crate does not enumerate them here. Shared helpers live in
-//! `helpers`, and pluggable web-search backends in `search`.
+//! The stateful todo tools are constructed by `neenee-agent` with their shared
+//! task-list context. Shared helpers live in `helpers`, and pluggable
+//! web-search backends in `search`.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod commands;
-pub mod mcp;
 pub mod project;
 pub mod search;
 mod ssrf;
@@ -23,6 +22,7 @@ mod helpers;
 mod list;
 mod read;
 mod read_image;
+mod todo;
 mod web;
 mod write;
 
@@ -36,6 +36,7 @@ pub use grep::GrepTool;
 pub use list::ListDirTool;
 pub use read::{ReadTextTerseTool, ReadTextTool};
 pub use read_image::ReadImageTool;
+pub use todo::{TodoToolContext, TodoUpdateTool, TodoWriteTool};
 pub(crate) use web::html_to_text;
 pub use web::{WebFetchTool, WebSearchTool};
 pub use write::WriteFileTool;
