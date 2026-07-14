@@ -9,9 +9,9 @@ on `/provider` (the picker) in `crates/neenee-code/src/main.rs`.
 
 Three capability surfaces matter for tool-using agents:
 
-- **Native tools** — the provider overrides `prepare_tools` and injects a
-  `tools` field into the request body. Without it, the agent falls back to
-  the universal text protocol.
+- **Native tools** — the adapter serializes the `tool_specs` carried by each
+  `ModelRequest` into its native request body. An adapter that ignores those
+  declarations uses the universal text protocol instead.
 - **Reasoning** — the provider reads `reasoning_content` from responses and
   emits `ProviderStreamEvent::ReasoningDelta`.
 - **Structured streaming** — the provider implements `stream_chat_events`

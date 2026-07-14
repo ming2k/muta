@@ -343,7 +343,7 @@ impl HookRegistry {
         };
         for outcome in self.fire(HookEventKind::SessionStart, None, &ctx).await {
             if let HookOutcome::Inject { context } = outcome {
-                messages.push(crate::model_context::hidden_user(
+                messages.push(crate::conversation_context::hidden_user(
                     InjectionKind::Hook(HookEventKind::SessionStart),
                     context,
                 ));

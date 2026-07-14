@@ -2295,7 +2295,11 @@ pub async fn summarize_with_provider(
     // entire frontend) forever. Two minutes is generous for a single
     // summarization response.
     const SUMMARIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-    let response = match tokio::time::timeout(SUMMARIZATION_TIMEOUT, provider.chat(messages)).await
+    let response = match tokio::time::timeout(
+        SUMMARIZATION_TIMEOUT,
+        provider.chat(neenee_core::ModelRequest::new(messages)),
+    )
+    .await
     {
         Ok(result) => result?,
         Err(_elapsed) => {
@@ -3741,12 +3745,12 @@ mod tests {
         struct FailingProvider;
         #[async_trait]
         impl Provider for FailingProvider {
-            async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+            async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
                 Err("boom".to_string())
             }
             async fn stream_chat(
                 &self,
-                _messages: Vec<Message>,
+                _request: neenee_core::ModelRequest,
             ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String>
             {
                 Err("boom".to_string())

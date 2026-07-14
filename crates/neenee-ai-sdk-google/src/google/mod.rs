@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Message, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_core::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
@@ -107,10 +107,6 @@ impl GoogleProvider {
 
 #[async_trait]
 impl Provider for GoogleProvider {
-    fn prepare_tools(&self, tools: &[std::sync::Arc<dyn neenee_core::Tool>]) {
-        self.turn.prepare(tools);
-    }
-
     fn provider_id(&self) -> String {
         self.endpoint.id.clone()
     }
@@ -166,7 +162,7 @@ impl Provider for GoogleProvider {
         Some(provider_meta)
     }
 
-    async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let client = reqwest::Client::new();
         let url = request::url(
             &self.endpoint.base_url,
@@ -175,15 +171,14 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = model_reasons(&self.endpoint.model);
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    tool_specs,
-                    include_thoughts,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                include_thoughts,
+            },
+        );
 
         let response = client
             .post(&url)
@@ -215,7 +210,7 @@ impl Provider for GoogleProvider {
 
     async fn stream_chat(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
         let url = request::stream_url(
@@ -225,15 +220,14 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = model_reasons(&self.endpoint.model);
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    tool_specs,
-                    include_thoughts,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                include_thoughts,
+            },
+        );
 
         let response = client
             .post(&url)
@@ -257,7 +251,7 @@ impl Provider for GoogleProvider {
 
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
         let url = request::stream_url(
@@ -267,15 +261,14 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = model_reasons(&self.endpoint.model);
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    tool_specs,
-                    include_thoughts,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                include_thoughts,
+            },
+        );
 
         let response = client
             .post(&url)

@@ -149,9 +149,9 @@ pub struct Agent {
     /// [`variant_selection`](Self::variant_selection).
     pub(crate) toolset: neenee_core::ToolSet,
     /// The active resolved view: exactly one variant per capability, for the
-    /// current model's [`variant_selection`](Self::variant_selection). Both advertising
-    /// (`visible_tools` → `prepare_tools`) and dispatch (`find` by name) read
-    /// this, so re-resolving it on a model/selection switch makes *both* the
+    /// current model's [`variant_selection`](Self::variant_selection). Both request
+    /// assembly (`visible_tools` → `ModelRequest`) and dispatch (`find` by name)
+    /// read this, so re-resolving it on a model/selection switch makes *both* the
     /// schema and the executed implementation track the chosen variant. Held
     /// behind a `RwLock` because it is swapped wholesale on selection change.
     resolved_tools: std::sync::RwLock<Vec<Arc<dyn Tool>>>,
@@ -161,7 +161,7 @@ pub struct Agent {
     /// collision policy, advertisement, and dispatch.
     dynamic_tools: Arc<crate::dynamic_tools::DynamicToolRegistry>,
     /// Session-level disabled-tool mask. Names here are hidden from the model
-    /// (their schemas are dropped before `prepare_tools`) and rejected at
+    /// (their schemas are omitted from `ModelRequest`) and rejected at
     /// dispatch, but the tool stays installed so it can be re-enabled without
     /// rebuilding the agent. Toggled from the session modal via
     /// `set_tool_enabled` / `ToggleTool`.
@@ -277,10 +277,9 @@ pub struct Agent {
     /// envoys, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the round boundary is a plain no-op there.
     round_persist: std::sync::Mutex<Option<RoundPersistFn>>,
-    /// Declarative system-prompt policy (ADR-0056). Seeded with the default
-    /// sections at construction and rebuilt before every provider request by
-    /// the [`crate::model_context`] funnel.
-    pub(crate) system_prompt_registry: crate::SystemPromptRegistry,
+    /// Request-scoped projector. The agent owns its lifecycle and supplies live
+    /// state snapshots; the assembler owns the pure window-to-request transform.
+    model_request_assembler: crate::model_request::ModelRequestAssembler,
     /// Per-model tool-variant selection (the **override** axis) for the
     /// *current* model: a `capability → variant_id` map. Seeded from
     /// `[tool_variants."<model-id>"]` config via
@@ -456,8 +455,8 @@ fn checkpoint_tool_signature(call: &ToolCall) -> String {
 /// Orchestration keeps this value across transient provider retries. A retry
 /// therefore resumes the exact provider request that failed while preserving
 /// completed tool results, loop-guard state, hook scope, accounting, and the
-/// steering inbox. `provider_request_pending` stays set until a complete,
-/// valid assistant response has been accepted; re-entry while it is set skips
+/// steering inbox. `pending_request` stays set until a complete, valid
+/// assistant response has been accepted; re-entry while it is set skips
 /// request preparation and round-start hooks so retrying cannot replay work
 /// that already happened at the request boundary.
 pub(crate) struct StreamingTurnState {
@@ -465,7 +464,7 @@ pub(crate) struct StreamingTurnState {
     tool_rounds: usize,
     inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
     started_at: std::time::Instant,
-    provider_request_pending: bool,
+    pending_request: Option<neenee_core::ModelRequest>,
     user_input_generation: Option<u64>,
 }
 
@@ -572,7 +571,7 @@ pub struct AgentBuilder {
     toolset: neenee_core::ToolSet,
     skills_registry: skills::SkillRegistry,
     identity: AgentIdentity,
-    system_prompt_registry: crate::SystemPromptRegistry,
+    model_request_assembler: crate::model_request::ModelRequestAssembler,
 }
 
 impl AgentBuilder {
@@ -586,7 +585,9 @@ impl AgentBuilder {
             toolset,
             skills_registry: skills::SkillRegistry::empty(),
             identity,
-            system_prompt_registry: crate::model_context::default_system_prompt_registry(),
+            model_request_assembler: crate::model_request::ModelRequestAssembler::new(
+                crate::model_request::default_system_prompt_registry(),
+            ),
         }
     }
 
@@ -619,7 +620,9 @@ impl AgentBuilder {
         mut self,
         section: S,
     ) -> Result<Self, crate::SystemPromptRegistryError> {
-        self.system_prompt_registry.try_register(section)?;
+        self.model_request_assembler
+            .registry_mut()
+            .try_register(section)?;
         Ok(self)
     }
 
@@ -628,7 +631,7 @@ impl AgentBuilder {
         mut self,
         id: &str,
     ) -> Result<Self, crate::SystemPromptRegistryError> {
-        self.system_prompt_registry.disable(id)?;
+        self.model_request_assembler.registry_mut().disable(id)?;
         Ok(self)
     }
 
@@ -638,24 +641,26 @@ impl AgentBuilder {
         id: &str,
         rank: u32,
     ) -> Result<Self, crate::SystemPromptRegistryError> {
-        self.system_prompt_registry.set_rank(id, rank)?;
+        self.model_request_assembler
+            .registry_mut()
+            .set_rank(id, rank)?;
         Ok(self)
     }
 
     /// Replace the default composition wholesale.
     pub fn with_system_prompt_registry(mut self, registry: crate::SystemPromptRegistry) -> Self {
-        self.system_prompt_registry = registry;
+        self.model_request_assembler.replace_registry(registry);
         self
     }
 
     /// Freeze the configuration and construct the agent.
     pub fn build(self) -> Agent {
-        Agent::from_toolset_with_system_prompt_registry(
+        Agent::from_toolset_with_model_request_assembler(
             self.provider,
             self.toolset,
             self.skills_registry,
             self.identity,
-            self.system_prompt_registry,
+            self.model_request_assembler,
         )
     }
 }
@@ -704,12 +709,12 @@ impl Agent {
         Self::builder_from_toolset(provider, toolset, identity).build()
     }
 
-    fn from_toolset_with_system_prompt_registry(
+    fn from_toolset_with_model_request_assembler(
         provider: Arc<dyn Provider>,
         toolset: neenee_core::ToolSet,
         skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
-        system_prompt_registry: crate::SystemPromptRegistry,
+        model_request_assembler: crate::model_request::ModelRequestAssembler,
     ) -> Self {
         let pursuit_state = crate::pursuit_state::PursuitState::new();
         let thread_id = Arc::new(std::sync::Mutex::new(None));
@@ -768,7 +773,7 @@ impl Agent {
             user_input_queue: std::sync::Mutex::new(None),
             identity,
             round_persist: std::sync::Mutex::new(None),
-            system_prompt_registry,
+            model_request_assembler,
             variant_selection: Arc::new(
                 std::sync::Mutex::new(neenee_core::VariantSelection::new()),
             ),
@@ -861,12 +866,35 @@ impl Agent {
         tools
     }
 
-    /// Estimate the complete next request at the same pre-wire choke point the
-    /// provider call uses. This keeps projection pressure tied to what the
-    /// model will actually receive instead of measuring durable history alone.
-    pub fn estimate_next_request_tokens(&self, messages: &[Message]) -> RequestTokenEstimate {
-        let mut prepared = messages.to_vec();
-        self.prepare_request_messages(&mut prepared);
+    /// Snapshot the live state available to declarative system-prompt policy.
+    fn system_prompt_context(&self, tools: &[Arc<dyn Tool>]) -> crate::SystemPromptContext {
+        let tool_names = tools.iter().map(|tool| tool.name().to_string()).collect();
+        let model_guidance = neenee_core::resolve_model(&self.provider.model()).model_guidance;
+        let provider_guidance = self.provider.prompt_hints().system_guidance;
+
+        crate::SystemPromptContext {
+            identity_preamble: self.identity.preamble(),
+            pursuit: self.get_pursuit(),
+            tool_names,
+            model_guidance,
+            provider_guidance,
+            unattended: self.get_unattended(),
+        }
+    }
+
+    /// Build one immutable provider request from a borrowed conversation window.
+    /// Implicit skill loading is evaluated on a private copy so estimates and
+    /// debug previews use the same projection without mutating durable state.
+    fn model_request(&self, messages: &[Message]) -> neenee_core::ModelRequest {
+        let mut enriched = messages.to_vec();
+        crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
+        let tools = self.visible_tools();
+        let context = self.system_prompt_context(&tools);
+        self.model_request_assembler
+            .assemble(&enriched, &context, &tools)
+    }
+
+    fn estimate_model_request(request: &neenee_core::ModelRequest) -> RequestTokenEstimate {
         // Use per-message wire weight here rather than `estimate_tokens`: the
         // latter intentionally includes persisted envoy children, while the
         // provider receives only the parent message's rendered result.
@@ -877,20 +905,18 @@ impl Agent {
                 .sum::<i64>()
                 .max(0) as usize
         };
-        let history = prepared
+        let history = request
+            .messages
             .iter()
             .filter(|message| message.role != Role::System)
             .cloned()
             .collect::<Vec<_>>();
         let history_tokens = message_tokens(&history);
-        let prepared_message_tokens = message_tokens(&prepared);
-        let tool_schema_tokens = self
-            .visible_tools()
+        let prepared_message_tokens = message_tokens(&request.messages);
+        let tool_schema_tokens = request
+            .tool_specs
             .iter()
-            .map(|tool| {
-                neenee_core::estimate_semantic_json_tokens(&tool.to_openai_function()).max(0)
-                    as usize
-            })
+            .map(|spec| neenee_core::estimate_semantic_json_tokens(spec).max(0) as usize)
             .sum::<usize>();
         let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
 
@@ -901,15 +927,21 @@ impl Agent {
         }
     }
 
+    /// Estimate the complete next request at the same immutable request
+    /// boundary the provider call uses.
+    pub fn estimate_next_request_tokens(&self, messages: &[Message]) -> RequestTokenEstimate {
+        Self::estimate_model_request(&self.model_request(messages))
+    }
+
     /// Dev-only dry run: rebuild the head system message and auto-load any
     /// skills mentioned in the latest visible user turn against a borrowed
-    /// message list, exactly as the next turn would (`prepare_request_messages`),
-    /// but with no provider call and no mutation of live turn history. Powers
+    /// message list, exactly as the next turn would, but with no provider call
+    /// and no mutation of live turn history. Powers
     /// the `/debug preview` so it captures the *real* request shape —
     /// including the freshly composed system prompt and injected skills —
     /// rather than a degenerate reconstruction.
     pub fn prepare_request_messages_debug(&self, messages: &mut Vec<Message>) {
-        self.prepare_request_messages(messages);
+        *messages = self.model_request(messages).messages;
     }
 
     /// A shared handle to this agent's live variant selection (the **override**
@@ -1701,8 +1733,10 @@ impl Agent {
 
         let admitted = inputs.len();
         for input in inputs {
-            let mut message =
-                crate::model_context::visible_user(InjectionKind::UserSteer, input.text.clone());
+            let mut message = crate::conversation_context::visible_user(
+                InjectionKind::UserSteer,
+                input.text.clone(),
+            );
             if let Some(display) = input.display_text.clone() {
                 message = message.with_display_content(display);
             }
@@ -1739,13 +1773,13 @@ impl Agent {
         while let Ok(op) = rx.try_recv() {
             match op {
                 AgentOp::InjectUserMessage(text) => {
-                    messages.push(crate::model_context::visible_user(
+                    messages.push(crate::conversation_context::visible_user(
                         InjectionKind::EnvoySteer,
                         text,
                     ));
                 }
                 AgentOp::InterAgentMessage { msg } => {
-                    messages.push(crate::model_context::hidden_user(
+                    messages.push(crate::conversation_context::hidden_user(
                         InjectionKind::InterAgent,
                         msg,
                     ));
@@ -2038,11 +2072,6 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        // Only enabled tools are advertised to the model: the disabled mask is
-        // applied here so a toggled-off tool's schema never reaches the
-        // provider, which keeps the model from naming it in the first place.
-        let visible = self.visible_tools();
-        self.provider.prepare_tools(&visible);
         let turn_start = std::time::Instant::now();
         let mut state = TurnState {
             guards: TurnState::guards_default(self.doom_guard_config()),
@@ -2078,14 +2107,15 @@ impl Agent {
                 self.fire_round_persist(messages).await?;
             }
 
-            self.prepare_request_messages(messages);
+            crate::conversation_context::inject_mentioned_skills(&self.skills_registry, messages);
             // RoundStart hooks (symmetric to the round-end Turn hooks): inject
             // any context at the top of this round's attention, before the
             // model is asked for its next completion. No-op without a
             // `[hooks]` config (envoys, tests).
             self.run_round_start_hooks(messages, &state, tool_rounds)
                 .await;
-            let request_projection = self.estimate_next_request_tokens(messages).total_tokens;
+            let request = self.model_request(messages);
+            let request_projection = Self::estimate_model_request(&request).total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
             let mut request_accounting = RequestAccountingGuard::begin(
@@ -2103,7 +2133,7 @@ impl Agent {
 
             let response = match tokio::time::timeout(
                 CHAT_RESPONSE_TIMEOUT,
-                self.provider.chat(messages.clone()),
+                self.provider.chat(request),
             )
             .await
             {
@@ -2164,7 +2194,7 @@ impl Agent {
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                messages.push(crate::model_context::hidden_user(kind, prompt));
+                messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
             let admitted = self.admit_user_inputs(
@@ -2232,7 +2262,7 @@ impl Agent {
                 .unwrap_or_else(|e| e.into_inner())
                 .take(),
             started_at: std::time::Instant::now(),
-            provider_request_pending: false,
+            pending_request: None,
             user_input_generation: self.user_input_generation(),
         }
     }
@@ -2253,22 +2283,16 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        // Only enabled tools are advertised to the model: the disabled mask is
-        // applied here so a toggled-off tool's schema never reaches the
-        // provider, which keeps the model from naming it in the first place.
-        let visible = self.visible_tools();
-        self.provider.prepare_tools(&visible);
-
         loop {
             if cancel.is_cancelled() {
                 return Err(HarnessError::Interrupted);
             }
 
-            let resuming_provider_request = turn.provider_request_pending;
+            let resuming_provider_request = turn.pending_request.is_some();
             if resuming_provider_request {
                 turn.state.protect_completed_tools_for_retry();
             }
-            if !turn.provider_request_pending {
+            if turn.pending_request.is_none() {
                 // Apply steering ops queued since the last round before
                 // preparing a new provider request. Replies bypass this (see
                 // `drain_inbox`). A transient retry deliberately skips this
@@ -2286,21 +2310,29 @@ impl Agent {
                     self.fire_round_persist(messages).await?;
                 }
 
-                self.prepare_request_messages(messages);
+                crate::conversation_context::inject_mentioned_skills(
+                    &self.skills_registry,
+                    messages,
+                );
                 // RoundStart hooks belong to a logical model round, not to
                 // each network attempt. Run them once before checkpointing the
                 // request so retries cannot duplicate injected context or hook
                 // side effects.
                 self.run_round_start_hooks(messages, &turn.state, turn.tool_rounds)
                     .await;
-                turn.provider_request_pending = true;
+                turn.pending_request = Some(self.model_request(messages));
             }
             tracing::debug!(
                 tool_round = turn.tool_rounds,
                 resumed = resuming_provider_request,
                 "requesting model completion"
             );
-            let request_projection = self.estimate_next_request_tokens(messages).total_tokens;
+            let Some(request) = turn.pending_request.as_ref() else {
+                return Err(HarnessError::from(
+                    "internal error: provider request was not assembled".to_string(),
+                ));
+            };
+            let request_projection = Self::estimate_model_request(request).total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
             let mut request_accounting = RequestAccountingGuard::begin(
@@ -2326,7 +2358,7 @@ impl Agent {
                 _ = cancel.cancelled() => return Err(HarnessError::Interrupted),
                 result = tokio::time::timeout(
                     STREAM_IDLE_TIMEOUT,
-                    self.provider.stream_chat_events(messages.clone()),
+                    self.provider.stream_chat_events(request.clone()),
                 ) => match result {
                     Ok(Ok(stream)) => stream,
                     Ok(Err(error)) => return Err(HarnessError::from(error)),
@@ -2484,7 +2516,7 @@ impl Agent {
             // The request checkpoint is consumed only after a complete,
             // valid response is available. Any earlier return leaves it set
             // so orchestration can retry this exact request.
-            turn.provider_request_pending = false;
+            turn.pending_request = None;
             self.book_turn_usage(
                 &mut turn.state,
                 &response,
@@ -2531,7 +2563,7 @@ impl Agent {
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                messages.push(crate::model_context::hidden_user(kind, prompt));
+                messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
             let admitted = self.admit_user_inputs(
@@ -2840,7 +2872,7 @@ impl Agent {
             // what to do instead. Non-terminating: the turn continues with the
             // (now masked) signatures hard-blocked for subsequent rounds.
             if let Some(message) = doom_message {
-                messages.push(crate::model_context::hidden_user(
+                messages.push(crate::conversation_context::hidden_user(
                     InjectionKind::LoopReviewNudge,
                     message,
                 ));
@@ -2996,7 +3028,7 @@ impl Agent {
                     .await;
             }
             if let Some(message) = doom_message {
-                messages.push(crate::model_context::hidden_user(
+                messages.push(crate::conversation_context::hidden_user(
                     InjectionKind::LoopReviewNudge,
                     message,
                 ));
@@ -3102,7 +3134,7 @@ impl Agent {
         // (OpenAI-compat) / `inline_data` (Gemini), letting the model see the
         // pixels. A short textual link ties the two messages together.
         if let ToolOutput::Image { mime, data } = result {
-            messages.push(crate::model_context::tool_image(
+            messages.push(crate::conversation_context::tool_image(
                 &call.name,
                 mime.clone(),
                 data.clone(),
@@ -3155,7 +3187,7 @@ impl Agent {
             InjectionKind::Hook(HookEventKind::PostToolUse)
         };
         for context in injected {
-            messages.push(crate::model_context::hidden_user(kind, context));
+            messages.push(crate::conversation_context::hidden_user(kind, context));
         }
     }
 
@@ -3198,7 +3230,7 @@ impl Agent {
             )
             .await;
         for context in side.injected {
-            messages.push(crate::model_context::hidden_user(
+            messages.push(crate::conversation_context::hidden_user(
                 InjectionKind::Hook(HookEventKind::Turn),
                 context,
             ));
@@ -3231,7 +3263,7 @@ impl Agent {
             )
             .await;
         for context in side.injected {
-            messages.push(crate::model_context::hidden_user(
+            messages.push(crate::conversation_context::hidden_user(
                 InjectionKind::Hook(HookEventKind::RoundStart),
                 context,
             ));
@@ -4022,9 +4054,8 @@ fn empty_response_error(response: &Message) -> HarnessError {
 
 /// Drop assistant messages that carry neither text nor a tool call — the model
 /// occasionally emits an empty assistant frame that would otherwise confuse
-/// the next provider request. Called from the shared
-/// [`Agent::prepare_request_messages`] prep funnel, which both turn loops route
-/// through (ADR-0039).
+/// the next provider request. Called by the shared request assembler, which
+/// both turn loops route through (ADR-0061).
 pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
     messages.retain(|message| message.role != Role::Assistant || valid_assistant_response(message));
 }

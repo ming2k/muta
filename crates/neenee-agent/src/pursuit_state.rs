@@ -143,7 +143,7 @@ impl PursuitState {
         if let Some(pursuit) = self.get()
             && !pursuit.is_complete
         {
-            messages.push(crate::model_context::hidden_user(
+            messages.push(crate::conversation_context::hidden_user(
                 neenee_core::InjectionKind::PursuitContinuation,
                 pursuit_prompts::continuation_prompt(&pursuit),
             ));
@@ -153,7 +153,7 @@ impl PursuitState {
     /// Append a hidden user message that informs the model the pursuit objective changed.
     pub fn inject_objective_updated(&self, messages: &mut Vec<neenee_core::Message>) {
         if let Some(pursuit) = self.get() {
-            messages.push(crate::model_context::hidden_user(
+            messages.push(crate::conversation_context::hidden_user(
                 neenee_core::InjectionKind::PursuitObjectiveUpdated,
                 pursuit_prompts::objective_updated_prompt(&pursuit),
             ));

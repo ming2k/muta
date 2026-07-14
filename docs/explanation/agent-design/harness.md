@@ -35,12 +35,12 @@ see [Provider capabilities](../provider-capabilities.md) and
 
 ### Declared: tools
 
-Tool schemas live inside the provider, not the conversation. Each round caches
-every tool's OpenAI function schema before any network work. Every HTTP
-request then re-injects the full cached set as the `tools` field with
-`tool_choice: "auto"`.
+Tool schemas live in the ephemeral model request, not the conversation. Each
+round snapshots the admitted tools together with the provider-visible
+messages before any network work. The adapter translates that same snapshot
+into its protocol's declaration field.
 
-Tool schemas are request-scoped. Every ReAct turn, including the turn that
+Tool schemas are request-scoped. Every ReAct round, including the round that
 carries tool results back upstream, sends the same complete schema set
 alongside the full message history. The provider is stateless across turns.
 
@@ -50,9 +50,9 @@ multi-model entries all share one adapter, so they inherit native tool
 declaration. The Anthropic adapter declares Anthropic-format `tools`; the
 Gemini adapter converts the same schema set into Gemini
 `functionDeclarations` and replays results as `functionResponse` parts.
-A provider that does not override `prepare_tools` never sends a `tools`
-field; tool calls on it travel only through the universal fallback
-below.
+A provider that does not serialize the supplied declarations never sends a
+native tools field; tool calls on it travel only through the universal
+fallback below.
 
 ### Observed: reasoning
 

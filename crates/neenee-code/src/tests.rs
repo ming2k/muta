@@ -71,20 +71,20 @@ fn registry_collects_all_self_registered_tools() {
 
 #[async_trait]
 impl Provider for RetryOnceProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -102,20 +102,20 @@ impl Provider for RetryOnceProvider {
 
 #[async_trait]
 impl Provider for PartialToolRetryProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -138,26 +138,26 @@ impl Provider for PartialToolRetryProvider {
 
 #[async_trait]
 impl Provider for ToolThenRetryProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
         self.requests
             .lock()
             .expect("request log lock poisoned")
-            .push(serde_json::to_string(&messages).expect("messages should serialize"));
+            .push(serde_json::to_string(&request.messages).expect("messages should serialize"));
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         match attempt {
             0 | 2 => Ok(Box::pin(stream::iter(vec![Ok(
@@ -180,20 +180,20 @@ impl Provider for ToolThenRetryProvider {
 
 #[async_trait]
 impl Provider for AlwaysRetryableProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
         // Every request fails with a retryable error so the turn exhausts
@@ -229,8 +229,10 @@ async fn proxy_provider_does_not_block_the_async_runtime() {
     let holder: Arc<RwLock<Arc<dyn Provider>>> = Arc::new(RwLock::new(Arc::new(MockProvider)));
     let proxy = ProxyProvider::new(holder);
 
-    proxy.prepare_tools(&[]);
-    let response = proxy.chat(Vec::new()).await.unwrap();
+    let response = proxy
+        .chat(neenee_core::ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
 
     assert!(response.content.contains("mock AI"));
 }

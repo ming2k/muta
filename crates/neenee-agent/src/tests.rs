@@ -17,13 +17,13 @@ struct StreamingReadTool(Arc<AtomicUsize>);
 
 #[async_trait]
 impl Provider for TestProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
@@ -31,13 +31,13 @@ impl Provider for TestProvider {
 
 #[async_trait]
 impl Provider for HintProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
@@ -51,7 +51,7 @@ impl Provider for HintProvider {
 
 #[async_trait]
 impl Provider for PermissionTestProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             Ok(Message {
                 role: Role::Assistant,
@@ -83,7 +83,7 @@ impl Provider for PermissionTestProvider {
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
@@ -91,20 +91,20 @@ impl Provider for PermissionTestProvider {
 
 #[async_trait]
 impl Provider for StreamingToolProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             vec![
@@ -381,7 +381,7 @@ fn pursuit_is_injected_into_system_prompt() {
     // Drive the real placement path: rebuild the head system message from
     // live agent state and read it back off the message list (ADR-0039).
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_message(&mut messages);
+    agent.prepare_request_messages_debug(&mut messages);
     let prompt = messages[0].content.clone();
 
     assert!(prompt.contains("ship the harness"));
@@ -396,7 +396,7 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
     );
 
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_message(&mut messages);
+    agent.prepare_request_messages_debug(&mut messages);
 
     assert!(messages[0].content.contains("Provider protocol hint."));
 }
@@ -404,9 +404,9 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
 /// Regression for ADR-0039 stage 6: the `/review` reviewer envoy's head
 /// system message must actually carry the review composition (REVIEW persona +
 /// registered dimensions + JSON contract). Previously the reviewer pre-seeded
-/// a system message that `ensure_system_message` clobbered on round 1, so none
-/// of it reached the model; the reviewer now carries a dedicated registry and
-/// `ensure_system_message` rebuilds the composition every round.
+/// a system message that request projection replaced on round 1, so none of it
+/// reached the model; the reviewer now carries a dedicated registry whose
+/// composition is assembled on every request.
 #[test]
 fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     use neenee_core::{REVIEW, Role};
@@ -417,7 +417,7 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
         Vec::new(),
         crate::AgentIdentity::default(),
     )
-    .with_system_prompt_registry(crate::model_context::reviewer_system_prompt_registry(
+    .with_system_prompt_registry(crate::model_request::reviewer_system_prompt_registry(
         &dimensions,
     ))
     .build();
@@ -425,7 +425,7 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     // Drive the same placement path the streaming loop uses: the registry
     // composes the head system message from the reviewer's sections.
     let mut messages: Vec<Message> = vec![Message::new(Role::User, "transcript snapshot")];
-    reviewer.ensure_system_message(&mut messages);
+    reviewer.prepare_request_messages_debug(&mut messages);
 
     let system = &messages[0];
     assert_eq!(system.role, Role::System);
@@ -466,7 +466,7 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     agent.set_pursuit(active_pursuit("ship the harness"));
 
     let mut messages: Vec<Message> = Vec::new();
-    agent.ensure_system_message(&mut messages);
+    agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
 
     // preamble \n\n persistence \n\n pursuit.
@@ -659,14 +659,13 @@ async fn round_persist_fires_at_each_tool_round_boundary() {
     assert_eq!(outcome.message.content, "done");
 
     // Exactly one boundary crossing (after round 0's tool result). The
-    // callback receives the full live history, which includes the
-    // `ensure_system_message` message at index 0: [system, user, assistant,
-    // tool_result] = 4. The final round (plain text, no tools) does not
-    // cross a boundary and must not fire the callback.
+    // callback receives the full live history: [user, assistant, tool_result]
+    // = 3. Request-scoped system policy is deliberately absent. The final
+    // round (plain text, no tools) does not cross a boundary and must not fire.
     let recorded = seen_lengths.lock().unwrap().clone();
     assert_eq!(
         recorded,
-        vec![4],
+        vec![3],
         "round persist fires once with the full history"
     );
 }
@@ -682,18 +681,18 @@ async fn stalled_provider_stream_times_out_as_retryable() {
     struct StalledStreamProvider;
     #[async_trait]
     impl Provider for StalledStreamProvider {
-        async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _messages: Vec<Message>,
+            _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _messages: Vec<Message>,
+            _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
@@ -721,18 +720,18 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     struct PendingProvider;
     #[async_trait]
     impl Provider for PendingProvider {
-        async fn chat(&self, _: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _: Vec<Message>,
+            _: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
         async fn stream_chat_events(
             &self,
-            _: Vec<Message>,
+            _: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
@@ -786,18 +785,18 @@ async fn stream_request_that_never_resolves_times_out() {
     struct PendingStreamProvider;
     #[async_trait]
     impl Provider for PendingStreamProvider {
-        async fn chat(&self, _: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _: Vec<Message>,
+            _: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             unreachable!("stream_chat_events should be called directly")
         }
         async fn stream_chat_events(
             &self,
-            _: Vec<Message>,
+            _: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             // Never resolves.
             pending().await
@@ -831,12 +830,12 @@ async fn non_streaming_chat_that_never_resolves_times_out() {
     struct PendingChatProvider;
     #[async_trait]
     impl Provider for PendingChatProvider {
-        async fn chat(&self, _: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
             pending().await
         }
         async fn stream_chat(
             &self,
-            _: Vec<Message>,
+            _: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
@@ -870,18 +869,18 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
     struct ReasoningOnlyProvider;
     #[async_trait]
     impl Provider for ReasoningOnlyProvider {
-        async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _messages: Vec<Message>,
+            _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _messages: Vec<Message>,
+            _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ReasoningDelta("let me think...".to_string()),
@@ -1154,20 +1153,20 @@ impl ScriptedProvider {
 
 #[async_trait]
 impl Provider for ScriptedProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("scripted provider is streaming-only".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         // A turn that runs past its script gets a terminal "done" so the
         // loop exits rather than hanging on a missing round.
@@ -1834,7 +1833,7 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
 #[tokio::test]
 async fn unattended_hides_ask_user_from_the_advertised_toolset() {
     // Under unattended, ask_user's schema must be dropped so the model cannot
-    // name it in the first place. `prepare_tools` is fed the visible set, so
+    // name it in the first place. `ModelRequest` snapshots the visible set, so
     // asserting it is absent from that set is the model-facing truth.
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_round("ok")])),
@@ -2213,18 +2212,18 @@ struct TwoEventProvider;
 
 #[async_trait]
 impl Provider for TwoEventProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("chat path not used by this test".to_string())
     }
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Err("stream_chat path not used by this test".to_string())
     }
     async fn stream_chat_events(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         Ok(Box::pin(futures::stream::iter([
             Ok(ProviderStreamEvent::TextDelta("hel".to_string())),
@@ -2249,7 +2248,7 @@ async fn debug_trace_writes_one_file_per_chat() {
     // Off by default, and a call while off writes nothing.
     assert!(!proxy.debug_capture_enabled());
     proxy
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .unwrap();
     let off_count = std::fs::read_dir(&dir).map(|entries| entries.count()).ok();
@@ -2259,11 +2258,11 @@ async fn debug_trace_writes_one_file_per_chat() {
     proxy.set_debug_capture(true, dir.clone());
     assert!(proxy.debug_capture_enabled());
     proxy
-        .chat(vec![Message::new(Role::User, "hello")])
+        .chat(vec![Message::new(Role::User, "hello")].into())
         .await
         .unwrap();
     proxy
-        .chat(vec![Message::new(Role::User, "again")])
+        .chat(vec![Message::new(Role::User, "again")].into())
         .await
         .unwrap();
     let entries: Vec<_> = std::fs::read_dir(&dir)
@@ -2289,7 +2288,7 @@ async fn debug_trace_writes_one_file_per_chat() {
     proxy.set_debug_capture(false, dir.clone());
     assert!(!proxy.debug_capture_enabled());
     proxy
-        .chat(vec![Message::new(Role::User, "after off")])
+        .chat(vec![Message::new(Role::User, "after off")].into())
         .await
         .unwrap();
     let after: Vec<_> = std::fs::read_dir(&dir)
@@ -2315,7 +2314,7 @@ async fn debug_trace_aggregates_a_full_stream_into_one_file() {
     // Drive the stream fully; on completion the wrapper drops and flushes the
     // aggregated record.
     let stream = proxy
-        .stream_chat_events(vec![Message::new(Role::User, "hi")])
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
         .unwrap();
     let items: Vec<_> = stream.collect::<Vec<_>>().await;
@@ -2338,9 +2337,9 @@ async fn debug_trace_aggregates_a_full_stream_into_one_file() {
 }
 
 /// ADR-0050: non-driving command echoes are durable + visible on resume/export
-/// but must be **projected out before the provider wire**. `prepare_request_messages`
-/// is the single pre-wire funnel; this proves echoes are dropped while genuine
-/// user prompts and assistant messages survive.
+/// but must be **projected out before the provider wire**. Model-request
+/// assembly is the single pre-wire funnel; this proves echoes are dropped
+/// while genuine user prompts and assistant messages survive.
 #[test]
 fn prepare_request_messages_projects_out_command_echoes() {
     let agent = agent();
@@ -2358,7 +2357,7 @@ fn prepare_request_messages_projects_out_command_echoes() {
     // no echo leaked through and the driving content survived in order.
     assert!(
         messages.iter().all(|m| !m.is_command_echo()),
-        "no command echo must leak through prepare_request_messages: {messages:?}"
+        "no command echo must leak through model-request assembly: {messages:?}"
     );
     let contents: Vec<&str> = messages
         .iter()

@@ -71,3 +71,4 @@ See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
 | [0058](0058-remove-bundled-skill-tier.md) | Remove the bundled skill tier while retaining XDG and project skill sources | Accepted |
 | [0059](0059-agent-tool-integration-boundary.md) | Agent-tool integration boundary: agent consumes concrete tools through a normal downward dependency | Accepted |
 | [0060](0060-skills-and-mcp-extension-boundaries.md) | Separate skill capability and MCP connector boundaries with a generic dynamic-tool publication port | Accepted |
+| [0061](0061-atomic-model-request-boundary.md) | Atomic model request boundary: pair messages and tool declarations while separating durable conversation context from ephemeral request assembly | Accepted |

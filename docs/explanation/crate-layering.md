@@ -32,10 +32,10 @@ ADR-0005 is dependency direction, not visual symmetry.
 ### `neenee-core` — shared contracts
 
 Pure domain and wire contracts with no workspace dependencies:
-`AgentRequest` / `AgentResponse` / `Message`, the `Provider` and `Tool` traits,
-`ToolSet`, `AgentIdentity`, principal/envoy profiles, `OperationScope`, and
-token-accounting records. Independent layers import the same vocabulary
-without depending on agent orchestration.
+`AgentRequest` / `AgentResponse` / `Message` / `ModelRequest`, the `Provider`
+and `Tool` traits, `ToolSet`, `AgentIdentity`, principal/envoy profiles,
+`OperationScope`, and token-accounting records. Independent layers import the
+same vocabulary without depending on agent orchestration.
 
 Core is not the default home for all pure code. An item enters core only when
 multiple independent layers exchange it, it prevents a dependency cycle, or
@@ -67,10 +67,10 @@ These crates implement the contracts below orchestration:
 
 ### `neenee-agent` — orchestration
 
-The engine. `Agent` + the turn/round loop (ADR-0047), model-context and system-
-prompt policy, tool-call dispatch and compatibility parsing, context
-projection, pursuit continuation, shell input policy, `ProxyProvider`, skill
-context injection,
+The engine. `Agent` + the turn/round loop (ADR-0047), model-request and
+system-prompt policy, durable conversation-context injection, tool-call
+dispatch and compatibility parsing, context projection, pursuit continuation,
+shell input policy, `ProxyProvider`, skill context injection,
 `EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It directly consumes `neenee-tools` and
 `neenee-skills`, binds agent-owned state to concrete todo tools, and interacts

@@ -33,8 +33,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{Agent, PURSUIT_COMPLETE_MARKER, RequestTokenEstimate};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
-    InjectionKind, Message, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, Provider,
-    ProviderStreamEvent, Pursuit, Role, RoundEvent,
+    InjectionKind, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface,
+    Provider, ProviderStreamEvent, Pursuit, Role, RoundEvent,
 };
 use neenee_store::{
     RepeatStore,
@@ -85,7 +85,7 @@ impl ProxyProvider {
         provider: &str,
         model: &str,
         kind: &'static str,
-        request: &[Message],
+        request: &ModelRequest,
     ) -> Option<PendingCapture> {
         if !self.debug_enabled.load(Ordering::SeqCst) {
             return None;
@@ -100,7 +100,7 @@ impl ProxyProvider {
             model: model.to_string(),
             kind,
             dir,
-            request: request.to_vec(),
+            request: request.clone(),
             seq: self.debug_seq.fetch_add(1, Ordering::SeqCst),
         })
     }
@@ -108,14 +108,6 @@ impl ProxyProvider {
 
 #[async_trait]
 impl Provider for ProxyProvider {
-    fn prepare_tools(&self, tools: &[Arc<dyn neenee_core::Tool>]) {
-        let p = self
-            .holder
-            .read()
-            .unwrap_or_else(|error| error.into_inner());
-        p.prepare_tools(tools);
-    }
-
     /// Delegate to the currently active inner provider so attribution tracks
     /// the live provider even after a mid-session `/provider` switch.
     fn provider_id(&self) -> String {
@@ -151,7 +143,7 @@ impl Provider for ProxyProvider {
         self.debug_enabled.load(Ordering::SeqCst)
     }
 
-    async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let p = self
             .holder
             .read()
@@ -160,8 +152,8 @@ impl Provider for ProxyProvider {
         let provider_id = p.provider_id();
         let model = p.model();
         let started = Instant::now();
-        let capture = self.begin_capture(&provider_id, &model, "chat", &messages);
-        let result = p.chat(messages).await;
+        let capture = self.begin_capture(&provider_id, &model, "chat", &request);
+        let result = p.chat(request).await;
         if let Some(capture) = capture {
             let item = match &result {
                 Ok(message) => serde_json::json!({
@@ -181,7 +173,7 @@ impl Provider for ProxyProvider {
     }
     async fn stream_chat(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let p = self
             .holder
@@ -190,8 +182,8 @@ impl Provider for ProxyProvider {
             .clone();
         let provider_id = p.provider_id();
         let model = p.model();
-        let capture = self.begin_capture(&provider_id, &model, "stream_chat", &messages);
-        let stream = p.stream_chat(messages).await;
+        let capture = self.begin_capture(&provider_id, &model, "stream_chat", &request);
+        let stream = p.stream_chat(request).await;
         match (capture, stream) {
             (Some(capture), Err(error)) => {
                 write_capture(
@@ -212,7 +204,7 @@ impl Provider for ProxyProvider {
     }
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let p = self
             .holder
@@ -221,8 +213,8 @@ impl Provider for ProxyProvider {
             .clone();
         let provider_id = p.provider_id();
         let model = p.model();
-        let capture = self.begin_capture(&provider_id, &model, "stream_chat_events", &messages);
-        let stream = p.stream_chat_events(messages).await;
+        let capture = self.begin_capture(&provider_id, &model, "stream_chat_events", &request);
+        let stream = p.stream_chat_events(request).await;
         match (capture, stream) {
             (Some(capture), Err(error)) => {
                 write_capture(
@@ -276,7 +268,7 @@ struct PendingCapture {
     model: String,
     kind: &'static str,
     dir: PathBuf,
-    request: Vec<Message>,
+    request: ModelRequest,
     seq: u64,
 }
 
@@ -331,7 +323,10 @@ fn write_capture(capture: &PendingCapture, items: &[serde_json::Value]) {
         "provider": capture.provider,
         "model": capture.model,
         "kind": capture.kind,
-        "request": { "messages": capture.request },
+        "request": {
+            "messages": &capture.request.messages,
+            "tools": &capture.request.tool_specs,
+        },
         "response": { "items": items },
     });
     let bytes = match serde_json::to_vec_pretty(&record) {
@@ -709,7 +704,7 @@ pub async fn execute_round(
     let mut turn_history = {
         let mut th = session.model_window().await;
         th.push(if input.hidden {
-            crate::model_context::hidden_user(InjectionKind::HiddenTurnInput, input.prompt)
+            crate::conversation_context::hidden_user(InjectionKind::HiddenTurnInput, input.prompt)
         } else {
             let message = Message::new(Role::User, input.prompt);
             let message = match input.display_prompt {

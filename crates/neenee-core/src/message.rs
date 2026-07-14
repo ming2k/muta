@@ -91,11 +91,11 @@ pub enum InjectionKind {
     SessionReviewInput,
     /// Implicit skill auto-load: the latest user turn mentioned a skill name,
     /// so the skill body was injected in-context. Site:
-    /// `neenee-agent`'s model-context skill injection policy.
+    /// `neenee-agent`'s conversation-context skill injection policy.
     ImplicitSkill,
     /// System-prompt assembly: the harness rebuilt the head system message
-    /// from live identity, pursuit, model/provider, and tool state. Site:
-    /// `SystemPromptRegistry::build_message` / `Agent::ensure_system_message`.
+    /// from live identity, pursuit, model/provider, and tool state through the
+    /// agent's request-scoped `SystemPromptRegistry` assembly.
     SystemPrompt,
     /// Built-in anti-anchoring nudge fired by the deterministic read-loop guard
     /// when the model repeats the same read (a single page or a two-page thrash)
@@ -120,11 +120,11 @@ pub enum InjectionKind {
     /// harness handles directly without an LLM roundtrip. Distinct from
     /// `HiddenTurnInput` (which *is* a driving hidden prompt): a `CommandEcho`
     /// carries no instruction for the model. Projected out before the wire by
-    /// `prepare_request_messages`. Site: `handlers_slash::dispatch` and
+    /// model-request assembly. Site: `handlers_slash::dispatch` and
     /// `shell::run_shell_command`. (ADR-0050.)
     CommandEcho,
     /// A user-role image companion projected from a tool result for providers
-    /// that accept image inputs. Site: `model_context::messages::tool_image`.
+    /// that accept image inputs. Site: `conversation_context::tool_image`.
     ToolImage,
 }
 
@@ -319,7 +319,7 @@ impl Message {
     /// Construct a **non-driving** command echo: a visible (`hidden = false`)
     /// user message stamped with the `CommandEcho` provenance. Recorded in the
     /// durable transcript for resume/export/audit faithfulness but projected
-    /// out before the provider wire (see `prepare_request_messages`, ADR-0050).
+    /// out before the provider wire (see model-request assembly, ADR-0050).
     /// Unlike [`Message::injected`] it is *visible* — the echo must show on
     /// resume — and unlike a driving prompt it never reaches the model.
     pub fn command_echo(text: impl Into<String>) -> Self {

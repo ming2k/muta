@@ -21,17 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Provider-reported values use bold styling, local estimates use underlining,
   and mixed totals use both, with a compact source legend before the list.
 
-- **Model-context assembly now has one explicit boundary.** The agent prepares
-  provider-visible messages under `model_context`, while system composition uses
-  the specialized `SystemPromptContext`, `SystemPromptSection`, and
-  `SystemPromptRegistry` APIs. The former `PromptChannel`, `PromptContext`,
-  `PromptSection`, and `PromptRegistry` APIs and prompt-policy builder method
-  names are removed; embeddings must migrate to the `SystemPrompt*` names.
-  The `SystemPrompt*`, `ContextProjectionGate`, and
-  `PURSUIT_COMPLETE_MARKER` APIs now live in `neenee-agent`, which owns their
-  lifecycle, instead of `neenee-core`. The exported shell-input predicates and
-  `neenee_core::tool_call` compatibility module are now private agent/SDK
-  implementation details.
+- **Provider requests are now atomic and request-scoped.** `ModelRequest` pairs
+  provider-visible messages with admitted tool declarations; `Provider`
+  implementations now consume it directly and the stateful `prepare_tools`
+  API is removed. The agent separates durable `conversation_context` additions
+  from ephemeral `model_request` assembly, and rebuilt system prompts are no
+  longer written into the durable model window. The specialized
+  `SystemPromptContext`, `SystemPromptSection`, and `SystemPromptRegistry` APIs
+  remain agent-owned; embeddings must migrate provider implementations and
+  test doubles to the new request signature.
 
 - **Skills no longer expose an empty bundled-system tier.** The unused
   `skills.bundled` setting, `SkillScope::System`, embedded-skill loader, and

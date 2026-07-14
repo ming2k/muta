@@ -144,8 +144,8 @@ The loop runs identically for interactive (streaming) and headless
 
 ```mermaid
 flowchart TD
-    A["prepare_tools"] --> C["prepare_request_messages<br/>(rebuild system msg +<br/>load implicit skills)"]
-    C --> D["stream_chat_events"]
+    A["enrich live conversation context"] --> C["assemble ModelRequest<br/>(system + messages + tools)"]
+    C --> D["stream_chat_events(ModelRequest)"]
     D --> E["accumulate text / reasoning / tool_calls"]
     E --> F["push assistant message"]
     F --> G{"response has<br/>tool_calls?"}

@@ -4,7 +4,7 @@
 //! many policy sections compose into one head `Role::System` message, and that
 //! singleton is rebuilt before every provider request. Harness-authored user
 //! context is event-driven and carries a bespoke payload, so it stays outside
-//! this registry and is constructed by the agent's `model_context` module.
+//! this registry and is constructed by `conversation_context` lifecycle owners.
 //!
 //! Registration is static and explicit. The policy lives with the agent that
 //! owns request preparation; only provider-supplied prompt hints cross the

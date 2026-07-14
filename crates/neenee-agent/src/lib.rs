@@ -7,8 +7,9 @@
 //! - **The `Agent` struct** (`agent.rs`) — holds the provider, tool set, mode,
 //!   pursuit, and skill registry; runs the streaming ReAct loop
 //!   (`run_streaming_with_events`).
-//! - **Model-context assembly** (`model_context/`) — the request-preparation
-//!   funnel, system-prompt policy, and harness-authored context messages.
+//! - **Model-request assembly** (`model_request/`) — immutable request
+//!   projection and system-prompt policy. Durable harness-authored messages
+//!   live separately under `conversation_context/`.
 //! - **Extension integration** — consumes an optional `neenee-skills`
 //!   registry for model-context injection and accepts connector tools through
 //!   a protocol-neutral dynamic-tool port. Discovery and transport stay in
@@ -69,7 +70,7 @@ pub use neenee_store::RepeatStore;
 pub use neenee_core::{
     AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, EXPLORE, EnvoyEvent, EnvoyProfile,
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
-    McpServerConfig, Message, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
+    McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
     PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
     ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, RoundOutcome, RoundTimer,
     SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, ThreadPursuit, TokenUsage,
@@ -128,6 +129,7 @@ pub use agent::{Agent, AgentBuilder, RequestTokenEstimate};
 mod bash_policy;
 pub mod catalog;
 mod context_projection;
+mod conversation_context;
 pub mod doom_guard;
 pub mod dynamic;
 mod dynamic_tools;
@@ -137,7 +139,7 @@ pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 pub mod envoy_tool;
 mod hook_runner;
 pub mod loop_guard;
-mod model_context;
+mod model_request;
 pub mod orchestration;
 mod permission_store;
 mod pursuit_prompts;
@@ -146,16 +148,15 @@ pub mod session_review;
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;
-pub mod system_prompt;
 mod tool_call;
 mod tool_integration;
 
 pub use context_projection::ContextProjectionGate;
 pub use envoy_tool::{EnvoyRegistry, EnvoyTool};
-pub use session_review::{LoopingReview, default_reviews};
-pub use system_prompt::{
+pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };
+pub use session_review::{LoopingReview, default_reviews};
 
 /// Model-emitted marker that satisfies the opt-in pursuit stop gate.
 pub const PURSUIT_COMPLETE_MARKER: &str = "[NEENEE_PURSUIT_COMPLETE]";

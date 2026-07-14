@@ -122,7 +122,7 @@ That single entry is the whole change for a pure-env-var preset. The catalog
 loops over `OPENAI_PROVIDER_SPECS` automatically, so no `match` arm is needed.
 `OpenAiProviderSpec::build` constructs the concrete `OpenAiCompatProvider`,
 stamping the preset `id` so assistant messages are attributed correctly. The
-preset inherits `prepare_tools`, `stream_chat_events`, and the full
+preset inherits native tool serialization, `stream_chat_events`, and the full
 `chat` / `stream_chat` implementations.
 
 ### Optional: persist the key in config
@@ -142,19 +142,24 @@ OpenAI Chat Completions. `GoogleProvider` (`GeminiNative`) and
 `AnthropicMessagesProvider` (`Anthropic`) are the existing examples, exposed
 through the `neenee-ai-sdk-*` crates and re-exported by `neenee-providers`.
 
-Implement a `Provider` struct with at minimum `chat` and `stream_chat`, and
-decide explicitly for each optional method:
+Implement a `Provider` struct with at minimum `chat` and `stream_chat`. Both
+methods receive one `ModelRequest` containing the messages and tool
+declarations for that call. Consume both values directly; do not cache request
+inputs in the provider.
+
+Decide explicitly whether to implement the optional structured-stream method:
 
 | Method | If implemented | If omitted (trait default) |
 |--------|----------------|---------------------------|
-| `prepare_tools` | Provider declares tool schemas; native function calling works | Provider never sends `tools`; tool calls fall back to text |
 | `stream_chat_events` | Provider emits `TextDelta`, `ReasoningDelta`, `ToolCallDelta` | Provider emits only `TextDelta`; reasoning and tool-call deltas are lost |
 
-Adapters that omit `prepare_tools` should return `tool_calls: None` and
-`reasoning_content: None` from their messages, matching `MockProvider`. The
-agent's private compatibility path then parses text-emitted tool calls instead
-of native `tool_calls`; provider implementations do not call the fallback
-parser directly.
+For native function calling, translate `ModelRequest.tool_specs` into the
+provider's tool-declaration shape and translate native tool calls back into
+`Message.tool_calls` or `ToolCallDelta`. An adapter without native function
+calling may ignore `tool_specs`; it should return `tool_calls: None`, matching
+`MockProvider`. The agent's compatibility path then parses text-emitted tool
+calls instead of native `tool_calls`; provider implementations do not call the
+fallback parser directly.
 
 Then wire the adapter into the two construction sites:
 
@@ -187,7 +192,7 @@ Then exercise the provider end-to-end:
 4. Run `/provider switch acme <model>` from inside the TUI and confirm the
    header updates and the new model is used.
 5. Repeat the tool-call test on a provider that uses the universal fallback
-   (a test adapter that omits `prepare_tools`) to confirm the new
+   (a test adapter that ignores `ModelRequest.tool_specs`) to confirm the new
    provider behaves consistently across both transports.
 
 ## Update documentation

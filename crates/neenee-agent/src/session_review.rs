@@ -103,7 +103,7 @@ impl Agent {
             sub_tools,
             crate::AgentIdentity::default(),
         )
-        .with_system_prompt_registry(crate::model_context::reviewer_system_prompt_registry(
+        .with_system_prompt_registry(crate::model_request::reviewer_system_prompt_registry(
             &dimensions,
         ))
         .build();
@@ -115,8 +115,8 @@ impl Agent {
         // read-loop guard's nudge (ADR-0034) so its own reads are never steered.
         reviewer.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
         // The builder installed the dedicated review composition above so
-        // `ensure_system_message` rebuilds persona + dimensions + JSON contract
-        // every round instead of clobbering a pre-seeded system message.
+        // request assembly builds persona + dimensions + JSON contract every
+        // round instead of replacing a pre-seeded system message with defaults.
 
         let transcript = serialize_transcript(messages, TRANSCRIPT_SNAPSHOT_BUDGET_CHARS);
         let user = format!(
@@ -125,11 +125,10 @@ impl Agent {
              {transcript}\n\n\
              Evaluate every dimension listed above and return the JSON object now."
         );
-        // The transcript is the user message; the head system message is built
-        // by `ensure_system_message` from the reviewer registry above. Starting
-        // without a pre-seeded system message avoids the round-1 clobber that
-        // lost the review prompt before ADR-0039 stage 6.
-        let mut child_messages = vec![crate::model_context::visible_user(
+        // The transcript is the durable user message; the ephemeral head
+        // system message is built from the reviewer registry above. Starting
+        // without a pre-seeded system message keeps the two lifecycles clear.
+        let mut child_messages = vec![crate::conversation_context::visible_user(
             neenee_core::InjectionKind::SessionReviewInput,
             user,
         )];

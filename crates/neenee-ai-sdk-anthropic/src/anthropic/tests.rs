@@ -113,19 +113,19 @@ fn request_body_includes_tools_in_anthropic_shape() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
-    provider.prepare_tools(&tools);
-    let body = provider.turn.with_tool_schemas(|tool_specs| {
-        request::body(
-            vec![Message::new(Role::User, "hi")],
-            BodyInput {
-                model: &provider.endpoint.model,
-                stream: false,
-                tool_specs,
-                max_tokens: provider.max_tokens,
-                thinking: provider.thinking,
-            },
-        )
-    });
+    let request =
+        neenee_core::ModelRequest::with_tools(vec![Message::new(Role::User, "hi")], &tools);
+    let (messages, tool_specs) = request.into_parts();
+    let body = request::body(
+        messages,
+        BodyInput {
+            model: &provider.endpoint.model,
+            stream: false,
+            tool_specs: Some(&tool_specs),
+            max_tokens: provider.max_tokens,
+            thinking: provider.thinking,
+        },
+    );
     let tool = &body["tools"][0];
     assert_eq!(tool["name"], "dummy");
     assert!(tool.get("input_schema").is_some(), "needs input_schema");
@@ -168,26 +168,28 @@ fn cache_breakpoints_hit_all_four_zones() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
-    provider.prepare_tools(&tools);
-    let body = provider.turn.with_tool_schemas(|tool_specs| {
-        request::body(
-            vec![
-                Message::new(Role::System, "you are a coding agent"),
-                Message::new(Role::User, "do task A"),
-                Message::new(Role::Assistant, "ok"),
-                Message::new(Role::User, "now task B"),
-                Message::new(Role::Assistant, "done"),
-                Message::new(Role::User, "task C"),
-            ],
-            BodyInput {
-                model: &provider.endpoint.model,
-                stream: false,
-                tool_specs,
-                max_tokens: provider.max_tokens,
-                thinking: provider.thinking,
-            },
-        )
-    });
+    let request = neenee_core::ModelRequest::with_tools(
+        vec![
+            Message::new(Role::System, "you are a coding agent"),
+            Message::new(Role::User, "do task A"),
+            Message::new(Role::Assistant, "ok"),
+            Message::new(Role::User, "now task B"),
+            Message::new(Role::Assistant, "done"),
+            Message::new(Role::User, "task C"),
+        ],
+        &tools,
+    );
+    let (messages, tool_specs) = request.into_parts();
+    let body = request::body(
+        messages,
+        BodyInput {
+            model: &provider.endpoint.model,
+            stream: false,
+            tool_specs: Some(&tool_specs),
+            max_tokens: provider.max_tokens,
+            thinking: provider.thinking,
+        },
+    );
     assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
     assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
     let msgs = body["messages"].as_array().unwrap();
@@ -205,7 +207,6 @@ fn cache_breakpoints_never_exceed_four_cap() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool), Arc::new(DummyTool2)];
-    provider.prepare_tools(&tools);
     let history: Vec<Message> = (0..8)
         .flat_map(|i| {
             vec![
@@ -214,18 +215,18 @@ fn cache_breakpoints_never_exceed_four_cap() {
             ]
         })
         .collect();
-    let body = provider.turn.with_tool_schemas(|tool_specs| {
-        request::body(
-            history,
-            BodyInput {
-                model: &provider.endpoint.model,
-                stream: false,
-                tool_specs,
-                max_tokens: provider.max_tokens,
-                thinking: provider.thinking,
-            },
-        )
-    });
+    let request = neenee_core::ModelRequest::with_tools(history, &tools);
+    let (messages, tool_specs) = request.into_parts();
+    let body = request::body(
+        messages,
+        BodyInput {
+            model: &provider.endpoint.model,
+            stream: false,
+            tool_specs: Some(&tool_specs),
+            max_tokens: provider.max_tokens,
+            thinking: provider.thinking,
+        },
+    );
     assert!(
         count_cache_breakpoints(&body) <= 4,
         "must not exceed the 4-breakpoint cap"

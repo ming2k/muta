@@ -3,13 +3,13 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Message, Provider, Role};
+use neenee_core::{Message, ModelRequest, Provider, Role};
 
 pub struct MockProvider;
 
 #[async_trait]
 impl Provider for MockProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
         Ok(Message {
             role: Role::Assistant,
             content: "Hello! I am a mock AI. How can I help you today?".to_string(),
@@ -41,7 +41,7 @@ impl Provider for MockProvider {
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let response = vec![
             Ok("This ".to_string()),

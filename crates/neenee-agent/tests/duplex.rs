@@ -43,12 +43,12 @@ struct IdleProvider;
 
 #[async_trait]
 impl Provider for IdleProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
     }
@@ -92,7 +92,7 @@ struct WriteCallProvider(AtomicUsize);
 
 #[async_trait]
 impl Provider for WriteCallProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             let mut msg = Message::new(Role::Assistant, "");
             msg.tool_calls = Some(vec![ToolCall {
@@ -107,7 +107,7 @@ impl Provider for WriteCallProvider {
     }
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
@@ -227,18 +227,18 @@ struct StreamWriteCallProvider(AtomicUsize);
 
 #[async_trait]
 impl Provider for StreamWriteCallProvider {
-    async fn chat(&self, _: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
     async fn stream_chat(
         &self,
-        _: Vec<Message>,
+        _: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
     async fn stream_chat_events(
         &self,
-        _: Vec<Message>,
+        _: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let round = self.0.fetch_add(1, Ordering::SeqCst);
         let events = if round == 0 {

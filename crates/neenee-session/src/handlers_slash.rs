@@ -87,7 +87,7 @@ pub async fn dispatch(
     // Record the slash invocation as a durable, non-driving echo so it
     // survives resume/export/audit (ADR-0050). This happens for EVERY command
     // uniformly — the literal `/cmd` text is persisted, never sent to the
-    // model (projected out in `prepare_request_messages`), and on resume is
+    // model (projected out during model-request assembly), and on resume is
     // reconstructed with `UserMessageOrigin::Slash`. Commands whose effects
     // mutate state or stream a reply still do so independently; the echo is
     // purely the invocation record. Best-effort: a failed persist logs but

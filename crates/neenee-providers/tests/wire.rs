@@ -68,7 +68,7 @@ async fn openai_chat_parses_content_reasoning_tool_calls_and_headers() {
         "neenee-test/1",
     );
     let message = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("chat should succeed");
 
@@ -107,7 +107,7 @@ async fn openai_chat_strips_tool_call_echo_when_native_calls_present() {
 
     let provider = OpenAiCompatProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let message = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("chat should succeed");
 
@@ -135,7 +135,7 @@ async fn openai_chat_classifies_server_error_as_retryable() {
 
     let provider = OpenAiCompatProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect_err("5xx must surface as an error");
 
@@ -170,7 +170,7 @@ async fn openai_chat_omits_auth_header_when_api_key_is_empty() {
         "ua",
     );
     let message = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("keyless chat should succeed");
     assert_eq!(message.content, "ok");
@@ -193,7 +193,7 @@ async fn openai_chat_decode_failure_embeds_raw_body() {
 
     let provider = OpenAiCompatProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect_err("non-JSON 200 must surface as a decode error");
 
@@ -230,7 +230,7 @@ async fn openai_stream_parses_text_reasoning_and_tool_call_deltas() {
 
     let provider = OpenAiCompatProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
-        .stream_chat_events(vec![Message::new(Role::User, "hi")])
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("stream should open");
     let events = collect_events(stream).await;
@@ -280,7 +280,7 @@ async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
 
     let provider = OpenAiCompatProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
-        .stream_chat_events(vec![Message::new(Role::User, "hi")])
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("stream should open");
     let events = collect_events(stream).await;
@@ -329,7 +329,7 @@ async fn anthropic_chat_assembles_text_thinking_and_tool_use() {
         "ua",
     );
     let message = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("chat should succeed");
 
@@ -376,7 +376,7 @@ async fn anthropic_stream_parses_tool_use_block_and_argument_fragments() {
         "ua",
     );
     let stream = provider
-        .stream_chat_events(vec![Message::new(Role::User, "hi")])
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("stream should open");
     let events = collect_events(stream).await;
@@ -422,7 +422,7 @@ async fn anthropic_stream_surfaces_in_band_error_event() {
         "ua",
     );
     let stream = provider
-        .stream_chat_events(vec![Message::new(Role::User, "hi")])
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("stream should open");
     let items = stream.collect::<Vec<_>>().await;
@@ -469,7 +469,7 @@ async fn assert_factory_body(mut channel: Channel, expected: Value) {
 
     let provider = build_provider_for_channel(&channel, "anthropic");
     let msg = provider
-        .chat(vec![Message::new(Role::User, "hi")])
+        .chat(vec![Message::new(Role::User, "hi")].into())
         .await
         .expect("factory-built provider chat must succeed");
     assert_eq!(msg.content, "ok");

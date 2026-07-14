@@ -102,18 +102,13 @@ impl Endpoint {
     }
 }
 
-/// Per-turn mutable state shared by all three providers: the prepared tool
-/// schemas and the most recent token-usage snapshot drained via
-/// [`neenee_core::Provider::take_last_usage`].
+/// Response-side mutable state shared by all three providers: the most recent
+/// token-usage snapshot drained via [`neenee_core::Provider::take_last_usage`].
 ///
 /// Factored out so a provider struct embeds `pub turn: TurnState` instead of
-/// restating the two `Mutex` fields. Recovering from a poisoned mutex (a prior
+/// restating the `Mutex` field. Recovering from a poisoned mutex (a prior
 /// panic must not take down the next request) is handled uniformly here.
 pub struct TurnState {
-    /// Tool schemas collected by `prepare_tools`, in OpenAI function-spec
-    /// shape (`{type:"function", function:{...}}`). `None` until the harness
-    /// first hands a toolset to the provider.
-    tools: Mutex<Option<Vec<serde_json::Value>>>,
     /// Stash for the most recent `usage` object, drained once by
     /// `take_last_usage`.
     last_usage: Mutex<Option<TokenUsage>>,
@@ -122,24 +117,8 @@ pub struct TurnState {
 impl TurnState {
     pub fn new() -> Self {
         Self {
-            tools: Mutex::new(None),
             last_usage: Mutex::new(None),
         }
-    }
-
-    /// Collect tool schemas (OpenAI function-spec shape) from a tool list.
-    pub fn prepare(&self, tools: &[std::sync::Arc<dyn neenee_core::Tool>]) {
-        let schemas: Vec<serde_json::Value> =
-            tools.iter().map(|t| t.to_openai_function()).collect();
-        let _ = self.tools.lock().map(|mut guard| *guard = Some(schemas));
-    }
-
-    /// Borrow the prepared tool schemas as a slice, recovering from a poisoned
-    /// mutex. The returned slice borrows the guard, so the caller binds the
-    /// guard with `let guard = ...; let specs = ...;` to keep it alive.
-    pub fn with_tool_schemas<R>(&self, f: impl FnOnce(Option<&[serde_json::Value]>) -> R) -> R {
-        let guard = self.tools.lock().unwrap_or_else(|e| e.into_inner());
-        f(guard.as_deref())
     }
 
     /// Stash the usage from the most recent turn.

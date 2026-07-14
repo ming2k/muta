@@ -22,6 +22,11 @@ provider's wire shape, and discarded after the response stream finishes. The
 durable session keeps the recoverable state; the request body is only the
 provider-facing materialization of that state.
 
+Messages and admitted tools are captured as one immutable request snapshot.
+Provider adapters do not retain tool declarations as mutable state between
+calls. A retry resends the same snapshot, while a later round assembles a new
+one from the then-current conversation and tool visibility.
+
 ## What the Request Contains
 
 Each provider request carries three conceptual inputs:
@@ -32,10 +37,11 @@ Each provider request carries three conceptual inputs:
 | **Messages** | Current model window | User messages, assistant replies, assistant tool calls, tool results, and hidden harness messages that still belong in model-visible history |
 | **Tools** | Current tool catalog | Native tool declarations: name, description, and parameter schema for each enabled tool |
 
-The system prompt is rebuilt for every request. Tool schemas are also sent on
-every request when the provider supports native tool calling. A disabled or
-masked tool is not declared to the provider, and dispatch rejects calls to tools
-that are not admitted for the current agent.
+The system prompt is rebuilt on a cloned request view and is never appended to
+the durable model window. Tool schemas are also sent on every request when the
+provider supports native tool calling. A disabled or masked tool is not
+declared to the provider, and dispatch rejects calls to tools that are not
+admitted for the current agent.
 
 ## Tool Schemas and Tool Trace
 
@@ -100,8 +106,8 @@ One turn can be read as this flow:
 ```text
 durable session
   -> restore current model window
-  -> rebuild system prompt from live state
-  -> declare currently enabled tools
+  -> enrich durable conversation context when lifecycle events require it
+  -> assemble one request snapshot from system + messages + enabled tools
   -> serialize provider-specific request
   -> stream assistant response
   -> append assistant/tool trace back into durable session

@@ -2,9 +2,12 @@
 
 use std::collections::HashSet;
 
-use crate::{Agent, InjectionKind, Message, Role};
+use crate::{InjectionKind, Message, Role};
 
-pub(super) fn inject_mentioned(agent: &Agent, messages: &mut Vec<Message>) {
+pub(crate) fn inject_mentioned_skills(
+    registry: &neenee_skills::SkillRegistry,
+    messages: &mut Vec<Message>,
+) {
     let text = messages
         .iter()
         .filter(|message| message.role == Role::User && !message.hidden)
@@ -27,7 +30,7 @@ pub(super) fn inject_mentioned(agent: &Agent, messages: &mut Vec<Message>) {
         .collect();
 
     let mentioned: Vec<String> = {
-        let registry = agent.skills_registry.lock();
+        let registry = registry.lock();
         registry
             .resolve_mentions(&text)
             .into_iter()
@@ -38,7 +41,7 @@ pub(super) fn inject_mentioned(agent: &Agent, messages: &mut Vec<Message>) {
 
     for name in mentioned {
         // Bodies are loaded lazily and cached on first use.
-        let Some(Ok(content)) = agent.skills_registry.body_for(&name) else {
+        let Some(Ok(content)) = registry.body_for(&name) else {
             continue;
         };
         messages.push(super::hidden_user_with_reason(

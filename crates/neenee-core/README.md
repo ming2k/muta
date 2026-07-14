@@ -7,7 +7,9 @@ filesystem, no network. It is the dependency-inversion boundary used by
 independent providers, tools, persistence, sessions, SDK adapters, and
 frontends:
 
-- the [`Provider`] and [`Tool`] capability traits (in [`capability.rs`][cap]);
+- the [`Provider`] and [`Tool`] capability traits plus the atomic
+  [`ModelRequest`] exchanged by agents and providers (in
+  [`capability.rs`][cap]);
 - conversation, event, and tool-output protocol types;
 - shared value policy such as capability scopes and context budgets;
 - pursuit / repeat / todo domain types, envoy profiles, skills/MCP config
@@ -29,4 +31,5 @@ zero-I/O dependency rule, and ADR-0057 for the contract-only admission rule.
 
 [`Provider`]: src/capability.rs
 [`Tool`]: src/capability.rs
+[`ModelRequest`]: src/capability.rs
 [cap]: src/capability.rs

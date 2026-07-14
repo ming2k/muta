@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Effort, Message, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_core::{Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -106,10 +106,6 @@ impl OpenAiCompatProvider {
 
 #[async_trait]
 impl Provider for OpenAiCompatProvider {
-    fn prepare_tools(&self, tools: &[Arc<dyn neenee_core::Tool>]) {
-        self.turn.prepare(tools);
-    }
-
     fn provider_id(&self) -> String {
         self.endpoint.id.clone()
     }
@@ -137,19 +133,18 @@ impl Provider for OpenAiCompatProvider {
         self.turn.take_usage()
     }
 
-    async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, request: ModelRequest) -> Result<neenee_core::Message, String> {
         let client = reqwest::Client::new();
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    model: &self.endpoint.model,
-                    stream: false,
-                    tool_specs,
-                    reasoning_effort: self.reasoning_effort,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                model: &self.endpoint.model,
+                stream: false,
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                reasoning_effort: self.reasoning_effort,
+            },
+        );
 
         let response = self
             .build_request(&client, &body)
@@ -186,20 +181,19 @@ impl Provider for OpenAiCompatProvider {
 
     async fn stream_chat(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    model: &self.endpoint.model,
-                    stream: true,
-                    tool_specs,
-                    reasoning_effort: self.reasoning_effort,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                model: &self.endpoint.model,
+                stream: true,
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                reasoning_effort: self.reasoning_effort,
+            },
+        );
 
         let response = self
             .build_request(&client, &body)
@@ -218,20 +212,19 @@ impl Provider for OpenAiCompatProvider {
 
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
-        let body = self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    model: &self.endpoint.model,
-                    stream: true,
-                    tool_specs,
-                    reasoning_effort: self.reasoning_effort,
-                },
-            )
-        });
+        let (messages, tool_specs) = request.into_parts();
+        let body = request::body(
+            messages,
+            request::BodyInput {
+                model: &self.endpoint.model,
+                stream: true,
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                reasoning_effort: self.reasoning_effort,
+            },
+        );
 
         let response = self
             .build_request(&client, &body)
@@ -302,7 +295,7 @@ impl Provider for OpenAiCompatProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::{Role, Tool};
+    use neenee_core::{Message, Role, Tool};
 
     // --- resolved-variant schema reaches the request body ---
 
@@ -338,8 +331,22 @@ mod tests {
             .unwrap_or("")
     }
 
+    fn body_with_tools(tools: &[Arc<dyn Tool>]) -> serde_json::Value {
+        let request = ModelRequest::with_tools(vec![Message::new(Role::User, "go")], tools);
+        let (messages, tool_specs) = request.into_parts();
+        request::body(
+            messages,
+            request::BodyInput {
+                model: "test-model",
+                stream: false,
+                tool_specs: Some(&tool_specs),
+                reasoning_effort: None,
+            },
+        )
+    }
+
     #[test]
-    fn prepare_tools_emits_the_selected_variants_schema() {
+    fn model_request_emits_the_selected_variants_schema() {
         // A `read_text` capability with two variants; the agent resolves a
         // selection before handing the toolset to the provider, so whichever
         // variant is selected is the one whose schema reaches the request body.
@@ -357,38 +364,14 @@ mod tests {
         ]);
 
         // Default selection → default variant's description in the body.
-        let provider = OpenAiCompatProvider::new("test-key".to_string(), "test-model".to_string());
-        provider.prepare_tools(&toolset.default_view());
-        let body = provider.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                vec![Message::new(Role::User, "go")],
-                request::BodyInput {
-                    model: "test-model",
-                    stream: false,
-                    tool_specs,
-                    reasoning_effort: None,
-                },
-            )
-        });
+        let body = body_with_tools(&toolset.default_view());
         assert_eq!(tool_desc_at(&body, 0), "default wording");
         assert_eq!(body["tools"][0]["function"]["name"], "read_text");
 
         // Selecting the terse variant → terse description in the body, same name.
         let mut selection = neenee_core::VariantSelection::new();
         selection.insert("read_text".to_string(), "terse".to_string());
-        let provider = OpenAiCompatProvider::new("test-key".to_string(), "test-model".to_string());
-        provider.prepare_tools(&toolset.resolve(&selection));
-        let body = provider.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                vec![Message::new(Role::User, "go")],
-                request::BodyInput {
-                    model: "test-model",
-                    stream: false,
-                    tool_specs,
-                    reasoning_effort: None,
-                },
-            )
-        });
+        let body = body_with_tools(&toolset.resolve(&selection));
         assert_eq!(tool_desc_at(&body, 0), "terse wording");
         assert_eq!(body["tools"][0]["function"]["name"], "read_text");
         assert_eq!(body["tools"][0]["type"], "function");

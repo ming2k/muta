@@ -101,7 +101,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **model context** | The provider-facing request view for one turn: rebuilt system prompt, current model window, and current tool catalog serialized for the selected provider. [Model context](../explanation/agent-design/model-context.md) |
+| **model context** | The provider-facing view for one request: rebuilt system prompt, current model window, and current tool catalog serialized for the selected provider. [Model context](../explanation/agent-design/model-context.md) |
 | **model-context projection** | The durable archive-and-replace operation that records original context in the session store and produces the model-visible window sent on later provider requests. [Session persistence](../explanation/agent-design/session-persistence.md) |
 | **model window** | The current model-visible message window restored on resume and sent to the provider after prompt assembly and provider-specific filtering. [Model context](../explanation/agent-design/model-context.md) |
 | **archived transcript** | Original messages moved out of the model window by pruning or compaction but retained in the durable session for full recovery. [Session persistence](../explanation/agent-design/session-persistence.md) |
@@ -118,6 +118,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | Term | Definition |
 |------|------------|
 | **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/provider` switch. [Providers](providers.md) |
+| **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, and transport; one per `[[providers.channels]]` entry. [Providers](providers.md) |
 | **transport** | The wire protocol a channel uses (`OpenAiCompat`, `Anthropic`, `GeminiNative`). [Configuration](configuration.md) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
@@ -148,9 +149,9 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **model-context assembly** | The pre-provider boundary that prepares model-visible messages, rebuilds the system message, removes non-driving command echoes, and injects explicitly mentioned skills. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **model-request assembly** | The pure pre-provider projection that clones the current window, removes non-driving command echoes and legacy system messages, composes one fresh system message, and snapshots admitted tools into `ModelRequest`. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`SystemPromptSection`** | An agent-owned declarative system-prompt fragment with a stable id, rank, activation predicate, and renderer. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
-| **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message. It does not construct user-role context. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message of an ephemeral request. It does not construct user-role context or mutate the durable model window. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, pursuit, admitted tool names, model/provider guidance, and unattended state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **harness context message** | A model-visible user-role message inserted by the harness rather than authored by the user. Common constructors enforce role, visibility, and provenance; lifecycle owners decide payload and insertion time. [Prompt and message assembly](../explanation/agent-design/prompt-assembly.md) |
 
@@ -158,7 +159,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **`neenee-core`** | Zero-I/O contract crate: shared provider/tool traits, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
+| **`neenee-core`** | Zero-I/O contract crate: shared provider/tool traits, `ModelRequest`, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
 | **`neenee-store`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`neenee-providers`** | Provider implementations and the `build_provider_for_channel` factory, built on the shared AI SDK substrate and protocol-specific SDK crates. [Crate layering](../explanation/crate-layering.md) |
 | **`neenee-tools`** | Built-in domain tools; filesystem/web/todo tools implement core contracts, while project/search facilities also consume store-owned services. It never depends on agent orchestration. [Crate layering](../explanation/crate-layering.md) |

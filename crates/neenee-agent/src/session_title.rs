@@ -26,7 +26,7 @@ use std::time::Duration;
 
 #[cfg(test)]
 use neenee_core::Provider;
-use neenee_core::{Message, Role, TITLE, clean_title};
+use neenee_core::{Message, ModelRequest, Role, TITLE, clean_title};
 
 use crate::agent::Agent;
 
@@ -72,25 +72,27 @@ impl Agent {
         // The title task is pure text-in/text-out. The primary turn has
         // already finished when this runs (auto-trigger is post-turn; `/title`
         // is on-demand at idle), so the shared provider is not mid-request.
-        // We do not call `prepare_tools`: a stale toolset from the prior turn
-        // may be advertised, but the model is instructed to output only a
-        // title and only `content` is read, so any tool call it emits is
-        // ignored.
-        let response =
-            match tokio::time::timeout(TITLE_CALL_TIMEOUT, self.provider.chat(messages)).await {
-                Ok(Ok(message)) => message,
-                Ok(Err(error)) => {
-                    tracing::warn!(error = %error, "title envoy provider call failed");
-                    return None;
-                }
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        timeout_secs = TITLE_CALL_TIMEOUT.as_secs(),
-                        "title envoy call timed out"
-                    );
-                    return None;
-                }
-            };
+        // The atomic request deliberately carries no tools, independent of
+        // whatever schemas the primary agent used on its preceding turn.
+        let response = match tokio::time::timeout(
+            TITLE_CALL_TIMEOUT,
+            self.provider.chat(ModelRequest::new(messages)),
+        )
+        .await
+        {
+            Ok(Ok(message)) => message,
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "title envoy provider call failed");
+                return None;
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout_secs = TITLE_CALL_TIMEOUT.as_secs(),
+                    "title envoy call timed out"
+                );
+                return None;
+            }
+        };
         clean_title(&response.content)
     }
 }
@@ -169,22 +171,24 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     /// A provider double that returns a canned assistant message. Captures the
-    /// last messages it was handed so a test can assert the title prompt shape.
+    /// last request so tests can assert the title prompt shape and tool scope.
     struct CannedProvider {
         reply: String,
         last_messages: Mutex<Vec<Message>>,
+        last_tool_specs: Mutex<Vec<serde_json::Value>>,
     }
 
     #[async_trait]
     impl Provider for CannedProvider {
-        async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
-            *self.last_messages.lock().unwrap() = messages;
+        async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+            *self.last_messages.lock().unwrap() = request.messages;
+            *self.last_tool_specs.lock().unwrap() = request.tool_specs;
             Ok(Message::new(Role::Assistant, self.reply.clone()))
         }
 
         async fn stream_chat(
             &self,
-            _messages: Vec<Message>,
+            _request: ModelRequest,
         ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(futures::stream::empty()))
         }
@@ -194,6 +198,7 @@ mod tests {
         let provider = Arc::new(CannedProvider {
             reply: reply.to_string(),
             last_messages: Mutex::new(Vec::new()),
+            last_tool_specs: Mutex::new(Vec::new()),
         });
         let agent = Agent::new(
             provider.clone(),
@@ -252,6 +257,10 @@ mod tests {
             .find(|m| m.role == Role::System)
             .expect("system message present");
         assert_eq!(system.content, TITLE.system_prompt);
+        assert!(
+            provider.last_tool_specs.lock().unwrap().is_empty(),
+            "title requests must not inherit the agent's tool catalog"
+        );
     }
 
     fn transcript_of_opening(opening: &str) -> Vec<Message> {

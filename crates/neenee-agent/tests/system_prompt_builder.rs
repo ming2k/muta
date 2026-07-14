@@ -14,13 +14,13 @@ struct IdleProvider;
 
 #[async_trait]
 impl Provider for IdleProvider {
-    async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
 
     async fn stream_chat(
         &self,
-        _messages: Vec<Message>,
+        _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::once(async { Ok("done".to_owned()) })))
     }

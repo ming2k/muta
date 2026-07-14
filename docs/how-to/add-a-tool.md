@@ -236,9 +236,10 @@ Then exercise the tool manually:
    result.
 4. Switch to `GoogleProvider` (`GeminiNative`) and repeat to confirm a second
    native tool-call wire format works.
-5. Switch to a provider that omits `prepare_tools` (e.g. a `MockProvider`
-   test adapter), and repeat. The model should emit the universal fallback
-   JSON and the tool should still execute through `parse_tool_call`.
+5. Switch to a provider that does not serialize `ModelRequest.tool_specs`
+   (e.g. a `MockProvider` test adapter), and repeat. The model should emit the
+   universal fallback JSON and the tool should still execute through
+   `parse_tool_call`.
 
 If the tool is `Write`, also confirm the permission modal appears on first
 use and that an `Always` decision is cached against the scope returned by

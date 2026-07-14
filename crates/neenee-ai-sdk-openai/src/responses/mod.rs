@@ -17,7 +17,9 @@ pub mod response;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Effort, Message, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_core::{
+    Effort, Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+};
 use std::sync::{Arc, Mutex};
 
 use neenee_ai_sdk_core::{Endpoint, TurnState};
@@ -85,27 +87,22 @@ impl ResponsesProvider {
         req
     }
 
-    fn build_body(&self, messages: Vec<Message>, stream: bool) -> serde_json::Value {
-        self.turn.with_tool_schemas(|tool_specs| {
-            request::body(
-                messages,
-                request::BodyInput {
-                    model: &self.endpoint.model,
-                    stream,
-                    tool_specs,
-                    reasoning_effort: self.reasoning_effort,
-                },
-            )
-        })
+    fn build_body(&self, request: ModelRequest, stream: bool) -> serde_json::Value {
+        let (messages, tool_specs) = request.into_parts();
+        request::body(
+            messages,
+            request::BodyInput {
+                model: &self.endpoint.model,
+                stream,
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                reasoning_effort: self.reasoning_effort,
+            },
+        )
     }
 }
 
 #[async_trait]
 impl Provider for ResponsesProvider {
-    fn prepare_tools(&self, tools: &[Arc<dyn neenee_core::Tool>]) {
-        self.turn.prepare(tools);
-    }
-
     fn provider_id(&self) -> String {
         self.endpoint.id.clone()
     }
@@ -130,9 +127,9 @@ impl Provider for ResponsesProvider {
         self.turn.take_usage()
     }
 
-    async fn chat(&self, messages: Vec<Message>) -> Result<Message, String> {
+    async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let client = reqwest::Client::new();
-        let body = self.build_body(messages, false);
+        let body = self.build_body(request, false);
         let resp = self
             .build_request(&client, &body)
             .send()
@@ -151,10 +148,10 @@ impl Provider for ResponsesProvider {
 
     async fn stream_chat(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
-        let body = self.build_body(messages, true);
+        let body = self.build_body(request, true);
         let resp = self
             .build_request(&client, &body)
             .send()
@@ -177,10 +174,10 @@ impl Provider for ResponsesProvider {
 
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
-        let body = self.build_body(messages, true);
+        let body = self.build_body(request, true);
         let resp = self
             .build_request(&client, &body)
             .send()

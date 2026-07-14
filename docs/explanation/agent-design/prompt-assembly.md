@@ -155,21 +155,23 @@ servers](mcp.md).
 ## Provenance and traceability
 
 The unifying discipline across all three channels is **provenance**. Every
-message the harness inserts — a rebuilt system message, a steering note, a
-compaction checkpoint, an implicit skill — is stamped at the construction site
-with a structured origin that classifies it. Genuine user input, assistant
-replies, and tool results carry no origin; only harness injections do.
+message the harness constructs — a request-scoped system message, a steering
+note, a compaction checkpoint, an implicit skill — is stamped at the
+construction site with a structured origin that classifies it. Genuine user
+input, assistant replies, and tool results carry no origin; only harness
+injections do.
 
 The classifier is deliberately closed: adding an injection path requires adding
 a variant, and exhaustiveness checking forces every injection site to be
-stamped. The stamp survives serialization, so a session saved to disk and
-reopened later reconstructs the exact live round. This is the contract that lets
-resume, replay, and audit all trust the transcript: nothing was silently
-inserted, and everything that was inserted is identifiable.
+stamped. For event-driven context appended to the live window, the stamp
+survives serialization, so a session saved to disk and reopened later
+reconstructs the exact live round. The system prompt is different: its stamp
+lives only in the ephemeral request because the prompt is rebuilt from current
+state and is never persisted as conversation history.
 
 System sections use stable string ids for policy configuration. Their composed
-message carries the single `SystemPrompt` provenance kind; event-driven user
-context carries the kind specific to its lifecycle source.
+request message carries the single `SystemPrompt` provenance kind;
+event-driven user context carries the kind specific to its lifecycle source.
 
 ## Decision history
 
@@ -177,6 +179,9 @@ context carries the kind specific to its lifecycle source.
   assembly becomes the provider-facing boundary; system sections use the
   specialized `SystemPrompt*` vocabulary while harness-authored user context
   shares message-construction invariants.
+- [ADR-0061](../../adr/0061-atomic-model-request-boundary.md) — messages and
+  tools form one immutable request while durable conversation additions remain
+  separate from ephemeral assembly.
 - [ADR-0039](../../adr/0039-unified-prompt-registry.md) — introduced ranked
   system-prompt composition and fixed latent system-message clobber defects;
   superseded by ADR-0056 for the cross-channel abstraction boundary.

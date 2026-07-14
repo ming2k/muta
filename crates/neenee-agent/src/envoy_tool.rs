@@ -388,20 +388,18 @@ impl EnvoyTool {
         // research envoy never pays for a diagnostic and review can never
         // recurse. No setup needed here. ADR-0018.
 
-        // The envoy's transcript opens with just the task as the user
-        // message. The head system message is rebuilt every round by
-        // `prepare_request_messages` from the profile persona (carried via
-        // `AgentIdentity`, set above) composed with the mission-neutral
-        // system-prompt policy — see ADR-0056.
+        // The envoy's durable transcript opens with just the task as the user
+        // message. Request assembly composes a fresh head system message every
+        // round from the profile persona (carried via `AgentIdentity`, set
+        // above) and mission-neutral system-prompt policy — see ADR-0061.
         //
         // An earlier `Task: {description}` system message here was dead code:
-        // `ensure_system_message` replaces any leading system message on round
-        // 1, so it was clobbered before the first model request and the
-        // persona (also vying for index 0) was what actually reached the
+        // request assembly projects legacy system messages out before adding
+        // the profile composition, so the task wrapper never reached the
         // model. Dropping it makes the single-message path honest. The task
         // itself is the user message; `description` remains a required label
         // arg (validated above) for the parent / TUI.
-        let mut messages = vec![crate::model_context::visible_user(
+        let mut messages = vec![crate::conversation_context::visible_user(
             neenee_core::InjectionKind::EnvoyTask,
             prompt,
         )];
@@ -559,13 +557,36 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Provider for CannedProvider {
-        async fn chat(&self, _messages: Vec<Message>) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
             Ok(Message::new(Role::Assistant, "found 3 relevant files"))
         }
         async fn stream_chat(
             &self,
-            _messages: Vec<Message>,
+            _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::once(async {
+                Ok("found 3 relevant files".to_string())
+            })))
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProvider {
+        request: std::sync::Mutex<Option<neenee_core::ModelRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for RecordingProvider {
+        async fn chat(&self, request: neenee_core::ModelRequest) -> Result<Message, String> {
+            *self.request.lock().unwrap() = Some(request);
+            Ok(Message::new(Role::Assistant, "found 3 relevant files"))
+        }
+
+        async fn stream_chat(
+            &self,
+            request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            *self.request.lock().unwrap() = Some(request);
             Ok(Box::pin(stream::once(async {
                 Ok("found 3 relevant files".to_string())
             })))
@@ -667,15 +688,13 @@ mod tests {
         assert_eq!(output, "found 3 relevant files");
     }
 
-    /// Regression for ADR-0039 stage 3: the envoy's head system message is
-    /// the registry-composed persona plus mission-neutral policy sections.
-    /// The legacy `Task: {description}` system message was dead code —
-    /// `ensure_system_message` clobbered index 0 on round 1 — and has been
-    /// removed; the task lives in the user message alone.
+    /// The envoy persona belongs to the immutable provider request, not its
+    /// durable child transcript. The delegated task remains a user message.
     #[tokio::test]
     async fn envoy_head_system_message_has_no_dead_task_line() {
+        let provider = std::sync::Arc::new(RecordingProvider::default());
         let tool = EnvoyTool::new(
-            std::sync::Arc::new(CannedProvider),
+            provider.clone(),
             neenee_core::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
@@ -690,8 +709,13 @@ mod tests {
             .await
             .unwrap();
 
-        // messages[0] is the rebuilt system message: EXPLORE persona opens it.
-        let system = &outcome.messages[0];
+        let request = provider
+            .request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("envoy request captured");
+        let system = &request.messages[0];
         assert_eq!(system.role, neenee_core::Role::System);
         assert!(
             system
@@ -704,11 +728,19 @@ mod tests {
             "the dead `Task: {{description}}` line must not appear (ADR-0039)"
         );
 
-        // The task is the user message, untouched by the system assembly.
-        assert_eq!(outcome.messages[1].role, neenee_core::Role::User);
-        assert_eq!(outcome.messages[1].content, "where are the handlers?");
+        assert!(
+            outcome
+                .messages
+                .iter()
+                .all(|message| message.role != neenee_core::Role::System),
+            "request-scoped policy must not be persisted in the child transcript"
+        );
+
+        // The task is the first durable user message.
+        assert_eq!(outcome.messages[0].role, neenee_core::Role::User);
+        assert_eq!(outcome.messages[0].content, "where are the handlers?");
         assert_eq!(
-            outcome.messages[1]
+            outcome.messages[0]
                 .origin
                 .as_ref()
                 .map(|origin| origin.kind),

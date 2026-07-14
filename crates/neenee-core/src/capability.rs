@@ -38,6 +38,55 @@ pub struct ProviderPromptHints {
     pub system_guidance: &'static str,
 }
 
+/// One immutable, provider-agnostic model request.
+///
+/// Messages and tool declarations travel together so a provider never has to
+/// retain request inputs in mutable side state. This is the contract exchanged
+/// by the agent (which assembles model context) and provider adapters (which
+/// serialize it into their protocol-specific wire shape).
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelRequest {
+    pub messages: Vec<Message>,
+    /// Tool declarations in the canonical function-spec shape produced by
+    /// [`Tool::to_openai_function`]. Provider adapters translate this neutral
+    /// harness representation into their own wire format when necessary.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_specs: Vec<serde_json::Value>,
+}
+
+impl ModelRequest {
+    /// Build a request without tools (title generation, summarization, tests).
+    pub fn new(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            tool_specs: Vec::new(),
+        }
+    }
+
+    /// Build a request and snapshot the supplied tool declarations atomically.
+    pub fn with_tools(messages: Vec<Message>, tools: &[Arc<dyn Tool>]) -> Self {
+        Self {
+            messages,
+            tool_specs: tools.iter().map(|tool| tool.to_openai_function()).collect(),
+        }
+    }
+
+    /// Borrow tool declarations in the optional form used by request builders.
+    pub fn tool_specs(&self) -> Option<&[serde_json::Value]> {
+        (!self.tool_specs.is_empty()).then_some(self.tool_specs.as_slice())
+    }
+
+    pub fn into_parts(self) -> (Vec<Message>, Vec<serde_json::Value>) {
+        (self.messages, self.tool_specs)
+    }
+}
+
+impl From<Vec<Message>> for ModelRequest {
+    fn from(messages: Vec<Message>) -> Self {
+        Self::new(messages)
+    }
+}
+
 /// A shared empty [`VariantSelection`] map, handy as a default borrow target so
 /// callers can always hand out `&VariantSelection` without an `Option`.
 pub fn empty_variant_selection() -> &'static VariantSelection {
@@ -67,17 +116,17 @@ pub enum ProviderStreamEvent {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
-    async fn chat(&self, messages: Vec<Message>) -> Result<Message, String>;
+    async fn chat(&self, request: ModelRequest) -> Result<Message, String>;
     async fn stream_chat(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String>;
     async fn stream_chat_events(
         &self,
-        messages: Vec<Message>,
+        request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         Ok(self
-            .stream_chat(messages)
+            .stream_chat(request)
             .await?
             .filter_map(|item| async move {
                 match item {
@@ -88,14 +137,6 @@ pub trait Provider: Send + Sync {
             })
             .boxed())
     }
-
-    /// Called by the agent before each turn so the provider can prepare tool
-    /// schemas. The agent hands in the already-resolved toolset — exactly one
-    /// variant per capability for the active model — so each tool's own
-    /// [`Tool::to_openai_function`] is authoritative; there is no per-model
-    /// patching at this layer. Default is a no-op for providers that don't
-    /// support native function calling.
-    fn prepare_tools(&self, _tools: &[Arc<dyn Tool>]) {}
 
     /// Stable provider/solution identifier (e.g. `"kimi-code"`, `"gemini"`).
     /// The harness stamps it onto assistant messages so a session that mixes

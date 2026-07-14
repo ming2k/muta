@@ -3,7 +3,7 @@
 //! The system prompt is no longer one imperative method that pushes string
 //! literals into a `Vec`. It is a [`SystemPromptRegistry`] of declarative
 //! [`SystemPromptSection`]s — one per behavioral paragraph — registered on the
-//! [`Agent`](crate::Agent) at construction. The `model_context` request funnel
+//! [`Agent`](crate::Agent) at construction. The `model_request` assembler
 //! rebuilds the singleton system message from live agent state before every
 //! provider request.
 //!
@@ -279,13 +279,12 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
 //
 // The `/review` diagnostic spawns a read-only reviewer envoy that used to
 // pre-seed its system message (`build_reviewer_system_prompt`) and then run
-// the streaming turn loop. But `ensure_system_message` replaces any leading
-// system message on round 1, so the seeded persona + dimensions + JSON
-// contract were clobbered by the default registry's tone+todo and never
-// reached the model — the feature limped along only because verdict parsing
-// degrades gracefully. The fix mirrors ADR-0039 stage 3: give the reviewer a
-// dedicated registry whose composition IS the review prompt, so the message
-// rebuilt every round is correct by construction.
+// the streaming turn loop. Request assembly projects any pre-seeded system
+// message out, so the seeded persona + dimensions + JSON contract were
+// replaced by the default registry's tone+todo and never reached the model —
+// the feature limped along only because verdict parsing degrades gracefully.
+// Give the reviewer a dedicated registry whose composition IS the review
+// prompt, so the request-scoped message is correct by construction.
 // ---------------------------------------------------------------------------
 
 /// The [`REVIEW`] role framing.
