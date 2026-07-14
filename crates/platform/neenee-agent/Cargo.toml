@@ -1,0 +1,35 @@
+[package]
+name = "neenee-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+neenee-core = { path = "../neenee-core" }
+neenee-ai-sdk-core = { path = "../../providers/neenee-ai-sdk-core" }
+neenee-store = { path = "../neenee-store" }
+neenee-providers = { path = "../../providers/neenee-providers" }
+neenee-tools = { path = "../neenee-tools" }
+neenee-skills = { path = "../neenee-skills" }
+neenee-auth = { path = "../neenee-auth" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+regex = "1"
+fastrand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+toml = { workspace = true }
+mockito = { workspace = true }
+
+[lints]
+workspace = true

@@ -14,7 +14,7 @@ hot-attach transport. Its machine-readable contract is
 
 ## Scope and current limitations
 
-This contract describes `crates/neenee-session/src/serve.rs` as it exists now:
+This contract describes `crates/platform/neenee-session/src/serve.rs` as it exists now:
 
 - `/serve [port] [--public]` starts a listener attached to the **currently
   running TUI session**.
@@ -307,10 +307,10 @@ A production frontend should:
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/neenee-session/src/serve.rs` (`Wire`)
-- requests/responses/events: `crates/neenee-core/src/events.rs`
-- transcript: `crates/neenee-core/src/message.rs`
-- tool output: `crates/neenee-core/src/tool_output.rs`
+- envelope: `crates/platform/neenee-session/src/serve.rs` (`Wire`)
+- requests/responses/events: `crates/platform/neenee-core/src/events.rs`
+- transcript: `crates/platform/neenee-core/src/message.rs`
+- tool output: `crates/platform/neenee-core/src/tool_output.rs`
 
 Any wire-visible change to those types must update
 `docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and the

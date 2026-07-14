@@ -19,7 +19,7 @@ grid line as one region.
 ## Phase 1 — Parsing (document.rs)
 
 `parse_blocks_markdown()` in
-[`document.rs`](../../crates/neenee-tui-view/src/document.rs) detects a
+[`document.rs`](../../apps/code/neenee-tui-view/src/document.rs) detects a
 table when it sees `| ... |` followed by a separator row (`|---|---|`):
 
 ```text
@@ -47,7 +47,7 @@ grid at draw time.
 ## Phase 2 — Layout (markdown_table.rs)
 
 `build_table_render()` in
-[`markdown_table.rs`](../../crates/neenee-tui-view/src/render/markdown_table.rs)
+[`markdown_table.rs`](../../apps/code/neenee-tui-view/src/render/markdown_table.rs)
 is a **pure function**: it takes `(headers, rows, aligns, max_width)` and
 returns a `TableRender` — a set of grid lines plus, for each data line, the
 byte span of every cell's padded content within that line.
@@ -98,7 +98,7 @@ inserting spaces to reach the column width.
 ## Phase 3 — Rendering and hit registration (message_body.rs)
 
 The `Block::Table` branch of `draw_message_body()` in
-[`message_body.rs`](../../crates/neenee-tui-view/src/render/message_body.rs)
+[`message_body.rs`](../../apps/code/neenee-tui-view/src/render/message_body.rs)
 does three things for every frame:
 
 ### 3a. Call the layout engine
@@ -155,7 +155,7 @@ for the same cells:
 
 ## Phase 4 — The dual hit-test system (layout.rs)
 
-[`layout.rs`](../../crates/neenee-tui-view/src/layout.rs) exposes two
+[`layout.rs`](../../apps/code/neenee-tui-view/src/layout.rs) exposes two
 query methods on `LayoutMap`:
 
 ### `hit_test(x, y) → Option<SemanticCursor>`
@@ -185,7 +185,7 @@ cell. The two results serve different purposes in the click cascade.
 
 When a mouse click arrives at `(x, y)`, the event loop runs a priority
 chain in
-[`event_loop.rs`](../../crates/neenee-code/src/tui/event_loop.rs):
+[`event_loop.rs`](../../apps/code/neenee-code/src/tui/event_loop.rs):
 
 ```text
 ┌─ Input box?            → focus Compose, start text selection
@@ -211,7 +211,7 @@ is never highlighted until the user drags.
 
 ## Phase 6 — The cell-locked drag (selection.rs)
 
-[`selection.rs`](../../crates/neenee-tui-view/src/selection.rs) defines:
+[`selection.rs`](../../apps/code/neenee-tui-view/src/selection.rs) defines:
 
 ```rust
 pub struct SelectionDrag {
@@ -307,9 +307,9 @@ table structure.
 
 | File | Role |
 |------|------|
-| [`document.rs`](../../crates/neenee-tui-view/src/document.rs) | Parses GFM tables into `Block::Table` |
-| [`markdown_table.rs`](../../crates/neenee-tui-view/src/render/markdown_table.rs) | Pure layout: column sizing, wrapping, grid assembly, `col_spans` |
-| [`message_body.rs`](../../crates/neenee-tui-view/src/render/message_body.rs) | Renders table lines, registers `TableCellHit`s and `table_grid` |
-| [`layout.rs`](../../crates/neenee-tui-view/src/layout.rs) | `LayoutMap` with dual hit systems: `hit_test` + `table_cell_at` |
-| [`selection.rs`](../../crates/neenee-tui-view/src/selection.rs) | `SelectionState::TableCell`, `SelectionDrag.origin_cell`, `table_cell_text`, `strip_table_borders` |
-| [`event_loop.rs`](../../crates/neenee-code/src/tui/event_loop.rs) | Click cascade: `table_cell_at` check, cell-locked drag arm/dispatch |
+| [`document.rs`](../../apps/code/neenee-tui-view/src/document.rs) | Parses GFM tables into `Block::Table` |
+| [`markdown_table.rs`](../../apps/code/neenee-tui-view/src/render/markdown_table.rs) | Pure layout: column sizing, wrapping, grid assembly, `col_spans` |
+| [`message_body.rs`](../../apps/code/neenee-tui-view/src/render/message_body.rs) | Renders table lines, registers `TableCellHit`s and `table_grid` |
+| [`layout.rs`](../../apps/code/neenee-tui-view/src/layout.rs) | `LayoutMap` with dual hit systems: `hit_test` + `table_cell_at` |
+| [`selection.rs`](../../apps/code/neenee-tui-view/src/selection.rs) | `SelectionState::TableCell`, `SelectionDrag.origin_cell`, `table_cell_text`, `strip_table_borders` |
+| [`event_loop.rs`](../../apps/code/neenee-code/src/tui/event_loop.rs) | Click cascade: `table_cell_at` check, cell-locked drag arm/dispatch |

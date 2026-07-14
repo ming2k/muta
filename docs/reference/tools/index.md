@@ -8,7 +8,7 @@ capability axes, the permission broker), see [Tool access](access.md).
 Most built-in tools live in `neenee-tools`; skill adapters live in
 `neenee-skills`, MCP adapters in `neenee-mcp`, and `envoy` in `neenee-agent`.
 The `Tool` trait is defined in
-`crates/neenee-core/src/capability.rs`.
+`crates/platform/neenee-core/src/capability.rs`.
 
 ## Registry
 
@@ -47,7 +47,7 @@ own the three phases directly. See [pursuits](pursuits.md) and ADR-0031.
 against.
 
 Parameters are exposed to the model as JSON Schema via
-`Tool::to_openai_function()` (`crates/neenee-core/src/capability.rs`), which
+`Tool::to_openai_function()` (`crates/platform/neenee-core/src/capability.rs`), which
 wraps `Tool::parameters()`.
 
 ## See also

@@ -40,7 +40,7 @@ guesses.
 ## The priority chain
 
 At the single booking point (`Agent::book_turn_usage`,
-`crates/neenee-agent/src/agent.rs`), each round's usage is resolved through this
+`crates/platform/neenee-agent/src/agent.rs`), each round's usage is resolved through this
 chain, in order:
 
 ```text
@@ -81,7 +81,7 @@ makes "we already have the streamed number" short-circuit cleanly.
 ## The local char-class estimator
 
 When no upstream usage is available, neenee estimates locally. The estimator
-lives in `crates/neenee-core/src/pressure.rs` (`count_tokens`) and replaces the
+lives in `crates/platform/neenee-core/src/pressure.rs` (`count_tokens`) and replaces the
 old flat `bytes / 4` heuristic that the codebase carried for years.
 
 ### Why `bytes / 4` was wrong

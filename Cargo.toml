@@ -1,27 +1,12 @@
 [workspace]
 members = [
-    "crates/neenee-core",
-    "crates/neenee-store",
-    "crates/neenee-ai-sdk-core",
-    "crates/neenee-ai-sdk-openai",
-    "crates/neenee-ai-sdk-anthropic",
-    "crates/neenee-ai-sdk-google",
-    "crates/neenee-providers",
-    "crates/neenee-auth",
-    "crates/neenee-tools",
-    "crates/neenee-skills",
-    "crates/neenee-mcp",
-    "crates/neenee-quant",
-    "crates/neenee-intelligence",
-    "crates/neenee-quant-gui",
-    "crates/neenee-agent",
-    "crates/neenee-code",
-    "crates/neenee-session",
-    "crates/neenee-tui",
-    "crates/neenee-tui-view",
-    "crates/neenee-editor",
+    "apps/code/*",
+    "apps/editor/*",
+    "apps/quant/*",
+    "crates/platform/*",
+    "crates/providers/*",
 ]
-default-members = ["crates/neenee-code"]
+default-members = ["apps/code/neenee-code"]
 resolver = "2"
 
 [workspace.package]

@@ -2,13 +2,13 @@
 
 The neenee terminal UI is split into three layers — see
 [architecture.md](architecture.md) for the full picture. In short: the in-house
-[neenee-tui](../../../crates/neenee-tui/src/lib.rs) engine (ADR-0038) is a
+[neenee-tui](../../../apps/code/neenee-tui/src/lib.rs) engine (ADR-0038) is a
 retained cell grid with write-marks-dirty tracking, a back/front diff, and a
 crossterm backend; the **view layer**
-([neenee-tui-view](../../../crates/neenee-tui-view/src/lib.rs)) holds the widget
+([neenee-tui-view](../../../apps/code/neenee-tui-view/src/lib.rs)) holds the widget
 tree (entry point `render/mod.rs`) and the semantic document model, rendering
 *into* the engine's grid via `Frame::render_widget`; and the **app shell**
-(`crates/neenee-code/src/tui`) owns `App` state, the event loop, and input
+(`apps/code/neenee-code/src/tui`) owns `App` state, the event loop, and input
 mapping, driving the view layer through the borrowed `TranscriptView` seam.
 
 ## Frame layout
@@ -75,7 +75,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 See [architecture.md](architecture.md) for how these three groups depend on each
 other. Paths below are relative to each crate's `src/`.
 
-### View layer — `crates/neenee-tui-view/src/`
+### View layer — `apps/code/neenee-tui-view/src/`
 
 | File | Responsibility |
 |------|---------------|
@@ -105,7 +105,7 @@ other. Paths below are relative to each crate's `src/`.
 | `modal.rs` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` |
 | `completion.rs` | Completion-menu data types: `Completion`, `CompletionKind` (matching logic stays in the shell) |
 
-### App shell — `crates/neenee-code/src/tui/`
+### App shell — `apps/code/neenee-code/src/tui/`
 
 | File | Responsibility |
 |------|---------------|

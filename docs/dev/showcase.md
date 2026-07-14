@@ -55,7 +55,7 @@ crossterm keypresses through a **key handler**, and redraws via the
                   └─────────────────────────────────┘
 ```
 
-The shared runner ([`common::run_showcase`](../../crates/neenee-code/src/showcase/common.rs))
+The shared runner ([`common::run_showcase`](../../apps/code/neenee-code/src/showcase/common.rs))
 owns the terminal lifecycle (raw mode, alternate screen) and the event poll
 loop. Every showcase passes it a `&mut State` plus two closures:
 
@@ -69,7 +69,7 @@ individual showcases only handle their own keys.
 ## File layout
 
 ```text
-crates/neenee-code/src/showcase/
+apps/code/neenee-code/src/showcase/
 ├── mod.rs        # dispatcher: parses `showcase <component>`, routes
 ├── common.rs     # shared: terminal setup/teardown + run_showcase() + chrome
 ├── question.rs   # question modal — uses the MVU QuestionModel
@@ -171,7 +171,7 @@ That's it — the new component is now in the `neenee-code showcase` list.
 ## The question modal and MVU
 
 The `question` showcase is special: it doesn't just call a renderer, it drives
-the [`QuestionModel`](../../crates/neenee-code/src/tui/question_model.rs) state
+the [`QuestionModel`](../../apps/code/neenee-code/src/tui/question_model.rs) state
 machine — the same pure `update()` function the production event loop uses.
 This is possible because the question modal was refactored to
 [Model-View-Update](https://guide.elm-lang.org/architecture/):

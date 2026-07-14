@@ -17,7 +17,7 @@ set -euo pipefail
 
 REPO="ming2k/neenee"
 # Binary name as published inside the release tarball (matches `[[bin]]` in
-# crates/neenee-code/Cargo.toml).
+# `apps/code/neenee-code/Cargo.toml`).
 BIN_NAME="neenee-code"
 # Where the binary lands. Honour an explicit override, otherwise ~/.local/bin
 # (no sudo needed; create it if missing).

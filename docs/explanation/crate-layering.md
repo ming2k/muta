@@ -13,7 +13,7 @@ neenee-code ──► neenee-session ──► neenee-agent ──► neenee-too
                      ├──► neenee-mcp ─────────────────────────────────────┤
                      └─────────────────────────────────────────────────────┴──► neenee-core
 
-neenee-code ──► neenee-tui ──► neenee-tui-view
+neenee-code ──► neenee-tui-view ──► neenee-tui
 
 neenee-quant-gui ──► neenee-quant
         │

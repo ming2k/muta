@@ -6,10 +6,10 @@ capability model that decides which path to take, see
 [Provider capabilities](../explanation/provider-capabilities.md).
 
 neenee resolves every provider through one catalog
-(`build_catalog` in `crates/neenee-agent/src/catalog.rs`): it materializes
+(`build_catalog` in `crates/platform/neenee-agent/src/catalog.rs`): it materializes
 registry presets, bespoke built-ins, and user-defined entries into channels
 with fully resolved credentials, then constructs the concrete `Provider` via
-`build_provider_for_channel` in `crates/neenee-providers/src/registry.rs`.
+`build_provider_for_channel` in `crates/providers/neenee-providers/src/registry.rs`.
 Startup and `/provider switch` share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
 
@@ -94,7 +94,7 @@ through several relays), with `default_channel` selecting the active one. See
 ## Path 2: Registry entry (built-in OpenAI-compatible preset)
 
 Add one row to the `OPENAI_PROVIDER_SPECS` const table in
-`crates/neenee-providers/src/registry.rs`:
+`crates/providers/neenee-providers/src/registry.rs`:
 
 ```rust
 OpenAiProviderSpec {
@@ -129,9 +129,9 @@ preset inherits native tool serialization, `stream_chat_events`, and the full
 
 By default a registry preset reads its API key and model from the environment
 variables above. To also let users persist them in `config.toml`, add the
-field pair to `Config` in `crates/neenee-store/src/config.rs` and an arm to
+field pair to `Config` in `crates/platform/neenee-store/src/config.rs` and an arm to
 `config_key_for` / `config_model_for` in
-`crates/neenee-agent/src/catalog.rs`, keyed by the same `id`. This is a
+`crates/platform/neenee-agent/src/catalog.rs`, keyed by the same `id`. This is a
 convenience layer over env vars, not a requirement — a preset with no config
 arms still works through its env vars.
 
@@ -163,12 +163,12 @@ fallback parser directly.
 
 Then wire the adapter into the two construction sites:
 
-1. Add a `Transport` variant in `crates/neenee-core/src/catalog.rs` and an arm
+1. Add a `Transport` variant in `crates/platform/neenee-core/src/catalog.rs` and an arm
    in `build_provider_for_channel`
-   (`crates/neenee-providers/src/registry.rs`) that constructs the adapter from
+   (`crates/providers/neenee-providers/src/registry.rs`) that constructs the adapter from
    the channel.
 2. Materialize the entry in `build_catalog`
-   (`crates/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
+   (`crates/platform/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
 
 Map neenee's `Role` enum to the provider's role names in both `chat` and
 `stream_chat`. The universal fallback assumes assistant text is reachable

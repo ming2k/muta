@@ -5,7 +5,7 @@ Both the OpenAI Chat Completions API and the Anthropic Messages API support
 assistant response** (parallel tool use). neenee speaks both: models tagged
 `WireFormat::OpenAiCompat` go through `OpenAiCompatProvider`, models tagged
 `WireFormat::AnthropicCompat` go through `AnthropicMessagesProvider`
-(`crates/neenee-core/src/model.rs`, `crates/neenee-providers/src/`).
+(`crates/platform/neenee-core/src/model.rs`, `crates/providers/neenee-providers/src/`).
 
 The two protocols carry the *same* loop — declare tools, model emits calls,
 client runs them, client appends results, re-send — but disagree on almost every
@@ -83,11 +83,11 @@ Anthropic:
 
 ## How neenee bridges the two
 
-neenee's internal `Message` (`crates/neenee-core/src/`) is **OpenAI-shaped**: a
+neenee's internal `Message` (`crates/platform/neenee-core/src/`) is **OpenAI-shaped**: a
 flat list with a `Tool` role, `tool_calls`, a JSON-string `arguments`, and a
 `tool_call_id`. `OpenAiCompatProvider` serializes that almost verbatim. The
 work lives in `AnthropicMessagesProvider::request_body`
-(`crates/neenee-providers/src/anthropic_compat.rs`), which reshapes the flat
+(`crates/providers/neenee-providers/src/anthropic_compat.rs`), which reshapes the flat
 list into Messages format on the way out:
 
 - **System lifting.** Leading `Role::System` messages are concatenated and moved

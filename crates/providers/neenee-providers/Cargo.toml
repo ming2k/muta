@@ -1,0 +1,28 @@
+[package]
+name = "neenee-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+neenee-core = { path = "../../platform/neenee-core" }
+neenee-ai-sdk-core = { path = "../neenee-ai-sdk-core" }
+neenee-ai-sdk-openai = { path = "../neenee-ai-sdk-openai" }
+neenee-ai-sdk-anthropic = { path = "../neenee-ai-sdk-anthropic" }
+neenee-ai-sdk-google = { path = "../neenee-ai-sdk-google" }
+async-trait = { workspace = true }
+futures = { workspace = true }
+# Live model-list discovery (`GET /v1/models` &c.) and its JSON parsing.
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# `wire` integration test exercises the full HTTP → SSE → parse path against a
+# localhost mock server, covering behaviour the in-module unit tests (which can
+# only call pure parser functions) cannot reach.
+mockito = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

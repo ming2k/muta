@@ -106,30 +106,28 @@ The version bump is a single dedicated commit, separate from any code
 fixes. The commit message follows the established convention
 `release: bump version to vX.Y.Z`.
 
-Bump every workspace member in lockstep. neenee uses a single shared
-version across all crates, so a partial bump breaks the path-dependency
-graph.
+Bump the workspace package version once. Every member inherits this value, so
+Cargo applies the release version consistently across the grouped application,
+platform, and provider directories.
 
 ```bash
-# Bump all workspace crate manifests from the old to the new version.
-for f in crates/*/Cargo.toml; do
-  sed -i 's/^version = "0.13.0"/version = "0.14.0"/' "$f"
-done
+# Edit `[workspace.package] version` in the root manifest.
+sed -i 's/^version = "0.13.0"/version = "0.14.0"/' Cargo.toml
 ```
 
 Refresh `Cargo.lock` so it carries the new version. `cargo check`
 rewrites the lock for the workspace members:
 
 ```bash
-cargo check --workspace --locked \
+cargo check --workspace \
   --exclude neenee-quant --exclude neenee-quant-gui
 ```
 
 Verify all members moved together:
 
 ```bash
-grep -h '^version' crates/*/Cargo.toml | sort -u   # one line: 0.14.0
-git diff --stat Cargo.lock                          # workspace version bumps
+rg '^version = "0.14.0"' Cargo.toml  # one workspace package version
+git diff --stat Cargo.lock             # workspace member version bumps
 ```
 
 ### 4. Finalize the changelog
@@ -158,7 +156,7 @@ entry, add one now — a tag is the last chance to record it.
 Stage the version bump and changelog together:
 
 ```bash
-git add crates/*/Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "release: bump version to v0.14.0"
 ```
 

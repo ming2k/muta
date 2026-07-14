@@ -85,7 +85,7 @@ the name is derived from the parent directory.
 
 ## How discovery finds your skill
 
-The skill registry (`crates/neenee-skills/src/discovery.rs`) scans each
+The skill registry (`crates/platform/neenee-skills/src/discovery.rs`) scans each
 source directory **recursively**. Any file named exactly `SKILL.md` is parsed
 as a skill, regardless of how deeply it is nested. This means a single scan
 root can hold many skills side by side, and skills can live in nested

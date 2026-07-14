@@ -127,7 +127,7 @@ jobs:
     timeout-minutes: 30
     # Treat rustdoc warnings (broken intra-doc links, etc.) as failures so the
     # job can't quietly regress. The one prior broken link (`EXPLORE`) was fixed
-    # in `crates/neenee-agent/src/task_tool.rs`.
+    # in `crates/platform/neenee-agent/src/task_tool.rs`.
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:

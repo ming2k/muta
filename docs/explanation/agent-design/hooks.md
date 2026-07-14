@@ -205,7 +205,7 @@ influence what the model summarizes), and `PostCompact` observes the result.
 - [ADR-0025](../../adr/0025-lifecycle-event-hooks.md) — the decision to
   adopt a single event axis with implicit capability, and the multi-axis
   design rejected along the way
-- [ADR-0030](../../adr/0030-early-loop-intervention-and-turn-hook.md) — the
+- [ADR-0030](../../adr/0030-early-loop-intervention-and-round-hook.md) — the
   `Deny`-forbidden `Round` event (called `Turn` when the ADR was written) that
   partially supersedes ADR-0025's exclusion of loop-count (the in-loop review
   nudge it also added was later reworked into the deterministic guard of

@@ -34,7 +34,7 @@ secretly reach into application state.
 
 ## The three layers
 
-### Engine — `crates/neenee-tui`
+### Engine — `apps/code/neenee-tui`
 
 The in-house grid engine (ADR-0038). A retained 2-D cell grid with
 write-marks-dirty tracking, a back/front buffer diff, and a crossterm backend.
@@ -42,7 +42,7 @@ It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
 and friends. It has **no neenee dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `crates/neenee-tui-view`
+### View — `apps/code/neenee-tui-view`
 
 The widget layer and the semantic document model. Everything here is a pure
 function of borrowed data: it reads `neenee_core` domain types and a `Theme`
@@ -63,7 +63,7 @@ compiler enforces the one-way boundary.
 | `modal` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` (see below). |
 | `completion` | Completion-menu data types (`Completion`, `CompletionKind`) — the *matching logic* stays in the shell. |
 
-### App shell — `crates/neenee-code/src/tui`
+### App shell — `apps/code/neenee-code/src/tui`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the

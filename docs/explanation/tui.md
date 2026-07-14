@@ -124,7 +124,7 @@ Rendering is built on **`neenee-tui`**, neenee's in-house terminal engine
 backend that emits the minimal escape-code delta per frame. This is the
 vim/nvim `ScreenGrid` model, not an immediate-mode rebuild.
 
-The back [`Grid`](../../crates/neenee-tui/src/grid.rs) is the single source of
+The back [`Grid`](../../apps/code/neenee-tui/src/grid.rs) is the single source of
 truth for what the application wants on screen, and it is **retained** — not
 rebuilt from scratch each frame. Every write (`set`, `put`, `fill_rect`) marks
 the touched row dirty from the changed column leftward at *write time* (the
@@ -418,5 +418,5 @@ live in the lookup reference:
 - [Request flow](request-flow.md) — how streamed tokens reach the TUI
   over SSE.
 
-[neenee-tui]: ../../crates/neenee-tui/src/lib.rs
+[neenee-tui]: ../../apps/code/neenee-tui/src/lib.rs
 [Markdown rendering]: markdown-rendering.md

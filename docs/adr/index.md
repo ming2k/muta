@@ -74,3 +74,4 @@ See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
 | [0061](0061-atomic-model-request-boundary.md) | Atomic model request boundary: pair messages and tool declarations while separating durable conversation context from ephemeral request assembly | Accepted |
 | [0062](0062-longport-openapi-quant-adapter.md) | Direct LongPort OpenAPI adapter for quantitative trading | Accepted |
 | [0063](0063-intelligence-workbench-and-expert-council.md) | Intelligence workbench and expert council boundary | Accepted |
+| [0064](0064-product-family-workspace-layout.md) | Product-family workspace layout | Accepted |
