@@ -1,9 +1,38 @@
 use async_trait::async_trait;
 use neenee_core::{Tool, WebSearchConfig, truncate_utf8};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, OnceLock};
 
 use crate::search::SearchProvider;
+
+const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+/// A bounded, content-addressed observation of one public web page.
+///
+/// The raw body is deliberately not retained. Consumers get a stable hash for
+/// change detection plus a short text preview for review and notification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebPageSnapshot {
+    pub requested_url: String,
+    pub final_url: String,
+    pub title: String,
+    pub text_preview: String,
+    pub content_hash: String,
+    pub content_type: String,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub body_bytes: usize,
+    pub checked_at_ms: u64,
+}
+
+/// Result of a conditional page observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebSnapshotResult {
+    Modified(WebPageSnapshot),
+    NotModified { checked_at_ms: u64 },
+}
 
 /// Fetch a URL and return its text content (HTML stripped to text).
 pub struct WebFetchTool {
@@ -44,6 +73,132 @@ impl WebFetchTool {
         let built = self.client.get_or_init(|| http_client(&self.config));
         built.as_ref().map_err(|e| e.clone())
     }
+
+    /// Observe a public URL for durable change tracking.
+    ///
+    /// Supplying a prior ETag or Last-Modified value enables a conditional
+    /// request. Servers without validator support still work because callers
+    /// can compare [`WebPageSnapshot::content_hash`]. Bodies above 8 MiB are
+    /// rejected so a watched link cannot grow memory without bound.
+    pub async fn snapshot(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<WebSnapshotResult, String> {
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err("URL must start with http:// or https://".to_string());
+        }
+        crate::ssrf::assert_public_url(url).await?;
+
+        let mut request = self.client()?.get(url);
+        if let Some(value) = etag.map(str::trim).filter(|value| !value.is_empty()) {
+            request = request.header(reqwest::header::IF_NONE_MATCH, value);
+        }
+        if let Some(value) = last_modified
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            request = request.header(reqwest::header::IF_MODIFIED_SINCE, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("Request failed: {error}"))?;
+        let checked_at_ms = unix_now_ms();
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(WebSnapshotResult::NotModified { checked_at_ms });
+        }
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("HTTP {status} for {url}"));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_SNAPSHOT_BYTES as u64)
+        {
+            return Err(format!(
+                "Response for {url} exceeds the {} MiB tracking limit",
+                MAX_SNAPSHOT_BYTES / 1024 / 1024
+            ));
+        }
+
+        let final_url = response.url().to_string();
+        let headers = response.headers().clone();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| format!("Failed to read body: {error}"))?;
+        if body.len() > MAX_SNAPSHOT_BYTES {
+            return Err(format!(
+                "Response for {url} exceeds the {} MiB tracking limit",
+                MAX_SNAPSHOT_BYTES / 1024 / 1024
+            ));
+        }
+        let content_type = header_text(&headers, reqwest::header::CONTENT_TYPE)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let raw_text = String::from_utf8_lossy(&body);
+        let title = if content_type.contains("html") {
+            extract_html_title(&raw_text)
+        } else {
+            String::new()
+        };
+        let readable = if content_type.contains("html") {
+            html_to_text(&raw_text)
+        } else {
+            raw_text.trim().to_string()
+        };
+        let text_preview = truncate_utf8(&readable, 800).to_string();
+        let content_hash = format!("{:x}", Sha256::digest(&body));
+        Ok(WebSnapshotResult::Modified(WebPageSnapshot {
+            requested_url: url.to_string(),
+            final_url,
+            title,
+            text_preview,
+            content_hash,
+            content_type,
+            etag: header_text(&headers, reqwest::header::ETAG),
+            last_modified: header_text(&headers, reqwest::header::LAST_MODIFIED),
+            body_bytes: body.len(),
+            checked_at_ms,
+        }))
+    }
+}
+
+fn header_text(
+    headers: &reqwest::header::HeaderMap,
+    name: reqwest::header::HeaderName,
+) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_html_title(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let Some(open) = lower.find("<title") else {
+        return String::new();
+    };
+    let Some(start_offset) = lower[open..].find('>') else {
+        return String::new();
+    };
+    let start = open + start_offset + 1;
+    let Some(end_offset) = lower[start..].find("</title>") else {
+        return String::new();
+    };
+    html_to_text(&html[start..start + end_offset])
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
 }
 
 /// Build the shared HTTP client honoring the web tools' proxy and timeout.
@@ -359,3 +514,34 @@ neenee_core::register_tool!(WebSearchFactory => |ctx| {
         .unwrap_or_default();
     WebSearchTool::with_config(cfg)
 });
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn html_title_is_normalized_for_watch_summaries() {
+        let html = "<html><head><title>  Market &amp; Risk </title></head><body>x</body></html>";
+        assert_eq!(extract_html_title(html), "Market & Risk");
+        assert_eq!(extract_html_title("<html>untitled</html>"), "");
+    }
+
+    #[test]
+    fn snapshot_shape_round_trips_through_json() {
+        let snapshot = WebPageSnapshot {
+            requested_url: "https://example.com/a".to_string(),
+            final_url: "https://example.com/a".to_string(),
+            title: "A".to_string(),
+            text_preview: "preview".to_string(),
+            content_hash: format!("{:x}", Sha256::digest(b"body")),
+            content_type: "text/html".to_string(),
+            etag: Some("v1".to_string()),
+            last_modified: None,
+            body_bytes: 4,
+            checked_at_ms: 1,
+        };
+        let encoded = serde_json::to_string(&snapshot).expect("snapshot JSON");
+        let decoded: WebPageSnapshot = serde_json::from_str(&encoded).expect("snapshot round trip");
+        assert_eq!(decoded, snapshot);
+    }
+}

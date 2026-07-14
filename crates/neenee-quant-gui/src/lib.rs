@@ -6,6 +6,9 @@ use tokio::runtime::{Builder, Runtime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
+    Dashboard,
+    Intelligence,
+    Experts,
     Market,
     Backtest,
     Portfolio,
@@ -16,6 +19,9 @@ pub enum View {
 impl View {
     pub fn label(self) -> &'static str {
         match self {
+            View::Dashboard => "Overview",
+            View::Intelligence => "Intelligence",
+            View::Experts => "Expert council",
             View::Market => "Market",
             View::Backtest => "Backtest",
             View::Portfolio => "Portfolio",
@@ -27,14 +33,14 @@ impl View {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TradingMode {
-    Paper,
+    Disarmed,
     TradingArmed,
 }
 
 impl TradingMode {
     pub fn label(self) -> &'static str {
         match self {
-            TradingMode::Paper => "Paper",
+            TradingMode::Disarmed => "Trading disarmed",
             TradingMode::TradingArmed => "Trading armed",
         }
     }
@@ -99,11 +105,18 @@ impl AppState {
     ) -> Result<Self, std::io::Error> {
         let market_data_source = market_data_source.into();
         let config_summary = config_summary.into();
+        let default_symbol = if market_data_source == "longport-openapi" {
+            "AAPL.US"
+        } else {
+            "BTCUSDT"
+        };
         let starting_cash = config.paper.starting_cash;
-        let (risk_status, account_summary) = if config.broker.mode == "live-http" {
+        let live_broker = !matches!(config.broker.mode.as_str(), "paper" | "paper-trading");
+        let (risk_status, account_summary) = if live_broker {
+            let broker = broker_label(&config.broker.mode);
             (
-                "Live account: refresh positions before trading".to_string(),
-                "Live account: pending refresh".to_string(),
+                format!("{broker} account: refresh positions before trading"),
+                format!("{broker} account: pending refresh"),
             )
         } else {
             (
@@ -122,8 +135,8 @@ impl AppState {
             place_order: neenee_quant::PlaceOrderTool::with_runtime(runtime.clone()),
             cancel_order: neenee_quant::CancelOrderTool::with_runtime(runtime.clone()),
             list_positions: neenee_quant::ListPositionsTool::with_runtime(runtime),
-            view: View::Market,
-            mode: TradingMode::Paper,
+            view: View::Dashboard,
+            mode: TradingMode::Disarmed,
             market_kind: 0,
             order_side: 0,
             order_type: 0,
@@ -140,7 +153,7 @@ impl AppState {
             market_data_source,
             config_summary,
             config,
-            symbol: "BTCUSDT".to_string(),
+            symbol: default_symbol.to_string(),
             interval: "1h".to_string(),
             strategy: "sma_cross(50,200)".to_string(),
             start: "2024-01-01".to_string(),
@@ -148,7 +161,7 @@ impl AppState {
             capital: "100000".to_string(),
             quantity: "0.1".to_string(),
             price: String::new(),
-            order_id: "PAPER-000000".to_string(),
+            order_id: String::new(),
         })
     }
 
@@ -158,9 +171,13 @@ impl AppState {
 
     pub fn toggle_mode(&mut self) {
         self.mode = match self.mode {
-            TradingMode::Paper => TradingMode::TradingArmed,
-            TradingMode::TradingArmed => TradingMode::Paper,
+            TradingMode::Disarmed => TradingMode::TradingArmed,
+            TradingMode::TradingArmed => TradingMode::Disarmed,
         };
+    }
+
+    pub fn broker_label(&self) -> &'static str {
+        broker_label(&self.config.broker.mode)
     }
 
     pub fn fetch_market_data(&mut self) {
@@ -432,8 +449,16 @@ fn account_status(raw: &str) -> Option<String> {
         .and_then(Value::as_f64)
         .unwrap_or_default();
     Some(format!(
-        "Paper account: cash {cash:.2}, available {available_cash:.2}, equity {equity:.2}, realized {realized:.2}, fees {total_commission:.2}, net {net_pnl:.2}, buying power {buying_power:.2}, reserved buy {reserved_buy:.2}, gross exposure {gross_exposure:.2}, projected {projected_gross:.2}"
+        "Account: cash {cash:.2}, available {available_cash:.2}, equity {equity:.2}, realized {realized:.2}, fees {total_commission:.2}, net {net_pnl:.2}, buying power {buying_power:.2}, reserved buy {reserved_buy:.2}, gross exposure {gross_exposure:.2}, projected {projected_gross:.2}"
     ))
+}
+
+fn broker_label(mode: &str) -> &'static str {
+    match mode {
+        "longport" | "longbridge" => "LongPort live",
+        "live-http" => "Live HTTP",
+        _ => "Paper",
+    }
 }
 
 fn account_summary(raw: &str) -> Option<String> {
@@ -681,9 +706,28 @@ mod tests {
 
         let state = AppState::from_config(config).expect("state");
 
-        assert!(state.risk_status.contains("Live account"));
-        assert_eq!(state.account_summary, "Live account: pending refresh");
+        assert!(state.risk_status.contains("Live HTTP account"));
+        assert_eq!(state.account_summary, "Live HTTP account: pending refresh");
         assert!(state.config_summary.contains("broker=live-http"));
+    }
+
+    #[test]
+    fn longport_config_uses_live_labels_and_longport_symbol_format() {
+        let mut config = neenee_quant::QuantConfig::default();
+        config.market_data.source = "longport".to_string();
+        config.broker.mode = "longport".to_string();
+        let state = AppState::with_runtime(
+            neenee_quant::QuantRuntime::new(),
+            config.market_data_source_label(),
+            config.summary(),
+            config,
+        )
+        .expect("state");
+
+        assert_eq!(state.broker_label(), "LongPort live");
+        assert_eq!(state.symbol, "AAPL.US");
+        assert_eq!(state.mode, TradingMode::Disarmed);
+        assert!(state.risk_status.contains("LongPort live account"));
     }
 
     #[test]

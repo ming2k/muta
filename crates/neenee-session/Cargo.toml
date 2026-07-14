@@ -15,7 +15,7 @@ neenee-mcp = { path = "../neenee-mcp" }
 neenee-agent = { path = "../neenee-agent" }
 neenee-auth = { path = "../neenee-auth" }
 async-trait = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures = { workspace = true }

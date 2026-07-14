@@ -12,6 +12,7 @@ members = [
     "crates/neenee-skills",
     "crates/neenee-mcp",
     "crates/neenee-quant",
+    "crates/neenee-intelligence",
     "crates/neenee-quant-gui",
     "crates/neenee-agent",
     "crates/neenee-code",
@@ -20,6 +21,7 @@ members = [
     "crates/neenee-tui-view",
     "crates/neenee-editor",
 ]
+default-members = ["crates/neenee-code"]
 resolver = "2"
 
 [workspace.package]
@@ -38,7 +40,7 @@ serde_yaml = { package = "yaml_serde", version = "0.10" }
 toml = "1"
 futures = "0.3"
 async-trait = "0.1"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", default-features = false }
 tokio-util = "0.7"
 tokio-tungstenite = "0.26"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "stream", "socks", "gzip", "brotli", "query", "form"] }
@@ -55,6 +57,7 @@ inventory = "0.3"
 rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+longport = { version = "4.3.3", features = ["blocking"] }
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is
@@ -89,3 +92,19 @@ iris = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015ad
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+
+# Keep local builds and test binaries useful for backtraces without embedding
+# full dependency debug information in every linked artifact. Full symbols can
+# still be requested for a focused debugging session with CARGO_PROFILE_*.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test.package."*"]
+debug = 0

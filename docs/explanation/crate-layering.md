@@ -14,6 +14,12 @@ neenee-code ──► neenee-session ──► neenee-agent ──► neenee-too
                      └─────────────────────────────────────────────────────┴──► neenee-core
 
 neenee-code ──► neenee-tui ──► neenee-tui-view
+
+neenee-quant-gui ──► neenee-quant
+        │
+        └──► neenee-intelligence ──► neenee-agent
+                         ├─────────► neenee-tools
+                         └─────────► neenee-store
 ```
 
 An arrow means “depends on.” The diagram shows the important responsibility
@@ -111,7 +117,7 @@ stubs (ADR-0037 Step 6, Pending). Today there is exactly one session per
 process, driven by `SessionDriver` constructed in the application's `main.rs`.
 The multi-session daemon is the remaining migration step.
 
-### Application layer — `neenee-code` (and future `neenee-quant-bin`)
+### Application layer — `neenee-code` and the quant decision workspace
 
 The binary. `neenee-code`:
 
@@ -136,10 +142,16 @@ The binary. `neenee-code`:
 > `neenee-session` alone for orchestration. The direct deps are an interim
 > “reach-through,” not a design intent — see ADR-0037 §1 for the target DAG.
 
-`neenee-quant` is currently a library of quant-domain tools (implements
-`neenee_core::Tool`); a future `neenee-quant-bin` would mirror `neenee-code`:
-bring its own quant identity + principal + tools + `/backtest`-class slash
-commands, then drive the same neutral `neenee-session`.
+The quant application uses a different composition. `neenee-quant` owns market
+data, backtesting, portfolio state, risk checks, paper brokerage, and live
+broker adapters. `neenee-intelligence` owns public-web aggregation, explicit
+link observation, and structured expert meetings. `neenee-quant-gui` is the
+application shell that presents both services through optics/iris.
+
+That composition preserves a hard execution boundary. The intelligence crate
+has no dependency on the quant crate and no broker adapter. Expert conclusions
+remain evidence for a user decision; only an explicit, armed quant action can
+mutate an account. See ADR-0063.
 
 ## How a request flows across the layers
 
@@ -175,3 +187,5 @@ multi-frontend transport details.
   agent-to-tools integration and stateful tool construction.
 - [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) — separate
   skill/MCP capability crates and dynamic tool publication.
+- [ADR-0063](../adr/0063-intelligence-workbench-and-expert-council.md) — the
+  intelligence service and quant GUI composition boundary.

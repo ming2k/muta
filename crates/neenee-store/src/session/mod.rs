@@ -2551,6 +2551,22 @@ mod tests {
         }};
     }
 
+    struct CompactionProvider;
+
+    #[async_trait]
+    impl Provider for CompactionProvider {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+            Ok(Message::new(Role::Assistant, "mock AI summary"))
+        }
+
+        async fn stream_chat(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+    }
+
     #[tokio::test]
     async fn session_data_round_trips() {
         let directory =
@@ -3713,8 +3729,6 @@ mod tests {
 
     #[tokio::test]
     async fn run_compaction_uses_provider_summary() {
-        use neenee_providers::MockProvider;
-
         let mut history = vec![
             Message::new(Role::System, "system"),
             Message::new(Role::User, "old question"),
@@ -3722,7 +3736,7 @@ mod tests {
             Message::new(Role::User, "recent question"),
             Message::new(Role::Assistant, "recent answer"),
         ];
-        let provider: Arc<dyn Provider> = Arc::new(MockProvider);
+        let provider: Arc<dyn Provider> = Arc::new(CompactionProvider);
 
         let result = run_compaction(&mut history, 10_000, 1, Some(provider), Vec::new())
             .await
@@ -3737,11 +3751,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_compaction_falls_back_when_provider_errors() {
-        use neenee_providers::MockProvider;
-
-        // MockProvider succeeds, so to exercise the fallback we instead pass a
-        // provider that always errors and assert we still get an excerpt-based
-        // checkpoint.
+        // Pass a provider that always errors and assert we still get an
+        // excerpt-based checkpoint.
         struct FailingProvider;
         #[async_trait]
         impl Provider for FailingProvider {
@@ -3772,8 +3783,5 @@ mod tests {
 
         // Fallback excerpt summary references the old question.
         assert!(result.model_window[0].content.contains("old question"));
-        // Silence the unused MockProvider import warning while keeping the path
-        // documented for the success-case test above.
-        let _: &dyn Provider = &MockProvider;
     }
 }

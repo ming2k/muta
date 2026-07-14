@@ -13,7 +13,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 glob = { workspace = true }
 walkdir = { workspace = true }
@@ -22,6 +22,7 @@ inventory = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 chrono = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }

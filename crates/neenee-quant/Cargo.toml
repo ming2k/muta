@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+longport = ["dep:longport"]
+
 [dependencies]
 neenee-core = { path = "../neenee-core" }
 neenee-agent = { path = "../neenee-agent" }
@@ -13,10 +17,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 chrono = { workspace = true }
+longport = { workspace = true, optional = true }
 
 [dev-dependencies]
 neenee-tools = { path = "../neenee-tools" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

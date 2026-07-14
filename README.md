@@ -24,6 +24,9 @@
 - **Autonomous Pursuits** — Set a pursuit with `/pursue <condition>` and the harness keeps the turn going (a stop-gate) until the condition is met. Schedule recurring prompts on a clock with `/repeat`.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
+- **Quant Intelligence** — A modern optics/iris decision workspace combines
+  paper or LongPort trading with ranked public signals, watched-link changes,
+  and a two-round, multi-perspective expert council.
 
 ## Quick Start
 
@@ -44,6 +47,15 @@ cargo run --release
 ```
 
 On first launch, press `Ctrl+M` to pick a provider and enter your API key. Then just start typing.
+
+Run the quantitative decision workspace against the simulated paper account:
+
+```bash
+cargo run -p neenee-quant-gui --features gui -- --paper
+```
+
+See [How to use the intelligence workbench](docs/how-to/use-intelligence-workbench.md)
+before configuring its separate real-account entry point.
 
 ## Key Bindings
 

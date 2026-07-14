@@ -18,6 +18,10 @@
 use std::path::PathBuf;
 
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_GUI").is_none() {
+        return;
+    }
+
     for dir in discover_optics_link_dirs() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
     }

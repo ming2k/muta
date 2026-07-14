@@ -21,8 +21,8 @@ selections, blinking caret) inside iris's paint callback, under the chrome.
 | `main.rs`   | application shell: iris window, lens chrome, keymap, open/save   |
 
 `buffer`/`selection`/`history`/`editor` are pure Rust — no optics dependency —
-so the crate builds and tests headless with `--no-default-features`. Only
-`display`/`render`/`main.rs` (the `gui` feature) touch optics.
+so the crate builds and tests headless by default. Only
+`display`/`render`/`main.rs` (the opt-in `gui` feature) touch optics.
 
 ## Build
 
@@ -31,7 +31,7 @@ pkg-config, resolving the sibling `../optics/build` meson tree):
 
 ```bash
 cd ../optics && meson setup build -Dexamples=false -Dtests=false && meson compile -C build
-cd ../neenee && cargo build -p neenee-editor
+cd ../neenee && cargo build -p neenee-editor --features gui
 ```
 
 The crate's `build.rs` bakes an rpath to the optics shared libraries into the
@@ -41,7 +41,7 @@ pkg-config probe finds the install prefix and rpaths there.)
 ## Run
 
 ```bash
-cargo run -p neenee-editor -- path/to/file.txt
+cargo run -p neenee-editor --features gui -- path/to/file.txt
 ```
 
 ## Key bindings
@@ -60,5 +60,5 @@ cargo run -p neenee-editor -- path/to/file.txt
 The headless core has unit + integration tests (no GPU/compositor needed):
 
 ```bash
-cargo test -p neenee-editor --no-default-features
+cargo test -p neenee-editor
 ```

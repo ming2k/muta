@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 neenee-core = { path = "../neenee-core" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 futures = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -24,9 +24,6 @@ hex = "0.4"
 chrono = { workspace = true }
 inventory = { workspace = true }
 rusqlite = { workspace = true }
-
-[dev-dependencies]
-neenee-providers = { path = "../neenee-providers" }
 
 [lints]
 workspace = true

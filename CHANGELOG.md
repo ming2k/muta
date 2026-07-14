@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Decision-intelligence workbench and expert council.** A new reusable
+  `neenee-intelligence` crate collects ranked public-web topics, persists the
+  last good result per source, and observes selected links with HTTP validators
+  plus SHA-256 fallback fingerprints. The expert council runs five independent
+  perspectives, a cross-examination round, and a separate meeting-manager
+  synthesis while keeping all conclusions advisory and outside the order path.
+  See [ADR-0063](docs/adr/0063-intelligence-workbench-and-expert-council.md).
+
+- **Direct Longbridge/LongPort OpenAPI integration for `neenee-quant`.** The
+  official Rust SDK now supplies real-time quotes, candlesticks, depth, live
+  account balances and positions, order submission, and cancellation through
+  one shared adapter. API-key and OAuth authentication are supported, secrets
+  stay out of serialized/debug configuration, local risk and audit checks run
+  before live submission, and client-side trade throttling follows LongPort's
+  published limit. The quant GUI now distinguishes disarmed trading from paper
+  brokerage and reports the configured live broker accurately. See
+  [ADR-0062](docs/adr/0062-longport-openapi-quant-adapter.md).
+
 ### Changed
+
+- **Heavy native and broker integrations are now opt-in during development.**
+  Root Cargo commands default to `neenee-code`; the editor GUI and LongPort
+  SDK require explicit `gui` and `longport` features. Development and test
+  profiles retain line information while omitting full dependency symbols,
+  and test builds no longer retain incremental state indefinitely.
+
+- **The quant GUI is now a modern decision workspace.** The optics/iris shell
+  adds an overview cockpit, public-intelligence and expert-council workspaces,
+  a persistent control plane, modern navigation, status treatments, and clear
+  paper-versus-live execution boundaries. The optics Rust binding now exposes
+  its existing headings, multiline text, icons, and theme controls so product
+  layout remains in the application crate.
 
 - **Transient provider failures now resume from completed tool checkpoints.**
   The retry path resends only the pending model request, preserving turn state
@@ -50,6 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and publishes per-server snapshots through the connector-neutral
   `DynamicToolSink`. The former MCP-specific shared lock and source-name
   inference are removed.
+
+### Fixed
+
+- **The quant GUI now starts directly against a local optics build.** Its
+  binary carries runtime search paths for the optics shared libraries instead
+  of requiring a manual `LD_LIBRARY_PATH`. Explicit `--paper` and
+  `--longport-live` launch profiles keep simulated and real-account entry
+  points separate; live mode still starts disarmed.
 
 ## [0.20.3] - 2026-07-12
 

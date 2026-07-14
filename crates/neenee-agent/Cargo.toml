@@ -13,7 +13,7 @@ neenee-providers = { path = "../neenee-providers" }
 neenee-tools = { path = "../neenee-tools" }
 neenee-skills = { path = "../neenee-skills" }
 neenee-auth = { path = "../neenee-auth" }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }

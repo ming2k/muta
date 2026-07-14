@@ -19,13 +19,11 @@ env:
   RUSTFLAGS: "-D warnings"
 
 # Workspace-selection policy: `neenee-quant` and `neenee-quant-gui` are still
-# under active development and are explicitly excluded from every gating job
-# below. They remain workspace members (so they inherit shared deps/lints and
-# can be built locally), but a regression in those WIP crates must never turn a
-# neenee-code PR red. The check/clippy/test/msrv/doc/coverage jobs express this
-# with `--exclude neenee-quant --exclude neenee-quant-gui`; the fmt job uses an
-# explicit `-p` list instead, because `cargo fmt` does not support `--exclude`.
-# When a crate is ready to be gated, drop its exclusion here (and the fmt list).
+# under active development and are explicitly excluded from compile, test,
+# documentation, and coverage jobs below. They remain workspace members (so
+# they inherit shared dependencies, profiles, and lints), while the cheap fmt
+# job covers every member without compiling native or optional dependencies.
+# When a crate is ready to be gated, drop its exclusions from those jobs.
 
 # Least privilege: everything below is read-only by default. Jobs that need
 # more (the audit job posts a check run) widen their own scope.
@@ -61,21 +59,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      # `cargo fmt` has no `--exclude`; select the gated crates explicitly
-      # with `-p` instead. Keep this list in sync with the workspace members
-      # above minus the WIP `neenee-quant` / `neenee-quant-gui`.
-      - run: |
-          cargo fmt --check \
-            -p neenee-core \
-            -p neenee-store \
-            -p neenee-providers \
-            -p neenee-tools \
-            -p neenee-agent \
-            -p neenee-code \
-            -p neenee-server \
-            -p neenee-tui \
-            -p neenee-tui-view \
-            -p neenee-editor
+      # Formatting is cheap and dependency-free, so cover every member instead
+      # of maintaining a second, easily stale workspace list here.
+      - run: cargo fmt --all --check
 
   clippy:
     name: Clippy

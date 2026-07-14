@@ -1,5 +1,5 @@
 [package]
-name = "neenee-skills"
+name = "neenee-intelligence"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,19 +8,18 @@ license.workspace = true
 [dependencies]
 neenee-core = { path = "../neenee-core" }
 neenee-store = { path = "../neenee-store" }
+neenee-tools = { path = "../neenee-tools" }
+neenee-agent = { path = "../neenee-agent" }
 async-trait = { workspace = true }
-reqwest = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros", "rt"] }
-tracing = { workspace = true }
-walkdir = { workspace = true }
-dirs = { workspace = true }
-inventory = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
-uuid = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

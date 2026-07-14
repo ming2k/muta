@@ -31,13 +31,16 @@
 
 pub mod backtest;
 pub mod config;
+#[cfg(feature = "longport")]
+mod longport_adapter;
 pub mod market_data;
 pub mod orders;
 pub mod runtime;
 
 pub use backtest::BacktestTool;
 pub use config::{
-    BrokerRuntimeConfig, LiveHttpBrokerConfig, MarketDataConfig, PaperRuntimeConfig, QuantConfig,
+    BrokerRuntimeConfig, LiveHttpBrokerConfig, LongportRuntimeConfig, MarketDataConfig,
+    PaperRuntimeConfig, QuantConfig,
 };
 pub use market_data::MarketDataTool;
 pub use orders::{CancelOrderTool, ListPositionsTool, PlaceOrderTool};
