@@ -168,9 +168,10 @@ impl ContentModalSpec {
     pub const TOOLS: Self = Self::new(64, 11, 84);
     pub const MCP: Self = Self::new(64, 9, 84);
     pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
-    pub const CONFIG: Self = Self::new(62, 8, 80);
-    pub const CONFIG_NUDGE: Self = Self::new(66, 11, 84);
+    pub const CONFIG: Self = Self::new(62, 14, 84);
     pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);
+    pub const CONFIG_THEME: Self = Self::new(78, 14, 84);
+    pub const CONFIG_THEME_CUSTOM: Self = Self::new(70, 18, 90);
 
     pub const fn modal_spec(self) -> ModalSpec {
         self.spec

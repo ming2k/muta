@@ -110,21 +110,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         tracing::warn!(?error, "could not persist provider model reconciliation");
     }
+    // Overlay persisted fitted-model metadata onto model resolution, so ids a
+    // trusted provider advertised (but the static registry does not know)
+    // resolve with their real capabilities from the very first request.
+    catalog::sync_fitted_model_registry(&config);
 
     // Live model-list discovery for API-sourced instances. Runs in the
     // BACKGROUND so slow/unreachable providers never delay the first frame:
     // every instance already has either its fixed snapshot or last known valid
     // subset. The live `GET /models` result is intersected with the client's
-    // protocol-compatible model registry; failure or an empty intersection
-    // leaves that subset untouched. The task persists only actual changes, so
-    // the refreshed list takes effect on the next session (the same pattern
-    // models.dev uses). See `discover_provider_models` for the exact rules.
+    // protocol-compatible model registry (or, for fitting-enabled trusted
+    // templates, materialized wholesale with capability metadata); failure or
+    // an empty intersection leaves that subset untouched. The task persists
+    // only actual changes, so the refreshed list takes effect on the next
+    // session (the same pattern models.dev uses). See
+    // `discover_provider_models` for the exact rules.
     tokio::spawn(async move {
         let mut config = Config::load();
-        if catalog::discover_provider_models(&mut config).await
-            && let Err(error) = config.save()
-        {
-            tracing::warn!(?error, "live discovery: could not persist refreshed models");
+        if catalog::discover_provider_models(&mut config).await {
+            catalog::sync_fitted_model_registry(&config);
+            if let Err(error) = config.save() {
+                tracing::warn!(?error, "live discovery: could not persist refreshed models");
+            }
         }
     });
 

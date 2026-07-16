@@ -85,7 +85,7 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 |-----------|---------|--------|
 | **Pursuit continuation** | The `/pursue` stop-gate forces another turn because the pursuit is not yet complete | Re-anchor the model on the objective and define what counts as completion; the prompt marks the objective as untrusted user data and sets rigorous completion-audit criteria so the model does not declare victory prematurely |
 | **Pursuit objective updated** | The user edits the active pursuit mid-flight | Tell the model the objective changed and to drop work that only served the old one |
-| **Read-loop nudge** | The deterministic guard detects a repeated identical read (a stuck anchor or a two-page thrash) | Break the self-reinforcing context: the model is told the repeated read returns identical content and must change course; it escalates once if the loop persists, then stays silent and lets the hard backstops (`Esc`, `hard_stop_turns`, `abort`) take over |
+| **Doom-loop block note** | The optional deterministic guard blocks a repeated watched tool signature before execution | Tell the model the call was refused and require a different command, file, query, or an explicit `abort` |
 | **Compaction checkpoint** | Context pressure triggers compaction | Wrap a model-written summary of archived turns under a stable header that flags it as durable context, not a new request. See [Context compaction](context-compaction.md) |
 | **Implicit skill** | The latest user message mentions a skill name | Load the skill body so the model behaves as if it had explicitly invoked it. See [Skills](skills.md) |
 | **Hook output** | A configured lifecycle hook returns injected context | Let user practice (lint failures, CI gates, reminders) re-enter the conversation. See [Lifecycle hooks](hooks.md) |
@@ -93,12 +93,11 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 | **Envoy task** | The harness starts an envoy or a session-review diagnostic | Open the child transcript with its delegated task or review input while retaining its non-user provenance |
 | **Tool image** | A tool returns an image that must travel as a user-role companion message | Preserve the image attachment and identify the protocol projection as harness-authored context |
 
-A defining property is that none of these are semantic guesses. The read-loop
-nudge, in particular, fires on *provable* waste — an identical read returns
-byte-for-byte identical content — so its detection is pure bookkeeping with no
-false positives on legitimate work. Real research reads *different* things, so
-its signatures never repeat. This keeps the cheapest intervention also the most
-precise. See [ADR-0034](../../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md).
+A defining property is that none of these are semantic guesses. The optional
+doom-loop guard uses deterministic normalized signatures rather than a model
+judgement. Its normalization is deliberately conservative, so it remains an
+advanced, default-off policy rather than an always-on heuristic. See the
+[Configuration Reference](../../reference/configuration.md#agent-behavior).
 
 The injected prompts follow a consistent design. Pursuit-related prompts wrap
 user-supplied text in an XML sentinel (`<objective>` / `<untrusted_objective>`)

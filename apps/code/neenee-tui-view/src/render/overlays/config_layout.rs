@@ -65,6 +65,7 @@ pub fn draw_config_layout_modal(
     current: Strategy,
     modal_index: usize,
     scroll: &mut usize,
+    keymap_open: bool,
     theme: &Theme,
 ) -> neenee_tui::Rect {
     let probe = content_modal_probe(frame, ContentModalSpec::CONFIG_LAYOUT);
@@ -95,8 +96,8 @@ pub fn draw_config_layout_modal(
     for (i, opt) in options().iter().enumerate() {
         let is_sel = i == modal_index;
         let is_active = opt.config_value == current_value;
-        let s: ChoiceStyle = choice_style(ChoiceTone::Filled, is_sel, theme);
-        let glyph = if is_sel { "▸" } else { " " };
+        let s: ChoiceStyle = choice_style(ChoiceTone::Flat, is_sel, theme);
+        let glyph = if is_sel { "›" } else { " " };
         let mark = if is_active { "● " } else { "○ " };
 
         let label_w = 12usize;
@@ -140,7 +141,7 @@ pub fn draw_config_layout_modal(
 
     let header = [
         HeaderPart::Text {
-            text: "Configuration › ",
+            text: "Settings  /  ",
             accent: false,
         },
         HeaderPart::title("Layout"),
@@ -163,8 +164,8 @@ pub fn draw_config_layout_modal(
                 FooterHint::always("Esc", "back"),
             ],
             extra_footer_hints: &[],
-            keymap_open: false,
-            show_more: false,
+            keymap_open,
+            show_more: true,
         },
         theme,
     )

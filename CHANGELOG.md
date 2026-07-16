@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configurable TUI color schemes.** The redesigned flat `/config` Settings
+  overlay now includes live-previewed Zen, Midnight, Nord, Catppuccin, and
+  Paper presets plus an editable eight-color custom palette. Appearance and
+  layout choices apply immediately and persist under `[tui]` in `config.toml`.
+
 - **Decision-intelligence workbench and expert council.** A new reusable
   `neenee-intelligence` crate collects ranked public-web topics, persists the
   last good result per source, and observes selected links with HTTP validators
@@ -28,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-0062](docs/adr/0062-longport-openapi-quant-adapter.md).
 
 ### Changed
+
+- **The `kimi-code` provider now serves Kimi K3 and tracks the platform's live
+  model list.** Moonshot's coding platform released K3 — a 1,048,576-token
+  context window, image/video inputs, and always-on thinking — so the preset's
+  default model id moves from `kimi-k2.7-code` to `k3`. The template now
+  discovers the platform's `GET /models` list at startup and **fits**
+  capability metadata for platform ids the client registry does not know
+  (context window, reasoning, vision, effort tiers; persisted per instance and
+  overlaid onto model resolution behind the static registry), so future
+  platform models become usable with zero client changes. Existing instances
+  upgrade their model source from `Fixed` to `Api` automatically; their
+  current default model is preserved while it remains advertised. See
+  [ADR-0065](docs/adr/0065-runtime-fitted-model-capability-overlay.md).
 
 - **Heavy native and broker integrations are now opt-in during development.**
   Root Cargo commands default to `neenee-code`; the editor GUI and LongPort
@@ -85,6 +103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inference are removed.
 
 ### Fixed
+
+- **The opencode-go seed no longer includes models the relay does not serve.**
+  Legacy-config migration seeds one channel per entry of
+  `OPENCODE_GO_SERVED_MODELS` (mirroring models.dev) instead of every
+  registry model in a served family, so newly registered models like Kimi
+  `k3` — and the already-registered `glm-4.7` — no longer appear as go
+  channels that would only answer "model not found".
 
 - **The quant GUI now starts directly against a local optics build.** Its
   binary carries runtime search paths for the optics shared libraries instead

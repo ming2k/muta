@@ -55,7 +55,7 @@ env vars are data in that table, not hard-coded per struct.
 
 | `default_provider` | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|----------|-------------|-----------|--------------------------|
-| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `MOONSHOT_API_KEY` | `MOONSHOT_MODEL` | `kimi-k2.7-code` (pinned to the latest K2.7 Code weights) |
+| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `MOONSHOT_API_KEY` | `MOONSHOT_MODEL` | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
 | `zai-code` | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `ZAI_API_KEY` | `ZAI_MODEL` | `glm-5.2` (default), `glm-5.1`, `glm-4.7` |
 
 ### Bespoke providers
@@ -75,8 +75,13 @@ Notes:
 - `zai-code` targets the Z.AI (Zhipu) coding-plan platform and serves the
   GLM-5 family; it sends a `opencode/1.17.10` User-Agent so the platform
   recognises a coding agent.
-- `kimi-code` pins a single model id (`kimi-k2.7-code`); overrides are
-  ignored.
+- `kimi-code` tracks the Kimi Code platform's live `GET /models` list at
+  startup (`k3` by default); model overrides are ignored. It is the first
+  **fitting** template: platform-native ids the client registry does not know
+  (e.g. `kimi-for-coding`) are materialized with the capability metadata the
+  platform advertises — context window, reasoning, vision, effort tiers — so
+  new platform models become usable with zero client changes
+  ([ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md)).
 - `opencode-go` is a runtime-derived entry whose model list is built from
   `KNOWN_MODELS` at startup, spanning OpenAI- and Anthropic-compatible
   models (e.g. MiniMax, Qwen) behind opencode-go's endpoints.

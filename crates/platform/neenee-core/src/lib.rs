@@ -19,6 +19,8 @@ pub use async_trait::async_trait;
 
 pub mod cron;
 pub use cron::CronExpr;
+pub mod colorschemeconfig;
+pub use colorschemeconfig::ColorSchemeConfig;
 pub mod pursuits;
 pub mod repeat;
 pub use pursuits::{Pursuit, RoundOutcome, RoundTimer, ThreadPursuit, TokenUsage};
@@ -90,7 +92,10 @@ pub use hooks::{
 };
 pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
-pub use model::{KNOWN_MODELS, Model, WireFormat, model_by_id, resolve as resolve_model};
+pub use model::{
+    FittedModel, KNOWN_MODELS, Model, WireFormat, model_by_id, register_fitted_models,
+    resolve as resolve_model,
+};
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
     PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens,

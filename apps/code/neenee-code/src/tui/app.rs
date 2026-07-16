@@ -291,7 +291,7 @@ pub struct App {
     pub permissions_scroll: usize,
     /// Body scroll offset of the config manager modal. Reset to 0 each time
     /// the modal opens; clamped each frame by the renderer. Selection cursor
-    /// for the config root and nudge sub-page reuses [`Self::modal_index`].
+    /// for the config root and its sub-pages reuses [`Self::modal_index`].
     pub config_scroll: usize,
     /// Index of the skills-modal row whose detail block is expanded
     /// ([`Modal::Skills`]), or `None` when every row is collapsed. `Enter`
@@ -333,11 +333,6 @@ pub struct App {
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Refreshed each frame from the response listener.
     pub session_context: Option<neenee_core::SessionContextSnapshot>,
-    /// Live doom-guard config snapshot, mirrored from
-    /// `AgentResponse::DoomGuardConfigUpdated` each frame. The `/config` modal
-    /// reads this to render the current window and enabled state; edits go out
-    /// as `AgentRequest::UpdateDoomGuardConfig`.
-    pub nudge_config: neenee_core::DoomGuardConfig,
     pub loop_status: String,
     pub activity_status: String,
     /// Whether write-tool permission prompts are bypassed this session
@@ -467,6 +462,16 @@ pub struct App {
     /// tool round grouped under a labelled header). See
     /// `crate::tui::render::layout::Strategy`.
     pub transcript_layout: crate::tui::render::layout::Strategy,
+    /// Canonical active color-scheme id (`zen`, a built-in preset, or
+    /// `custom`). The renderer theme is rebuilt from this value immediately
+    /// when the Appearance page applies a choice.
+    pub color_scheme: String,
+    /// Last persisted custom semantic palette. Retained while a preset is
+    /// active so switching schemes never discards the user's colors.
+    pub custom_color_scheme: neenee_core::ColorSchemeConfig,
+    /// Transactional working copy used by the custom palette editor. Esc
+    /// discards it; Enter promotes it to `custom_color_scheme` and persists it.
+    pub custom_color_draft: neenee_core::ColorSchemeConfig,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means
     /// every key has its ordinary input-box meaning (typing flows into the

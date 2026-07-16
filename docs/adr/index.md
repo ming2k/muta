@@ -75,3 +75,4 @@ See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
 | [0062](0062-longport-openapi-quant-adapter.md) | Direct LongPort OpenAPI adapter for quantitative trading | Accepted |
 | [0063](0063-intelligence-workbench-and-expert-council.md) | Intelligence workbench and expert council boundary | Accepted |
 | [0064](0064-product-family-workspace-layout.md) | Product-family workspace layout | Accepted |
+| [0065](0065-runtime-fitted-model-capability-overlay.md) | Runtime-fitted model capability overlay: trusted provider templates fit metadata for registry-unknown ids from live `/models` (persisted per instance, overlaid onto `model::resolve` behind the static registry); `kimi-code` opts in first | Accepted |

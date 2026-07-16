@@ -62,7 +62,13 @@ pub fn provider() -> io::Result<()> {
                 true,
                 true,
             ),
-            mk("kimi-code", "Kimi Code", &["kimi-k2.7-code"], false, true),
+            mk(
+                "kimi-code",
+                "Kimi Code",
+                &["k3", "kimi-k2.7-code"],
+                false,
+                true,
+            ),
         ],
     };
     let key_status: HashMap<String, bool> = picker
@@ -92,7 +98,7 @@ pub fn provider() -> io::Result<()> {
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut lm = LayoutMap::new();
                 let query = if s.search { s.query.trim() } else { "" };
-                let ranked = crate::tui::providers_filtered_from(&s.picker, query);
+                let ranked = crate::tui::providers::providers_filtered_from(&s.picker, query);
                 // The draw closure borrows state immutably; follow-selection
                 // re-anchors the scroll each frame, so a frame-local offset is
                 // sufficient for the showcase.

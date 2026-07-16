@@ -6,6 +6,7 @@
 use crate::startup::BuiltinCmd;
 use crate::tui::App;
 pub use neenee_tui_view::completion::{Completion, CompletionItemKind, CompletionKind};
+use neenee_tui_view::render::{composer_text_width, composer_wrapped_pos};
 
 // The built-in slash-command vocabulary (names + descriptions) lives in ONE
 // place: `startup::BuiltinCmd::ALL`. Completion, `/help`, and the dispatch
@@ -303,6 +304,63 @@ pub(super) fn sort_path_completions(comps: &mut [Completion]) {
             .cmp(&a_dir)
             .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
     });
+}
+
+/// Column (absolute screen x) the completion popup's leading edge should sit
+/// at so the menu hangs off the token it completes:
+///
+/// - `/command` — the trigger starts the input, so the popup aligns with the
+///   start of the composer's text area (the prompt prefix is
+///   `COMPOSER_PROMPT_PREFIX_COLS = 2` columns, matched below rather than
+///   imported so the `pub(super)` design constant stays private to the view
+///   crate).
+/// - `@path` — the `@` trigger's column, mapped through the composer's
+///   wrapped-line layout so the popup follows the token even when the input
+///   wraps (the mention scanner rejects tokens containing newlines, so the
+///   `@` is always in the text the wrapper sees).
+pub fn completion_anchor_x(
+    input: &str,
+    byte_cursor: usize,
+    input_rect: neenee_tui::Rect,
+    kind: CompletionKind,
+) -> u16 {
+    const COMPOSER_PROMPT_PREFIX_COLS: u16 = 2;
+    let text_width = composer_text_width(input_rect.width as usize);
+    let trigger_byte = match kind {
+        CompletionKind::Path => mention_range_at(input, byte_cursor)
+            .map(|(start, _)| start)
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let (_, col) = composer_wrapped_pos(input, text_width, trigger_byte);
+    input_rect.x + COMPOSER_PROMPT_PREFIX_COLS + col.min(text_width) as u16
+}
+
+/// Byte length of the leading `/command` token when the input names a
+/// *known* command — a built-in (`BuiltinCmd::from_slash`) or one of the
+/// user-defined `custom_commands` — so the composer can accent it and the
+/// user can tell a resolved command apart from plain prose (or from an
+/// unrecognized `/`-prefix, which stays in the normal text color). Only the
+/// command token is covered, never the argument tail. `None` for non-slash
+/// input.
+pub fn resolved_slash_command_len(
+    input: &str,
+    custom_commands: &[(String, String)],
+) -> Option<usize> {
+    if !input.starts_with('/') {
+        return None;
+    }
+    // `split_custom_command` trims the input and strips the leading `/` from
+    // the name it returns, so compare against a re-slashed token. The token
+    // length in the original input is the name length plus the `/`.
+    let (bare, _args) = crate::startup::split_custom_command(input);
+    if bare.is_empty() {
+        return None;
+    }
+    let slashed = format!("/{bare}");
+    let known = BuiltinCmd::from_slash(&slashed).is_some()
+        || custom_commands.iter().any(|(cmd, _)| cmd == &slashed);
+    known.then_some(slashed.len())
 }
 
 /// Pure core of [`App::active_mention_range`]. Given the input bytes and a

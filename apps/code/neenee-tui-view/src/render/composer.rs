@@ -4,7 +4,7 @@
 
 use neenee_tui::text::{cursor_column, str_len};
 use neenee_tui::{
-    Frame, Paragraph, Rect, Style, {Line, Span},
+    Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
 };
 
 use crate::layout::{BlockRegion, LayoutMap};
@@ -59,6 +59,39 @@ fn composer_wrapped(input: &str, text_width: usize, byte_cursor: usize) -> Vec<W
 pub(super) fn input_row_count(input: &str, text_width: usize, byte_cursor: usize) -> usize {
     composer_wrapped(input, text_width, byte_cursor)
         .len()
+        .max(1)
+}
+
+/// Display column of `byte` inside the composer's wrapped text grid: the row
+/// it lands on plus the column within that row, both relative to the text
+/// area (the prompt glyph is added back by the caller when it needs screen
+/// coordinates). Shares [`composer_wrapped`] with the draw path so the two
+/// can never disagree on where a byte sits.
+///
+/// A byte exactly at a wrapped-line boundary resolves to column 0 of the
+/// *next* row (the position the caret would occupy), so the completion
+/// popup's leading edge follows the trigger token across wrap boundaries
+/// instead of sticking to the end of the previous row.
+pub fn composer_wrapped_pos(input: &str, text_width: usize, byte: usize) -> (usize, usize) {
+    let wrapped = composer_wrapped(input, text_width, byte);
+    // A byte exactly at a wrapped-line boundary (the end of one row and the
+    // start of the continuation) resolves to column 0 of the continuation —
+    // the position the trigger glyph itself occupies. Otherwise the byte
+    // lands on the first row whose end covers it.
+    for (row, wl) in wrapped.iter().enumerate() {
+        if byte >= wl.start_byte && byte < wl.end_byte {
+            let local = byte.saturating_sub(wl.start_byte).min(wl.text.len());
+            return (row, cursor_column(&wl.text, local));
+        }
+    }
+    (wrapped.len().saturating_sub(1), 0)
+}
+
+/// Display width of the composer's text area inside a box of `full_width`
+/// columns (the total minus the left prompt prefix and right padding).
+pub fn composer_text_width(full_width: usize) -> usize {
+    full_width
+        .saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
         .max(1)
 }
 
@@ -150,6 +183,74 @@ pub fn draw_composer(
     input_scroll: &mut usize,
     selection: &SelectionState,
 ) {
+    draw_composer_impl(
+        frame,
+        input_rect,
+        input,
+        byte_cursor,
+        focused,
+        show_caret,
+        theme,
+        layout_map,
+        record,
+        input_scroll,
+        selection,
+        None,
+    )
+}
+
+/// Like [`draw_composer`], but paints the `highlight_len`-byte run at the
+/// start of the input in bold + the theme's accent color. Used by the shell
+/// to mark a resolved `/command` token so it reads differently from plain
+/// prose (and from an unmatched `/`-prefix, which stays in the normal text
+/// color). The length is clamped per wrapped row so the accent never bleeds
+/// into the argument text when the input wraps.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_composer_highlighted(
+    frame: &mut Frame,
+    input_rect: Rect,
+    input: &str,
+    byte_cursor: usize,
+    focused: bool,
+    show_caret: bool,
+    theme: &Theme,
+    layout_map: &mut LayoutMap,
+    record: bool,
+    input_scroll: &mut usize,
+    selection: &SelectionState,
+    highlight_len: usize,
+) {
+    draw_composer_impl(
+        frame,
+        input_rect,
+        input,
+        byte_cursor,
+        focused,
+        show_caret,
+        theme,
+        layout_map,
+        record,
+        input_scroll,
+        selection,
+        Some(highlight_len),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_composer_impl(
+    frame: &mut Frame,
+    input_rect: Rect,
+    input: &str,
+    byte_cursor: usize,
+    focused: bool,
+    show_caret: bool,
+    theme: &Theme,
+    layout_map: &mut LayoutMap,
+    record: bool,
+    input_scroll: &mut usize,
+    selection: &SelectionState,
+    highlight_len: Option<usize>,
+) {
     // The input box is a flat panel: each text row carries panel_bg and is
     // prefixed with `› ` on the first wrapped line / a two-space indent on
     // continuations. The top and bottom edges are half-block rows so the panel
@@ -233,6 +334,12 @@ pub fn draw_composer(
         let selected_bg = theme.selected();
         let text_fg = theme.fg();
         let base_text = Style::default().bg(panel_bg).fg(text_fg);
+        // Resolved `/command` token: bold + accent color, echoing the
+        // completion menu's command column so the two surfaces read alike.
+        let accent_text = Style::default()
+            .bg(panel_bg)
+            .fg(theme.brand())
+            .add_modifier(Modifier::BOLD);
         for (i, wl) in wrapped[start..end].iter().enumerate() {
             let used = COMPOSER_PROMPT_PREFIX_COLS + str_len(&wl.text);
             let mut spans = if start + i == 0 {
@@ -241,9 +348,15 @@ pub fn draw_composer(
                 vec![indent.clone()]
             };
             let selected = line_selection(sel_range, wl);
-            match selected {
-                None => spans.push(Span::styled(wl.text.clone(), base_text)),
-                Some((lo, hi)) => {
+            // A resolved `/command` token is accented from the input's first
+            // byte; clamp to this wrapped row so the accent stops at the wrap
+            // boundary instead of bleeding into the argument text.
+            let hl_end = highlight_len
+                .filter(|_| start + i == 0)
+                .map(|len| len.min(wl.text.len()));
+            match (selected, hl_end) {
+                (None, hl) => push_accented(&mut spans, &wl.text, hl, base_text, accent_text),
+                (Some((lo, hi)), None) => {
                     if lo > 0 {
                         spans.push(Span::styled(wl.text[..lo].to_string(), base_text));
                     }
@@ -253,6 +366,32 @@ pub fn draw_composer(
                     ));
                     if hi < wl.text.len() {
                         spans.push(Span::styled(wl.text[hi..].to_string(), base_text));
+                    }
+                }
+                // Selection wins over the command accent inside its range so
+                // the highlighted slice stays uniformly selected.
+                (Some((lo, hi)), Some(end)) => {
+                    if lo > 0 {
+                        push_accented(
+                            &mut spans,
+                            &wl.text[..lo],
+                            Some(end.min(lo)),
+                            base_text,
+                            accent_text,
+                        );
+                    }
+                    spans.push(Span::styled(
+                        wl.text[lo..hi].to_string(),
+                        base_text.bg(selected_bg),
+                    ));
+                    if hi < wl.text.len() {
+                        push_accented(
+                            &mut spans,
+                            &wl.text[hi..],
+                            Some(end.saturating_sub(hi)).filter(|e| *e > 0),
+                            base_text,
+                            accent_text,
+                        );
                     }
                 }
             }
@@ -299,5 +438,28 @@ pub fn draw_composer(
     // terminal cursor are always identical.
     if show_caret {
         frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+/// Push `text` onto `spans`, styling the first `accent_len` bytes with
+/// `accent` and the remainder with `base`. `None` (or a zero length) renders
+/// the whole slice in `base`. The length is expected to land on a char
+/// boundary — the composer clamps it against wrapped-line text, which always
+/// breaks on grapheme boundaries.
+fn push_accented(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    accent_len: Option<usize>,
+    base: Style,
+    accent: Style,
+) {
+    match accent_len.filter(|len| *len > 0 && *len <= text.len()) {
+        None => spans.push(Span::styled(text.to_string(), base)),
+        Some(len) => {
+            spans.push(Span::styled(text[..len].to_string(), accent));
+            if len < text.len() {
+                spans.push(Span::styled(text[len..].to_string(), base));
+            }
+        }
     }
 }

@@ -105,10 +105,9 @@ pub async fn dispatch(
         }
         Some(BuiltinCmd::Config) => {
             // Handled in the TUI: `/config` opens the config manager modal
-            // locally (intercepted in input.rs as `InputAction::OpenConfig`),
-            // so it is never forwarded here as a SlashCommand. The modal
-            // reads the live `doom_guard_config` snapshot and sends
-            // `AgentRequest::UpdateDoomGuardConfig` to mutate settings.
+            // locally for presentation settings (intercepted in input.rs as
+            // `InputAction::OpenConfig`), so it is never forwarded here as a
+            // SlashCommand.
         }
         Some(BuiltinCmd::Tools) => {
             // Handled in TUI (`/tools` opens the tools manager modal

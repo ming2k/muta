@@ -36,7 +36,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | Term | Definition |
 |------|------------|
 | **agent** | Umbrella term for the execution engine (`Agent`, crate `neenee-agent`) and the engine-level protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every running role is an agent; use `principal` or `envoy` when the role matters. [Harness architecture](../explanation/agent-design/harness.md) |
-| **principal** | The top-level, human-facing agent a frontend drives. Owns the visible conversation and the user-tunable `[principal]` config table (`hard_stop_turns`, `loop_review_enabled`). [Configuration](configuration.md) |
+| **principal** | The top-level, human-facing agent a frontend drives. Owns the visible conversation and the user-tunable `[principal]` config table (`hard_stop_turns`, `allow_model_stdin`, and the advanced `nudge` guard). [Configuration](configuration.md) |
 | **envoy** | An isolated child agent the principal spawns via the `envoy` tool to serve a bounded sub-question; fresh history, profile-filtered tools, shares only the provider. See the [Envoys](#envoys) section. [Envoys](../explanation/agent-design/envoys.md) |
 
 ## Pursuits and scheduling
@@ -124,6 +124,8 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[NEENEE_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
+| **fitted model** | A model id the static registry does not know, materialized from a trusted provider's live `/models` capability fields (context window, reasoning, vision, effort tiers); persisted per instance and overlaid onto `model::resolve` behind the static registry. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
+| **model discovery** | Live `GET /models` fetch for template-sourced provider instances (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted templates. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
 
 ## Persistence
 

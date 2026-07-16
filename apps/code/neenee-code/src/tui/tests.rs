@@ -9,7 +9,8 @@ use tokio::sync::mpsc;
 use crate::tui::app::{App, CaretOwner};
 use crate::tui::completion::CompletionKind;
 use crate::tui::completion::{
-    is_explicit_path_prefix, manual_walk, mention_range_at, path_query_match, resolve_explicit_dir,
+    completion_anchor_x, is_explicit_path_prefix, manual_walk, mention_range_at, path_query_match,
+    resolve_explicit_dir, resolved_slash_command_len,
 };
 use crate::tui::config;
 use crate::tui::event_loop::{display_status, focused_messages_mut};
@@ -583,6 +584,82 @@ fn mention_range_detects_at_start_of_input() {
 }
 
 #[test]
+fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
+    // A `/command` replaces the whole input, so the popup hangs off the
+    // start of the composer's text area — the rect's left edge plus the
+    // two-column prompt prefix.
+    let rect = neenee_tui::Rect::new(0, 10, 80, 3);
+    let x = completion_anchor_x("/pu", 3, rect, CompletionKind::Slash);
+    assert_eq!(x, rect.x + 2);
+}
+
+#[test]
+fn completion_anchor_aligns_path_menu_with_the_at_trigger() {
+    // `look at @sr` — the `@` sits at display column 8 of the input, so the
+    // popup's leading edge lands 8 columns right of the text area's start.
+    let rect = neenee_tui::Rect::new(0, 10, 80, 3);
+    let input = "look at @sr";
+    let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
+    assert_eq!(x, rect.x + 2 + 8);
+}
+
+#[test]
+fn completion_anchor_follows_the_at_trigger_across_wraps() {
+    // A 10-column-wide text area (rect 14 wide minus the 2+2 composer
+    // padding) wraps `wrap this @sr` after `wrap this `; the `@` then starts
+    // the second text row at column 0, so the popup realigns to the text
+    // area's left edge instead of sticking to the pre-wrap column.
+    let rect = neenee_tui::Rect::new(0, 10, 14, 4);
+    let input = "wrap this @sr";
+    let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
+    assert_eq!(x, rect.x + 2);
+}
+
+#[test]
+fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
+    // No wrap: the `@` at display column 10 keeps its column even on a
+    // narrow-ish box, so the popup tracks the token exactly.
+    let rect = neenee_tui::Rect::new(0, 10, 20, 3);
+    let input = "wrap this @sr";
+    let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
+    assert_eq!(x, rect.x + 2 + 10);
+}
+
+// ----- resolved `/command` highlight tests -----
+
+#[test]
+fn resolved_slash_len_matches_builtin_command_without_args() {
+    assert_eq!(resolved_slash_command_len("/clear", &[]), Some(6));
+}
+
+#[test]
+fn resolved_slash_len_covers_only_the_command_token_not_args() {
+    // `/session new` — only `/session` (8 bytes) is the resolved command;
+    // the argument tail is excluded so the accent stops at the token.
+    assert_eq!(resolved_slash_command_len("/session new", &[]), Some(8));
+}
+
+#[test]
+fn resolved_slash_len_matches_custom_command() {
+    let customs = vec![("/deploy".to_string(), "Deploy the app".to_string())];
+    assert_eq!(
+        resolved_slash_command_len("/deploy prod", &customs),
+        Some(7)
+    );
+}
+
+#[test]
+fn resolved_slash_len_rejects_partial_prefix_and_unknown_commands() {
+    // A bare `/` or an in-progress prefix is not yet a command.
+    assert_eq!(resolved_slash_command_len("/", &[]), None);
+    assert_eq!(resolved_slash_command_len("/cle", &[]), None);
+    assert_eq!(resolved_slash_command_len("/not-a-command", &[]), None);
+    // Plain prose and `@` mentions never highlight.
+    assert_eq!(resolved_slash_command_len("hello", &[]), None);
+    assert_eq!(resolved_slash_command_len("@src/main.rs", &[]), None);
+}
+
+#[test]
 fn mention_range_detects_inline_after_whitespace() {
     // `look at @src`: the `@` follows a space, so the range starts at the
     // `@` and ends at the cursor.
@@ -933,7 +1010,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         path_scan_cache: None,
         current_pursuit: None,
         session_context: None,
-        nudge_config: neenee_core::DoomGuardConfig::default(),
         loop_status: "idle".to_string(),
         activity_status: String::new(),
         unattended: false,
@@ -973,6 +1049,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         hovered_step: None,
         tool_density: Arc::new(AtomicBool::new(false)),
         transcript_layout: crate::tui::render::layout::Strategy::default(),
+        color_scheme: "zen".to_string(),
+        custom_color_scheme: neenee_core::ColorSchemeConfig::default(),
+        custom_color_draft: neenee_core::ColorSchemeConfig::default(),
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),
@@ -2102,6 +2181,7 @@ fn caret_owner_modal_for_caret_modals() {
         Modal::ModelEditor,
         Modal::CustomProvider,
         Modal::HistorySearch,
+        Modal::ConfigThemeCustom,
     ] {
         app.active_modal = modal;
         assert_eq!(
@@ -2249,6 +2329,7 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
         Modal::ModelEditor,
         Modal::CustomProvider,
         Modal::HistorySearch,
+        Modal::ConfigThemeCustom,
     ];
     for m in owns {
         assert!(m.owns_caret(), "{m:?} must own the caret");

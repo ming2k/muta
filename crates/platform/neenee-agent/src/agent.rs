@@ -203,16 +203,13 @@ pub struct Agent {
     /// `set_hard_stop_turns`. This is the sole execution cap; session review
     /// is on-demand (`/review`) and never aborts a turn.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
-    /// Whether the deterministic read-loop guard ([`crate::loop_guard`]) may
-    /// inject its anti-anchoring nudge, and the tunable thresholds it uses.
-    /// Default **disabled** ([`neenee_core::NudgeConfig::default`]);
-    /// seeded from `[principal.nudge]` in `config.toml` and flipped to
-    /// [`NudgeConfig::disabled`] for envoys and the review diagnostic via
-    /// `set_nudge_config`. Held behind an `Arc<RwLock>` so a runtime update
-    /// from the `/config` modal (`set_nudge_config`) replaces both the master
-    /// switch and the thresholds atomically; the round-boundary path reads
-    /// `enabled` and the per-turn guard reads the thresholds when it is
-    /// constructed (`TurnState::guards_default`).
+    /// Advanced pre-dispatch doom-loop guard configuration. Default
+    /// **disabled** ([`neenee_core::DoomGuardConfig::default`]); seeded from
+    /// `[principal.nudge]` in `config.toml` and forced to
+    /// [`neenee_core::DoomGuardConfig::disabled`] for envoys and the review
+    /// diagnostic. Held behind an `Arc<RwLock>` because principal-profile
+    /// overlays can replace the configuration atomically; the per-turn guard
+    /// reads it when `TurnState` is constructed.
     doom_guard_config: Arc<std::sync::RwLock<neenee_core::DoomGuardConfig>>,
     /// Whether the model may supply stdin bytes for a `bash` call it emits
     /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
@@ -985,15 +982,11 @@ impl Agent {
         }
     }
 
-    /// Replace the live nudge configuration atomically. The next turn
-    /// reconstructs its per-turn guard from the new thresholds (the current
-    /// turn, if any, keeps its already-built guard state — per-turn state is
-    /// not retroactively patched). The `enabled` flag is read at every round
-    /// boundary in `Self::apply_guard_actions`, so a mid-turn toggle takes
-    /// effect on the very next round.
+    /// Replace the live doom-guard configuration atomically. The next turn
+    /// reconstructs its per-turn guard from the new settings; the current
+    /// turn, if any, keeps its already-built guard state.
     ///
-    /// Wired from `[principal.nudge]` in `config.toml` at startup, mutated at
-    /// runtime by the `/config` modal, and forced to
+    /// Wired from `[principal.nudge]` in `config.toml` at startup and forced to
     /// [`neenee_core::DoomGuardConfig::disabled`] on envoys and the review
     /// diagnostic so they run unobstructed regardless of user settings.
     pub fn set_doom_guard_config(&self, config: neenee_core::DoomGuardConfig) {
@@ -1003,8 +996,7 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner()) = config;
     }
 
-    /// Snapshot of the live doom-guard configuration. The `/config` modal reads
-    /// this to render the current values; the round boundary reads
+    /// Snapshot of the live doom-guard configuration. The round boundary reads
     /// `enabled` to gate the pre-dispatch doom check.
     pub fn doom_guard_config(&self) -> neenee_core::DoomGuardConfig {
         *self

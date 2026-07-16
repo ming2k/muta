@@ -153,7 +153,9 @@ authoritative and the duplicate call is not executed.
 
 ## Safety bounds
 
-- 3 consecutive identical tool calls.
+- Exact tool-call replays after a provider retry are never re-executed.
+- An optional deterministic doom-loop guard can block repeated watched tool
+  signatures before execution.
 - 8 seconds to initialize an MCP server.
 
 Distinct tool calls and autonomous loop iterations are both **uncapped**,
@@ -165,19 +167,20 @@ context window; the user can interrupt at any time with `Esc` or
 rounds per round, 50 autonomous iterations per `/loop`) that this decision
 removed.
 
-### Read-loop guard (ADR-0034)
+### Advanced doom-loop guard
 
-The cheapest stuck state to detect is the *repeated read*: the model re-issuing
-the same `read_file` (one page, or thrashing between two pages) without progress.
-Identical read arguments return identical bytes, so this is a *provable* waste
-that needs no model judgement. A per-round guard
-(`neenee-agent/src/loop_guard.rs`) keeps a sliding window of recent read-turn
-signatures and, when one recurs past a threshold, injects a hidden anti-anchoring
-nudge (`InjectionKind::LoopReviewNudge`) naming the repeated read and demanding a
-different action. Detection is pure bookkeeping (no inference, no false positives
-on genuine paging, which reads distinct ranges); the nudge is **non-terminating**
-— `Esc`, `hard_stop_turns`, and `abort` stay the hard backstops. Gated by
-`[principal] loop_review_enabled` (default on; off for envoys and `/review`).
+The optional doom-loop guard detects repeated normalized signatures for common
+read, search, command, fetch, and file-mutation tools. When a watched signature
+would recur within the configured window, the guard blocks it before execution
+and injects a hidden explanation that directs the model to change approach.
+The block lasts only for the current turn and does not terminate other work.
+
+The guard is deterministic bookkeeping with no model call, but signature
+normalization is intentionally conservative: operations on the same target may
+collide even when secondary arguments differ. It is therefore an advanced,
+default-off policy configured through `[principal.nudge]`, not a routine TUI
+preference. Envoys and `/review` force it off. See the
+[Configuration Reference](../../reference/configuration.md#agent-behavior).
 
 ### Session review (ADR-0016)
 

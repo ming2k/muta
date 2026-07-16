@@ -28,7 +28,10 @@ mod snapshot_tests;
 
 pub use chrome::draw_activity_bar;
 pub use chrome::{HintBarView, draw_completion_menu, draw_hint_bar};
-pub use composer::{INPUT_MSG_IDX, cursor_screen_pos, draw_composer};
+pub use composer::{
+    INPUT_MSG_IDX, composer_text_width, composer_wrapped_pos, cursor_screen_pos, draw_composer,
+    draw_composer_highlighted,
+};
 use design::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
     COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
@@ -51,13 +54,14 @@ pub(super) use message_body::draw_message_body;
 pub(super) use notice::draw_notice;
 pub use overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 pub use overlays::{
-    ActivityModalView, ContextUsageView, CustomEditorView, draw_activity_modal, draw_armed_toast,
-    draw_config_layout_modal, draw_config_modal, draw_config_nudge_modal, draw_copy_toast,
-    draw_custom_provider_editor, draw_help_modal, draw_history_modal, draw_input_injection,
-    draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
-    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
-    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal, token_report_turn_count,
+    ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, draw_activity_modal,
+    draw_armed_toast, draw_config_layout_modal, draw_config_modal, draw_config_theme_custom_modal,
+    draw_config_theme_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
+    draw_history_modal, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
+    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
+    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
+    draw_sessions_modal, draw_skills_modal, draw_token_report_modal, draw_tools_modal,
+    token_report_turn_count,
 };
 use page_header::{PageHeader, draw_page_header};
 pub use primitives::recess_backdrop;
@@ -68,7 +72,7 @@ use text_layout::WrappedLine;
 use text_layout::{
     block_selection_range, line_selection, prohibited_line_end, prohibited_line_start,
 };
-pub use theme::Theme;
+pub use theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, ColorSchemePreset, CustomColorField, Theme};
 
 use neenee_tui::{
     Alignment, Block as RtBlock, Constraint, Direction, Frame, Layout, Line, Paragraph, Rect, Span,
@@ -805,6 +809,7 @@ mod tests {
                     ],
                     Some(0),
                     Rect::new(0, 20, 80, 3),
+                    2,
                     &theme,
                 );
                 draw_copy_toast(f, "copied to clipboard", false, &theme);
@@ -957,6 +962,33 @@ mod tests {
             let mut hit_map = crate::layout::ModalHitMap::new();
             let _ =
                 draw_permission_sheet(f, &mut hit_map, &request, 0, false, false, 0, rect, &theme);
+        });
+    }
+
+    #[test]
+    fn config_appearance_pages_render_at_minimum_terminal_size() {
+        let theme = Theme::default();
+        let custom = neenee_core::ColorSchemeConfig::default();
+        let mut terminal = neenee_tui::TestTerminal::new(80, 24);
+
+        terminal.draw(|frame| {
+            draw_config_modal(
+                frame,
+                0,
+                &mut 0,
+                ConfigOverview {
+                    color_scheme: "zen",
+                    layout: crate::render::layout::Strategy::Default,
+                },
+                false,
+                &theme,
+            );
+        });
+        terminal.draw(|frame| {
+            draw_config_theme_modal(frame, "nord", &custom, 2, &mut 0, false, &theme);
+        });
+        terminal.draw(|frame| {
+            draw_config_theme_custom_modal(frame, &custom, 4, "#8ea191", 7, &mut 0, &theme);
         });
     }
 
@@ -1615,6 +1647,91 @@ mod tests {
                 "{label}: caret not flush with end of {input:?}"
             );
         }
+    }
+
+    /// A resolved `/command` token renders in bold + the theme accent color,
+    /// and the accent stops at the token boundary — the argument tail keeps
+    /// the normal text color so the two read as command + payload.
+    #[test]
+    fn draw_composer_highlighted_accents_only_the_command_token() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui::TestTerminal::new(30, 4);
+        let input = "/pursue keep going";
+        terminal.draw(|f| {
+            draw_composer_highlighted(
+                f,
+                Rect::new(0, 0, 30, 3),
+                input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                "/pursue".len(),
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = super::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        // Every glyph of `/pursue` is bold + brand-colored on the panel bg.
+        for (i, ch) in "/pursue".chars().enumerate() {
+            let cell = buf.get(text_x + i as u16, text_y).expect("command cell");
+            assert_eq!(cell.symbol(), ch.to_string());
+            assert_eq!(cell.fg, theme.brand(), "command glyph {ch} lost the accent");
+            assert!(
+                cell.style.add.contains(neenee_tui::Modifier::BOLD),
+                "command glyph {ch} lost bold"
+            );
+        }
+        // The argument tail (`keep going`) keeps the default text color.
+        let arg_start = text_x + "/pursue ".len() as u16;
+        let cell = buf.get(arg_start, text_y).expect("argument cell");
+        assert_eq!(cell.symbol(), "k");
+        assert_eq!(cell.fg, theme.fg(), "argument text must not be accented");
+    }
+
+    /// The accent must not bleed past the first wrapped row: when the command
+    /// token itself fits but the highlight length would cover the wrap
+    /// boundary, the continuation row renders in the normal text color.
+    #[test]
+    fn draw_composer_highlight_clamps_at_wrap_boundary() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui::TestTerminal::new(12, 6);
+        // 8-column text area (12 - 2 prefix - 2 right pad): `/session` fills
+        // row 0 exactly; ` new` wraps to row 1.
+        let input = "/session new";
+        terminal.draw(|f| {
+            draw_composer_highlighted(
+                f,
+                Rect::new(0, 0, 12, 5),
+                input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                "/session".len(),
+            );
+        });
+        let buf = terminal.buffer();
+        let row1_y = super::design::COMPOSER_TEXT_ROW_OFFSET + 1;
+        // The continuation row keeps the two-column prompt indent before the
+        // wrapped text (`/session` + the trailing space fill row 0 exactly).
+        let cell = buf
+            .get(COMPOSER_PROMPT_PREFIX_COLS as u16 + 1, row1_y)
+            .expect("continuation cell");
+        assert_eq!(cell.symbol(), "n", "continuation row should start with 'n'");
+        assert_eq!(
+            cell.fg,
+            theme.fg(),
+            "accent must not bleed onto the wrapped argument row"
+        );
     }
 
     /// Regression for the IME cursor-lag fix: the input-driven immediate flush

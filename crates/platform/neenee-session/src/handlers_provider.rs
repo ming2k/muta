@@ -224,6 +224,9 @@ pub async fn add(
         default_channel: 0,
         template_id: resolved_template_id,
         model_source,
+        // A fresh instance has no fitted metadata yet; live discovery fills
+        // it for fitting-enabled templates on the next refresh.
+        fitted_models: Default::default(),
     };
     config.providers.push(entry);
     config.default_provider = id.clone();

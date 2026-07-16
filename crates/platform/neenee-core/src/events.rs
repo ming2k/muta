@@ -2,7 +2,7 @@
 //! responses ([`AgentResponse`]), live turn events ([`AgentEvent`]), and the
 //! small data records they carry.
 
-use crate::{DoomGuardConfig, ImagePart, Message, Pursuit, ToolOutput, ToolStream};
+use crate::{ImagePart, Message, Pursuit, ToolOutput, ToolStream};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,14 +244,6 @@ pub enum AgentRequest {
     /// `/sessions`), and emits [`AgentResponse::SideViewClosed`]. Sent by
     /// the TUI when the user presses `Esc` / `Ctrl+C` inside the side view.
     ExitSideView,
-    /// Update the doom-guard configuration at runtime (from the `/config`
-    /// modal). The harness writes the new config to `config.toml`, calls
-    /// `Agent::set_doom_guard_config`, and replies with
-    /// [`AgentResponse::DoomGuardConfigUpdated`] so the modal reflects the
-    /// persisted state. The `enabled` flag takes effect on the next round
-    /// boundary; the window size takes effect on the next turn (per-turn guard
-    /// state is rebuilt fresh each turn).
-    UpdateDoomGuardConfig(DoomGuardConfig),
     /// Update the transcript layout preference (from the `/config` modal).
     /// The harness writes the new value to `config.toml`'s `[tui]
     /// transcript_layout` and replies with [`AgentResponse::TuiLayoutUpdated`]
@@ -260,6 +252,13 @@ pub enum AgentRequest {
     /// "legacy"); interpretation into a [`crate`] layout `Strategy`
     /// happens in the renderer, keeping the core free of render types.
     UpdateTuiLayout(String),
+    /// Update the TUI color scheme preference (from the `/config` modal).
+    /// The harness persists the selected preset id and the custom semantic
+    /// palette together so switching away from Custom does not discard it.
+    UpdateTuiColorScheme {
+        name: String,
+        custom: crate::ColorSchemeConfig,
+    },
 }
 
 /// User-authored input waiting to be inserted into a running round.
@@ -339,16 +338,16 @@ pub enum AgentResponse {
     /// and re-sent after any mutation handled by the harness
     /// ([`AgentRequest::RevokePermission`] / [`AgentRequest::ToggleTool`]).
     SessionContext(SessionContextSnapshot),
-    /// The doom-guard configuration was updated (from the `/config` modal via
-    /// [`AgentRequest::UpdateDoomGuardConfig`]). Carries the persisted config so
-    /// the modal re-renders from the authoritative state — the TOML write
-    /// is the source of truth, not the TUI's optimistic local edit.
-    DoomGuardConfigUpdated(DoomGuardConfig),
     /// The transcript layout preference was updated (from the `/config` modal
     /// via [`AgentRequest::UpdateTuiLayout`]). Carries the persisted config
     /// string so the modal re-renders from the authoritative state — the TOML
     /// write is the source of truth, not the TUI's optimistic local edit.
     TuiLayoutUpdated(String),
+    /// The TUI color scheme and custom palette were persisted successfully.
+    TuiColorSchemeUpdated {
+        name: String,
+        custom: crate::ColorSchemeConfig,
+    },
 }
 
 /// A user-visible notice emitted by the agent or harness.

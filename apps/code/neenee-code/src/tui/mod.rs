@@ -31,7 +31,7 @@ pub(crate) use neenee_tui_view::completion::CompletionKind;
 pub(crate) use neenee_tui_view::modal::{ActivityTab, Modal, Recess};
 pub(crate) use neenee_tui_view::providers::{
     CustomField, PROVIDER_TEMPLATES, model_display_name, protocol_model_candidates,
-    provider_template_label_for, providers_filtered_from,
+    provider_template_label_for,
 };
 
 use crossterm::{
@@ -220,13 +220,6 @@ pub async fn run_tui(
     // (revoke / toggle). `None` until the first response lands.
     let session_context = Arc::new(Mutex::new(None::<SessionContextSnapshot>));
     let session_context_clone = session_context.clone();
-    // Live doom-guard config snapshot, mirrored from the harness whenever
-    // `AgentResponse::DoomGuardConfigUpdated` arrives. The `/config` modal reads
-    // this each frame to render the current window and enabled state; edits
-    // are sent back as `AgentRequest::UpdateDoomGuardConfig` and the
-    // harness's reply updates this cell.
-    let nudge_config = Arc::new(Mutex::new(neenee_core::DoomGuardConfig::default()));
-    let nudge_config_clone = nudge_config.clone();
     // Global tool-step density (true = Comfortable: new tool steps spawn
     // expanded). Shared with the response listener so steps created mid-turn
     // respect the user's last Ctrl+T choice (ADR-0001 Step 8).
@@ -1133,13 +1126,6 @@ pub async fn run_tui(
                     let mut msgs = messages_clone.write().await;
                     push_local_notice(&mut msgs, NoticeSeverity::Error, msg);
                 }
-                AgentResponse::DoomGuardConfigUpdated(config) => {
-                    // Mirror the persisted doom-guard config into the TUI's
-                    // snapshot so the `/config` modal re-renders from the
-                    // authoritative state. The modal reads this field when
-                    // it is open; the write is a single assignment.
-                    *nudge_config_clone.lock().await = config;
-                }
                 AgentResponse::TuiLayoutUpdated(_value) => {
                     // Persisted transcript layout confirmed by the harness.
                     // The apply path already set `app.transcript_layout`
@@ -1149,6 +1135,12 @@ pub async fn run_tui(
                     // surfaced separately as `AgentResponse::Error`. Kept as
                     // an explicit arm (rather than a `_ =>` catch-all) so a
                     // future normalization step can hook in here.
+                }
+                AgentResponse::TuiColorSchemeUpdated { .. } => {
+                    // Appearance changes are applied optimistically in the TUI
+                    // so every frame switches at once. Save failures arrive as
+                    // `AgentResponse::Error`; this success response is kept
+                    // explicit for protocol exhaustiveness.
                 }
             }
         }
@@ -1213,7 +1205,6 @@ pub async fn run_tui(
         path_scan_cache: None,
         current_pursuit: None,
         session_context: None,
-        nudge_config: neenee_core::DoomGuardConfig::default(),
         loop_status: "idle".to_string(),
         activity_status: String::new(),
         unattended: false,
@@ -1255,6 +1246,9 @@ pub async fn run_tui(
         transcript_layout: crate::tui::render::layout::Strategy::from_config(
             &tui_config.transcript_layout,
         ),
+        color_scheme: Theme::normalize_color_scheme(&tui_config.color_scheme).to_string(),
+        custom_color_scheme: tui_config.custom_color_scheme.clone(),
+        custom_color_draft: tui_config.custom_color_scheme.clone(),
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),
@@ -1303,7 +1297,7 @@ pub async fn run_tui(
         provider_delete_rect: None,
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
-        theme: Theme::default(),
+        theme: Theme::from_color_scheme(&tui_config.color_scheme, &tui_config.custom_color_scheme),
         logo: load_user_logo(),
     };
 
@@ -1336,7 +1330,6 @@ pub async fn run_tui(
             oauth_add_signal,
             awaiting_oauth_add,
             session_context,
-            nudge_config,
             todos,
             round_count,
             current_turn,

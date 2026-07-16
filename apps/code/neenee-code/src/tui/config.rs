@@ -45,6 +45,7 @@ mod tests {
         TuiConfig {
             default_expanded: map,
             transcript_layout: String::new(),
+            ..TuiConfig::default()
         }
     }
 
@@ -96,5 +97,25 @@ thinking = true
         assert!(cfg.default_expanded.is_empty());
         assert!(tool_default_expanded(&cfg, "edit_file"));
         assert!(!thinking_default_expanded(&cfg));
+    }
+
+    #[test]
+    fn parses_color_scheme_and_custom_palette() {
+        let toml = r##"
+color_scheme = "custom"
+
+[custom_color_scheme]
+background = "#101218"
+accent = "#7aa2f7"
+"##;
+        let cfg: TuiConfig = toml::from_str(toml).expect("parses");
+        assert_eq!(cfg.color_scheme, "custom");
+        assert_eq!(cfg.custom_color_scheme.background, "#101218");
+        assert_eq!(cfg.custom_color_scheme.accent, "#7aa2f7");
+        // Missing custom fields inherit their semantic defaults.
+        assert_eq!(
+            cfg.custom_color_scheme.text,
+            neenee_core::ColorSchemeConfig::default().text
+        );
     }
 }

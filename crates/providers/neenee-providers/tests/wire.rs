@@ -665,7 +665,8 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
     };
     let models = list_models(req).await.expect("discovery succeeds");
     // Sorted + de-duplicated, regardless of the API's ordering or duplicates.
-    assert_eq!(models, vec!["alpha-first", "mid-model", "zeta-last"]);
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["alpha-first", "mid-model", "zeta-last"]);
 }
 
 #[tokio::test]
@@ -689,7 +690,8 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
         user_agent: None,
     };
     let models = list_models(req).await.expect("keyless discovery succeeds");
-    assert_eq!(models, vec!["relay-only"]);
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["relay-only"]);
 }
 
 #[tokio::test]
@@ -723,7 +725,11 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
     let models = list_models(req)
         .await
         .expect("anthropic discovery succeeds");
-    assert_eq!(models, vec!["claude-opus-4-8", "claude-sonnet-5"]);
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-5"]);
+    // The display name rides along; capability fields stay None on this shape.
+    assert_eq!(models[0].display_name.as_deref(), Some("Opus"));
+    assert_eq!(models[0].context_window, None);
 }
 
 #[tokio::test]
@@ -755,7 +761,8 @@ async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
     };
     let models = list_models(req).await.expect("gemini discovery succeeds");
     // The embedding-only model is filtered out.
-    assert_eq!(models, vec!["gemini-2.5-pro"]);
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["gemini-2.5-pro"]);
 }
 
 #[tokio::test]

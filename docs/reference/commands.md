@@ -29,14 +29,16 @@ Project and user-defined commands are covered under
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
+| `/config` | Open user configuration |
 | `/export` | Export the current conversation to the clipboard as Markdown |
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
 | `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program |
 
-`/provider`, `/exit`, and `/serve` are handled entirely in the TUI; the rest
-are dispatched by the agent backend.
+Several interactive management commands, including `/provider`, `/tools`, and
+`/config`, are handled in the TUI. Commands that mutate agent or session state
+are dispatched to the backend.
 
 ### `/serve`
 
@@ -121,6 +123,19 @@ builtins and `mcp:<server>` tools — each with its source and an
 off (the harness applies it and replies with a fresh snapshot), and `Esc`
 closes. `/tools` is handled entirely in the TUI and is never forwarded to the
 backend.
+
+### `/config`
+
+| Form | Effect |
+|------|--------|
+| `/config` | Open the Settings overlay |
+
+The Settings overlay exposes Appearance and Layout. Appearance offers the
+`zen`, `midnight`, `nord`, `catppuccin`, and `paper` presets. The Custom option
+opens an eight-field `#RRGGBB` editor for background, surface, text, muted,
+accent, success, warning, and error colors. Valid custom colors preview live;
+`Enter` saves and applies the palette, while `Esc` cancels the draft. Changes
+apply immediately and persist in the `[tui]` table of `config.toml`.
 
 ### `/unattended`
 

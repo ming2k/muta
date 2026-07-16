@@ -149,7 +149,7 @@ impl DoomLoopGuard {
         }
     }
 
-    /// The configured thresholds. Exposed for tests and the `/config` modal.
+    /// The configured thresholds. Exposed for tests and diagnostics.
     pub fn config(&self) -> DoomGuardConfig {
         self.config
     }

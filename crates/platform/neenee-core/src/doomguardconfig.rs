@@ -7,7 +7,7 @@
 //! the `[principal.nudge]` TOML table, and `neenee-agent` reads it before each
 //! tool round to decide whether to intercept a repeating call.
 //!
-//! Default is **disabled** — opt in via the `/config` modal or the
+//! Default is **disabled** — opt in through the advanced
 //! `[principal.nudge]` sub-table in `config.toml`.
 //!
 //! The TOML key is kept as `nudge` for backward compatibility (existing

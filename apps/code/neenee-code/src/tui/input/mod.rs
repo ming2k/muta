@@ -103,7 +103,10 @@ fn edits_input_field(
     custom_text_field: bool,
 ) -> bool {
     match modal {
-        super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
+        super::Modal::None
+        | super::Modal::ModelEditor
+        | super::Modal::InputInjection
+        | super::Modal::ConfigThemeCustom => true,
         super::Modal::Provider => model_searching,
         super::Modal::HistorySearch => history_searching,
         // The provider editor edits the composer line on every visible field
@@ -140,7 +143,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Skills
             | super::Modal::Permissions
             | super::Modal::Config
-            | super::Modal::ConfigNudge
+            | super::Modal::ConfigTheme
             | super::Modal::ConfigLayout
             | super::Modal::Activity
             | super::Modal::TokenReport
@@ -262,7 +265,7 @@ pub enum InputAction {
     /// `/skills reload` to the backend. Bound to `r`.
     SkillsReload,
     /// Open the config manager modal: a centered list of configurable
-    /// categories (Nudge, …). Reached via the `/config` slash command
+    /// categories (Appearance and Layout). Reached via the `/config` slash command
     /// (intercepted locally, never sent to the backend). `Enter` / `Space`
     /// on a category drills into its sub-page.
     OpenConfig,
@@ -280,19 +283,19 @@ pub enum InputAction {
     /// Drill into the selected config category's sub-page (from
     /// [`Modal::Config`](super::Modal::Config)). Bound to `Enter` / `Space`.
     ConfigActivate,
+    /// Apply the selected built-in color scheme, or open the custom editor
+    /// when the Custom row is selected.
+    ConfigThemeActivate,
+    /// Move between custom semantic-color fields, committing the current field
+    /// only when it contains a valid `#RRGGBB` value.
+    ConfigThemeField {
+        delta: i32,
+    },
+    /// Save the custom palette, apply it live, and persist it.
+    ConfigThemeCustomSave,
     /// Return from a config sub-page to the config root. Bound to `Esc`
     /// inside a sub-page (a second `Esc` closes the modal).
     ConfigBack,
-    /// Toggle the doom-guard master switch (`enabled`) in the nudge sub-page.
-    /// Bound to `Space` when the enabled row is selected.
-    ConfigNudgeToggle,
-    /// Adjust the selected doom-guard value by `delta` (±1). Bound to `←`
-    /// (delta = -1) and `→` (delta = +1) in the nudge sub-page. The harness
-    /// persists the new config and replies with
-    /// `AgentResponse::DoomGuardConfigUpdated`.
-    ConfigNudgeAdjust {
-        delta: i32,
-    },
     /// Apply the selected transcript layout strategy in the layout sub-page.
     /// Bound to `Enter` / `Space`. The harness persists the choice to
     /// `config.toml` and replies with `AgentResponse::TuiLayoutUpdated`.
@@ -1028,9 +1031,9 @@ pub fn process_event(
                         // In the stage-2 model sub-list (browse mode): Esc steps
                         // back to the stage-1 provider list rather than closing.
                         InputAction::ProviderPickerBack
-                    } else if context.active_modal == super::Modal::ConfigNudge {
-                        // Esc in the nudge sub-page returns to the config root
-                        // rather than closing the whole modal.
+                    } else if context.active_modal == super::Modal::ConfigTheme
+                        || context.active_modal == super::Modal::ConfigThemeCustom
+                    {
                         InputAction::ConfigBack
                     } else if context.active_modal == super::Modal::ConfigLayout {
                         // Esc in the layout sub-page returns to the config root.
@@ -1143,7 +1146,8 @@ pub fn process_event(
                         super::Modal::Skills => InputAction::SkillsToggleDetail,
                         super::Modal::Permissions => InputAction::CloseModal,
                         super::Modal::Config => InputAction::ConfigActivate,
-                        super::Modal::ConfigNudge => InputAction::ConfigNudgeToggle,
+                        super::Modal::ConfigTheme => InputAction::ConfigThemeActivate,
+                        super::Modal::ConfigThemeCustom => InputAction::ConfigThemeCustomSave,
                         super::Modal::ConfigLayout => InputAction::ConfigLayoutApply,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
@@ -1228,6 +1232,8 @@ pub fn process_event(
                         // Tab cycles focus between the editor's API-key and
                         // model-id fields.
                         InputAction::ModelEditorNextField
+                    } else if context.active_modal == super::Modal::ConfigThemeCustom {
+                        InputAction::ConfigThemeField { delta: 1 }
                     } else if context.active_modal == super::Modal::CustomProvider {
                         // Tab advances through the editor's visible fields.
                         InputAction::CustomProviderNextField
@@ -1254,6 +1260,8 @@ pub fn process_event(
                     // uses Ctrl+Up/Ctrl-Down, not Tab).
                     if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
+                    } else if context.active_modal == super::Modal::ConfigThemeCustom {
+                        InputAction::ConfigThemeField { delta: -1 }
                     } else {
                         InputAction::None
                     }
@@ -1550,14 +1558,12 @@ pub fn process_event(
                         return InputAction::PermissionsActivate;
                     }
                     // Space in the config root drills into the selected
-                    // category; in the nudge sub-page it toggles the enabled
-                    // flag (when the enabled row is selected) or drills into
-                    // a threshold (no-op — thresholds are adjusted with ←/→).
+                    // category.
                     if context.active_modal == super::Modal::Config && c == ' ' {
                         return InputAction::ConfigActivate;
                     }
-                    if context.active_modal == super::Modal::ConfigNudge && c == ' ' {
-                        return InputAction::ConfigNudgeToggle;
+                    if context.active_modal == super::Modal::ConfigTheme && c == ' ' {
+                        return InputAction::ConfigThemeActivate;
                     }
                     // Space in the layout sub-page applies the selected
                     // strategy (same as Enter).
@@ -1630,6 +1636,14 @@ pub fn process_event(
                         InputAction::ModelEditorThinkingToggle
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionInsertChar(c)
+                    } else if context.active_modal == super::Modal::ConfigThemeCustom
+                        && c != '#'
+                        && !c.is_ascii_hexdigit()
+                    {
+                        // Custom colors are strict hex fields. Ignore other
+                        // printable input instead of letting the user build an
+                        // impossible value that can never be saved.
+                        InputAction::None
                     } else if context.active_modal == super::Modal::HistorySearch
                         && !context.history_searching
                         && c == '/'
@@ -1754,12 +1768,6 @@ pub fn process_event(
                     {
                         return InputAction::ModelEditorEffortCycle { delta: -1 };
                     }
-                    // In the nudge sub-page, ← decreases the selected
-                    // threshold by 1 (no-op on the enabled row, which is
-                    // toggled with Space).
-                    if context.active_modal == super::Modal::ConfigNudge {
-                        return InputAction::ConfigNudgeAdjust { delta: -1 };
-                    }
                     // In the provider editor every field borrows the composer
                     // line, so ←/→ move the caret within the focused field.
                     if edits_input_field(
@@ -1792,11 +1800,6 @@ pub fn process_event(
                         && context.editor_field == Some(1)
                     {
                         return InputAction::ModelEditorEffortCycle { delta: 1 };
-                    }
-                    // In the nudge sub-page, → increases the selected
-                    // threshold by 1.
-                    if context.active_modal == super::Modal::ConfigNudge {
-                        return InputAction::ConfigNudgeAdjust { delta: 1 };
                     }
                     if edits_input_field(
                         context.active_modal,
@@ -1865,7 +1868,10 @@ pub fn process_event(
                         super::Modal::Skills => InputAction::SessionSelect { forward: false },
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
-                        super::Modal::ConfigNudge => InputAction::ModalUp,
+                        super::Modal::ConfigTheme => InputAction::ModalUp,
+                        super::Modal::ConfigThemeCustom => {
+                            InputAction::ConfigThemeField { delta: -1 }
+                        }
                         super::Modal::ConfigLayout => InputAction::ModalUp,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: false }
@@ -1928,7 +1934,10 @@ pub fn process_event(
                         super::Modal::Skills => InputAction::SessionSelect { forward: true },
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
-                        super::Modal::ConfigNudge => InputAction::ModalDown,
+                        super::Modal::ConfigTheme => InputAction::ModalDown,
+                        super::Modal::ConfigThemeCustom => {
+                            InputAction::ConfigThemeField { delta: 1 }
+                        }
                         super::Modal::ConfigLayout => InputAction::ModalDown,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: true }

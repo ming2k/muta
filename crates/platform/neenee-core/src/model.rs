@@ -146,6 +146,24 @@ pub const KNOWN_MODELS: &[Model] = &[
     },
     // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
     Model {
+        // The Kimi Code platform's current flagship. The platform's live
+        // `GET /models` advertises `k3` with a 1M context window, image/video
+        // inputs, and always-on thinking (`supports_thinking_type: "only"`,
+        // single `max` effort tier) — over the OpenAI-compatible wire the
+        // always-on reasoning simply streams back as `reasoning_content`, so
+        // there is no thinking switch to model.
+        id: "k3",
+        name: "Kimi K3",
+        family: "kimi",
+        context_window: 1_048_576,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAiCompat,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
         id: "kimi-k2.7-code",
         name: "Kimi K2.7 Code",
         family: "kimi",
@@ -835,13 +853,120 @@ pub fn fallback_model(_id: &str) -> Model {
     }
 }
 
-/// Resolve any model id to its metadata: the canonical entry when known, or a
-/// conservative fallback otherwise. Never returns `None` so callers need not
-/// branch on absence.
+/// Resolve any model id to its metadata, in precedence order: the vetted
+/// static registry entry when known, then the runtime-fitted overlay (see
+/// [`register_fitted_models`]) for ids a trusted provider advertised, then a
+/// conservative fallback. Never returns `None` so callers need not branch on
+/// absence.
 pub fn resolve(id: &str) -> Model {
-    model_by_id(id)
-        .copied()
-        .unwrap_or_else(|| fallback_model(id))
+    if let Some(model) = model_by_id(id) {
+        return *model;
+    }
+    if let Some(model) = fitted_models()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+    {
+        return *model;
+    }
+    fallback_model(id)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Runtime-fitted models (capability overlay)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Capability metadata for a model id the static registry does not know,
+/// learned at runtime from a provider's live model list (ADR-0065).
+///
+/// Only **trusted** providers may feed this overlay (official endpoints whose
+/// `/models` advertises real capability fields, opted in via their template);
+/// an arbitrary relay cannot use it to inflate a model's context window or
+/// capabilities. Registration is ignored for ids present in [`KNOWN_MODELS`]
+/// — the vetted static entry always wins, so a provider can never
+/// *downgrade* a known model either.
+#[derive(Debug, Clone)]
+pub struct FittedModel {
+    /// Wire model id as advertised by the provider.
+    pub id: String,
+    /// Provider-supplied display name; falls back to the id when absent.
+    pub display_name: Option<String>,
+    /// Grouping family (the feeding template's id, e.g. `"kimi-code"`).
+    pub family: String,
+    /// Advertised context window in tokens; `0` means the endpoint did not
+    /// say (the model resolves with an unknown window, like the fallback).
+    pub context_window: usize,
+    /// The endpoint advertises reasoning (a `reasoning_content` stream).
+    pub reasoning: bool,
+    /// The endpoint advertises image inputs.
+    pub vision: bool,
+    /// Wire protocol the feeding provider speaks for this model.
+    pub format: WireFormat,
+    /// Advertised reasoning-effort levels (any order; stored ascending via
+    /// [`Effort::ORDER`](crate::effort::Effort::ORDER)).
+    pub effort_levels: Vec<crate::effort::Effort>,
+}
+
+/// Process-wide overlay of runtime-fitted models. Populated at startup from
+/// persisted discovery results and refreshed after a live fetch (the feeding
+/// layer lives in `neenee_agent::catalog`).
+static FITTED_MODELS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<&'static str, Model>>,
+> = std::sync::OnceLock::new();
+
+fn fitted_models() -> &'static std::sync::RwLock<std::collections::HashMap<&'static str, Model>> {
+    FITTED_MODELS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Register (or replace) runtime-fitted models. Ids already in
+/// [`KNOWN_MODELS`] are skipped — the static registry is vetted and always
+/// wins. Strings and slices are interned via `Box::leak` because [`Model`]
+/// is `Copy` over `&'static str`; the set of distinct fitted ids is bounded
+/// by what a provider advertises, so the one-time leak per registration is
+/// negligible.
+pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
+    let mut overlay = fitted_models().write().unwrap_or_else(|e| e.into_inner());
+    for fitted in models {
+        if model_by_id(&fitted.id).is_some() {
+            continue;
+        }
+        let id: &'static str = Box::leak(fitted.id.into_boxed_str());
+        let name: &'static str = Box::leak(
+            fitted
+                .display_name
+                .unwrap_or_else(|| id.to_string())
+                .into_boxed_str(),
+        );
+        let mut levels = fitted.effort_levels;
+        levels.sort_by_key(|level| {
+            crate::effort::Effort::ORDER
+                .iter()
+                .position(|ordered| ordered == level)
+                .unwrap_or(usize::MAX)
+        });
+        levels.dedup();
+        overlay.insert(
+            id,
+            Model {
+                id,
+                name,
+                family: Box::leak(fitted.family.into_boxed_str()),
+                context_window: fitted.context_window,
+                thinking: if fitted.reasoning {
+                    ThinkingSupport::ReasoningContent
+                } else {
+                    ThinkingSupport::None
+                },
+                // The harness depends on tool calling; an advertised coding
+                // model is assumed capable (same assumption as the fallback).
+                tool_call: true,
+                vision: fitted.vision,
+                format: fitted.format,
+                model_guidance: "",
+                effort_levels: Box::leak(levels.into_boxed_slice()),
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -944,6 +1069,55 @@ mod tests {
         assert!(!m.reasoning());
         // The harness depends on tool calling, so even the fallback assumes it.
         assert!(m.tool_call);
+    }
+
+    #[test]
+    fn fitted_overlay_supplies_metadata_for_unregistered_ids() {
+        register_fitted_models(vec![FittedModel {
+            id: "fitted-future-k9".to_string(),
+            display_name: Some("Future K9".to_string()),
+            family: "kimi-code".to_string(),
+            context_window: 2_000_000,
+            reasoning: true,
+            vision: true,
+            format: WireFormat::OpenAiCompat,
+            // Unsorted input with a duplicate: stored ascending, deduped.
+            effort_levels: vec![
+                crate::effort::Effort::Max,
+                crate::effort::Effort::Low,
+                crate::effort::Effort::Low,
+            ],
+        }]);
+        let m = resolve("fitted-future-k9");
+        assert_eq!(m.id, "fitted-future-k9");
+        assert_eq!(m.name, "Future K9");
+        assert_eq!(m.context_window, 2_000_000);
+        assert!(m.reasoning());
+        assert!(m.vision);
+        assert_eq!(
+            m.effort_levels,
+            &[crate::effort::Effort::Low, crate::effort::Effort::Max]
+        );
+    }
+
+    #[test]
+    fn fitted_overlay_never_overrides_the_static_registry() {
+        register_fitted_models(vec![FittedModel {
+            id: "glm-5.2".to_string(),
+            display_name: Some("bogus".to_string()),
+            family: "bogus".to_string(),
+            context_window: 1,
+            reasoning: false,
+            vision: true,
+            format: WireFormat::Gemini,
+            effort_levels: vec![crate::effort::Effort::Max],
+        }]);
+        // The vetted static entry wins on every field.
+        let m = resolve("glm-5.2");
+        assert_eq!(m.name, "GLM-5.2");
+        assert_eq!(m.context_window, 1_000_000);
+        assert_eq!(m.format, WireFormat::OpenAiCompat);
+        assert!(!m.vision);
     }
 
     #[test]

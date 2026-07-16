@@ -11,8 +11,9 @@
 //! - [`history`] — history search modal
 //! - [`help`] — help / keybindings modal
 //! - [`config`] — config manager modal (root settings overlay)
-//! - [`config_nudge`] — nudge sub-page of the config manager
 //! - [`config_layout`] — transcript layout sub-page of the config manager
+//! - [`config_theme`] — preset and custom color-scheme picker
+//! - [`config_theme_custom`] — custom semantic-color editor
 //! - [`toast`] — copy / armed-action notice bubbles
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
 
@@ -20,7 +21,8 @@ pub mod activity;
 pub mod common;
 pub mod config;
 pub mod config_layout;
-pub mod config_nudge;
+pub mod config_theme;
+pub mod config_theme_custom;
 pub mod help;
 pub mod history;
 pub mod mcp;
@@ -36,9 +38,10 @@ pub mod tools;
 
 // Re-export the public API so `render::overlays::draw_*` callers are unchanged.
 pub use activity::{ActivityModalView, draw_activity_modal};
-pub use config::draw_config_modal;
+pub use config::{ConfigOverview, draw_config_modal};
 pub use config_layout::draw_config_layout_modal;
-pub use config_nudge::draw_config_nudge_modal;
+pub use config_theme::draw_config_theme_modal;
+pub use config_theme_custom::draw_config_theme_custom_modal;
 pub use help::draw_help_modal;
 pub use history::draw_history_modal;
 pub use mcp::draw_mcp_modal;

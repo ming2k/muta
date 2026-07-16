@@ -26,7 +26,7 @@ stays focused on geometry, panels, color helpers, and raw body rendering.
 
 | File | Public shape inside `render` | Reused by | Responsibility |
 |------|------------------------------|-----------|----------------|
-| `components/modal.rs` | `ModalPage`, `ModalHeader`, `ModalPageSize`, `draw_modal_page`, `modal_body_width` | Help, Config, Config nudge, Config layout, Tools, MCP | Complete centered modal shell: geometry, panel chrome, header, scrollable body, footer |
+| `components/modal.rs` | `ModalPage`, `ModalHeader`, `ModalPageSize`, `draw_modal_page`, `modal_body_width` | Help, Config, Config appearance, Config layout, Tools, MCP | Complete centered modal shell: geometry, panel chrome, header, scrollable body, footer |
 | `components/list.rs` | `SelectableListPage`, `draw_selectable_list_page`, `row_style` | Config, Tools, MCP | Selectable list modal composition and selected-row palette |
 | `components/scroll.rs` | `ScrollBody` | Modal and list components | Scrollable body wrapper around `render_body`, including follow-row and edge-margin behavior |
 | `components/footer.rs` | `FooterHint`, `render_modal_footer`, `modal_footer_text` | Modal component, legacy primitive re-export, direct modal renderers | One-line modal command strip with width-aware degradation |

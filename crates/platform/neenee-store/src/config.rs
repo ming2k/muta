@@ -38,9 +38,9 @@ pub const THINKING_KEY: &str = "thinking";
 /// # interrupts, or context compaction cannot relieve pressure (ADR-0009).
 /// # hard_stop_turns = 0
 ///
-/// # Doom-loop guard. Default disabled — opt in here or via the `/config`
-/// # modal. See [`DoomGuardConfig`]. (TOML key stays `nudge` for backward
-/// # compatibility.)
+/// # Advanced doom-loop guard. Default disabled; opt in here when deterministic
+/// # repeated-call blocking is desired. See [`DoomGuardConfig`]. (TOML key
+/// # stays `nudge` for backward compatibility.)
 /// # [principal.nudge]
 /// # enabled = false
 /// ```
@@ -63,8 +63,8 @@ pub struct PrincipalConfig {
     /// arguments. Wired through `Agent::set_allow_model_stdin`.
     pub allow_model_stdin: bool,
     /// Doom-loop guard configuration (`neenee_agent::doom_guard`). Default
-    /// **disabled** — opt in via the `/config` modal or the `[principal.nudge]`
-    /// sub-table. See [`DoomGuardConfig`] for the per-field semantics.
+    /// **disabled** — opt in via the advanced `[principal.nudge]` sub-table.
+    /// See [`DoomGuardConfig`] for the per-field semantics.
     pub nudge: DoomGuardConfig,
 }
 
@@ -104,6 +104,13 @@ pub struct TuiConfig {
     /// transcript_layout = "default"
     /// ```
     pub transcript_layout: String,
+    /// Active color scheme id. Built-in values are `zen`, `midnight`, `nord`,
+    /// `catppuccin`, and `paper`; `custom` uses `custom_color_scheme` below.
+    /// Unknown / empty values fall back to `zen`.
+    pub color_scheme: String,
+    /// User-editable semantic palette retained even when a built-in scheme is
+    /// active, so it can be revisited from `/config` without losing changes.
+    pub custom_color_scheme: neenee_core::ColorSchemeConfig,
 }
 
 /// Declarative permission configuration — the `[permissions]` table. Lets users
@@ -338,6 +345,31 @@ pub struct UserChannelConfig {
     pub thinking: Option<bool>,
 }
 
+/// Capability metadata fitted from a provider's live `GET /models` response
+/// for one model id the client registry does not know. Persisted per instance
+/// so the metadata survives restarts: live discovery refreshes it in the
+/// background, and a failed fetch leaves the last good values in place. Only
+/// instances created from a fitting-enabled template (trusted official
+/// endpoints) ever carry this. See `neenee_core::model::FittedModel`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct FittedModelInfo {
+    /// Advertised context window in tokens (`0` = the endpoint did not say).
+    #[serde(default)]
+    pub context_window: usize,
+    /// The endpoint advertises reasoning (e.g. a `reasoning_content` stream).
+    #[serde(default)]
+    pub reasoning: bool,
+    /// The endpoint advertises image inputs.
+    #[serde(default)]
+    pub vision: bool,
+    /// Advertised reasoning-effort tiers, as named by the provider.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
+    /// Provider-supplied display name, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
 /// A user-defined model entry. When its `id` matches a built-in, the user entry
 /// replaces the built-in entirely (override); otherwise it is appended as a new
 /// model. A model with multiple `channels` finally enables multi-channel
@@ -371,11 +403,21 @@ pub struct UserProviderConfig {
     /// pure-custom instance (`template_id = None`) ignores this field — its
     /// channels are user-managed. Defaults to [`ModelSource::Fixed`] for legacy
     /// configs; the add-provider flow sets it from the template's `discovery`
-    /// capability when the user accepts the default.
+    /// capability when the user accepts the default. An instance stamped
+    /// `Fixed` before its template gained discovery is upgraded to `Api` at
+    /// reconcile time when the template also fits capabilities (ADR-0065).
     ///
     /// See `neenee_agent::catalog::reconcile_provider_models`.
     #[serde(default)]
     pub model_source: ModelSource,
+    /// Capability metadata fitted from this instance's live model list, keyed
+    /// by model id — only for ids the client registry does not know, and only
+    /// when the instance's template opts in to capability fitting (trusted
+    /// official endpoints). Read at startup to build the dynamic model
+    /// overlay (see `neenee_core::model::register_fitted_models`); refreshed
+    /// by every successful live discovery.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fitted_models: std::collections::BTreeMap<String, FittedModelInfo>,
 }
 
 impl UserProviderConfig {
@@ -1274,6 +1316,7 @@ mod tests {
             default_channel: 0,
             template_id: Some("openai-sub2api".to_string()),
             model_source: ModelSource::Api,
+            fitted_models: Default::default(),
         }
     }
 
@@ -1352,6 +1395,45 @@ mod tests {
         assert_eq!(provider.channels[0].model, before[0].model);
         assert_eq!(provider.channels[0].api_key, before[0].api_key);
         assert_eq!(provider.channels[0].base_url, before[0].base_url);
+    }
+
+    #[test]
+    fn fitted_models_round_trip_through_toml() {
+        // Fitted capability metadata persists on the instance and survives a
+        // config reload; an empty map stays out of the serialized TOML.
+        let mut provider = UserProviderConfig {
+            id: "kimi".to_string(),
+            ..UserProviderConfig::default()
+        };
+        provider.fitted_models.insert(
+            "kimi-for-coding".to_string(),
+            FittedModelInfo {
+                context_window: 262_144,
+                reasoning: true,
+                vision: true,
+                efforts: vec!["max".to_string()],
+                display_name: Some("kimi-for-coding".to_string()),
+            },
+        );
+        let mut config = Config::default();
+        config.providers.push(provider);
+
+        let parsed: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        let fitted = &parsed.providers[0].fitted_models["kimi-for-coding"];
+        assert_eq!(fitted.context_window, 262_144);
+        assert!(fitted.reasoning);
+        assert!(fitted.vision);
+        assert_eq!(fitted.efforts, vec!["max".to_string()]);
+
+        // A legacy config without the field defaults to an empty map.
+        let legacy: Config = toml::from_str(
+            r#"[[providers]]
+id = "kimi"
+"#,
+        )
+        .unwrap();
+        assert!(legacy.providers[0].fitted_models.is_empty());
+        assert!(!toml::to_string(&legacy).unwrap().contains("fitted_models"));
     }
 
     /// Tests that mutate the process-wide paths override (`set_test_default`)

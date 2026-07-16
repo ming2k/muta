@@ -45,6 +45,7 @@ Resolved thresholds per model (defaults):
 | Model | Window | Prune at | Compact at | Target |
 |-------|--------|----------|------------|--------|
 | `glm-5.2`, Gemini, DeepSeek | 1,000,000 | 650,000 | 850,000 | 250,000 |
+| `k3` | 1,048,576 | 681,574 | 891,289 | 262,144 |
 | `kimi-k2.7-code` | 262,144 | 170,393 | 222,822 | 65,536 |
 | `gpt-4o` | 128,000 | 83,200 | 108,800 | 32,000 |
 | unknown / local | 32,000 (fallback) | 20,800 | 27,200 | 8,000 |
@@ -69,13 +70,20 @@ The optional `[principal]` table.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `principal.hard_stop_turns` | `0` | Hard-stop a turn after this many total tool turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
-| `principal.loop_review_enabled` | `true` | Enables the deterministic read-loop guard's anti-anchoring nudge: when the model repeats the same read (one page or a two-page thrash) without progress, a hidden steering message is injected. Pure signature detection (no model call), non-terminating. Flipped off on envoys and the `/review` diagnostic |
 | `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for unattended/automatic flows where no human is reachable |
+| `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same turn. Forced off for envoys and `/review` |
+| `principal.nudge.window` | `8` | Number of recent watched tool signatures retained for repeat detection |
 
 ```toml
 [principal]
 hard_stop_turns = 0
 allow_model_stdin = false
+
+# Advanced, opt-in deterministic repeated-call blocking. The `nudge` table
+# name is retained for compatibility.
+[principal.nudge]
+enabled = false
+window = 8
 ```
 
 ## Provider selection and retry
@@ -96,7 +104,7 @@ API keys accept an environment variable or an inline value; see
 |-----|---------------|---------|
 | `openai_api_key`, `openai_model` | `gpt-5.6-sol` | OpenAI |
 | `gemini_api_key`, `gemini_model` | `gemini-3.5-flash` | Google Gemini |
-| `moonshot_api_key`, `moonshot_model` | `kimi-k2.7-code` | Moonshot / Kimi Code |
+| `moonshot_api_key`, `moonshot_model` | `k3` | Moonshot / Kimi Code |
 | `deepseek_api_key`, `deepseek_flash_model`, `deepseek_pro_model` | `deepseek-v4-flash` / `deepseek-v4-pro` | DeepSeek V4 (shared key) |
 | `zai_api_key`, `zai_model` | `glm-5.2` | Z.AI coding plan (GLM-5) |
 | `anthropic_api_key`, `anthropic_model` | `claude-opus-4-8` | Anthropic |
@@ -282,14 +290,46 @@ for the operator workflow.
 
 ## TUI presentation
 
-The optional `[tui]` table. `default_expanded` maps a tool name (or `thinking`
-for reasoning traces) to its default expand state.
+The optional `[tui]` table. Appearance and layout values can also be changed
+interactively with `/config`.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (round bands) or `legacy` |
+| `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
+| `tui.default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
+| `tui.custom_color_scheme.background` | `"#070808"` | Terminal canvas |
+| `tui.custom_color_scheme.surface` | `"#0e0f0f"` | Panels and menus |
+| `tui.custom_color_scheme.text` | `"#d5d5cd"` | Primary foreground |
+| `tui.custom_color_scheme.muted` | `"#777d75"` | Secondary foreground |
+| `tui.custom_color_scheme.accent` | `"#8ea191"` | Focus and brand color |
+| `tui.custom_color_scheme.success` | `"#759475"` | Positive states |
+| `tui.custom_color_scheme.warning` | `"#b5955d"` | Caution states |
+| `tui.custom_color_scheme.error` | `"#be6f68"` | Failure states |
+
+The custom palette contains eight `#RRGGBB` semantic colors. The renderer
+derives its remaining surfaces, hover states, code colors, and diff colors
+from these values.
 
 ```toml
+[tui]
+transcript_layout = "default"
+color_scheme = "custom"
+
 [tui.default_expanded]
 edit_file = true
 bash = true
 thinking = false
+
+[tui.custom_color_scheme]
+background = "#070808"
+surface = "#0e0f0f"
+text = "#d5d5cd"
+muted = "#777d75"
+accent = "#8ea191"
+success = "#759475"
+warning = "#b5955d"
+error = "#be6f68"
 ```
 
 ## Hooks

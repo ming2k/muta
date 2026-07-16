@@ -77,18 +77,23 @@ pub struct OpenAiProviderSpec {
 /// The single registry of OpenAI-compatible providers — the source of truth for
 /// their endpoints, default models, and environment variables.
 pub const OPENAI_PROVIDER_SPECS: &[OpenAiProviderSpec] = &[
-    // Kimi Code — Moonshot AI's coding model, served via the Kimi Code
-    // membership platform (api.kimi.com/coding/v1). The platform requires a
-    // recognized coding-agent User-Agent and pins the model id to the fixed
-    // `kimi-k2.7-code` alias. API key env still uses the MOONSHOT_API_KEY
-    // legacy name for config compatibility.
+    // Kimi Code — Moonshot AI's coding platform (api.kimi.com/coding/v1).
+    // The platform pins the model id to the fixed `k3` alias (Kimi K3, 1M
+    // context, always-on thinking); its live `GET /models` also lists the
+    // legacy `kimi-for-coding` (K2.7) ids, kept selectable via
+    // [`KIMI_CODE_MODELS`]. API key env still uses the MOONSHOT_API_KEY
+    // legacy name for config compatibility. The `opencode/0.1.0` User-Agent
+    // is borrowed on purpose: the endpoint was live-tested (2026-07) to
+    // accept any UA — including none — under OAuth auth, but whether the
+    // API-key path gates on a recognized coding-agent UA is unknown, so the
+    // recognized default stays as the zero-risk choice.
     OpenAiProviderSpec {
         id: "kimi-code",
         base_url: "https://api.kimi.com/coding/v1/chat/completions",
-        default_model: "kimi-k2.7-code",
+        default_model: "k3",
         env_api_key: "MOONSHOT_API_KEY",
         env_model: "MOONSHOT_MODEL",
-        fixed_model: Some("kimi-k2.7-code"),
+        fixed_model: Some("k3"),
         default_user_agent: Some("opencode/0.1.0"),
     },
     // DeepSeek V4 (Flash + Pro) is served as one multi-model `deepseek` provider
@@ -206,14 +211,50 @@ pub const OPENAI_SUB2API_MODELS: &[&str] = &[
     "gpt-5.2-pro",
 ];
 
-/// Models served by Moonshot's Kimi Code endpoint.
-pub const KIMI_CODE_MODELS: &[&str] = &["kimi-k2.7-code"];
+/// Models served by Moonshot's Kimi Code endpoint, in display/activation
+/// order — the first entry is the initial active channel. `k3` is the
+/// platform's current flagship; `kimi-k2.7-code` remains as the previous
+/// pinned alias.
+pub const KIMI_CODE_MODELS: &[&str] = &["k3", "kimi-k2.7-code"];
 
 /// Models served by Z.AI's coding-plan endpoint.
 pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.2"];
 
 /// Curated OpenAI-compatible models offered by the OpenCode Go template.
 pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
+
+/// The full catalogue the opencode-go relay (opencode.ai/zen/go) actually
+/// serves — mirrors the opencode-go entries on models.dev, the same source
+/// [`ANTHROPIC_MODEL_MAX_TOKENS`] follows. The legacy-config migration seeds
+/// one channel per entry it knows (intersected with the client model
+/// registry, which supplies each model's wire format and metadata).
+///
+/// Keeping this as an explicit allowlist — rather than deriving the seed from
+/// registry families — is deliberate: a newly registered model must NOT
+/// appear on the relay until the relay advertises it, otherwise users get a
+/// channel that only ever answers "model not found". (Kimi `k3` and `glm-4.7`
+/// are registered for other providers but unserved by go, for example.)
+pub const OPENCODE_GO_SERVED_MODELS: &[&str] = &[
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "glm-5",
+    "glm-5.1",
+    "glm-5.2",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+    "mimo-v2-omni",
+    "mimo-v2-pro",
+    "mimo-v2.5",
+    "mimo-v2.5-pro",
+    "minimax-m2.5",
+    "minimax-m2.7",
+    "minimax-m3",
+    "qwen3.5-plus",
+    "qwen3.6-plus",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+];
 
 /// Gemini-native models advertised by Antigravity sub2api relays.
 ///
@@ -260,10 +301,23 @@ pub struct ProviderTemplateSpec {
     /// `ModelSource::Api` (live availability intersected with the client model
     /// registry, retaining the last valid subset on error). When `false`, the
     /// instance always uses the snapshot. A template is marked `false` when its
-    /// endpoint is a fixed single-model membership platform (Kimi Code, Z.AI
-    /// Code) or its model list is derived at runtime (opencode-go), since those
-    /// would regress under a live overwrite.
+    /// endpoint is a fixed single-model membership platform (Z.AI Code) or its
+    /// model list is derived at runtime (opencode-go), since those would
+    /// regress under a live overwrite.
     pub discovery: bool,
+    /// Whether live discovery may **fit capability metadata** for model ids the
+    /// client registry does not know — materializing them as channels with
+    /// their advertised context window, reasoning, vision, and effort tiers
+    /// (persisted per instance, then overlaid onto model resolution; see
+    /// `neenee_core::model::register_fitted_models`).
+    ///
+    /// This is a trust decision, not a technical one: it is enabled only for
+    /// official first-party endpoints whose `/models` advertises real
+    /// capability fields (the Kimi Code platform). Arbitrary relays must never
+    /// get it — a malicious or sloppy relay could otherwise inflate a model's
+    /// context window or claim vision support the model lacks. When `false`,
+    /// discovery keeps only registry-known ids (the historical behavior).
+    pub fitting: bool,
 }
 
 /// The single registry of provider templates offered when adding a provider.
@@ -277,30 +331,35 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         protocol: "openai",
         models: OPENAI_BUILTIN_MODELS,
         discovery: true,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "anthropic",
         protocol: "anthropic",
         models: ANTHROPIC_BUILTIN_MODELS,
         discovery: true,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "google",
         protocol: "gemini",
         models: GOOGLE_BUILTIN_MODELS,
         discovery: true,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "deepseek",
         protocol: "openai",
         models: DEEPSEEK_BUILTIN_MODELS,
         discovery: true,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "xai-oauth",
         protocol: "openai",
         models: XAI_BUILTIN_MODELS,
         discovery: true,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "chatgpt-oauth",
@@ -310,14 +369,20 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         protocol: "openai",
         models: CHATGPT_BUILTIN_MODELS,
         discovery: false,
+        fitting: false,
     },
     ProviderTemplateSpec {
         id: "kimi-code",
         protocol: "openai",
-        // The Kimi Code platform pins a single fixed model id; a live /models
-        // call would either fail (the membership endpoint does not expose it)
-        // or return a divergent list, so discovery is disabled.
-        discovery: false,
+        // The Kimi Code platform exposes a live /models endpoint, so instances
+        // created from this template track the platform's actual model list.
+        discovery: true,
+        // It is also a trusted first-party endpoint whose /models advertises
+        // real capability fields: platform-native ids the static registry does
+        // not know (e.g. `kimi-for-coding`, and every future model) are fitted
+        // with their advertised metadata instead of being intersected away —
+        // new platform models become usable with zero client changes.
+        fitting: true,
         models: KIMI_CODE_MODELS,
     },
     ProviderTemplateSpec {
@@ -325,6 +390,7 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         protocol: "openai",
         // Same rationale as kimi-code: a single pinned membership-platform model.
         discovery: false,
+        fitting: false,
         models: ZAI_CODE_MODELS,
     },
     ProviderTemplateSpec {
@@ -333,6 +399,7 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         // opencode-go's model list is derived at runtime from KNOWN_MODELS and
         // spans multiple transports; a live overwrite would regress it.
         discovery: false,
+        fitting: false,
         models: OPENCODE_GO_MODELS,
     },
     ProviderTemplateSpec {
@@ -341,18 +408,21 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         // A sub2api relay advertises whatever Claude models it forwards; live
         // discovery surfaces the relay's actual set.
         discovery: true,
+        fitting: false,
         models: ANTHROPIC_BUILTIN_MODELS,
     },
     ProviderTemplateSpec {
         id: "openai-sub2api",
         protocol: "openai",
         discovery: true,
+        fitting: false,
         models: OPENAI_SUB2API_MODELS,
     },
     ProviderTemplateSpec {
         id: "antigravity-sub2api",
         protocol: "gemini",
         discovery: true,
+        fitting: false,
         models: ANTIGRAVITY_SUB2API_MODELS,
     },
 ];
@@ -489,25 +559,22 @@ mod spec_tests {
     fn kimi_code_uses_kimi_code_platform() {
         let spec = openai_provider_spec("kimi-code").expect("kimi-code spec");
         // The Kimi Code platform pins the model id — overrides are ignored.
-        assert_eq!(spec.resolve_model(None), "kimi-k2.7-code");
-        assert_eq!(
-            spec.resolve_model(Some("kimi-k2.7-code-highspeed".to_string())),
-            "kimi-k2.7-code"
-        );
+        assert_eq!(spec.resolve_model(None), "k3");
+        assert_eq!(spec.resolve_model(Some("kimi-k2.7-code".to_string())), "k3");
 
         let provider = spec.build("test-key".to_string(), None, None);
         assert_eq!(
             provider.endpoint.base_url(),
             "https://api.kimi.com/coding/v1/chat/completions"
         );
-        assert_eq!(provider.endpoint.model_id(), "kimi-k2.7-code");
+        assert_eq!(provider.endpoint.model_id(), "k3");
         // The Kimi Code platform requires a recognized coding-agent UA.
         assert_eq!(provider.endpoint.user_agent(), "opencode/0.1.0");
         // The registry stamps the preset id onto the concrete provider so
         // assistant responses can be attributed to "kimi-code".
         assert_eq!(provider.endpoint.id(), "kimi-code");
         assert_eq!(provider.provider_id(), "kimi-code");
-        assert_eq!(provider.model(), "kimi-k2.7-code");
+        assert_eq!(provider.model(), "k3");
     }
 
     #[test]

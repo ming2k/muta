@@ -24,13 +24,14 @@ use neenee_core::{
 
 use crate::tui::clipboard;
 use crate::tui::clipboard_ops;
-use crate::tui::completion::CompletionKind;
+use crate::tui::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
 use crate::tui::composer_attachments;
 use crate::tui::document::{MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin};
 use crate::tui::input::{self};
 use crate::tui::interaction::{self, ClickTarget};
 use crate::tui::layout::{InteractiveTarget, InteractiveTargetKind, LayoutMap};
 use crate::tui::render;
+use crate::tui::render::Theme;
 use crate::tui::selection::{
     CellDragInfo, SelectionState, floor_grapheme_boundary, get_selected_text,
     inclusive_grapheme_end,
@@ -235,11 +236,6 @@ pub(super) struct UiRuntime {
     /// round-trip completes. Each manager renders a lightweight placeholder
     /// while this is `None`.
     pub session_context: Arc<Mutex<Option<neenee_core::SessionContextSnapshot>>>,
-    /// Live doom-guard config snapshot, mirrored from
-    /// `AgentResponse::DoomGuardConfigUpdated`. The `/config` modal reads this
-    /// each frame; edits go out as `AgentRequest::UpdateDoomGuardConfig` and the
-    /// reply updates this cell.
-    pub nudge_config: Arc<Mutex<neenee_core::DoomGuardConfig>>,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. The
     /// render loop copies it into `App::todos` each frame so the Activity
     /// modal stays in sync with the agent's state.
@@ -728,7 +724,6 @@ pub(super) async fn run_app_loop(
             app.unattended = harness.unattended;
             app.activity_status = runtime.activity_status.lock().await.clone();
             app.session_context = runtime.session_context.lock().await.clone();
-            app.nudge_config = *runtime.nudge_config.lock().await;
             app.todos = runtime.todos.lock().await.clone();
             app.round_count = *runtime.round_count.lock().await;
             app.current_turn = *runtime.current_turn.lock().await;
@@ -1428,19 +1423,41 @@ pub(super) async fn run_app_loop(
                         // of drifting from the hide/show state machine.
                         let step_focused = app.focused_target.is_some();
                         let show_caret = app.caret_visible();
-                        render::draw_composer(
-                            f,
-                            input_rect,
-                            &app.input,
-                            app.byte_cursor(),
-                            !step_focused,
-                            show_caret,
-                            &app.theme,
-                            &mut layout_map,
-                            true,
-                            &mut app.input_scroll,
-                            &app.selection,
-                        );
+                        // A fully-typed known `/command` is painted in bold +
+                        // accent color so it reads as a resolved command
+                        // rather than prose; an unmatched `/`-prefix keeps
+                        // the normal text color.
+                        let slash_len =
+                            resolved_slash_command_len(&app.input, &app.custom_commands);
+                        match slash_len {
+                            Some(len) => render::draw_composer_highlighted(
+                                f,
+                                input_rect,
+                                &app.input,
+                                app.byte_cursor(),
+                                !step_focused,
+                                show_caret,
+                                &app.theme,
+                                &mut layout_map,
+                                true,
+                                &mut app.input_scroll,
+                                &app.selection,
+                                len,
+                            ),
+                            None => render::draw_composer(
+                                f,
+                                input_rect,
+                                &app.input,
+                                app.byte_cursor(),
+                                !step_focused,
+                                show_caret,
+                                &app.theme,
+                                &mut layout_map,
+                                true,
+                                &mut app.input_scroll,
+                                &app.selection,
+                            ),
+                        }
                     }
                 }
 
@@ -1481,12 +1498,24 @@ pub(super) async fn run_app_loop(
                 {
                     let completions = app.completions();
                     if !completions.is_empty() {
+                        // Hang the popup's leading edge off the trigger token
+                        // it completes — column 0 of the composer text area
+                        // for a `/command`, the `@`'s column for a path
+                        // mention — so the menu aligns with what was typed
+                        // even after the line wraps.
+                        let anchor_x = completion_anchor_x(
+                            &app.input,
+                            app.byte_cursor(),
+                            input_rect,
+                            app.completion_kind(),
+                        );
                         render::draw_completion_menu(
                             f,
                             &mut layout_map,
                             &completions,
                             app.suggestion_index,
                             input_rect,
+                            anchor_x,
                             &app.theme,
                         );
                     }
@@ -1749,13 +1778,30 @@ pub(super) async fn run_app_loop(
                         f,
                         app.modal_index,
                         &mut app.config_scroll,
+                        render::ConfigOverview {
+                            color_scheme: &app.color_scheme,
+                            layout: app.transcript_layout,
+                        },
+                        app.modal_keymap_open,
                         &app.theme,
                     )),
-                    Modal::ConfigNudge => Some(render::draw_config_nudge_modal(
+                    Modal::ConfigTheme => Some(render::draw_config_theme_modal(
                         f,
-                        &app.nudge_config,
+                        &app.color_scheme,
+                        &app.custom_color_scheme,
                         app.modal_index
-                            .min(crate::tui::render::overlays::config_nudge::ROW_COUNT - 1),
+                            .min(crate::tui::render::overlays::config_theme::ROW_COUNT - 1),
+                        &mut app.config_scroll,
+                        app.modal_keymap_open,
+                        &app.theme,
+                    )),
+                    Modal::ConfigThemeCustom => Some(render::draw_config_theme_custom_modal(
+                        f,
+                        &app.custom_color_draft,
+                        app.modal_index
+                            .min(crate::tui::render::overlays::config_theme_custom::ROW_COUNT - 1),
+                        &app.input,
+                        app.cursor_position,
                         &mut app.config_scroll,
                         &app.theme,
                     )),
@@ -1765,6 +1811,7 @@ pub(super) async fn run_app_loop(
                         app.modal_index
                             .min(crate::tui::render::overlays::config_layout::ROW_COUNT - 1),
                         &mut app.config_scroll,
+                        app.modal_keymap_open,
                         &app.theme,
                     )),
                     Modal::Activity => {
@@ -3193,12 +3240,12 @@ pub(super) async fn run_app_loop(
                 input::InputAction::ConfigActivate => {
                     // Drill into the selected config category's sub-page.
                     // Index matches `categories()` order in config.rs
-                    // (0 = Nudge, 1 = Layout).
+                    // (0 = Appearance, 1 = Layout).
                     match app.modal_index {
                         0 => {
-                            app.active_modal = Modal::ConfigNudge;
+                            app.active_modal = Modal::ConfigTheme;
                             app.modal_keymap_open = false;
-                            app.modal_index = 0;
+                            app.modal_index = Theme::color_scheme_index(&app.color_scheme);
                             app.config_scroll = 0;
                         }
                         1 => {
@@ -3214,11 +3261,93 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ConfigBack => {
-                    // Return from a config sub-page to the config root.
-                    app.active_modal = Modal::Config;
+                    // The custom editor is one level deeper than the other
+                    // pages. Esc cancels its preview and returns to Appearance;
+                    // the other pages return to the settings index.
                     app.modal_keymap_open = false;
-                    app.modal_index = 0;
                     app.config_scroll = 0;
+                    if app.active_modal == Modal::ConfigThemeCustom {
+                        app.theme =
+                            Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
+                        app.custom_color_draft = app.custom_color_scheme.clone();
+                        app.input.clear();
+                        app.set_cursor(0);
+                        app.active_modal = Modal::ConfigTheme;
+                        app.modal_index = Theme::color_scheme_index("custom");
+                    } else {
+                        app.modal_index = match app.active_modal {
+                            Modal::ConfigTheme => 0,
+                            Modal::ConfigLayout => 1,
+                            _ => 0,
+                        };
+                        app.active_modal = Modal::Config;
+                    }
+                }
+                input::InputAction::ConfigThemeActivate => {
+                    if let Some(name) =
+                        crate::tui::render::overlays::config_theme::scheme_id_at(app.modal_index)
+                    {
+                        if name == "custom" {
+                            app.custom_color_draft = app.custom_color_scheme.clone();
+                            app.active_modal = Modal::ConfigThemeCustom;
+                            app.modal_keymap_open = false;
+                            app.modal_index = 0;
+                            app.config_scroll = 0;
+                            app.input = Theme::custom_color_value(&app.custom_color_draft, 0)
+                                .unwrap_or("#000000")
+                                .to_string();
+                            app.set_cursor_end();
+                            app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
+                        } else {
+                            app.color_scheme = name.to_string();
+                            app.theme = Theme::from_color_scheme(name, &app.custom_color_scheme);
+                            let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                name: app.color_scheme.clone(),
+                                custom: app.custom_color_scheme.clone(),
+                            });
+                        }
+                    }
+                }
+                input::InputAction::ConfigThemeField { delta } => {
+                    if app.active_modal == Modal::ConfigThemeCustom
+                        && Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            app.modal_index,
+                            &app.input,
+                        )
+                    {
+                        app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
+                        let count =
+                            crate::tui::render::overlays::config_theme_custom::ROW_COUNT as i32;
+                        let next = (app.modal_index as i32 + delta).rem_euclid(count) as usize;
+                        app.modal_index = next;
+                        app.input = Theme::custom_color_value(&app.custom_color_draft, next)
+                            .unwrap_or("#000000")
+                            .to_string();
+                        app.set_cursor_end();
+                    }
+                }
+                input::InputAction::ConfigThemeCustomSave => {
+                    if app.active_modal == Modal::ConfigThemeCustom
+                        && Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            app.modal_index,
+                            &app.input,
+                        )
+                    {
+                        app.custom_color_scheme = app.custom_color_draft.clone();
+                        app.color_scheme = "custom".to_string();
+                        app.theme = Theme::from_color_scheme("custom", &app.custom_color_scheme);
+                        let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                            name: app.color_scheme.clone(),
+                            custom: app.custom_color_scheme.clone(),
+                        });
+                        app.input.clear();
+                        app.set_cursor(0);
+                        app.active_modal = Modal::ConfigTheme;
+                        app.modal_index = Theme::color_scheme_index("custom");
+                        app.config_scroll = 0;
+                    }
                 }
                 input::InputAction::ConfigLayoutApply => {
                     // Apply the selected layout strategy. Persisted to
@@ -3235,27 +3364,6 @@ pub(super) async fn run_app_loop(
                         let _ = app
                             .tx
                             .send(AgentRequest::UpdateTuiLayout(value.to_string()));
-                    }
-                }
-                input::InputAction::ConfigNudgeToggle => {
-                    // Only the `enabled` row (index 0) is toggled by Space.
-                    if app.modal_index == crate::tui::render::overlays::config_nudge::ROW_ENABLED {
-                        let mut cfg = app.nudge_config;
-                        cfg.enabled = !cfg.enabled;
-                        let _ = app.tx.send(AgentRequest::UpdateDoomGuardConfig(cfg));
-                    }
-                }
-                input::InputAction::ConfigNudgeAdjust { delta } => {
-                    // Adjust the selected threshold by `delta` (±1). The
-                    // `enabled` row (index 0) is not a threshold; it is
-                    // toggled with Space, so ←/→ is a no-op there.
-                    let row = app.modal_index;
-                    if row != crate::tui::render::overlays::config_nudge::ROW_ENABLED {
-                        let mut cfg = app.nudge_config;
-                        crate::tui::render::overlays::config_nudge::apply_threshold_delta(
-                            &mut cfg, row, delta,
-                        );
-                        let _ = app.tx.send(AgentRequest::UpdateDoomGuardConfig(cfg));
                     }
                 }
                 input::InputAction::McpToggle => {
@@ -3417,6 +3525,16 @@ pub(super) async fn run_app_loop(
                             app.model_modal_follow = true;
                             app.modal_index = 0;
                             return_to_picker = true;
+                        } else if app.active_modal == Modal::ConfigThemeCustom {
+                            // Click-outside closes the settings stack. Discard
+                            // the transactional custom preview before leaving.
+                            app.theme = Theme::from_color_scheme(
+                                &app.color_scheme,
+                                &app.custom_color_scheme,
+                            );
+                            app.custom_color_draft = app.custom_color_scheme.clone();
+                            app.input.clear();
+                            app.set_cursor(0);
                         }
                         app.modal_keymap_open = false;
                         app.active_modal = if return_to_picker {
@@ -3447,7 +3565,7 @@ pub(super) async fn run_app_loop(
                             app.session_scroll = 0;
                             app.session_modal_follow = true;
                         }
-                        Modal::Config | Modal::ConfigNudge | Modal::ConfigLayout => {
+                        Modal::Config | Modal::ConfigTheme | Modal::ConfigLayout => {
                             app.config_scroll = 0;
                         }
                         Modal::TokenReport => app.token_report_scroll = 0,
@@ -3849,6 +3967,14 @@ pub(super) async fn run_app_loop(
                     // list as the query changes.
                     if app.active_modal == Modal::CustomProvider {
                         app.on_custom_filter_changed();
+                    } else if app.active_modal == Modal::ConfigThemeCustom
+                        && Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            app.modal_index,
+                            &app.input,
+                        )
+                    {
+                        app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
                     }
                     app.suggestion_index = None;
                     // The user is editing again, so live completions are
@@ -3867,6 +3993,14 @@ pub(super) async fn run_app_loop(
                 input::InputAction::Backspace => {
                     if app.active_modal == Modal::CustomProvider {
                         app.on_custom_filter_changed();
+                    } else if app.active_modal == Modal::ConfigThemeCustom
+                        && Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            app.modal_index,
+                            &app.input,
+                        )
+                    {
+                        app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
                     }
                     app.suggestion_index = None;
                     app.completion_dismissed = false;
@@ -4072,14 +4206,14 @@ pub(super) async fn run_app_loop(
                         };
                     }
                     Modal::Config => {
-                        // Config root: cycle down through the category list.
+                        // Config root: cycle up through the category list.
                         // Count matches `categories()` in config.rs.
                         let count = 2usize;
-                        app.modal_index = (app.modal_index + 1) % count;
+                        app.modal_index = (app.modal_index + count - 1) % count;
                     }
-                    Modal::ConfigNudge => {
-                        let count = crate::tui::render::overlays::config_nudge::ROW_COUNT;
-                        app.modal_index = (app.modal_index + 1) % count;
+                    Modal::ConfigTheme => {
+                        let count = crate::tui::render::overlays::config_theme::ROW_COUNT;
+                        app.modal_index = (app.modal_index + count - 1) % count;
                     }
                     Modal::ConfigLayout => {
                         let count = crate::tui::render::overlays::config_layout::ROW_COUNT;
@@ -4108,6 +4242,7 @@ pub(super) async fn run_app_loop(
                     | Modal::ProviderTemplate
                     | Modal::OauthPending
                     | Modal::CustomProvider
+                    | Modal::ConfigThemeCustom
                     | Modal::InputInjection
                     | Modal::Tools
                     | Modal::Mcp
@@ -4152,8 +4287,8 @@ pub(super) async fn run_app_loop(
                         let count = 2usize;
                         app.modal_index = (app.modal_index + 1) % count;
                     }
-                    Modal::ConfigNudge => {
-                        let count = crate::tui::render::overlays::config_nudge::ROW_COUNT;
+                    Modal::ConfigTheme => {
+                        let count = crate::tui::render::overlays::config_theme::ROW_COUNT;
                         app.modal_index = (app.modal_index + 1) % count;
                     }
                     Modal::ConfigLayout => {
@@ -4183,6 +4318,7 @@ pub(super) async fn run_app_loop(
                     | Modal::ProviderTemplate
                     | Modal::OauthPending
                     | Modal::CustomProvider
+                    | Modal::ConfigThemeCustom
                     | Modal::InputInjection
                     | Modal::Tools
                     | Modal::Mcp

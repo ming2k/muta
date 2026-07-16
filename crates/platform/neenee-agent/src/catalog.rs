@@ -16,11 +16,11 @@ use neenee_core::{
     Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ThinkingMode, WireFormat,
 };
 use neenee_providers::{
-    ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, NEENEE_USER_AGENT,
-    OPENAI_BUILTIN_MODELS, provider_template_spec,
+    ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
+    NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, provider_template_spec,
 };
 use neenee_store::config::{
-    Config, ModelSource, UserChannelConfig, UserProviderConfig, UserTransport,
+    Config, FittedModelInfo, ModelSource, UserChannelConfig, UserProviderConfig, UserTransport,
 };
 use neenee_store::provider_usage::ProviderUsage;
 use std::collections::HashSet;
@@ -277,7 +277,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         UserTransport::OpenAiCompat,
         "https://api.kimi.com/coding/v1/chat/completions",
         Some("opencode/0.1.0"),
-        &["kimi-k2.7-code"],
+        KIMI_CODE_MODELS,
         kimi_key,
         legacy_model.as_deref(),
         Some("kimi-code"),
@@ -340,15 +340,16 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
                 name: Some("OpenCode Go".to_string()),
                 channels,
                 default_channel,
-                // The OpenCode Go seed derives its models from the KNOWN_MODELS
-                // table at runtime, so it is NOT a 1:1 mirror of the
-                // `opencode-go` template spec (which uses a fixed list). Leave
-                // it untracked so a template edit does not clobber the curated
-                // runtime-derived set.
+                // The OpenCode Go seed mirrors the relay's served catalogue
+                // (OPENCODE_GO_SERVED_MODELS), so it is NOT a 1:1 mirror of
+                // the `opencode-go` template spec (which uses a fixed list).
+                // Leave it untracked so a template edit does not clobber the
+                // curated served set.
                 template_id: None,
                 // A pure-custom (untracked) instance; model_source is ignored,
                 // so the Fixed default is harmless.
                 model_source: Default::default(),
+                fitted_models: Default::default(),
             });
             changed = true;
         }
@@ -435,13 +436,33 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
         if let Some(tid) = provider.template_id.as_deref()
             && let Some(spec) = provider_template_spec(tid)
         {
+            // A stock instance of a fitting template upgrades Fixed → Api: its
+            // Fixed source dates from before the template supported discovery
+            // (stamped by the backfill), not from a user choice — the template
+            // offered no Api source at the time, so Fixed cannot have been a
+            // deliberate opt-out.
+            if spec.discovery && spec.fitting && provider.model_source == ModelSource::Fixed {
+                provider.model_source = ModelSource::Api;
+                changed = true;
+            }
+            // Fitted ids from the last live fetch are as retainable as
+            // registry ids — intersecting against the static registry alone
+            // would undo the fitting on every startup. Owned up front so the
+            // borrow of `provider` ends before the reseed below, and declared
+            // outside the branch so `target_models` may borrow from it.
+            let fitted_ids: Vec<String> = if spec.fitting {
+                provider.fitted_models.keys().cloned().collect()
+            } else {
+                Vec::new()
+            };
             let target_models = if provider.model_source == ModelSource::Api {
                 let current_models = provider
                     .channel_models()
                     .into_iter()
                     .map(str::to_string)
                     .collect::<Vec<_>>();
-                let known_models = supported_models_for_protocol(spec.protocol);
+                let mut known_models: Vec<&str> = supported_models_for_protocol(spec.protocol);
+                known_models.extend(fitted_ids.iter().map(String::as_str));
                 let supported = supported_model_intersection(&known_models, &current_models);
                 // A malformed/obsolete instance with no supported channels
                 // falls back to the snapshot rather than becoming unusable.
@@ -550,11 +571,31 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
 
         match neenee_providers::list_models(discovery_req).await {
             Ok(models) => {
-                // Only expose models both advertised by the provider and known
-                // to the client for this wire protocol. Preserve registry order
-                // so provider response ordering cannot churn the picker.
-                let known_models = supported_models_for_protocol(spec.protocol);
-                let supported = supported_model_intersection(&known_models, &models);
+                let supported: Vec<&str> = if spec.fitting {
+                    // Trusted endpoint: every advertised id is materialized,
+                    // and ids the static registry does not know have their
+                    // advertised capability metadata persisted for the dynamic
+                    // overlay (registry-known ids keep the vetted entry, so a
+                    // provider can never downgrade a known model).
+                    let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
+                        .iter()
+                        .filter(|model| neenee_core::model::model_by_id(&model.id).is_none())
+                        .map(|model| (model.id.clone(), fitted_model_info(model)))
+                        .collect();
+                    if provider.fitted_models != fitted {
+                        provider.fitted_models = fitted;
+                        changed = true;
+                    }
+                    models.iter().map(|model| model.id.as_str()).collect()
+                } else {
+                    // Only expose models both advertised by the provider and
+                    // known to the client for this wire protocol. Preserve
+                    // registry order so provider response ordering cannot
+                    // churn the picker.
+                    let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
+                    let known_models = supported_models_for_protocol(spec.protocol);
+                    supported_model_intersection(&known_models, &ids)
+                };
                 if supported.is_empty() {
                     tracing::warn!(
                         provider_id = %provider.id,
@@ -619,6 +660,75 @@ fn supported_model_intersection<'a>(supported: &[&'a str], available: &[String])
         .copied()
         .filter(|model| available.contains(model))
         .collect()
+}
+
+/// Convert a live-discovered model entry into its persisted fitted form.
+/// Absent capability hints degrade to the conservative zero values — the
+/// overlay then behaves exactly like the static fallback for that aspect.
+fn fitted_model_info(model: &neenee_providers::DiscoveredModel) -> FittedModelInfo {
+    FittedModelInfo {
+        context_window: model.context_window.unwrap_or(0),
+        reasoning: model.reasoning.unwrap_or(false),
+        vision: model.vision.unwrap_or(false),
+        efforts: model.effort_levels.clone().unwrap_or_default(),
+        display_name: model.display_name.clone(),
+    }
+}
+
+/// Feed every instance's persisted fitted-model metadata into the dynamic
+/// model overlay ([`neenee_core::model::register_fitted_models`]), so a model
+/// id the static registry does not know still resolves with the capabilities
+/// its (trusted) provider advertised — context window, reasoning, vision, and
+/// effort tiers flow through the same `model::resolve` every consumer uses.
+///
+/// Idempotent and additive: the static registry always wins for ids it knows.
+/// Called at startup after reconciliation and again after a live discovery
+/// refresh.
+pub fn sync_fitted_model_registry(config: &Config) {
+    let fitted: Vec<neenee_core::model::FittedModel> = config
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            let spec = provider
+                .template_id
+                .as_deref()
+                .and_then(provider_template_spec);
+            provider.fitted_models.iter().map(move |(id, info)| {
+                let (format, family) = match spec {
+                    Some(spec) => (wire_format_for_protocol(spec.protocol), spec.id.to_string()),
+                    // A pure-custom instance should never carry fitted data
+                    // (only fitting templates write it); degrade to the most
+                    // common shape if one somehow does.
+                    None => (WireFormat::OpenAiCompat, provider.id.clone()),
+                };
+                neenee_core::model::FittedModel {
+                    id: id.clone(),
+                    display_name: info.display_name.clone(),
+                    family,
+                    context_window: info.context_window,
+                    reasoning: info.reasoning,
+                    vision: info.vision,
+                    format,
+                    effort_levels: info
+                        .efforts
+                        .iter()
+                        .filter_map(|level| Effort::parse(level))
+                        .collect(),
+                }
+            })
+        })
+        .collect();
+    neenee_core::model::register_fitted_models(fitted);
+}
+
+/// Map a template wire protocol to the registry's wire format. Mirrors
+/// [`transport_for_protocol`], which produces the channel-level enum.
+fn wire_format_for_protocol(protocol: &str) -> WireFormat {
+    match protocol {
+        "anthropic" => WireFormat::AnthropicCompat,
+        "gemini" => WireFormat::Gemini,
+        _ => WireFormat::OpenAiCompat,
+    }
 }
 
 /// The default [`ModelSource`] a template-sourced instance adopts when its
@@ -720,19 +830,20 @@ fn migrate_legacy_instance(
         default_channel,
         template_id,
         model_source,
+        fitted_models: Default::default(),
     });
     true
 }
 
+/// Seed one channel per model the opencode-go relay actually serves
+/// ([`OPENCODE_GO_SERVED_MODELS`], mirroring models.dev), taking the wire
+/// format and metadata from the client registry. A model registered for
+/// another provider (e.g. Kimi `k3`, `glm-4.7`) must not leak in here — an
+/// unserved channel only ever answers "model not found".
 fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
     let mut models: Vec<_> = neenee_core::KNOWN_MODELS
         .iter()
-        .filter(|m| {
-            matches!(
-                m.family,
-                "glm" | "kimi" | "deepseek" | "mimo" | "minimax" | "qwen"
-            )
-        })
+        .filter(|m| OPENCODE_GO_SERVED_MODELS.contains(&m.id))
         .collect();
     models.sort_by(|a, b| a.id.cmp(b.id));
     models
@@ -1082,6 +1193,7 @@ mod tests {
             default_channel: 0,
             template_id: Some(tid.to_string()),
             model_source: Default::default(),
+            fitted_models: Default::default(),
         }
     }
 
@@ -1151,6 +1263,7 @@ mod tests {
             default_channel: 0,
             template_id: Some("openai-sub2api".to_string()),
             model_source: Default::default(),
+            fitted_models: Default::default(),
         });
         let before_models: Vec<String> = config.providers[0]
             .channels
@@ -1313,6 +1426,7 @@ mod tests {
             default_channel: 0,
             template_id: Some("removed-template".to_string()),
             model_source: Default::default(),
+            fitted_models: Default::default(),
         });
         let before_models: Vec<String> = config.providers[0]
             .channels
@@ -1401,6 +1515,37 @@ mod tests {
                 spec.id
             );
         }
+    }
+
+    #[test]
+    fn opencode_go_seed_channels_only_include_models_the_relay_serves() {
+        let channels = opencode_go_seed_channels("go-key".to_string());
+        let ids: Vec<&str> = channels.iter().filter_map(|c| c.model.as_deref()).collect();
+        // Models registered for other providers but not served by the relay
+        // must not be seeded: an unserved channel only answers "model not
+        // found" (Kimi k3 is kimi-code-only; glm-4.7 is not on go).
+        assert!(!ids.contains(&"k3"), "k3 must not be seeded: {ids:?}");
+        assert!(!ids.contains(&"glm-4.7"), "glm-4.7 must not be seeded");
+        // Served models in the registry are seeded, each with the transport
+        // its wire format implies (one provider, two wire formats).
+        for (id, is_anthropic) in [
+            ("glm-5.2", false),
+            ("kimi-k2.7-code", false),
+            ("minimax-m3", true),
+        ] {
+            let channel = channels
+                .iter()
+                .find(|c| c.model.as_deref() == Some(id))
+                .unwrap_or_else(|| panic!("{id} served by opencode-go"));
+            let want_anthropic = matches!(channel.transport, UserTransport::Anthropic);
+            assert_eq!(want_anthropic, is_anthropic, "{id} transport");
+        }
+        // The seed set is exactly the served catalogue the registry knows.
+        let mut expected: Vec<&str> = OPENCODE_GO_SERVED_MODELS.to_vec();
+        expected.sort_unstable();
+        let mut got = ids;
+        got.sort_unstable();
+        assert_eq!(got, expected);
     }
 
     #[test]
@@ -1815,11 +1960,8 @@ mod tests {
             .find(|e| e.id == "kimi-code")
             .expect("kimi-code entry");
         let channel = entry.default_channel().expect("default channel");
-        // The Kimi Code platform pins the model id to kimi-k2.7-code.
-        assert_eq!(
-            channel.model, "kimi-k2.7-code",
-            "model must be the pinned kimi-k2.7-code alias"
-        );
+        // The Kimi Code platform pins the model id to k3.
+        assert_eq!(channel.model, "k3", "model must be the pinned k3 alias");
         let (base_url, user_agent) = match &channel.transport {
             Transport::OpenAiCompat {
                 base_url,
@@ -1829,7 +1971,9 @@ mod tests {
             other => panic!("kimi-code must be OpenAiCompat, got {other:?}"),
         };
         assert_eq!(base_url, "https://api.kimi.com/coding/v1/chat/completions");
-        // The Kimi Code platform requires a recognized coding-agent UA.
+        // The preset borrows a recognized coding-agent UA as the zero-risk
+        // default (the endpoint tolerates any UA under OAuth, untested for
+        // API-key auth).
         assert_eq!(user_agent, "opencode/0.1.0");
     }
 
@@ -2432,6 +2576,7 @@ mod tests {
             default_channel: 0,
             template_id: None,
             model_source: Default::default(),
+            fitted_models: Default::default(),
         });
 
         assert!(reconcile_provider_models(&mut config));
@@ -2449,12 +2594,12 @@ mod tests {
     #[test]
     fn reconcile_backfill_sets_fixed_model_source_for_nondiscovery_template() {
         // A legacy instance that exactly matches a discovery-disabled template
-        // (kimi-code) gets stamped but keeps model_source=Fixed.
-        let models = current_template_models("kimi-code");
+        // (zai-code) gets stamped but keeps model_source=Fixed.
+        let models = current_template_models("zai-code");
         let mut config = bare_config();
         config.providers.push(UserProviderConfig {
-            id: "kimi".to_string(),
-            name: Some("Kimi".to_string()),
+            id: "zai".to_string(),
+            name: Some("ZAI".to_string()),
             channels: models
                 .iter()
                 .map(|m| UserChannelConfig {
@@ -2463,7 +2608,7 @@ mod tests {
                     api_key_env: None,
                     api_key: Some("sk".to_string()),
                     model: Some(m.clone()),
-                    base_url: Some("https://kimi.example.com".to_string()),
+                    base_url: Some("https://zai.example.com".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
@@ -2473,17 +2618,147 @@ mod tests {
             default_channel: 0,
             template_id: None,
             model_source: Default::default(),
+            fitted_models: Default::default(),
         });
 
         assert!(reconcile_provider_models(&mut config));
-        assert_eq!(
-            config.providers[0].template_id.as_deref(),
-            Some("kimi-code")
-        );
+        assert_eq!(config.providers[0].template_id.as_deref(), Some("zai-code"));
         assert_eq!(
             config.providers[0].model_source,
             neenee_store::config::ModelSource::Fixed,
             "backfilled nondiscovery-template instance keeps Fixed source"
         );
+    }
+
+    #[test]
+    fn reconcile_upgrades_fixed_to_api_for_fitting_templates() {
+        // kimi-code gained discovery+fitting after existing instances had been
+        // stamped Fixed by the backfill — that Fixed was never a deliberate
+        // opt-out (the template offered no Api source at the time), so the
+        // instance follows the template to Api and starts live discovery.
+        let mut config = bare_config();
+        let mut instance = template_instance("kimi-code", KIMI_CODE_MODELS);
+        instance.model_source = neenee_store::config::ModelSource::Fixed;
+        config.providers.push(instance);
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].model_source,
+            neenee_store::config::ModelSource::Api,
+            "Fixed instance of a fitting template upgrades to Api"
+        );
+        // The upgrade itself does not touch the channel set.
+        assert_eq!(
+            config.providers[0].channel_models(),
+            KIMI_CODE_MODELS.to_vec()
+        );
+    }
+
+    #[test]
+    fn reconcile_api_instance_retains_fitted_channels() {
+        // An Api instance whose channels came from a previous live fetch keeps
+        // its fitted ids across reconciles — intersecting against the static
+        // registry alone would drop them and undo the fitting.
+        let mut config = bare_config();
+        let mut instance = template_instance("kimi-code", &["k3", "kimi-for-coding"]);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        instance.fitted_models.insert(
+            "kimi-for-coding".to_string(),
+            FittedModelInfo {
+                context_window: 262_144,
+                reasoning: true,
+                vision: true,
+                efforts: Vec::new(),
+                display_name: None,
+            },
+        );
+        config.providers.push(instance);
+
+        // The channel set already equals the retainable set → no-op.
+        assert!(!reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].channel_models(),
+            vec!["k3".to_string(), "kimi-for-coding".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_fitting_template_materializes_and_fits_advertised_models() {
+        // Recorded 2026-07 from GET https://api.kimi.com/coding/v1/models.
+        let body = r#"{"data":[
+            {"id":"kimi-for-coding","created":1761264000,"created_at":"2025-10-24T00:00:00Z","object":"model","display_name":"kimi-for-coding","type":"model","context_length":262144,"supports_reasoning":true,"supports_image_in":true,"supports_video_in":true,"supports_thinking_type":"only"},
+            {"id":"kimi-for-coding-highspeed","created":1761264000,"created_at":"2025-10-24T00:00:00Z","object":"model","display_name":"kimi-for-coding-highspeed","type":"model","context_length":262144,"supports_reasoning":true,"supports_image_in":true,"supports_video_in":true,"supports_thinking_type":"only"},
+            {"id":"k3","created":1761264000,"created_at":"2025-10-24T00:00:00Z","object":"model","display_name":"k3","type":"model","context_length":1048576,"supports_reasoning":true,"supports_image_in":true,"supports_video_in":true,"supports_thinking_type":"only","think_efforts":{"support":true,"valid_efforts":["max"],"default_effort":"max"}}
+        ],"object":"list","first_id":"kimi-for-coding","last_id":"k3","has_more":false}"#;
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/v1/models")
+            .match_header("authorization", "Bearer sk-test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let mut instance = template_instance("kimi-code", KIMI_CODE_MODELS);
+        instance.model_source = neenee_store::config::ModelSource::Api;
+        let chat_url = format!("{}/v1/chat/completions", server.url());
+        for channel in &mut instance.channels {
+            channel.base_url = Some(chat_url.clone());
+        }
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        assert!(discover_provider_models(&mut config).await);
+        // Every advertised id is materialized (sorted by id), including the
+        // platform-native ids the static registry does not know.
+        assert_eq!(
+            config.providers[0].channel_models(),
+            vec![
+                "k3".to_string(),
+                "kimi-for-coding".to_string(),
+                "kimi-for-coding-highspeed".to_string()
+            ]
+        );
+        // Fitted metadata is persisted only for registry-unknown ids — k3 is
+        // registered, so its vetted static entry stays authoritative.
+        let fitted = &config.providers[0].fitted_models;
+        assert!(!fitted.contains_key("k3"));
+        let kimi_for_coding = &fitted["kimi-for-coding"];
+        assert_eq!(kimi_for_coding.context_window, 262_144);
+        assert!(kimi_for_coding.reasoning);
+        assert!(kimi_for_coding.vision);
+        assert_eq!(
+            fitted["kimi-for-coding-highspeed"].display_name.as_deref(),
+            Some("kimi-for-coding-highspeed")
+        );
+    }
+
+    #[test]
+    fn sync_fitted_model_registry_populates_the_resolution_overlay() {
+        let mut config = bare_config();
+        let mut instance = template_instance("kimi-code", &["k3", "fitted-sync-k9"]);
+        instance.fitted_models.insert(
+            "fitted-sync-k9".to_string(),
+            FittedModelInfo {
+                context_window: 512_000,
+                reasoning: true,
+                vision: true,
+                // Unsorted: the overlay stores levels ascending.
+                efforts: vec!["high".to_string(), "low".to_string()],
+                display_name: Some("Sync K9".to_string()),
+            },
+        );
+        config.providers.push(instance);
+
+        sync_fitted_model_registry(&config);
+
+        let model = neenee_core::model::resolve("fitted-sync-k9");
+        assert_eq!(model.name, "Sync K9");
+        assert_eq!(model.family, "kimi-code");
+        assert_eq!(model.context_window, 512_000);
+        assert!(model.reasoning());
+        assert!(model.vision);
+        assert_eq!(model.effort_levels, &[Effort::Low, Effort::High]);
     }
 }

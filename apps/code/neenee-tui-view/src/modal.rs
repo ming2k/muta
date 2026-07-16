@@ -91,19 +91,18 @@ pub enum Modal {
     /// inline real-time approval sheet).
     Permissions,
     /// Config manager modal: a centered, dismissable overlay listing the
-    /// configurable categories (Nudge, …). Opened with the `/config` slash
-    /// command (intercepted locally, never sent to the backend). `Enter` /
-    /// `Space` drills into a category's sub-page ([`Modal::ConfigNudge`]);
-    /// `Esc` closes.
+    /// configurable categories (Appearance and Layout). Opened with the
+    /// `/config` slash command (intercepted locally, never sent to the
+    /// backend). `Enter` / `Space` drills into a category's sub-page; `Esc`
+    /// closes.
     Config,
-    /// Nudge sub-page of the config manager. Reached from [`Modal::Config`]
-    /// by selecting the "Nudge" row. Shows the master `enabled` switch and
-    /// the four tunable thresholds (`window`, `threshold`, `escalate_at`,
-    /// `path_threshold`). `Space` toggles the enabled flag; `←`/`→` adjust
-    /// the selected threshold; `Esc` returns to the config root. Edits are
-    /// sent as `AgentRequest::UpdateNudgeConfig` and the harness replies with
-    /// `AgentResponse::NudgeConfigUpdated`, which re-seeds the snapshot.
-    ConfigNudge,
+    /// Color-scheme picker reached from the Appearance row in [`Modal::Config`].
+    /// Built-in presets apply immediately; Custom opens
+    /// [`Modal::ConfigThemeCustom`].
+    ConfigTheme,
+    /// Eight-field `#RRGGBB` editor for the custom semantic palette. The field
+    /// borrows the composer input buffer and previews valid colors live.
+    ConfigThemeCustom,
     /// Transcript layout sub-page of the config manager. Reached from
     /// [`Modal::Config`] by selecting the "Layout" row. Lists the layout
     /// strategies (Round-band / Legacy); `Space` or `Enter` applies the
@@ -195,7 +194,7 @@ impl Modal {
                 | Modal::Sessions
                 | Modal::Permissions
                 | Modal::Config
-                | Modal::ConfigNudge
+                | Modal::ConfigTheme
                 | Modal::ConfigLayout
                 | Modal::Activity
                 | Modal::HistorySearch
@@ -215,7 +214,11 @@ impl Modal {
     pub fn owns_caret(self) -> bool {
         matches!(
             self,
-            Modal::Provider | Modal::ModelEditor | Modal::CustomProvider | Modal::HistorySearch
+            Modal::Provider
+                | Modal::ModelEditor
+                | Modal::CustomProvider
+                | Modal::HistorySearch
+                | Modal::ConfigThemeCustom
         )
     }
 }

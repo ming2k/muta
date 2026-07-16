@@ -93,7 +93,7 @@ other. Paths below are relative to each crate's `src/`.
 | `render/tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `render/composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
 | `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
-| `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_nudge`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
+| `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `render/empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
 | `render/notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `render/components/notice.rs` |
 | `render/markdown_table.rs` | `build_table_render`, `shrink_column_widths` |

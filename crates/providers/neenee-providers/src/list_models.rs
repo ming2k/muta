@@ -5,7 +5,11 @@
 //! or fetch the list *live* from the provider's own `GET /models` endpoint.
 //! This module owns the live path: it speaks the three wire protocols
 //! (`openai` / `anthropic` / `gemini`), authenticates the same way a chat
-//! request would, and parses the returned model ids.
+//! request would, and parses the returned model entries. Beyond the id,
+//! endpoints may advertise per-model capability hints (context length,
+//! reasoning, image input, effort tiers — the Kimi Code platform is the rich
+//! case); these ride along on [`DiscoveredModel`] as `Option`s, and the
+//! catalog decides per template whether to trust and persist them.
 //!
 //! ## Priority
 //!
@@ -134,6 +138,30 @@ impl std::error::Error for ModelListError {
 /// unreachable relay — the snapshot fallback covers the gap.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// A model entry discovered from a provider's live `GET /models` list. The
+/// `id` is always present; every capability field is `None` when the endpoint
+/// does not advertise it. The stock OpenAI/Anthropic/Gemini shapes carry no
+/// capability data — the Kimi Code platform (`api.kimi.com/coding`) is the
+/// rich case, advertising context length, reasoning/thinking support, image
+/// input, and effort tiers per model. Consumers decide per template whether
+/// these hints may be trusted (see `ProviderTemplateSpec::fitting`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveredModel {
+    pub id: String,
+    /// `context_length` — advertised context window in tokens.
+    pub context_window: Option<usize>,
+    /// Reasoning support. Precedence mirrors the kimi-code client: an
+    /// explicit `supports_thinking_type` (`"only"`/`"both"` → true, `"no"` →
+    /// false) wins over the legacy `supports_reasoning` boolean.
+    pub reasoning: Option<bool>,
+    /// `supports_image_in` — the model accepts image inputs.
+    pub vision: Option<bool>,
+    /// `think_efforts.valid_efforts` — advertised reasoning-effort tiers.
+    pub effort_levels: Option<Vec<String>>,
+    /// `display_name` when the endpoint provides one.
+    pub display_name: Option<String>,
+}
+
 /// Derive the `GET /models` endpoint from a chat endpoint base URL.
 ///
 /// The chat endpoint is the authority (it is what the channel actually calls),
@@ -184,12 +212,14 @@ pub fn models_endpoint_for(
 }
 
 /// Fetch the live model list for `req`. Pure network + parse; the fallback
-/// decision lives in the caller. Sorted + de-duplicated so the resulting
-/// channel set is stable across runs regardless of API ordering.
+/// decision lives in the caller. Sorted + de-duplicated by id so the
+/// resulting channel set is stable across runs regardless of API ordering.
 ///
 /// Empty results are reported as [`ModelListError::Empty`] (never an empty
 /// `Ok`) so a broken endpoint can never blank out a working instance.
-pub async fn list_models(req: ModelDiscoveryRequest<'_>) -> Result<Vec<String>, ModelListError> {
+pub async fn list_models(
+    req: ModelDiscoveryRequest<'_>,
+) -> Result<Vec<DiscoveredModel>, ModelListError> {
     let endpoint = models_endpoint_for(req.protocol, req.base_url)?;
     let user_agent = req.user_agent.unwrap_or(crate::NEENEE_USER_AGENT);
 
@@ -252,11 +282,11 @@ pub async fn list_models(req: ModelDiscoveryRequest<'_>) -> Result<Vec<String>, 
     if models.is_empty() {
         return Err(ModelListError::Empty);
     }
-    // Stable order regardless of API ordering: sort then de-dup. This makes
-    // the reseed idempotent across runs (a re-fetch that returns the same set
-    // in a different order does not register as a change).
-    models.sort();
-    models.dedup();
+    // Stable order regardless of API ordering: sort by id then de-dup. This
+    // makes the reseed idempotent across runs (a re-fetch that returns the
+    // same set in a different order does not register as a change).
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
     Ok(models)
 }
 
@@ -266,31 +296,74 @@ fn anthropic_version() -> &'static str {
     neenee_ai_sdk_anthropic::anthropic::request::ANTHROPIC_VERSION
 }
 
-/// Parse a `GET /models` response body into a list of model ids, per protocol.
-/// Pure function so the per-protocol shapes are unit-testable without any HTTP.
-fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<String> {
+/// Parse a `GET /models` response body into a list of model entries, per
+/// protocol. Pure function so the per-protocol shapes are unit-testable
+/// without any HTTP.
+fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredModel> {
     match protocol {
-        DiscoveryProtocol::OpenAi => parse_data_ids(json),
-        DiscoveryProtocol::Anthropic => parse_data_ids(json),
+        DiscoveryProtocol::OpenAi => parse_data_models(json),
+        DiscoveryProtocol::Anthropic => parse_data_models(json),
         DiscoveryProtocol::Gemini => parse_gemini_models(json),
     }
 }
 
-/// Extract `data[].id` as strings. Used by both OpenAI-compat and Anthropic,
-/// which share the `{data: [{id}, …]}` shape on their models endpoints.
-fn parse_data_ids(json: &Value) -> Vec<String> {
+/// Extract `data[]` entries. Used by both OpenAI-compat and Anthropic, which
+/// share the `{data: [{id}, …]}` shape on their models endpoints. Every
+/// capability field is optional: the stock endpoints omit them (yielding
+/// `None`), while the Kimi Code platform advertises the full set.
+fn parse_data_models(json: &Value) -> Vec<DiscoveredModel> {
     let Some(data) = json.get("data").and_then(Value::as_array) else {
         return Vec::new();
     };
     data.iter()
-        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
-        .map(|id| id.to_string())
+        .filter_map(discovered_model_from_entry)
         .collect()
 }
 
+/// Read one `data[]` entry: the mandatory `id` plus any advertised capability
+/// fields (absent fields stay `None` — the caller decides whether to trust
+/// and persist them).
+fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
+    let id = entry.get("id").and_then(Value::as_str)?.to_string();
+    // Thinking-type precedence mirrors the kimi-code client: the newer
+    // three-state field wins over the legacy boolean when present.
+    let reasoning = match entry.get("supports_thinking_type").and_then(Value::as_str) {
+        Some("only") | Some("both") => Some(true),
+        Some("no") => Some(false),
+        _ => entry.get("supports_reasoning").and_then(Value::as_bool),
+    };
+    let effort_levels = entry
+        .get("think_efforts")
+        .and_then(|efforts| efforts.get("valid_efforts"))
+        .and_then(Value::as_array)
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        });
+    Some(DiscoveredModel {
+        id,
+        context_window: entry
+            .get("context_length")
+            .and_then(Value::as_u64)
+            .map(|length| length as usize),
+        reasoning,
+        vision: entry.get("supports_image_in").and_then(Value::as_bool),
+        effort_levels,
+        display_name: entry
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 /// Extract Gemini `models[]`, keeping only `generateContent`-capable text
-/// models and stripping the `models/` name prefix to a bare id.
-fn parse_gemini_models(json: &Value) -> Vec<String> {
+/// models and stripping the `models/` name prefix to a bare id. The Gemini
+/// shape advertises no per-model capability fields neenee consumes, so the
+/// entries carry ids only.
+fn parse_gemini_models(json: &Value) -> Vec<DiscoveredModel> {
     let Some(models) = json.get("models").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -312,7 +385,10 @@ fn parse_gemini_models(json: &Value) -> Vec<String> {
             entry
                 .get("name")
                 .and_then(Value::as_str)
-                .map(|name| name.strip_prefix("models/").unwrap_or(name).to_string())
+                .map(|name| DiscoveredModel {
+                    id: name.strip_prefix("models/").unwrap_or(name).to_string(),
+                    ..DiscoveredModel::default()
+                })
         })
         .collect()
 }
@@ -411,23 +487,95 @@ mod tests {
                 { "id": "gpt-5.4-mini", "object": "model" }
             ]
         });
-        let mut got = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let mut got: Vec<String> = parse_models(DiscoveryProtocol::OpenAi, &json)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
         got.sort();
         assert_eq!(got, vec!["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"]);
     }
 
     #[test]
+    fn parses_kimi_platform_capability_fields() {
+        // The Kimi Code platform's live response shape (recorded 2026-07 from
+        // GET https://api.kimi.com/coding/v1/models): every entry advertises
+        // its context length, reasoning/thinking support, and image input;
+        // K3 additionally lists its effort tiers.
+        let json = serde_json::json!({
+            "data": [
+                {
+                    "id": "kimi-for-coding",
+                    "display_name": "kimi-for-coding",
+                    "context_length": 262144,
+                    "supports_reasoning": true,
+                    "supports_image_in": true,
+                    "supports_video_in": true,
+                    "supports_thinking_type": "only"
+                },
+                {
+                    "id": "k3",
+                    "display_name": "k3",
+                    "context_length": 1048576,
+                    "supports_reasoning": true,
+                    "supports_image_in": true,
+                    "supports_video_in": true,
+                    "supports_thinking_type": "only",
+                    "think_efforts": {
+                        "support": true,
+                        "valid_efforts": ["max"],
+                        "default_effort": "max"
+                    }
+                }
+            ],
+            "object": "list"
+        });
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        assert_eq!(models.len(), 2);
+        let k3 = &models[1];
+        assert_eq!(k3.id, "k3");
+        assert_eq!(k3.context_window, Some(1_048_576));
+        assert_eq!(k3.reasoning, Some(true));
+        assert_eq!(k3.vision, Some(true));
+        assert_eq!(k3.effort_levels, Some(vec!["max".to_string()]));
+        assert_eq!(k3.display_name.as_deref(), Some("k3"));
+        // The legacy entry has no effort field → None, not an empty vec.
+        assert_eq!(models[0].id, "kimi-for-coding");
+        assert_eq!(models[0].context_window, Some(262_144));
+        assert_eq!(models[0].effort_levels, None);
+    }
+
+    #[test]
+    fn thinking_type_field_wins_over_legacy_reasoning_bool() {
+        // `supports_thinking_type` is the newer, authoritative field: "no"
+        // must override a stray `supports_reasoning: true`.
+        let json = serde_json::json!({
+            "data": [
+                { "id": "a", "supports_reasoning": true, "supports_thinking_type": "no" },
+                { "id": "b", "supports_reasoning": false, "supports_thinking_type": "both" }
+            ]
+        });
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        assert_eq!(models[0].reasoning, Some(false));
+        assert_eq!(models[1].reasoning, Some(true));
+    }
+
+    #[test]
     fn parses_anthropic_data_ids() {
-        // Anthropic's /v1/models returns the same {data:[{id}]} shape.
+        // Anthropic's /v1/models returns the same {data:[{id}]} shape plus a
+        // display name; no capability fields are advertised.
         let json = serde_json::json!({
             "data": [
                 { "id": "claude-opus-4-8", "display_name": "Claude Opus 4.8" },
                 { "id": "claude-sonnet-5", "display_name": "Claude Sonnet 5" }
             ]
         });
-        let mut got = parse_models(DiscoveryProtocol::Anthropic, &json);
+        let models = parse_models(DiscoveryProtocol::Anthropic, &json);
+        let mut got: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
         got.sort();
         assert_eq!(got, vec!["claude-opus-4-8", "claude-sonnet-5"]);
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Opus 4.8"));
+        assert_eq!(models[0].context_window, None);
+        assert_eq!(models[0].reasoning, None);
     }
 
     #[test]
@@ -451,7 +599,10 @@ mod tests {
                 { "name": "models/gemini-3-pro-preview" }
             ]
         });
-        let mut got = parse_models(DiscoveryProtocol::Gemini, &json);
+        let mut got: Vec<String> = parse_models(DiscoveryProtocol::Gemini, &json)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
         got.sort();
         assert_eq!(
             got,

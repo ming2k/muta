@@ -405,18 +405,26 @@ fn truncate_for_bar(s: &str, max: usize) -> String {
     }
 }
 
-/// Draw a completion menu anchored above the input box. Renders each
-/// candidate as `label · description` with the selected row highlighted; no
-/// title or operating instructions are shown so the menu reads as a plain
-/// list of candidates. Works for both slash-command and `@path` mention
-/// completions since the rendering only depends on the label/description
-/// pair, not the replacement range.
+/// Draw a completion menu anchored above the input box.
+///
+/// The popup's leading edge aligns with the typed trigger token (`anchor_x`,
+/// passed in by the caller as the token's on-screen column — e.g. column 0 of
+/// the composer text area for a `/command`, or the `@`'s column for a path
+/// mention), so the menu visually hangs off the text it completes.
+///
+/// Each row is `command  description` laid out in two columns separated by
+/// plain padding — no `·` ornament; the primary/secondary relationship is
+/// carried by weight and brightness alone (command bright + bold,
+/// description dim). The selected row is highlighted as one solid band
+/// across the **full popup width**, label column, padding, and trailing fill
+/// included, so the highlight never fragments into per-segment blocks.
 pub fn draw_completion_menu(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
     completions: &[crate::completion::Completion],
     selected_idx: Option<usize>,
     anchor: Rect,
+    anchor_x: u16,
     theme: &Theme,
 ) {
     if completions.is_empty() {
@@ -450,9 +458,11 @@ pub fn draw_completion_menu(
         _ => 0,
     };
     let window_end = (scroll_offset + MAX_VISIBLE).min(total);
-    let visible_rows = completions[scroll_offset..window_end].to_vec();
+    let visible_rows = &completions[scroll_offset..window_end];
     let visible_count = visible_rows.len();
     let popup_height = visible_count as u16;
+
+    let viewport = viewport_rect(frame);
 
     // Compute width from content. The description column is dropped entirely
     // (separator + padding) when no candidate carries a description — the
@@ -475,29 +485,45 @@ pub fn draw_completion_menu(
     } else {
         0
     };
-    let inner_width = if any_desc {
-        (max_cmd + 3 + max_desc).max(30) as u16
+    // The popup never grows past a compact share of the viewport: the slash
+    // menu's longest description (e.g. /unattended's) would otherwise fill
+    // the whole row on a standard 80-column terminal, pushing the popup's
+    // leading edge off the typed token and breaking the visual anchor.
+    // Over-long descriptions truncate with an ellipsis (see the row builder
+    // below) instead of stretching the menu.
+    let max_popup_width = ((viewport.width as usize) * 3 / 5).max(24);
+    // Text runs from edge to edge of the popup so the selection band can
+    // paint the row solid; a single right-edge padding cell keeps the last
+    // glyph off the frame boundary.
+    let content_width = if any_desc {
+        (max_cmd + 2 + max_desc).max(30)
     } else {
-        (max_cmd + 2).max(20) as u16
-    };
-    let popup_width = inner_width + 2; // left + right padding
+        (max_cmd + 1).max(20)
+    }
+    .min(max_popup_width);
+    let popup_width = content_width as u16;
 
     // Position: try above the input box; if not enough room, clamp to top.
+    // Horizontally hang the menu off the typed token (`anchor_x`); when the
+    // token sits far right the popup shifts left just enough to stay on
+    // screen (right-clamped), like an editor completion widget.
     let mut y = anchor.y.saturating_sub(popup_height);
     if y == 0 && anchor.y < popup_height {
         y = 0;
     }
-    let viewport = viewport_rect(frame);
-    let x = anchor
-        .x
-        .saturating_add(2)
-        .min(viewport.right().saturating_sub(popup_width));
+    let x = anchor_x
+        .min(viewport.right().saturating_sub(popup_width))
+        .max(viewport.x);
 
     let area = Rect::new(x, y, popup_width.min(viewport.right() - x), popup_height);
     frame.render_widget(Clear, area);
 
     let block = RtBlock::default().style(Style::default().bg(theme.body()));
 
+    let popup_w = area.width as usize;
+    // The description column gets whatever the label column leaves inside
+    // the capped popup width; longer descriptions truncate with an ellipsis.
+    let desc_col = popup_w.saturating_sub(max_cmd + 2);
     let lines: Vec<Line> = visible_rows
         .iter()
         .enumerate()
@@ -507,37 +533,57 @@ pub fn draw_completion_menu(
             // check matches the value passed in `selected_idx`.
             let global_idx = row + scroll_offset;
             let is_selected = Some(global_idx) == selected_idx;
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.brand())
-                    .fg(contrast_fg(theme.brand()))
-            } else {
-                Style::default().fg(theme.fg())
-            };
+            let body_bg = theme.body();
+            // Every span on the row shares the row background (`brand` when
+            // selected, `body` otherwise) and the trailing fill spans out to
+            // the popup's full width, so the highlight reads as one
+            // continuous band instead of per-segment blocks.
+            let row_bg = if is_selected { theme.brand() } else { body_bg };
             let cmd_style = if is_selected {
-                style.add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(row_bg)
+                    .fg(contrast_fg(theme.brand()))
+                    .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(row_bg)
+                    .fg(theme.fg())
+                    .add_modifier(Modifier::BOLD)
             };
-            // Build the row spans. When the description is empty (e.g. the
-            // `@path` menu), drop the `· desc` suffix entirely so the row is just
-            // the candidate — matches the "candidate + description" plain style
-            // without forcing every row to carry a `·` ornament.
-            let mut spans = vec![
-                Span::styled(" ", Style::default()),
-                Span::styled(format!("{:<width$}", c.label, width = max_cmd), cmd_style),
-            ];
+            let desc_style = if is_selected {
+                Style::default()
+                    .bg(row_bg)
+                    .fg(contrast_fg(theme.brand()))
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Style::default().bg(row_bg).fg(theme.muted())
+            };
+            let pad_style = Style::default().bg(row_bg);
+
+            // `command  description` in two padded columns separated by plain
+            // spaces — no `·` separator; weight (bold) and brightness
+            // (fg vs muted) carry the primary/secondary relationship.
+            let mut used = max_cmd;
+            let mut spans = vec![Span::styled(
+                format!("{:<width$}", c.label, width = max_cmd),
+                cmd_style,
+            )];
             if any_desc {
-                spans.push(Span::styled("· ", Style::default().fg(theme.muted())));
-                spans.push(Span::styled(
-                    format!("{:<width$}", c.description, width = max_desc),
-                    if is_selected {
-                        style
-                    } else {
-                        Style::default().fg(theme.muted())
-                    },
-                ));
+                spans.push(Span::styled("  ", pad_style));
+                let desc = if c.description.width() > desc_col {
+                    truncate_for_bar(&c.description, desc_col)
+                } else {
+                    format!("{:<width$}", c.description, width = desc_col)
+                };
+                spans.push(Span::styled(desc, desc_style));
+                used += 2 + desc_col;
             }
+            // Solid fill to the popup edge so the selected row's highlight
+            // spans the whole width, not just the text it contains.
+            spans.push(Span::styled(
+                " ".repeat(popup_w.saturating_sub(used)),
+                pad_style,
+            ));
             Line::from(spans)
         })
         .collect();
@@ -1267,5 +1313,192 @@ mod tests {
         assert!(on.contains("◆ high"), "missing ◆ high tag in: {on:?}");
         // A different effort level renders its own value, not a hardcoded one.
         assert!(row_text(Some("max")).contains("◆ max"));
+    }
+
+    /// Paint the completion menu into a test buffer and return the rect the
+    /// popup actually occupied (found by scanning for the popup background),
+    /// so assertions can check alignment and full-width highlighting without
+    /// duplicating the layout math.
+    fn paint_completion_menu(
+        input_anchor_x: u16,
+        selected: Option<usize>,
+    ) -> (neenee_tui::TestTerminal, Rect) {
+        let theme = Theme::default();
+        let completions = vec![
+            crate::completion::Completion {
+                label: "/pursue".to_string(),
+                description: "Pursue a long-running objective".to_string(),
+                replace_start: 0,
+                replace_end: 2,
+                kind: crate::completion::CompletionItemKind::Slash,
+            },
+            crate::completion::Completion {
+                label: "/permissions".to_string(),
+                description: "Manage permissions".to_string(),
+                replace_start: 0,
+                replace_end: 2,
+                kind: crate::completion::CompletionItemKind::Slash,
+            },
+        ];
+        let mut terminal = neenee_tui::TestTerminal::new(80, 12);
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                selected,
+                Rect::new(0, 10, 80, 2), // input box occupies rows 10..12
+                input_anchor_x,
+                &theme,
+            );
+        });
+        // The two rows directly above the input box are the popup.
+        (terminal, Rect::new(0, 8, 80, 2))
+    }
+
+    #[test]
+    fn completion_menu_left_edge_aligns_with_anchor_column() {
+        let (terminal, popup) = paint_completion_menu(2, None);
+        let buf = terminal.buffer();
+        let body = Theme::default().body();
+        // Row start of the popup: cells left of the anchor column keep the
+        // app background; the popup body starts exactly at the anchor column.
+        let y = popup.y;
+        let at_anchor = buf.get(2, y).expect("cell at anchor column");
+        assert_eq!(at_anchor.bg, body, "popup body must start at the anchor");
+        assert_eq!(at_anchor.symbol(), "/");
+        let left_of_anchor = buf.get(1, y).expect("cell left of anchor");
+        assert_ne!(
+            left_of_anchor.bg, body,
+            "popup must not start before the anchor"
+        );
+    }
+
+    #[test]
+    fn completion_menu_selected_row_is_one_solid_band_full_width() {
+        let theme = Theme::default();
+        let (terminal, popup) = paint_completion_menu(2, Some(0));
+        let buf = terminal.buffer();
+        let brand = theme.brand();
+        let body = theme.body();
+        let y = popup.y; // first popup row = selected row
+        // Find the popup's horizontal extent on this row (cells whose bg is
+        // the popup body/brand rather than the app background).
+        let row_cells: Vec<u16> = (0..buf.area().width)
+            .filter(|&x| {
+                let bg = buf.get(x, y).map(|c| c.bg);
+                bg == Some(brand) || bg == Some(body)
+            })
+            .collect();
+        assert!(!row_cells.is_empty(), "popup row not found");
+        let (first, last) = (*row_cells.first().unwrap(), *row_cells.last().unwrap());
+        // Every cell of the selected row inside the popup extent carries the
+        // selection background — label, the padding between label and
+        // description, and the fill out to the popup's right edge — so the
+        // highlight reads as one continuous band.
+        for x in first..=last {
+            assert_eq!(
+                buf.get(x, y).map(|c| c.bg),
+                Some(brand),
+                "cell ({x}, {y}) broke the selection band"
+            );
+        }
+        // The band spans further than the row's text: the longest candidate
+        // (`/permissions  Manage permissions`) ends well before the popup
+        // edge, and the highlight must still cover the fill.
+        assert!(
+            last - first >= 30,
+            "popup band too narrow: {first}..={last}"
+        );
+        // The unselected row keeps the popup body background across its full
+        // width (no brand cell leaks onto it).
+        let second_row = popup.y + 1;
+        for x in first..=last {
+            assert_eq!(
+                buf.get(x, second_row).map(|c| c.bg),
+                Some(body),
+                "cell ({x}, {second_row}) of the unselected row lost the body bg"
+            );
+        }
+    }
+
+    /// A menu whose longest description would stretch to the viewport edge
+    /// must stay compact instead: the description truncates with an ellipsis
+    /// and the popup's leading edge keeps the anchor column (this is the
+    /// bare-`/` slash menu case — the full command table at 80 columns).
+    #[test]
+    fn completion_menu_caps_width_and_truncates_long_descriptions() {
+        let theme = Theme::default();
+        let completions = [
+            ("/provider", "Select an LLM provider"),
+            ("/tools", "Manage session tools (enable/disable)"),
+            (
+                "/unattended",
+                "Toggle unattended mode — agent runs without human intervention (on/off)",
+            ),
+        ]
+        .iter()
+        .map(|(l, d)| crate::completion::Completion {
+            label: l.to_string(),
+            description: d.to_string(),
+            replace_start: 0,
+            replace_end: 1,
+            kind: crate::completion::CompletionItemKind::Slash,
+        })
+        .collect::<Vec<_>>();
+        let mut terminal = neenee_tui::TestTerminal::new(80, 12);
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                None,
+                Rect::new(0, 10, 80, 2),
+                2,
+                &theme,
+            );
+        });
+        let buf = terminal.buffer();
+        let body = theme.body();
+        // The popup keeps its anchor: body-colored cells start at column 2,
+        // never stretch to the right edge of the 80-column viewport.
+        let y = 9u16; // last popup row (3 candidates above rows 10..12)
+        let cells: Vec<u16> = (0..80u16)
+            .filter(|&x| buf.get(x, y).map(|c| c.bg) == Some(body))
+            .collect();
+        let (first, last) = (*cells.first().unwrap(), *cells.last().unwrap());
+        assert_eq!(first, 2, "popup must stay anchored at the typed token");
+        assert!(
+            (last - first + 1) as usize <= 80 * 3 / 5,
+            "popup must not fill the viewport: {first}..={last}"
+        );
+        // The truncated description ends with an ellipsis.
+        let row_text: String = (first..=last)
+            .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
+            .collect();
+        assert!(row_text.trim_end().ends_with('…'), "row was {row_text:?}");
+        assert!(row_text.starts_with("/unattended"), "row was {row_text:?}");
+    }
+
+    #[test]
+    fn completion_menu_has_no_dot_separator_and_two_space_gap() {
+        let (terminal, popup) = paint_completion_menu(2, None);
+        let buf = terminal.buffer();
+        let row_text = |y: u16| -> String {
+            (0..buf.area().width)
+                .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
+                .collect()
+        };
+        let first = row_text(popup.y);
+        // Label and description sit in plain padded columns — no `·` (or any
+        // other ornament) between them; weight/brightness carry the hierarchy.
+        assert!(first.contains("/pursue"), "row was {first:?}");
+        assert!(
+            first.contains("Pursue a long-running objective"),
+            "row was {first:?}"
+        );
+        assert!(!first.contains('·'), "row was {first:?}");
     }
 }
