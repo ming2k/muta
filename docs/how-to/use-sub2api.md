@@ -12,6 +12,11 @@ failed request or an empty intersection keeps the last valid model list.
 Discovery never replaces the provider's token, token environment variable,
 base URL, user agent, or authentication mode.
 
+Trusted first-party templates (currently only Kimi Code) are the exception:
+every advertised model is materialized, and ids missing from the registry are
+fitted with the capability metadata the platform advertises — see
+[ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md).
+
 For the provider schema and field meanings, see
 [How to add a provider](add-a-provider.md) and
 [Providers](../reference/providers.md).

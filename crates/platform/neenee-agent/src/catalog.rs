@@ -423,24 +423,27 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
 /// [`ModelSource`](UserProviderConfig::model_source) is `Api` additionally get a
 /// live `GET /models` fetch from [`discover_provider_models`] at startup; the
 /// last valid persisted subset remains the fallback when that fetch fails.
+///
+/// Per-instance semantics:
+/// - **Fixed** instances mirror the whole template snapshot.
+/// - **Api** instances retain their last discovered subset of ids known to the
+///   client: registry ids compatible with the template protocol, plus — for
+///   fitting-enabled templates — the persisted fitted ids (ADR-0065).
+///   Re-expanding Api instances to the snapshot here would overwrite the
+///   persisted discovery result on every startup before the picker could
+///   display it.
+/// - A **Fixed** instance of a fitting template upgrades to **Api**: its
+///   Fixed source predates the template's discovery support and cannot have
+///   been a deliberate opt-out.
 pub fn reconcile_provider_models(config: &mut Config) -> bool {
     let mut changed = false;
 
     for provider in &mut config.providers {
         // A known template_id → reconcile against the client-supported set.
-        // Fixed instances mirror the whole template. Api instances retain the
-        // last successfully discovered subset of KNOWN_MODELS compatible with
-        // the template protocol, while dropping unknown/incompatible ids.
-        // Re-expanding Api instances here would overwrite the persisted
-        // discovery result on every startup before the picker could display it.
         if let Some(tid) = provider.template_id.as_deref()
             && let Some(spec) = provider_template_spec(tid)
         {
-            // A stock instance of a fitting template upgrades Fixed → Api: its
-            // Fixed source dates from before the template supported discovery
-            // (stamped by the backfill), not from a user choice — the template
-            // offered no Api source at the time, so Fixed cannot have been a
-            // deliberate opt-out.
+            // Fixed → Api upgrade for fitting templates (see the fn docs).
             if spec.discovery && spec.fitting && provider.model_source == ModelSource::Fixed {
                 provider.model_source = ModelSource::Api;
                 changed = true;
@@ -508,22 +511,29 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
 /// [`ModelSource`](UserProviderConfig::model_source) is `Api`.
 ///
 /// The companion to [`reconcile_provider_models`] for the live-discovery path:
-/// where reconcile validates the last known subset against the client model
-/// registry synchronously, this hits each provider's actual `GET /models`
-/// endpoint asynchronously and persists the intersection of those two sets.
-/// Provider-advertised models unknown to the client or incompatible with the
-/// template protocol are never materialized. The previous subset (or initial
-/// template snapshot) is kept when fetching fails or the intersection is
-/// empty, so a flaky network, a wrong endpoint, or an incompatible response
-/// cannot blank a provider.
+/// where reconcile validates the last known subset synchronously, this hits
+/// each provider's actual `GET /models` endpoint asynchronously and persists
+/// the result. Two shapes, decided by the template's `fitting` flag
+/// (ADR-0065):
+///
+/// - **Registry-intersected** (default): only ids both advertised and known
+///   to the client for the template protocol are materialized. An arbitrary
+///   relay is an availability signal only, never a metadata source.
+/// - **Fitted** (trusted first-party templates): every advertised id is
+///   materialized, and ids the static registry does not know have their
+///   advertised capability metadata persisted to `fitted_models` for the
+///   dynamic overlay.
+///
+/// Either way, the previous subset (or initial template snapshot) is kept
+/// when fetching fails or the result is empty, so a flaky network, a wrong
+/// endpoint, or an incompatible response cannot blank a provider.
 ///
 /// Per-instance semantics:
 /// - `template_id` resolves to a known template **and** `spec.discovery` is on
-///   **and** `model_source == Api` → fetch live, persist a non-empty supported
-///   intersection, and leave the previous valid set alone otherwise.
+///   **and** `model_source == Api` → fetch live as above.
 /// - Otherwise → skipped. `Fixed` instances, discovery-disabled templates
-///   (Kimi Code, Z.AI Code, opencode-go), and pure-custom instances keep what
-///   the synchronous reconcile produced.
+///   (Z.AI Code, opencode-go), and pure-custom instances keep what the
+///   synchronous reconcile produced.
 ///
 /// Returns `true` when any instance changed, so the caller can persist only
 /// when necessary. Best-effort: a per-instance failure never aborts the pass —

@@ -26,8 +26,8 @@ pub mod tools;
 #[cfg(test)]
 mod snapshot_tests;
 
-pub use chrome::draw_activity_bar;
 pub use chrome::{HintBarView, draw_completion_menu, draw_hint_bar};
+pub use chrome::{draw_activity_bar, draw_state_bar};
 pub use composer::{
     INPUT_MSG_IDX, composer_text_width, composer_wrapped_pos, cursor_screen_pos, draw_composer,
     draw_composer_highlighted,
@@ -37,8 +37,8 @@ use design::{
     COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
     COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS,
     HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS,
-    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS,
-    STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATE_BAR_ROWS,
+    STATUS_BAR_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
     TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use disclosure::{StickyStep, draw_sticky_summary_if_needed};
@@ -189,7 +189,8 @@ pub struct TranscriptView<'a> {
     /// Wall-clock instant the current turn started, or `None` between turns.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub turn_started_at: Option<std::time::Instant>,
-    /// Session policy indicator pinned to the activity row's right edge.
+    /// Session-state flag rendered as `UNATTENDED` on the state bar between
+    /// the activity bar and the input box (the row appears only while on).
     pub unattended: bool,
     /// Message index of the step (tool step or reasoning trace) whose header
     /// currently rests under the mouse pointer (inline or sticky pinned), so
@@ -458,13 +459,18 @@ pub fn draw_transcript(
     // even when the harness is idle, so an active task list is always visible
     // — not only while a turn is running.
     let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
-    let activity_row_needed =
-        status_active || ((has_visible_todos || unattended) && !chrome_hidden && !in_envoy);
+    let activity_row_needed = status_active || (has_visible_todos && !chrome_hidden && !in_envoy);
     let status_height: u16 = if activity_row_needed {
         STATUS_BAR_ROWS
     } else {
         0
     };
+    // The state bar owns persistent session-state indicators (unattended
+    // today). It gets its own row — never shared with transient activity —
+    // and appears exactly when at least one indicator is active, so an
+    // ordinary session pays zero vertical space for it.
+    let state_row_needed = unattended && !chrome_hidden && !in_envoy;
+    let state_height: u16 = if state_row_needed { STATE_BAR_ROWS } else { 0 };
 
     // The input box grows with its content: the typed text wraps onto new
     // lines and the box expands to fit, up to roughly half the terminal so the
@@ -495,7 +501,7 @@ pub fn draw_transcript(
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        FOOTER_TOP_GAP_ROWS + status_height + input_box_height + hint_height
+        FOOTER_TOP_GAP_ROWS + status_height + state_height + input_box_height + hint_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -636,8 +642,9 @@ pub fn draw_transcript(
     }
 
     // The footer stacks, from top to bottom: a permanent blank separator, the
-    // transient activity bar (when active), the input box, and the persistent
-    // hint bar. The separator keeps the latest response visually distinct from
+    // transient activity bar (when active), the persistent state bar (when any
+    // session-state indicator is on), the input box, and the persistent hint
+    // bar. The separator keeps the latest response visually distinct from
     // the controls even when the activity row appears or disappears. The
     // activity bar doubles as the click target that opens the Activity modal
     // (the pursuit and plan summaries that used to live here now scroll inside
@@ -667,7 +674,6 @@ pub fn draw_transcript(
             turn_started_at,
             activity,
             spinner_phase,
-            unattended,
             theme,
         )
         .map(|hit| (Some(hit.bar_rect), hit.todos_rect))
@@ -676,11 +682,24 @@ pub fn draw_transcript(
         (None, None)
     };
 
-    // The input box sits directly below the activity bar (when active), or at
-    // the top of the footer otherwise.
+    // The persistent state bar sits between the activity bar and the input
+    // box. It hosts session-state flags (`UNATTENDED` today; workspace and
+    // other ambient state later) that the activity bar and hint bar no longer
+    // have to carry, and renders only while at least one flag is active.
+    if state_row_needed {
+        draw_state_bar(
+            frame,
+            Rect::new(footer_x, status_y + status_height, footer_w, STATE_BAR_ROWS),
+            unattended,
+            theme,
+        );
+    }
+
+    // The input box sits directly below the activity/state rows (whichever
+    // are active), or at the top of the footer otherwise.
     let input_rect = Rect::new(
         footer_x,
-        status_y + status_height,
+        status_y + status_height + state_height,
         footer_w,
         input_box_height,
     );
@@ -692,7 +711,7 @@ pub fn draw_transcript(
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + status_height + input_box_height,
+            status_y + status_height + state_height + input_box_height,
             footer_w,
             hint_height,
         )

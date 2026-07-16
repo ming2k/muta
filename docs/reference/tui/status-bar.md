@@ -2,23 +2,26 @@
 
 Transient activity indicator shown directly above the input box. It unifies
 the live status label, the active pursuit, todos progress, and the
-breathing-dot liveness anchor into one click-to-open bar.
+breathing-dot liveness anchor into one click-to-open bar. Long-lived
+session-state flags (`UNATTENDED` and friends) are deliberately absent —
+they live on the [state bar](state-bar.md).
 
 ## Appearance
 
 ```text
- ● making edits · ⟴ refactor auth module · todos 2/5 · 23s
+ ● making edits (23s · Esc Esc to interrupt) · » refactor auth module      todos 2/5
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **live
-status** (lead, brand + italic), an optional **pursuit badge** (`⟴ <objective>`,
-shown only while a pursuit is armed), **todos progress** (`todos d/t`,
-shown only when a non-empty task list exists), and **elapsed** time (the only
-live counter). Segments are omitted when there is nothing to report, so a
-plain round reads simply:
+status** (lead, shimmering muted → brand sweep), an optional **pursuit
+badge** (`» <objective>`, shown only while a pursuit is armed), the
+**elapsed** timer inside the interrupt hint, and **todos progress**
+(`todos d/t`, right-pinned, shown only when a non-empty task list exists).
+Segments are omitted when there is nothing to report, so a plain round
+reads simply:
 
 ```text
- ● making edits · 3s
+ ● making edits (3s · Esc Esc to interrupt)
 ```
 
 The structural counters — `turn N · round M · <model>` — no longer live on
@@ -47,7 +50,7 @@ moves. See [ADR-0008](../../adr/0008-single-breathing-anchor.md).
 
 | Condition | Visible? |
 |-----------|----------|
-| Idle | No |
+| Idle | Only while a non-empty todo list keeps the row alive (`ready` + right-pinned `todos d/t`) |
 | Streaming assistant text ("responding") | Yes — the bar stays up across the whole round lifecycle, sustaining the breathing-dot liveness anchor (ADR-0008) through the longest phase |
 | Running tool / queued / waiting | Yes |
 | Overlay modal open | No |

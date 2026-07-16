@@ -79,6 +79,11 @@ pub(super) const HINT_BAR_GAP_MIN: usize = 2;
 pub(super) const HINT_BAR_SEGMENT_GAP: usize = 2;
 
 pub(super) const STATUS_BAR_ROWS: u16 = 1;
+/// State bar: a single-line strip for persistent session-state indicators
+/// (unattended mode today; workspace and other ambient state later). Always
+/// one row tall when visible; the caller allocates zero rows when no
+/// indicator is active.
+pub(super) const STATE_BAR_ROWS: u16 = 1;
 /// Permanent breathing room between the transcript and footer chrome. Keeping
 /// this row even while the activity bar is idle prevents the latest response
 /// from visually running into the composer when the active row appears or

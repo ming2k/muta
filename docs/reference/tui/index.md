@@ -19,6 +19,7 @@ mapping, driving the view layer through the borrowed `TranscriptView` seam.
 │   (messages, expandable steps, sticky pinned summaries)  │
 ├──────────────────────────────────────────────────────────┤
 │  Activity bar                                 (0 or 1 row)  │
+│  State bar                                    (0 or 1 row)  │
 │  Input box                         (2 + wrapped lines)  │
 │  Hint bar                                       (1 row)  │
 └──────────────────────────────────────────────────────────┘
@@ -57,7 +58,8 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](status-bar.md) | Breathing-dot liveness anchor + live status label + pursuit objective + todos progress + elapsed; clickable to open the Activity modal |
-| [Hint bar](hint-line.md) | Optional `[ SHELL ]` pill + model/context cluster |
+| [State bar](state-bar.md) | Persistent session-state flags (`UNATTENDED` today) on their own conditional row |
+| [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |
 
@@ -92,7 +94,7 @@ other. Paths below are relative to each crate's `src/`.
 | `render/layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
 | `render/tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `render/composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
-| `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `render/empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
 | `render/notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `render/components/notice.rs` |

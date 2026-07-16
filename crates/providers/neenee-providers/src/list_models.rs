@@ -16,10 +16,13 @@
 //! The catalog reconciliation layer decides which instances use live
 //! discovery via a `ModelSource` flag on `UserProviderConfig` (see
 //! `neenee-store::config` and `neenee_agent::catalog::reconcile_provider_models`).
-//! For `ModelSource::Api`, the catalog intersects the live result with its
-//! protocol-compatible model registry and retains the last valid subset on an
-//! error or empty intersection. `ModelSource::Fixed` skips the network entirely
-//! and uses the template snapshot.
+//! For `ModelSource::Api`, the catalog either intersects the live result with
+//! its protocol-compatible model registry (the default) or — for
+//! fitting-enabled trusted templates — materializes every advertised id and
+//! persists the capability hints of registry-unknown ones (ADR-0065). On an
+//! error or empty result it retains the last valid subset either way.
+//! `ModelSource::Fixed` skips the network entirely and uses the template
+//! snapshot.
 //!
 //! ## Protocol details
 //!

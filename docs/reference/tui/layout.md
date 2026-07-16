@@ -49,6 +49,7 @@ The default. A two-chunk vertical split inside `draw_transcript`:
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │  Activity bar (optional, 0 or 1 row)              ┐          │
+│  State bar (optional, 0 or 1 row)                  │          │
 │  Input box (grows with text, capped)               │ chunks[1]│
 │  Hint bar (1 row, persistent)                     ┘          │
 ├──────────────────────────────────────────────────────────────┤
@@ -62,23 +63,23 @@ the transcript reclaims the full vertical space above the footer.
 
 ### Footer stack
 
-The footer's height is the sum of its rows. The activity bar is optional and
-collapses to 0 when idle; the input and hint bars are persistent (when chrome
-is visible):
+The footer's height is the sum of its rows. The activity and state bars are
+optional and collapse to 0 when they have nothing to show; the input and
+hint bars are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
-| Activity bar | `STATUS_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Unifies the prior pursuit bar, status bar, and todos/review segments into one click-to-open bar. |
+| Activity bar | `STATUS_BAR_ROWS = 1` | Activity is non-empty and not `idle`, or a non-empty todo list keeps it alive; not in envoy view; chrome visible. Unifies the prior pursuit bar, status bar, and todos/review segments into one click-to-open bar. |
+| State bar | `STATE_BAR_ROWS = 1` | At least one session-state indicator is active (`UNATTENDED` today); not in envoy view; chrome visible. See [State bar](state-bar.md). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open) |
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
-│ ● making edits   ⟴ ship docs   todos 2/5   23s            │  ← activity bar
-├────────────────────────────────────────────────────────────┤
-│  > type here…                                               │  ← input box
-├────────────────────────────────────────────────────────────┤
-│                  Kimi K2.7 Code   89.2k (8%)              │  ← hint bar
+│ ● making edits (23s · Esc Esc to interrupt)     todos 2/5 │  ← activity bar
+│ UNATTENDED                                                │  ← state bar (when on)
+│  > type here…                                              │  ← input box
+│ Enter send               Kimi K2.7 Code   89.2k (8%)      │  ← hint bar
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -87,7 +88,8 @@ status label, the active pursuit objective, a todos `d/t` segment, and the
 round elapsed timer — each surfaced only while it applies. The structural
 counters (`round N · turn M · <model>`) deliberately do **not** appear on the
 bar; they live inside the Activity modal (opened by clicking the bar), along
-with the per-item todo breakdown. The footer is inset by
+with the per-item todo breakdown. The state bar owns persistent session-state
+flags so neither of its neighbours has to carry them. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share
 the same horizontal extent so their left and right edges line up.
 
@@ -128,9 +130,9 @@ not the root conversation.
 | Transcript (children) | `Min(0)` | fills |
 | Envoy bar | `Length(ENVOY_BAR_ROWS = 1)` | 1 |
 
-Status bar, activity bar, input box, and hint bar all collapse to 0 —
-the zoomed view is read-only, with the navigation bar as its only chrome. See
-[Envoy view](envoy-view.md) for the focus stack that drives this
+Status bar, activity bar, state bar, input box, and hint bar all collapse to
+0 — the zoomed view is read-only, with the navigation bar as its only chrome.
+See [Envoy view](envoy-view.md) for the focus stack that drives this
 mode and the bar's contents.
 
 ## Modal overlay view
@@ -141,8 +143,8 @@ its normal height and darkens the whole live surface in place
 (`recess_backdrop` scales every cell by `theme.modal_dim_factor`), so the
 transcript and chrome stay visible for context while the centered panel reads
 as the focal layer. The **Takeover** policy (the sessions picker only) instead
-collapses the entire footer (activity bar, input box, hint bar) to 0 height and
-fully occludes the surface. The one
+collapses the entire footer (activity bar, state bar, input box, hint bar) to
+0 height and fully occludes the surface. The one
 **None**-recess surface is the [permission sheet](modals.md#permission-sheet),
 which is inline (no dimming, no footer collapse) and replaces only the
 input-box area.
@@ -158,7 +160,7 @@ input-box area.
 │            │                                    │            │
 │            ╰────────────────────────────────────╯            │
 │                                                              │
-│footer = 0 (activity bar, input box, hint bar all hidden)      │
+│footer = 0 (activity, state, input, hint bars all hidden)      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -214,6 +216,7 @@ the transcript content above.
 | Left/right gutter (all content) | 2 cols `app_bg` | `TRANSCRIPT_H_INSET`, applied via `transcript_band_rect` (steps) / explicit spans (user panel, code block) / wrap-width slack (markdown) |
 | Footer side inset | 2 cols (matches `TRANSCRIPT_H_INSET`) | `FOOTER_H_INSET` |
 | Activity bar height | 1 row | `STATUS_BAR_ROWS` |
+| State bar height | 1 row | `STATE_BAR_ROWS` |
 | Hint bar height | 1 row | `HINT_BAR_ROWS` |
 | Envoy bar height | 1 row | `ENVOY_BAR_ROWS` |
 | Input box min height | 3 rows (top transition + 1 text + bottom transition) | `COMPOSER_MIN_HEIGHT` |
@@ -242,7 +245,7 @@ the transcript content above.
 | `render/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `STATUS_BAR_ROWS`, `HINT_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `render/primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
-| `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (persistent session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `render/composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
 | `render/disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
 | `app.rs` | `in_envoy_view`, `focus_stack`, `follow_bottom`, scroll clamping |

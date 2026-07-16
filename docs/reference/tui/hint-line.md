@@ -1,69 +1,58 @@
 # Hint line
 
-Single-row status strip below the input box. The right side carries the
-model name and context-usage indicator; the left side carries a flat
-`UNATTENDED` label (warning tone) while write-tool prompts are bypassed,
-and a `[ SHELL ]` pill only when a `!`-prefixed shell command is staged
-in the prompt.
+Single-row status strip below the input box. The left side states what
+the next `Enter` does; the right side carries the model name, an optional
+reasoning-effort tag, and the context-usage indicator. Session-state flags
+are not shown here — `UNATTENDED` lives on the [state bar](state-bar.md).
 
 ## Appearance
 
-Normal chat (no labels on the left), reasoning model:
+Normal chat, reasoning model:
 
 ```text
-                       Claude Opus 4.8  ◆ high  89.2k (8%)
+ Enter send                Claude Opus 4.8  ◆ high  89.2k (8%)
 ```
 
 Non-reasoning model (effort tag absent):
 
 ```text
-                            Kimi K2.7 Code   89.2k (8%)
+ Enter send                 Kimi K2.7 Code   89.2k (8%)
 ```
 
-Unattended mode active (`UNATTENDED` flag on the left):
+While a turn is running, the left side explains where the next message
+lands, offers the `Tab` alternative, and reports the queued outbox:
 
 ```text
-  UNATTENDED                Kimi K2.7 Code   89.2k (8%)
+ Enter send after current reply · Tab add to current reply · 2 waiting · ↑ edit latest   Kimi K2.7 Code   89.2k (8%)
 ```
 
-With a `!`-prefixed shell command staged:
+With a `!`-prefixed shell command staged, the Enter action becomes
+`run command`:
 
 ```text
-  [ SHELL ]                 Kimi K2.7 Code   89.2k (8%)
+ Enter run command          Kimi K2.7 Code   89.2k (8%)
 ```
 
-Both at once (unattended + staged shell command):
+On narrow terminals the row degrades in a fixed order: the action
+sentence compacts first (`send later` / `add now`), then the reasoning
+tag and the context meter drop, then the action shrinks to its tiny form;
+the model name is the last ambient item to disappear. The Enter action
+itself never disappears.
 
-```text
-  UNATTENDED  [ SHELL ]     Kimi K2.7 Code   89.2k (8%)
-```
+| Attribute | Value |
+|-----------|-------|
+| Location | 1 row below the input box |
+| Left cluster | Next-Enter action sentence (`Enter …`), optional `Tab` alternative, outbox counts (`2 waiting` / `2 paused` + `↑ edit latest`) |
+| Model name | `brand` + BOLD |
+| Reasoning effort | `◆ {effort}` in `info` + BOLD, only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
+| Context usage | `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); click opens the token-source report |
+| Background | `surface` |
 
 There is no compose/browse mode pill: the TUI has a single navigation
 state, not two zones (see [Transcript focus](#transcript-focus) below).
 When a transcript step carries keyboard focus, the focused step itself is
 reverse-highlighted in the transcript — the hint line does not advertise
 it.
-
-| Attribute | Value |
-|-----------|-------|
-| Location | 1 row below the input box |
-| Unattended flag | `UNATTENDED` (warning tone + BOLD), only while the agent runs without human intervention |
-| Shell pill | `[ SHELL ]` (warning tone + raised bg), only while the prompt is `!`-prefixed |
-| Model name | `brand` + BOLD |
-| Reasoning effort | `◆ {effort}` in `info` + BOLD, only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
-| Context usage | `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red) |
-| Background | `surface` |
-
-## Unattended mode
-
-When unattended mode is active (`--unattended` / `/unattended on`), the
-agent runs without human intervention — no confirmations, no questions.
-The hint bar shows a flat `UNATTENDED` label in the warning tone at its
-left edge. Plain text rather than a bracketed pill: it reads as a
-persistent state flag (always-on while the session is elevated) rather
-than a momentary input mode, so it carries its meaning without any chrome.
-The composer's `›` prompt glyph keeps its usual brand color — the elevated
-state lives entirely on the hint line.
 
 ## Transcript focus
 
@@ -85,10 +74,13 @@ completion suggestion when one is open.
 
 ## Visibility
 
-Hidden when overlay modals are open.
+Hidden when overlay modals are open, and suppressed while the permission
+sheet is open (the sheet takes over the input-box and hint rows).
 
 ## Source
 
-`draw_hint_bar` / `HintBarView` in `render/chrome.rs`. The focused-step
-palette switch lives in `draw_composer` (`render/composer.rs`); the
-`Ctrl+↑`/`Ctrl+↓` handling lives in `input/mod.rs`.
+`draw_hint_bar` / `HintBarView` in `render/chrome.rs`; the returned rect
+is the context meter's click target that opens the token-source report.
+The focused-step palette switch lives in `draw_composer`
+(`render/composer.rs`); the `Ctrl+↑`/`Ctrl+↓` handling lives in
+`input/mod.rs`.

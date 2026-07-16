@@ -119,10 +119,12 @@ pub struct ActivityBarHit {
 /// Layout:
 /// ```text
 /// active:  <spinner> <status> (<elapsed> · Esc Esc to interrupt) [· » <pursuit>] [⚠ <alert>]      todos d/t
-/// idle:   ready                                                todos d/t · unattended
+/// idle:   ready                                                                     todos d/t
 /// ```
-/// The left half is transient (turn-scoped); the right-pinned session-state
-/// cluster is persistent and shows todos and/or `unattended` even while idle.
+/// The left half is transient (turn-scoped); the right-pinned todos badge is
+/// persistent and shows even while idle. Session-state flags such as
+/// `unattended` deliberately do not live here: they have their own state bar
+/// ([`draw_state_bar`]) so this row stays a pure activity surface.
 ///
 /// The bar surfaces what the user most wants to know mid-turn — the live
 /// status, whether a pursuit/plan is in flight, and how long the turn has
@@ -153,13 +155,11 @@ pub fn draw_activity_bar(
     turn_started_at: Option<Instant>,
     status: &str,
     spinner_phase: usize,
-    unattended: bool,
     theme: &Theme,
 ) -> Option<ActivityBarHit> {
     // The bar has two halves: a transient LEFT segment (spinner + shimmering
     // status + elapsed/interrupt hint + pursuit + review alert) shown only
-    // while a turn is active,
-    // and a persistent RIGHT-pinned session cluster (todos + unattended).
+    // while a turn is active, and a persistent RIGHT-pinned todos badge.
     // If neither half has content, the bar is hidden entirely.
     let status_active = !status.is_empty() && status != "idle";
     let dim = Style::default().fg(theme.muted());
@@ -176,15 +176,7 @@ pub fn draw_activity_bar(
         let w = UnicodeWidthStr::width(badge.as_str());
         (badge, w)
     });
-    let unattended_badge = unattended.then_some(("unattended", "unattended".width()));
-    let persistent_separator_width = if todos_badge.is_some() && unattended_badge.is_some() {
-        " · ".width()
-    } else {
-        0
-    };
-    let persistent_width = todos_badge.as_ref().map(|(_, width)| *width).unwrap_or(0)
-        + persistent_separator_width
-        + unattended_badge.map(|(_, width)| width).unwrap_or(0);
+    let persistent_width = todos_badge.as_ref().map(|(_, width)| *width).unwrap_or(0);
 
     // If there is nothing to show at all, hide the bar — no point painting a
     // blank row.
@@ -336,13 +328,13 @@ pub fn draw_activity_bar(
             }
         }
     } else {
-        // A persistent right-side policy/task indicator keeps this row alive
-        // while the agent is idle. Name that state explicitly so the row does
-        // not look like unexplained empty padding.
+        // A persistent right-side todos badge keeps this row alive while the
+        // agent is idle. Name that state explicitly so the row does not look
+        // like unexplained empty padding.
         spans.push(Span::styled(" ready", dim));
     }
 
-    // ── Right-pin persistent session state ──
+    // ── Right-pin the persistent todos badge ──
     if persistent_width > 0 {
         let left_w: usize = spans
             .iter()
@@ -352,25 +344,15 @@ pub fn draw_activity_bar(
         // Place the badge flush against the right edge with a 1-cell margin.
         let right_margin = 1;
         let gap = row_w.saturating_sub(left_w + persistent_width + right_margin);
-        // The cluster's absolute column = left_w + gap.
-        let cluster_col = rect.x + (left_w + gap) as u16;
-        if status_active && gap > 0 {
-            // Pad between the transient segment and the cluster.
-            spans.push(Span::raw(" ".repeat(gap)));
-        } else if !status_active {
-            // Idle: the cluster is the only content; push it to the right edge
-            // with leading padding rather than leaving it left-aligned.
-            spans.push(Span::raw(" ".repeat(gap)));
-        }
+        // The badge's absolute column = left_w + gap.
+        let badge_col = rect.x + (left_w + gap) as u16;
+        // Pad between the left segment and the badge. When idle the badge is
+        // the only content, so the same leading padding pushes it to the
+        // right edge rather than leaving it left-aligned.
+        spans.push(Span::raw(" ".repeat(gap)));
         if let Some((badge, badge_w)) = todos_badge {
             spans.push(Span::styled(badge, dim));
-            todos_rect = Some(Rect::new(cluster_col, rect.y, badge_w as u16, 1));
-            if unattended_badge.is_some() {
-                spans.push(Span::styled(" · ", dim));
-            }
-        }
-        if let Some((badge, _)) = unattended_badge {
-            spans.push(Span::styled(badge, Style::default().fg(theme.warn())));
+            todos_rect = Some(Rect::new(badge_col, rect.y, badge_w as u16, 1));
         }
     }
 
@@ -379,6 +361,42 @@ pub fn draw_activity_bar(
         bar_rect: rect,
         todos_rect,
     })
+}
+
+/// Draw the persistent state bar: one row between the activity bar and the
+/// input box that hosts session-state indicators staying on for minutes or
+/// the whole session. Today that is the unattended flag; the row is the
+/// designated home for future ambient state (workspace, and friends) so
+/// neither the activity bar above nor the hint bar below has to make room.
+///
+/// Flags are left-aligned and joined by ` · `. The caller allocates zero
+/// rows when no flag is active, so an empty bar never consumes vertical
+/// space; this function simply renders whatever flags it is given.
+pub fn draw_state_bar(frame: &mut Frame, rect: Rect, unattended: bool, theme: &Theme) {
+    // Each active session-state indicator becomes one flag on the row. New
+    // indicators push onto this vec; the join below keeps the separator
+    // handling identical no matter how many flags exist.
+    let mut flags: Vec<Span> = Vec::new();
+    if unattended {
+        // The one flag that bypasses human oversight (no confirmations, no
+        // questions) gets the strongest treatment on the row: uppercase,
+        // warning tone, bold.
+        flags.push(Span::styled(
+            "UNATTENDED",
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let mut spans: Vec<Span> = vec![Span::raw(" ")];
+    for (index, flag) in flags.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(theme.muted())));
+        }
+        spans.push(flag);
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 /// Truncate `s` to at most `max` display cells, appending `…` when cut, so a
@@ -1018,7 +1036,6 @@ mod tests {
                 None,
                 status,
                 phase,
-                false,
                 &Theme::default(),
             );
         });
@@ -1062,21 +1079,36 @@ mod tests {
     }
 
     #[test]
-    fn unattended_is_persistent_on_the_runtime_rows_right_edge() {
+    fn state_bar_shows_the_unattended_flag_in_warning_bold() {
+        let theme = Theme::default();
         let mut terminal = neenee_tui::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
-            draw_activity_bar(
-                frame,
-                Rect::new(0, 0, 80, 1),
-                None,
-                None,
-                "",
-                None,
-                "idle",
-                0,
-                true,
-                &Theme::default(),
-            );
+            draw_state_bar(frame, Rect::new(0, 0, 80, 1), true, &theme);
+        });
+        let buffer = terminal.buffer();
+        let text = buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            text.trim_start().starts_with("UNATTENDED"),
+            "row was {text:?}"
+        );
+        let flag_cell = buffer
+            .content
+            .iter()
+            .find(|cell| cell.symbol() == "U")
+            .expect("UNATTENDED flag cell");
+        assert_eq!(flag_cell.fg, theme.warn());
+        assert!(flag_cell.style.add.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn state_bar_renders_blank_when_no_flag_is_active() {
+        let mut terminal = neenee_tui::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_state_bar(frame, Rect::new(0, 0, 80, 1), false, &Theme::default());
         });
         let text = terminal
             .buffer()
@@ -1084,13 +1116,11 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.trim_start().starts_with("ready"), "row was {text:?}");
-        assert!(text.trim_end().ends_with("unattended"), "row was {text:?}");
-        assert!(text.find("unattended").unwrap_or(0) > 60);
+        assert!(text.trim().is_empty(), "row was {text:?}");
     }
 
     #[test]
-    fn narrow_runtime_row_keeps_unattended_and_interrupt_keys() {
+    fn narrow_runtime_row_keeps_todos_and_interrupt_keys() {
         let mut todos = neenee_core::TodoList::new();
         todos.items.push(neenee_core::TodoItem {
             id: neenee_core::TodoId(1),
@@ -1110,7 +1140,6 @@ mod tests {
                 None,
                 "retrying a provider request after a detailed transient failure",
                 8,
-                true,
                 &Theme::default(),
             );
         });
@@ -1122,8 +1151,10 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("Esc Esc"), "row was {text:?}");
         assert!(text.contains("todos 0/1"), "row was {text:?}");
-        assert!(text.contains("unattended"), "row was {text:?}");
-        assert!(text.ends_with("unattended "), "row was {text:?}");
+        // Session-state flags live on the state bar now; the activity row
+        // never carries them, even when they would fit.
+        assert!(!text.contains("unattended"), "row was {text:?}");
+        assert!(text.ends_with("todos 0/1 "), "row was {text:?}");
     }
 
     #[test]
