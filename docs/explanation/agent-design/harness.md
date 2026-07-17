@@ -21,8 +21,9 @@ providers use system messages; Gemini maps them to `systemInstruction` and
 returns fallback tool results as user-context text.
 
 The TUI merges each tool call and result into a semantic step. Steps are
-collapsed to a one-line status by default and `Ctrl+T` toggles complete JSON
-arguments and output. Session replay rebuilds the same steps in FIFO order,
+collapsed to a one-line status by default and expand inline on click or
+`Enter` (when focused) to show complete JSON arguments and output. Session
+replay rebuilds the same steps in FIFO order,
 including parallel calls with identical tool names.
 
 ## Provider capabilities

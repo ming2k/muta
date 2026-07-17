@@ -58,7 +58,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](status-bar.md) | Breathing-dot liveness anchor + live status label + pursuit objective + todos progress + elapsed; clickable to open the Activity modal |
-| [State bar](state-bar.md) | Persistent session-state flags (`UNATTENDED` today) on their own conditional row |
+| [State bar](state-bar.md) | Persistent session-state flags (`unattended` today) on their own conditional row below the input |
 | [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |

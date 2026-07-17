@@ -128,10 +128,10 @@ shouldn't be.
 Because an unattended session silently executes actions that would otherwise
 pause, the harness makes the state impossible to miss without making it loud:
 
-- The hint bar shows a flat `UNATTENDED` label in the warning tone for the whole
-  session — plain text, not a raised pill, because it is a persistent state flag
-  rather than a momentary mode. See
-  [TUI hint line](../../reference/tui/hint-line.md#unattended-mode).
+- The state bar shows a flat `unattended` label in the warning tone for the
+  whole session — plain text, not a raised pill, because it is a persistent
+  state flag rather than a momentary mode. See
+  [TUI state bar](../../reference/tui/state-bar.md).
 - Toggling emits a `RoundEvent::UnattendedChanged` so the TUI refreshes the badge
   immediately, mid-turn, without flushing the activity bar.
 

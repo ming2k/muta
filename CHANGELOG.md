@@ -34,6 +34,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **State bar relocated below the input and lowercased.** The persistent
+  session-state row now sits directly under the input box (above the hint bar)
+  rather than between the activity bar and the input, so `unattended` reads as
+  an attribute of the composer area. The flag is rendered lowercase
+  (`unattended`, warning tone + bold). The row still costs zero vertical space
+  while no indicator is active and remains the designated home for future
+  ambient state (workspace, etc.). See the
+  [state bar reference](docs/reference/tui/state-bar.md).
+
+- **`Ctrl+T` now opens the Todos modal.** It no longer bulk-toggles tool-step
+  expansion; that affordance moved to per-step click / `Enter` / `Space`. The
+  Todos modal surfaces the agent's live task list (read-only in the TUI) and is
+  the same view reached by clicking the `todos d/t` badge on the activity bar.
+
+- **Unified keybinding registry.** Global shortcuts now live in one place
+  (`tui::keymap`) that both the input handler and the Help modal read from, so
+  the keys shown in Help can never drift from the keys that actually fire.
+  Adding a global shortcut is a single declarative entry that appears in Help
+  automatically.
+
 - **The `kimi-code` provider now serves Kimi K3 and tracks the platform's live
   model list.** Moonshot's coding platform released K3 — a 1,048,576-token
   context window, image/video inputs, and always-on thinking — so the preset's

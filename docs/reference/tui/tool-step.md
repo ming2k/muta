@@ -125,7 +125,6 @@ sticky-pin, and narrow-fallback behavior. Tool-step specifics:
 
 - `Enter` on a focused tool step toggles its inline disclosure — the same
   effect as clicking its summary or right-clicking it.
-- `Ctrl+T` expands or collapses all tool steps.
 - `↑` / `↓` while a step is focused includes visible tool steps in the keyboard focus order.
 
 ## Envoy children

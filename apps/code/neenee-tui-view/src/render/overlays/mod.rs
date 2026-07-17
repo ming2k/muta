@@ -42,7 +42,7 @@ pub use config::{ConfigOverview, draw_config_modal};
 pub use config_layout::draw_config_layout_modal;
 pub use config_theme::draw_config_theme_modal;
 pub use config_theme_custom::draw_config_theme_custom_modal;
-pub use help::draw_help_modal;
+pub use help::{HelpBinding, draw_help_modal};
 pub use history::draw_history_modal;
 pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};

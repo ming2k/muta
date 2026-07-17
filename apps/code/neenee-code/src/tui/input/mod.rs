@@ -338,8 +338,10 @@ pub enum InputAction {
     /// Plain Ctrl+C: copy selection, clear input, or arm quit. It never
     /// interrupts a running turn — only double-Esc does.
     CtrlC,
-    /// Toggle expanded details for semantic tool steps.
-    ToggleToolSteps,
+    /// Open the Todos modal (the agent's live task list). The list is
+    /// agent-owned and read-only in the TUI; the modal surfaces it on its own
+    /// dedicated overlay, opened with `Ctrl+T`.
+    OpenTodos,
     /// Move keyboard focus to the next activatable target. When no target is
     /// focused yet, focuses the first (oldest) step. Driven by `Ctrl+↓` and by
     /// `↓` while a step is already focused.
@@ -955,24 +957,15 @@ pub fn process_event(
             }
         }
         Event::Key(key) => {
-            // Copy selection with Ctrl+Shift+C or Cmd+C
-            if key.code == KeyCode::Char('c')
-                && (key.modifiers.contains(KeyModifiers::SHIFT)
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                    || key.modifiers.contains(KeyModifiers::SUPER))
+            // Global shortcuts are resolved through the unified keybinding
+            // registry (`tui::keymap`), the single source of truth shared with
+            // the Help modal. Anything resolved here wins over the contextual
+            // match arms below. Keys not declared globally (text editing,
+            // modal-internal selection, Esc's modal hierarchy, …) return `None`
+            // and fall through to the contextual handling.
+            if let Some(global) = super::keymap::Registry::new().resolve(key, context.active_modal)
             {
-                return InputAction::CopySelection;
-            }
-            // Plain Ctrl+C: semantic copy/clear/quit, resolved by the app.
-            // It does not interrupt a running task — only double-Esc does.
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return InputAction::CtrlC;
-            }
-            if key.code == KeyCode::Char('t')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && context.active_modal == super::Modal::None
-            {
-                return InputAction::ToggleToolSteps;
+                return global;
             }
 
             match key.code {
@@ -1071,24 +1064,15 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if context.active_modal == super::Modal::None {
-                        InputAction::OpenHistory
-                    } else {
-                        InputAction::None
-                    }
+                    // Ctrl+R is a declared global binding (registry →
+                    // OpenHistory). It only reaches this arm when a modal is
+                    // open (the gate blocks it at the top level), so it is a
+                    // no-op here.
+                    InputAction::None
                 }
-                // F1 opens help on every terminal. Unlike Ctrl+H, F1 is a
-                // dedicated function key with no legacy control-byte
-                // collision, so it works under multiplexers (tmux/screen)
-                // that strip the Kitty keyboard protocol — see the Ctrl+H
-                // note below for why that one is less portable.
-                KeyCode::F(1) => {
-                    if context.active_modal == super::Modal::None {
-                        InputAction::OpenHelp
-                    } else {
-                        InputAction::None
-                    }
-                }
+                // F1 is a declared global binding (registry → OpenHelp) and
+                // only reaches this arm inside a modal, where it is a no-op.
+                KeyCode::F(1) => InputAction::None,
                 // Ctrl+H opens help only when the Kitty enhanced-keyboard
                 // protocol is active (enabled in `run_tui`). In a raw
                 // terminal Ctrl+H is byte-identical to Backspace (0x08), so
@@ -1096,7 +1080,9 @@ pub fn process_event(
                 // arm and never reaches here. Multiplexers like tmux that
                 // don't forward Kitty flags further collapse Ctrl+Backspace
                 // and Ctrl+H onto the same 0x08 byte, so both keys open
-                // help there. Use F1 or `?` for a portable shortcut.
+                // help there. Use F1 or `?` for a portable shortcut. Not in
+                // the registry because it needs the Kitty protocol; the Help
+                // modal documents it via its description.
                 KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if context.active_modal == super::Modal::None {
                         InputAction::OpenHelp
@@ -1104,17 +1090,14 @@ pub fn process_event(
                         InputAction::None
                     }
                 }
-                // Ctrl+M: open the models modal. In a raw terminal Ctrl+M is
-                // byte-identical to Enter, so this only fires when the Kitty
-                // enhanced-keyboard protocol is active (enabled in `run_tui`).
-                // On terminals without it, Ctrl+M arrives as Enter and leaves
-                // input behavior untouched — no regression.
+                // Ctrl+M is a declared global binding (registry →
+                // OpenProvider). In a raw terminal Ctrl+M is byte-identical
+                // to Enter, so the registry arm only fires under the Kitty
+                // protocol; without it Ctrl+M arrives as Enter and leaves
+                // input behavior untouched — no regression. It only reaches
+                // this arm inside a modal, where it is a no-op.
                 KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if context.active_modal == super::Modal::None {
-                        InputAction::OpenProvider
-                    } else {
-                        InputAction::None
-                    }
+                    InputAction::None
                 }
                 // Alt+Enter / Ctrl+J: insert a literal newline so the input
                 // box supports multi-line drafting. Plain Enter sends the
@@ -2958,7 +2941,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_t_toggles_tool_steps() {
+    fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
+        // Ctrl+T is a declared global binding (registry → OpenTodos). It opens
+        // the Todos modal from the top level and is a no-op while another
+        // modal owns the surface.
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
@@ -2992,7 +2978,7 @@ mod tests {
             },
             &mut drag,
         );
-        assert_eq!(action, InputAction::ToggleToolSteps);
+        assert_eq!(action, InputAction::OpenTodos);
     }
 
     #[test]

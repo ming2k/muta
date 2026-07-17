@@ -1211,7 +1211,7 @@ pub(super) async fn run_app_loop(
                 // - Dim (every other centered modal): the footer keeps its height
                 //   so layout is stable, and the whole surface is darkened in place
                 //   by the recess pass just before the modal is drawn. Context
-                //   (transcript, input, hint bar, activity bar) stays visible for
+                //   (transcript, input, hint bar, activity bar, state bar) stays visible for
                 //   focus while the centered panel reads as the focal layer.
                 // - None (Question / Permission): floats on the fully-live surface.
                 // Provider / ModelEditor / HistorySearch borrow the input line as
@@ -1709,7 +1709,25 @@ pub(super) async fn run_app_loop(
                         ))
                     }
                     Modal::Help => {
-                        Some(render::draw_help_modal(f, &mut app.help_scroll, &app.theme))
+                        // Project the global-keybinding registry into the rows
+                        // the Help modal renders. Help and the live input
+                        // resolver share the same registry, so the keys shown
+                        // here can never drift from the keys that actually fire.
+                        let bindings: Vec<render::HelpBinding> =
+                            crate::tui::keymap::Registry::new()
+                                .bindings()
+                                .iter()
+                                .map(|b| render::HelpBinding {
+                                    key: b.key.label(),
+                                    description: b.description,
+                                })
+                                .collect();
+                        Some(render::draw_help_modal(
+                            f,
+                            &mut app.help_scroll,
+                            &bindings,
+                            &app.theme,
+                        ))
                     }
                     Modal::Sessions => Some(render::draw_sessions_modal(
                         f,
@@ -3834,26 +3852,20 @@ pub(super) async fn run_app_loop(
                         app.ctrl_c_armed_ticks = 20;
                     }
                 }
-                input::InputAction::ToggleToolSteps => {
-                    // Read the target state from the focused view (a snapshot
-                    // clone), then apply to the live messages.
-                    let expand = app.focused_messages().iter().any(|message| {
-                        !message.is_envoy_task() && message.tool_step_expanded() == Some(false)
-                    });
-                    let mut messages = runtime.messages.write().await;
-                    for message in focused_messages_mut(&mut messages, &app.focus_stack) {
-                        // Envoy task steps are navigated, not expanded.
-                        // This is a user bulk action → pin each step so the
-                        // choice survives later lifecycle transitions.
-                        if !message.is_envoy_task() {
-                            message.pin_tool_step_expanded(expand);
-                        }
-                    }
-                    drop(messages);
-                    // Persist the choice as the global density so new tool steps
-                    // created mid-turn also respect it (ADR-0001 Step 8).
-                    app.tool_density.store(expand, Ordering::SeqCst);
+                input::InputAction::OpenTodos => {
+                    // Ctrl+T opens the Todos modal — the agent's live task
+                    // list surfaced on its own overlay. The list is
+                    // agent-owned and read-only in the TUI; this simply opens
+                    // the Activity modal pinned to the Todos section, exactly
+                    // like clicking the `todos d/t` badge on the activity bar.
+                    app.active_modal = Modal::Activity;
+                    app.activity_tab = ActivityTab::Todos;
+                    app.modal_keymap_open = false;
+                    app.modal_index = 0;
+                    app.activity_scroll = 0;
                     app.selection = SelectionState::None;
+                    app.focused_target = None;
+                    app.drag.cancel();
                 }
                 input::InputAction::FocusNextTarget => {
                     // Ctrl+↓ (or ↓ while focused): advance to the next step.
@@ -4855,6 +4867,7 @@ pub(super) fn resolve_focused_mut<'a>(
 /// Iterate mutable messages in the currently focused view (the root
 /// conversation, or the focused envoy task's child stream) for bulk
 /// expand/collapse operations. Callers filter by kind as needed.
+#[cfg(test)]
 pub(super) fn focused_messages_mut<'a>(
     messages: &'a mut [TranscriptMessage],
     focus_stack: &[crate::tui::app::ZoomFrame],

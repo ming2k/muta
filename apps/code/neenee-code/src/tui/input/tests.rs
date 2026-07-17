@@ -703,7 +703,8 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
 }
 
 #[test]
-fn ctrl_t_toggles_tool_steps() {
+fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
+    // Ctrl+T is a declared global binding (registry → OpenTodos).
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -732,7 +733,7 @@ fn ctrl_t_toggles_tool_steps() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::ToggleToolSteps);
+    assert_eq!(action, InputAction::OpenTodos);
 }
 
 #[test]

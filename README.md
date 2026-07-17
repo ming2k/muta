@@ -64,7 +64,7 @@ before configuring its separate real-account entry point.
 | `Enter` | Send message |
 | `Tab` | Accept slash-command / `@path` completion |
 | `Ctrl+M` | Open provider picker |
-| `Ctrl+T` | Expand / collapse tool details |
+| `Ctrl+T` | Open todos |
 | `Ctrl+B` | Toggle between input and conversation stream |
 | `Ctrl+C` | Copy → interrupt → close modal → clear → quit |
 | `Ctrl+V` | Paste from clipboard |

@@ -91,7 +91,7 @@ The single rule that prevents auto defaults from fighting the user:
 | Writer | Used by | Effect |
 |--------|---------|--------|
 | `set_tool_step_expanded` / `set_thinking_expanded` | harness lifecycle transitions, step creation, scroll restore, selection-then-expand | no-op when `user_pinned == true` |
-| `pin_tool_step_expanded` / `pin_thinking_expanded` | user toggle (click, `Enter`, `Space`, `Ctrl+T`) | forces `expanded` and sets `user_pinned = true` |
+| `pin_tool_step_expanded` / `pin_thinking_expanded` | user toggle (click, `Enter`) | forces `expanded` and sets `user_pinned = true` |
 
 Once the user has manually expanded or collapsed a step, later lifecycle
 transitions leave it alone. There is no explicit "unpin"; a later manual

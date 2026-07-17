@@ -70,15 +70,15 @@ hint bars are persistent (when chrome is visible):
 | Row | Height | When present |
 |-----|--------|--------------|
 | Activity bar | `STATUS_BAR_ROWS = 1` | Activity is non-empty and not `idle`, or a non-empty todo list keeps it alive; not in envoy view; chrome visible. Unifies the prior pursuit bar, status bar, and todos/review segments into one click-to-open bar. |
-| State bar | `STATE_BAR_ROWS = 1` | At least one session-state indicator is active (`UNATTENDED` today); not in envoy view; chrome visible. See [State bar](state-bar.md). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
+| State bar | `STATE_BAR_ROWS = 1` | At least one session-state indicator is active (`unattended` today); not in envoy view; chrome visible. See [State bar](state-bar.md). |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open) |
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
 │ ● making edits (23s · Esc Esc to interrupt)     todos 2/5 │  ← activity bar
-│ UNATTENDED                                                │  ← state bar (when on)
 │  > type here…                                              │  ← input box
+│ unattended                                                 │  ← state bar (when on)
 │ Enter send               Kimi K2.7 Code   89.2k (8%)      │  ← hint bar
 └────────────────────────────────────────────────────────────┘
 ```
@@ -88,8 +88,9 @@ status label, the active pursuit objective, a todos `d/t` segment, and the
 round elapsed timer — each surfaced only while it applies. The structural
 counters (`round N · turn M · <model>`) deliberately do **not** appear on the
 bar; they live inside the Activity modal (opened by clicking the bar), along
-with the per-item todo breakdown. The state bar owns persistent session-state
-flags so neither of its neighbours has to carry them. The footer is inset by
+with the per-item todo breakdown. The state bar — directly below the input —
+owns persistent session-state flags so neither of its neighbours has to carry
+them. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share
 the same horizontal extent so their left and right edges line up.
 

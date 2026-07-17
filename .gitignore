@@ -20,6 +20,10 @@
 /test.rs
 /test_*.rs
 
+# Local chat/session transcript exports — private conversation artifacts, not
+# source. Never check these in.
+/kimi-export-session_*.md
+
 # IDE files
 .vscode/
 .idea/

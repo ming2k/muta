@@ -1,11 +1,15 @@
 # State bar
 
-Persistent session-state indicators on one dedicated row between the
-[activity bar](status-bar.md) and the [input box](input-box.md). Neither
-the activity bar above nor the [hint bar](hint-line.md) below carries
-long-lived session state: this row is its designated home, so both bars
-stay uncluttered and there is room for more indicators later (current
+Persistent session-state indicators on one dedicated row directly below the
+[input box](input-box.md) and above the [hint bar](hint-line.md). Neither the
+[activity bar](status-bar.md) above the input nor the hint bar below it
+carries long-lived session state: this row is its designated home, so both
+bars stay uncluttered and there is room for more indicators later (current
 workspace and other ambient state).
+
+Sitting just under the input box makes `unattended` read as an attribute of
+the composer area — the place the user is acting — rather than as a transient
+status line above the prompt.
 
 The row is conditional: it occupies zero rows when no indicator is
 active, so an ordinary session pays no vertical space for it.
@@ -15,7 +19,7 @@ active, so an ordinary session pays no vertical space for it.
 Unattended mode active:
 
 ```text
- UNATTENDED
+ unattended
 ```
 
 Flags are left-aligned with a one-space indent and joined by ` · ` when
@@ -23,9 +27,9 @@ more than one is on.
 
 | Attribute | Value |
 |-----------|-------|
-| Location | 1 row between the activity bar and the input box |
+| Location | 1 row directly below the input box, above the hint bar |
 | Height | `STATE_BAR_ROWS = 1` while any flag is active, 0 otherwise |
-| `UNATTENDED` flag | warning tone + BOLD, only while unattended mode is on |
+| `unattended` flag | lowercase, warning tone + BOLD, only while unattended mode is on |
 | Flag separator | ` · ` in `text_muted` |
 | Indent | 1 space |
 
@@ -33,12 +37,10 @@ more than one is on.
 
 When unattended mode is active (`--unattended` / `/unattended on`), the
 agent runs without human intervention — no confirmations, no questions.
-The state bar shows a flat `UNATTENDED` flag in the warning tone, bold and
-uppercase: the one flag that bypasses human oversight gets the strongest
-treatment on the row. Plain text rather than a bracketed pill: it reads
-as a persistent state flag (always-on while the session is elevated)
-rather than a momentary input mode, so it carries its meaning without any
-chrome.
+The state bar shows a lowercase `unattended` flag in the warning tone, bold.
+Plain text rather than a bracketed pill: it reads as a persistent state flag
+(always-on while the session is elevated) rather than a momentary input mode,
+so it carries its meaning without any chrome.
 
 ## Visibility
 

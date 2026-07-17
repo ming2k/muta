@@ -514,7 +514,10 @@ pub fn help() -> io::Result<()> {
                 &theme,
                 |f| {
                     let mut scroll = 0;
-                    draw_help_modal(f, &mut scroll, &theme);
+                    // The showcase demo has no keybinding registry; pass an
+                    // empty projection so only the static fallback rows render.
+                    let bindings: &[crate::tui::render::HelpBinding] = &[];
+                    draw_help_modal(f, &mut scroll, bindings, &theme);
                 },
             );
         },

@@ -56,7 +56,6 @@ the header text column 4 onward.
 | `Enter` / `Space` on a focused **thinking** step | Toggle that step |
 | `Enter` on a focused **tool** step | Toggle the tool's [inline disclosure](tool-step.md#inline-disclosure) (ADR-0001); click a tool-step header to toggle it inline as well |
 | Click header | Focus and toggle that step |
-| `Ctrl+T` | Expand or collapse all tool steps (bulk density toggle) |
 | Sticky pin | When an expanded step's body scrolls past the top of the viewport, its header pins to the top row of the transcript area (rendered with `-`) |
 | Narrow terminal (`< 8` cols) | Falls back to plain block rendering via `draw_message_body` |
 

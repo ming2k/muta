@@ -1047,7 +1047,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         layout_map: LayoutMap::new(),
         modal_hit_map: crate::tui::layout::ModalHitMap::new(),
         hovered_step: None,
-        tool_density: Arc::new(AtomicBool::new(false)),
         transcript_layout: crate::tui::render::layout::Strategy::default(),
         color_scheme: "zen".to_string(),
         custom_color_scheme: neenee_core::ColorSchemeConfig::default(),

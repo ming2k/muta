@@ -63,7 +63,7 @@ cargo run -p neenee-quant-gui --features gui -- --paper
 | `Enter` | 发送消息 |
 | `Tab` | 接受斜杠命令 / `@path` 补全 |
 | `Ctrl+M` | 打开模型选择器 |
-| `Ctrl+T` | 展开 / 折叠工具详情 |
+| `Ctrl+T` | 打开待办 |
 | `Ctrl+B` | 在输入框和对话流之间切换 |
 | `Ctrl+C` | 复制 → 中断 → 关闭弹窗 → 清空 → 退出 |
 | `Ctrl+V` | 粘贴剪贴板内容 |

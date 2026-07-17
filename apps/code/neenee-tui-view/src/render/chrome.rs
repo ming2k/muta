@@ -363,11 +363,11 @@ pub fn draw_activity_bar(
     })
 }
 
-/// Draw the persistent state bar: one row between the activity bar and the
-/// input box that hosts session-state indicators staying on for minutes or
-/// the whole session. Today that is the unattended flag; the row is the
-/// designated home for future ambient state (workspace, and friends) so
-/// neither the activity bar above nor the hint bar below has to make room.
+/// Draw the persistent state bar: one row directly below the input box that
+/// hosts session-state indicators staying on for minutes or the whole session.
+/// Today that is the unattended flag; the row is the designated home for
+/// future ambient state (workspace, and friends) so neither the activity bar
+/// above nor the hint bar below has to make room.
 ///
 /// Flags are left-aligned and joined by ` · `. The caller allocates zero
 /// rows when no flag is active, so an empty bar never consumes vertical
@@ -379,10 +379,10 @@ pub fn draw_state_bar(frame: &mut Frame, rect: Rect, unattended: bool, theme: &T
     let mut flags: Vec<Span> = Vec::new();
     if unattended {
         // The one flag that bypasses human oversight (no confirmations, no
-        // questions) gets the strongest treatment on the row: uppercase,
+        // questions) gets a clear but quiet treatment on the row: lowercase,
         // warning tone, bold.
         flags.push(Span::styled(
-            "UNATTENDED",
+            "unattended",
             Style::default()
                 .fg(theme.warn())
                 .add_modifier(Modifier::BOLD),
@@ -1092,14 +1092,14 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(
-            text.trim_start().starts_with("UNATTENDED"),
+            text.trim_start().starts_with("unattended"),
             "row was {text:?}"
         );
         let flag_cell = buffer
             .content
             .iter()
-            .find(|cell| cell.symbol() == "U")
-            .expect("UNATTENDED flag cell");
+            .find(|cell| cell.symbol() == "u")
+            .expect("unattended flag cell");
         assert_eq!(flag_cell.fg, theme.warn());
         assert!(flag_cell.style.add.contains(Modifier::BOLD));
     }

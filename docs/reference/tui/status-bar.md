@@ -3,7 +3,7 @@
 Transient activity indicator shown directly above the input box. It unifies
 the live status label, the active pursuit, todos progress, and the
 breathing-dot liveness anchor into one click-to-open bar. Long-lived
-session-state flags (`UNATTENDED` and friends) are deliberately absent —
+session-state flags (`unattended` and friends) are deliberately absent —
 they live on the [state bar](state-bar.md).
 
 ## Appearance

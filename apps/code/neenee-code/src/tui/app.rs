@@ -337,8 +337,9 @@ pub struct App {
     pub activity_status: String,
     /// Whether write-tool permission prompts are bypassed this session
     /// (`--unattended` / `/unattended on`). Mirrored from the harness
-    /// snapshot; surfaced by the hint bar's flat `UNATTENDED` label (warning
-    /// tone) below the input so the elevated state is unmissable.
+    /// snapshot; surfaced by the state bar's flat `unattended` label (warning
+    /// tone + bold) directly below the input so the elevated state is
+    /// unmissable.
     pub unattended: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Activity modal (and no longer pinned above the input box) so
@@ -454,9 +455,6 @@ pub struct App {
     /// affordance. `None` whenever the pointer is elsewhere or an overlay
     /// modal is open.
     pub hovered_step: Option<usize>,
-    /// Global tool-step density (false = legacy default, true = Comfortable:
-    /// new tool steps spawn expanded). Shared with the response listener.
-    pub tool_density: Arc<AtomicBool>,
     /// Which layout strategy arranges the transcript message stream. Selected
     /// via `[tui] transcript_layout`; defaults to the round-banded layout (each
     /// tool round grouped under a labelled header). See

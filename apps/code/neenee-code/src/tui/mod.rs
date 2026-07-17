@@ -13,6 +13,7 @@ pub mod config;
 mod event_loop;
 pub mod input;
 pub mod interaction;
+pub mod keymap;
 pub mod question_model;
 pub mod step_interaction;
 mod terminal;
@@ -1242,7 +1243,6 @@ pub async fn run_tui(
         layout_map: LayoutMap::new(),
         modal_hit_map: crate::tui::layout::ModalHitMap::new(),
         hovered_step: None,
-        tool_density: tool_density.clone(),
         transcript_layout: crate::tui::render::layout::Strategy::from_config(
             &tui_config.transcript_layout,
         ),

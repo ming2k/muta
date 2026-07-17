@@ -1,4 +1,17 @@
 //! Help / keybindings modal.
+//!
+//! The global-shortcut rows are **not** hard-coded here: they are fed in by
+//! the app shell from the unified keybinding registry
+//! (`neenee_code::tui::keymap`), which is the single source of truth shared
+//! with the input resolver. That way the keys shown in Help can never drift
+//! from the keys that actually fire. See [`HelpBinding`] and
+//! [`draw_help_modal`].
+//!
+//! The remaining rows (Enter semantics, line editing, transcript focus, slash
+//! commands, modes) are static fallback content for keys that are either
+//! context-sensitive (`?`/`ctrl+h` help aliases need an empty prompt / the
+//! Kitty protocol), polymorphic (`enter`, `tab`), or non-keyboard (`/tools`,
+//! `/pursue`). Those are documented prose, not registry-resolvable bindings.
 
 use neenee_tui::{
     Frame, Modifier, Span, {Line, Style},
@@ -9,7 +22,27 @@ use crate::render::components::modal::{ModalHeader, ModalPage, ModalPageSize, dr
 use crate::render::components::scroll::ScrollBody;
 use crate::render::primitives::{FixedModalSpec, FooterHint};
 
-pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> neenee_tui::Rect {
+/// One row in the Help modal's "Views & tools" section, projected from the
+/// keybinding registry. `key` is the canonical lowercase label (e.g.
+/// `ctrl+t`); `description` is the short human text shown beside it.
+///
+/// This is a plain data type so the view crate can render it without a
+/// dependency on the shell — the shell builds the slice from its registry and
+/// hands it over each frame.
+pub struct HelpBinding {
+    pub key: &'static str,
+    pub description: &'static str,
+}
+
+/// Draw the Help modal. `bindings` is the registry projection for the global
+/// shortcuts section; everything else is static fallback prose (see the module
+/// docs for why those keys are not registry-resolvable).
+pub fn draw_help_modal(
+    frame: &mut Frame,
+    scroll: &mut usize,
+    bindings: &[HelpBinding],
+    theme: &Theme,
+) -> neenee_tui::Rect {
     let key = |k: &str| {
         Span::styled(
             format!("{:<10}", k),
@@ -27,12 +60,21 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
     };
     let row = |k: &str, d: &str| Line::from(vec![key(k), desc(d)]);
 
-    let body = vec![
+    let mut body = vec![
         Line::from(section("General")),
         row("enter", "send message"),
         row("alt+enter", "insert newline (ctrl+j)"),
         row("esc", "interrupt (×2) / close"),
-        row("ctrl+c", "copy · clear input · quit (×2)"),
+    ];
+
+    // ── Global shortcuts (from the keybinding registry) ──
+    // These rows are projected from the single source of truth, so Help and
+    // the live key handler can never disagree about which global keys exist.
+    // `ctrl+c` is deliberately kept here as well so the copy/clear/quit row
+    // renders exactly once, sourced from the registry.
+    body.extend(bindings.iter().map(|b| row(b.key, b.description)));
+
+    body.extend([
         Line::from(""),
         Line::from(section("While the agent is running")),
         row("enter", "perform the action shown below the prompt"),
@@ -63,21 +105,22 @@ pub fn draw_help_modal(frame: &mut Frame, scroll: &mut usize, theme: &Theme) -> 
         row("esc", "clear the focus"),
         Line::from(""),
         Line::from(section("Views & tools")),
-        row("? / f1 / ctrl+h", "this help"),
+        // Help aliases that the registry cannot own (context-sensitive /
+        // protocol-dependent) are documented here as prose, alongside the
+        // slash-command surfaces and the registry-provided globals below them.
+        row("? / ctrl+h", "this help (f1 anywhere)"),
         row("/tools", "manage tools"),
         row("/skills", "browse skills"),
         row("/permissions", "manage permissions"),
         row("/config", "configuration"),
-        row("ctrl+m", "switch model"),
-        row("ctrl+r", "search history"),
-        row("ctrl+t", "toggle tool steps"),
         row("/", "slash commands"),
         Line::from(""),
         Line::from(section("Modes")),
         row("/pursue", "pursue a pursuit until it is met"),
         Line::from(""),
         Line::from(desc("Drag to select · Ctrl+C or Ctrl+Shift+C to copy.")),
-    ];
+    ]);
+
     draw_modal_page(
         frame,
         ModalPage {

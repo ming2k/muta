@@ -54,14 +54,14 @@ pub(super) use message_body::draw_message_body;
 pub(super) use notice::draw_notice;
 pub use overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 pub use overlays::{
-    ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, draw_activity_modal,
-    draw_armed_toast, draw_config_layout_modal, draw_config_modal, draw_config_theme_custom_modal,
-    draw_config_theme_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
-    draw_history_modal, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
-    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
-    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
-    draw_sessions_modal, draw_skills_modal, draw_token_report_modal, draw_tools_modal,
-    token_report_turn_count,
+    ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, HelpBinding,
+    draw_activity_modal, draw_armed_toast, draw_config_layout_modal, draw_config_modal,
+    draw_config_theme_custom_modal, draw_config_theme_modal, draw_copy_toast,
+    draw_custom_provider_editor, draw_help_modal, draw_history_modal, draw_input_injection,
+    draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
+    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
+    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_turn_count,
 };
 use page_header::{PageHeader, draw_page_header};
 pub use primitives::recess_backdrop;
@@ -189,8 +189,8 @@ pub struct TranscriptView<'a> {
     /// Wall-clock instant the current turn started, or `None` between turns.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub turn_started_at: Option<std::time::Instant>,
-    /// Session-state flag rendered as `UNATTENDED` on the state bar between
-    /// the activity bar and the input box (the row appears only while on).
+    /// Session-state flag rendered as `unattended` on the state bar directly
+    /// below the input box (the row appears only while on).
     pub unattended: bool,
     /// Message index of the step (tool step or reasoning trace) whose header
     /// currently rests under the mouse pointer (inline or sticky pinned), so
@@ -501,7 +501,12 @@ pub fn draw_transcript(
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        FOOTER_TOP_GAP_ROWS + status_height + state_height + input_box_height + hint_height
+        // Order, top → bottom: gap, activity bar, input box, state bar, hint
+        // bar. The activity bar leads (transient liveness + todos); the input
+        // box follows; the persistent state bar (`unattended`) sits directly
+        // under the input so it reads as an attribute of the composer area;
+        // the hint bar caps the footer.
+        FOOTER_TOP_GAP_ROWS + status_height + input_box_height + state_height + hint_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -642,13 +647,15 @@ pub fn draw_transcript(
     }
 
     // The footer stacks, from top to bottom: a permanent blank separator, the
-    // transient activity bar (when active), the persistent state bar (when any
-    // session-state indicator is on), the input box, and the persistent hint
-    // bar. The separator keeps the latest response visually distinct from
-    // the controls even when the activity row appears or disappears. The
-    // activity bar doubles as the click target that opens the Activity modal
-    // (the pursuit and plan summaries that used to live here now scroll inside
-    // that modal and as inline notices in the transcript).
+    // transient activity bar (when active), the input box, the persistent
+    // state bar (when any session-state indicator is on), and the hint bar.
+    // The separator keeps the latest response visually distinct from the
+    // controls even when the activity row appears or disappears. The activity
+    // bar doubles as the click target that opens the Activity modal (the
+    // pursuit and plan summaries that used to live here now scroll inside that
+    // modal and as inline notices in the transcript). The state bar sits
+    // directly under the input box so `unattended` reads as an attribute of
+    // the composer area rather than a transient status above it.
     let footer_x = chunks[1].x + FOOTER_H_INSET;
     let footer_w = chunks[1].width.saturating_sub(2 * FOOTER_H_INSET);
 
@@ -682,36 +689,40 @@ pub fn draw_transcript(
         (None, None)
     };
 
-    // The persistent state bar sits between the activity bar and the input
-    // box. It hosts session-state flags (`UNATTENDED` today; workspace and
-    // other ambient state later) that the activity bar and hint bar no longer
-    // have to carry, and renders only while at least one flag is active.
+    // The input box sits directly below the activity bar (when active), or at
+    // the top of the footer otherwise.
+    let input_rect = Rect::new(
+        footer_x,
+        status_y + status_height,
+        footer_w,
+        input_box_height,
+    );
+
+    // The persistent state bar sits directly below the input box. It hosts
+    // session-state flags (`unattended` today; workspace and other ambient
+    // state later) that the activity bar and hint bar no longer have to
+    // carry, and renders only while at least one flag is active.
     if state_row_needed {
         draw_state_bar(
             frame,
-            Rect::new(footer_x, status_y + status_height, footer_w, STATE_BAR_ROWS),
+            Rect::new(
+                footer_x,
+                status_y + status_height + input_box_height,
+                footer_w,
+                STATE_BAR_ROWS,
+            ),
             unattended,
             theme,
         );
     }
 
-    // The input box sits directly below the activity/state rows (whichever
-    // are active), or at the top of the footer otherwise.
-    let input_rect = Rect::new(
-        footer_x,
-        status_y + status_height + state_height,
-        footer_w,
-        input_box_height,
-    );
-
-    // The hint bar sits directly below the input box and carries the input
-    // action plus model/context info. Rendered last so its rect is computed
-    // even though its draw call is delegated to the app loop (which owns the
-    // masked input state).
+    // The hint bar caps the footer, carrying the input action plus
+    // model/context info. Its rect is computed even though its draw call is
+    // delegated to the app loop (which owns the masked input state).
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + status_height + state_height + input_box_height,
+            status_y + status_height + input_box_height + state_height,
             footer_w,
             hint_height,
         )
@@ -909,7 +920,8 @@ mod tests {
             );
             {
                 let mut scroll = 0;
-                draw_help_modal(f, &mut scroll, &theme);
+                let bindings: &[HelpBinding] = &[];
+                draw_help_modal(f, &mut scroll, bindings, &theme);
             }
             draw_sessions_modal(
                 f,
