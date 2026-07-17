@@ -42,10 +42,13 @@ Responses API used by the ChatGPT subscription backend.
 
 ## Provider catalog
 
-`default_provider` in `config.toml` selects the initial provider. The same
-names are accepted by the `/provider` picker. API keys may be supplied through
-environment variables or `config.toml` fields; model selection uses a
-separate `<NAME>_MODEL` env var.
+`default_provider` in `config.toml` is the **fresh-session default**: the
+provider a new launch lands on. The `/provider` picker accepts the same names
+and, on a switch, persists the choice back to `default_provider` so the next
+launch follows it; see [Dual-write provider/model
+selection](../adr/0066-dual-write-provider-selection.md). API keys may be
+supplied through environment variables or `config.toml` fields; model selection
+uses a separate `<NAME>_MODEL` env var.
 
 ### OpenAI-compatible presets
 
@@ -109,7 +112,7 @@ concrete `Provider` is then built by `build_provider_for_channel` in
 | Site | Function | Purpose |
 |------|----------|---------|
 | Startup dispatch | `catalog::build_provider_for` | Reads `config.default_provider`, resolves env/config values via the catalog |
-| Runtime switch | `AgentRequest::SwitchProvider` handler | Resolves a TUI-entered key/url, persists it to `config.toml`, rebuilds via the catalog |
+| Runtime switch | `AgentRequest::SwitchProvider` handler | Resolves a TUI-entered key/url, persists the selection to `config.toml` (`default_provider`/`default_model`) **and** pins it to the session, then rebuilds via the catalog |
 | API-key status | `provider_key_status` | Reports per-provider readiness to the TUI (derived from the catalog) |
 | Model-name mirror | `catalog::resolved_model_name` | Friendly default model label for the TUI header |
 

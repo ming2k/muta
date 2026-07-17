@@ -11,11 +11,15 @@ use serde_json::Value;
 /// `completion_tokens` / `total_tokens`) into a [`TokenUsage`]. Returns `None`
 /// when the object is absent or has no numeric fields.
 ///
-/// OpenAI auto-caches without explicit breakpoints and folds its discount into
-/// `prompt_tokens` (reported separately as `prompt_tokens_details.cached_tokens`).
-/// The Anthropic-style cache counters stay zero here — the ledger has no cache
-/// breakout for OpenAI, which is correct (its caching is invisible by design).
+/// OpenAI auto-caches without explicit breakpoints. Its discount surfaces as
+/// `prompt_tokens_details.cached_tokens` (Moonshot exposes the same number as a
+/// top-level `cached_tokens`). That count is a **cache read** — served from the
+/// auto-cache at a discount — and is now surfaced in
+/// [`TokenUsage::cache_read_input_tokens`] so the token-source report shows the
+/// hit rate and the cost is attributed correctly. `cache_creation_input_tokens`
+/// stays zero: OpenAI-style auto-caching has no separate write counter.
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
+    let cached = neenee_core::cache::read_cached_tokens(usage);
     let prompt = usage["prompt_tokens"].as_i64();
     let completion = usage["completion_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
@@ -24,12 +28,14 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
         (Some(p), None, Some(t)) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: (t - p).max(0),
             total_tokens: t,
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
         _ => {
@@ -38,6 +44,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 total_tokens: t,
+                cache_read_input_tokens: cached.unwrap_or(0),
                 ..Default::default()
             })
         }
@@ -197,5 +204,43 @@ mod tests {
         assert_eq!(msg.content, "hello");
         assert_eq!(msg.tool_calls.as_ref().unwrap().len(), 1);
         assert_eq!(msg.tool_calls.unwrap()[0].name, "bash");
+    }
+
+    #[test]
+    fn usage_surfaces_openai_cached_tokens_as_read() {
+        let u = usage(&serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "total_tokens": 1050,
+            "prompt_tokens_details": { "cached_tokens": 700 }
+        }))
+        .unwrap();
+        assert_eq!(u.prompt_tokens, 1000);
+        assert_eq!(u.cache_read_input_tokens, 700);
+        // OpenAI auto-cache has no separate write counter.
+        assert_eq!(u.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn usage_surfaces_moonshot_top_level_cached_tokens() {
+        let u = usage(&serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "cached_tokens": 300
+        }))
+        .unwrap();
+        assert_eq!(u.cache_read_input_tokens, 300);
+    }
+
+    #[test]
+    fn usage_without_cache_field_has_zero_counters() {
+        let u = usage(&serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "total_tokens": 1050
+        }))
+        .unwrap();
+        assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.cache_creation_input_tokens, 0);
     }
 }

@@ -5,6 +5,8 @@
 
 mod messages;
 mod skills;
+mod system_reminder;
 
 pub(crate) use messages::{hidden_user, hidden_user_with_reason, tool_image, visible_user};
 pub(crate) use skills::inject_mentioned_skills;
+pub(crate) use system_reminder::inject as inject_reminders;

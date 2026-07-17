@@ -45,6 +45,13 @@ pub struct BodyInput<'a> {
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
+    /// Optional session-scoped prompt-cache key (Moonshot / Kimi). When set, the
+    /// body carries `prompt_cache_key` so the server-side cache namespaces per
+    /// session and repeated prefixes (system prompt, recent turns) hit at a
+    /// discount. Resolved from the model's [`neenee_core::CachePolicy`] by the
+    /// provider adapter; `None` omits the field entirely (OpenAI ignores it
+    /// harmlessly, but we still don't send it unless the policy is `SessionKey`).
+    pub prompt_cache_key: Option<&'a str>,
 }
 
 /// Build the chat-completions request body.
@@ -65,6 +72,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         stream,
         tool_specs,
         reasoning_effort,
+        prompt_cache_key,
     } = input;
 
     // If the model doesn't support vision, strip inline images so the API
@@ -186,6 +194,15 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     if let Some(specs) = tool_specs {
         body["tools"] = specs;
     }
+    if let Some(key) = prompt_cache_key
+        && !key.is_empty()
+    {
+        // Moonshot / Kimi: a session-scoped cache key namespaces the server-side
+        // prompt cache so repeated prefixes (system prompt + recent turns) hit
+        // across steps in a session. Relays that don't recognise the field
+        // ignore it harmlessly.
+        body["prompt_cache_key"] = json!(key);
+    }
     body
 }
 
@@ -284,6 +301,7 @@ mod tests {
                 stream: true,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
 
@@ -300,10 +318,41 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: Some(Effort::Xhigh),
+                prompt_cache_key: None,
             },
         );
 
         assert_eq!(body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn request_injects_prompt_cache_key_when_present() {
+        let body = super::body(
+            vec![Message::new(Role::User, "hi")],
+            BodyInput {
+                model: "kimi-k2.7-code",
+                stream: false,
+                tool_specs: None,
+                reasoning_effort: None,
+                prompt_cache_key: Some("session-42"),
+            },
+        );
+        assert_eq!(body["prompt_cache_key"], "session-42");
+    }
+
+    #[test]
+    fn request_omits_prompt_cache_key_when_absent() {
+        let body = super::body(
+            vec![Message::new(Role::User, "hi")],
+            BodyInput {
+                model: "gpt-5.5",
+                stream: false,
+                tool_specs: None,
+                reasoning_effort: None,
+                prompt_cache_key: None,
+            },
+        );
+        assert!(body.get("prompt_cache_key").is_none());
     }
 
     #[test]
@@ -360,6 +409,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
 
@@ -402,6 +452,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -425,6 +476,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -458,6 +510,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -484,6 +537,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();
@@ -514,6 +568,7 @@ mod tests {
                 stream: false,
                 tool_specs: None,
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         );
         let msgs = body["messages"].as_array().unwrap();

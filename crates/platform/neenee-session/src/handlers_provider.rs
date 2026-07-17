@@ -36,16 +36,44 @@ fn is_multi_model_provider(config: &Config, id: &str) -> bool {
         .any(|p| p.id == id && p.channels.len() > 1)
 }
 
+/// Persist a TUI-entered API key for `provider_type`. The legacy per-builtin
+/// fields are still written (startup migration folds them into instances
+/// created later), but the catalog builds providers exclusively from
+/// `config.providers` instances — so when an instance already exists the key
+/// must also land on every non-OAuth channel, otherwise the live provider
+/// keeps the old key and the new one is dropped at the next startup. OAuth
+/// channels are skipped: their bearer is owned by the auth flow.
+fn apply_switch_api_key(config: &mut Config, provider_type: &str, key: &str) {
+    match provider_type {
+        "openai" => config.openai_api_key = Some(key.to_string()),
+        "google" => config.gemini_api_key = Some(key.to_string()),
+        "kimi-code" => config.moonshot_api_key = Some(key.to_string()),
+        "deepseek" => config.deepseek_api_key = Some(key.to_string()),
+        "zai-code" => config.zai_api_key = Some(key.to_string()),
+        "opencode-go" => config.opencode_go_api_key = Some(key.to_string()),
+        "anthropic" => config.anthropic_api_key = Some(key.to_string()),
+        _ => {}
+    }
+    if let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_type) {
+        for channel in &mut provider.channels {
+            if !channel.auth.is_oauth() {
+                channel.api_key = Some(key.to_string());
+            }
+        }
+    }
+}
+
 /// `AgentRequest::SwitchProvider` — persist the chosen key/url/model/default,
 /// rebuild the provider through the catalog so resolution stays shared with
 /// startup, swap it into the shared holder, re-seed mid-turn relief, and push
 /// the picker + key snapshots.
 ///
-/// C6: the provider + model selection is session-scoped. The key/url (which
-/// define *how to reach* a provider) are written to the global config under a
-/// cross-process lock, but the *selection* (which provider/model is active for
-/// this session) is pinned to this session's store instead of `config.toml`,
-/// so one session switching provider never changes what any other session sees.
+/// The switch writes the selection to the global `config.toml`
+/// (`default_provider`/`default_model`) so the next launch — a fresh session
+/// without a pin — lands on the switched provider, and additionally pins the
+/// selection to this session's store so resuming *this* session restores its
+/// own choice. Other live sessions keep their in-memory selection and live
+/// provider; only fresh sessions follow the new global default.
 #[allow(clippy::too_many_arguments)]
 pub async fn switch(
     config: &mut Config,
@@ -61,17 +89,8 @@ pub async fn switch(
 ) {
     // A key entered in the TUI is persisted and wins over
     // config; environment variables still take precedence.
-    if let Some(key) = api_key.clone() {
-        match provider_type.as_str() {
-            "openai" => config.openai_api_key = Some(key),
-            "google" => config.gemini_api_key = Some(key),
-            "kimi-code" => config.moonshot_api_key = Some(key),
-            "deepseek" => config.deepseek_api_key = Some(key),
-            "zai-code" => config.zai_api_key = Some(key),
-            "opencode-go" => config.opencode_go_api_key = Some(key),
-            "anthropic" => config.anthropic_api_key = Some(key),
-            _ => {}
-        }
+    if let Some(key) = api_key {
+        apply_switch_api_key(config, &provider_type, &key);
     }
     if let Some(url) = base_url
         && provider_type.as_str() == "anthropic"
@@ -83,10 +102,10 @@ pub async fn switch(
     // (`EditModelReasoning`) / a channel's reasoning fields
     // (`EditProviderModel`). Switching just selects the provider + model.
     //
-    // C6: set the selection on the *effective* config so `activate` resolves
-    // the right channel, then persist the keys/url to the global config while
-    // preserving the on-disk selection — the session-scoped pin (written below)
-    // is the durable record of this session's choice.
+    // Set the selection on the effective config so `activate` resolves the
+    // right channel; the save below persists it as the global default, and
+    // the session pin (written further below) records this session's own
+    // choice for exact restore on resume.
     config.default_provider = provider_type.clone();
     // Multi-model providers (opencode-go, anthropic, google, deepseek, and any
     // user-defined provider with several channels) carry the active model in the
@@ -107,12 +126,13 @@ pub async fn switch(
         // exact model even for single-model providers.
         Some(model.clone())
     };
-    if let Err(error) = config.save_preserving_provider_selection() {
-        tracing::warn!(?error, "could not persist provider keys/url");
+    // Persist the switch as the global default so the next launch (a fresh
+    // session without a pin) lands on this provider/model.
+    if let Err(error) = config.save() {
+        tracing::warn!(?error, "could not persist provider selection");
     }
-    // Pin the provider + model to this session so reopen restores it and no
-    // other session is affected. Best-effort: a failed pin does not block the
-    // live switch.
+    // Pin the provider + model to this session so resume restores it exactly.
+    // Best-effort: a failed pin does not block the live switch.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
             provider: provider_type.clone(),
@@ -233,9 +253,12 @@ pub async fn add(
     // Record the first seeded model as the active model so the picker and status
     // surfaces land on it.
     config.default_model = Some(active_model.clone());
-    let _ = config.save_preserving_provider_selection();
-    // C6: pin the newly-added provider to this session — adding a provider is
-    // also a live switch, so it is session-scoped like `/provider`.
+    // Adding a provider is also a live switch: persist the selection as the
+    // global default (like `/provider`), then pin it to this session so resume
+    // restores it exactly.
+    let _ = config.save();
+    // Pin the newly-added provider to this session — adding a provider is
+    // also a live switch, so it is pinned like `/provider`.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
             provider: id.clone(),
@@ -939,16 +962,26 @@ async fn activate(
 ) {
     refresh_oauth_if_needed(config, &provider_type).await;
 
+    // The live session id flows into prompt-cache control (ADR-0067): when the
+    // selected model's family is Moonshot / Kimi, it becomes the provider's
+    // `prompt_cache_key` so the server-side cache namespaces per session. The
+    // agent already carries the thread id (set at session start), so we resolve
+    // it here instead of threading a new parameter through every dispatch arm.
+    let session_id = agent.thread_id();
     // For multi-model providers the explicit model selects the channel (and thus
     // the per-model transport); build_provider_for_model reads `default_model` as
     // a fallback.
-    let new_p: Arc<dyn Provider> =
-        match catalog::build_provider_for_model(config, &provider_type, Some(&model)) {
-            provider if provider.provider_id() != "mock" => provider,
-            // Fall back to the catalog default if explicit-model resolution hit
-            // the mock sentinel (e.g. an unknown model id).
-            _ => catalog::build_provider_for(config, &provider_type),
-        };
+    let new_p: Arc<dyn Provider> = match catalog::build_provider_for_model(
+        config,
+        &provider_type,
+        Some(&model),
+        session_id.as_deref(),
+    ) {
+        provider if provider.provider_id() != "mock" => provider,
+        // Fall back to the catalog default if explicit-model resolution hit
+        // the mock sentinel (e.g. an unknown model id).
+        _ => catalog::build_provider_for(config, &provider_type),
+    };
     *provider_for_task
         .write()
         .unwrap_or_else(|error| error.into_inner()) = new_p;
@@ -1018,7 +1051,12 @@ pub async fn set_default_model(
     if let Err(error) = config.save() {
         tracing::warn!(?error, "could not persist default model");
     }
-    let new_p = catalog::build_provider_for(config, &id);
+    let new_p = catalog::build_provider_for_model(
+        config,
+        &id,
+        config.default_model.as_deref(),
+        agent.thread_id().as_deref(),
+    );
     *provider_for_task
         .write()
         .unwrap_or_else(|error| error.into_inner()) = new_p;
@@ -1047,7 +1085,7 @@ pub async fn set_default_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_store::config::UserProviderConfig;
+    use neenee_store::config::{UserChannelConfig, UserProviderConfig};
 
     #[test]
     fn custom_provider_id_slugifies_names() {
@@ -1091,5 +1129,72 @@ mod tests {
             ..Default::default()
         });
         assert!(is_multi_model_provider(&config, "my-relay"));
+    }
+
+    #[test]
+    fn switch_key_lands_on_instance_channels_and_legacy_field() {
+        let mut config = Config::default();
+        config.providers.push(UserProviderConfig {
+            id: "kimi-code".to_string(),
+            channels: vec![
+                UserChannelConfig {
+                    label: "k3".to_string(),
+                    api_key: Some("sk-old".to_string()),
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "kimi-for-coding".to_string(),
+                    api_key: None,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        apply_switch_api_key(&mut config, "kimi-code", "sk-new");
+
+        // The catalog builds providers from instance channels, so every
+        // channel must carry the new key — otherwise the live provider keeps
+        // the old key and the new one is dropped at the next startup.
+        let provider = &config.providers[0];
+        assert!(
+            provider
+                .channels
+                .iter()
+                .all(|c| c.api_key.as_deref() == Some("sk-new"))
+        );
+        // The legacy field stays in sync for the credentials fold.
+        assert_eq!(config.moonshot_api_key.as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn switch_key_skips_oauth_channels() {
+        let mut config = Config::default();
+        config.providers.push(UserProviderConfig {
+            id: "chatgpt-relay".to_string(),
+            channels: vec![
+                UserChannelConfig {
+                    label: "oauth-model".to_string(),
+                    auth: neenee_core::ChannelAuth::ChatGptOAuth,
+                    api_key: None,
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "key-model".to_string(),
+                    api_key: Some("sk-old".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        apply_switch_api_key(&mut config, "chatgpt-relay", "sk-new");
+
+        let provider = &config.providers[0];
+        assert!(
+            provider.channels[0].api_key.is_none(),
+            "an OAuth channel's bearer is owned by the auth flow"
+        );
+        assert_eq!(provider.channels[1].api_key.as_deref(), Some("sk-new"));
     }
 }

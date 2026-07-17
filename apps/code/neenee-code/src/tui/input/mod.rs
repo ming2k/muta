@@ -150,6 +150,14 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
     )
 }
 
+/// Which OAuth pending-sheet field to copy: the device verification code (the
+/// value the user pastes at github.com/login/device) or the verification URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OauthCopyTarget {
+    UserCode,
+    Url,
+}
+
 /// Result of processing an input event.
 #[derive(Debug, PartialEq)]
 pub enum InputAction {
@@ -214,6 +222,14 @@ pub enum InputAction {
     CancelProviderTemplate,
     /// Cancel the OAuth pending sheet (back to the template chooser).
     CancelOauthPending,
+    /// Copy the OAuth pending sheet's primary content. `user_code` copies the
+    /// device-verification code the user must paste at github.com/login/device;
+    /// `url` copies the verification URL. Lets the user copy without leaving
+    /// the modal, since neenee captures mouse events so terminal-native
+    /// drag-select does not reach modal body text.
+    CopyOauthContent {
+        target: OauthCopyTarget,
+    },
     /// Remove the highlighted model from a custom provider's stage-2 list (`d`).
     ProviderPickerRemoveModel,
     /// Delete the entire highlighted custom provider from the stage-1 list
@@ -1530,6 +1546,21 @@ pub fn process_event(
                     }
                     if context.active_modal == super::Modal::Mcp && c == 'r' {
                         return InputAction::McpReconnect;
+                    }
+                    // The OAuth pending sheet copies its primary content: `c`
+                    // copies the device code (the value to paste at
+                    // github.com/login/device), `u` copies the verification URL.
+                    // Mouse drag-select does not reach modal body text (neenee
+                    // captures mouse events), so these keys are the copy path.
+                    if context.active_modal == super::Modal::OauthPending && c == 'c' {
+                        return InputAction::CopyOauthContent {
+                            target: OauthCopyTarget::UserCode,
+                        };
+                    }
+                    if context.active_modal == super::Modal::OauthPending && c == 'u' {
+                        return InputAction::CopyOauthContent {
+                            target: OauthCopyTarget::Url,
+                        };
                     }
                     // `r` in the skills modal reloads the skill registry.
                     if context.active_modal == super::Modal::Skills && c == 'r' {

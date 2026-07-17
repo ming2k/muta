@@ -147,49 +147,94 @@ where
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
 
-        if status.is_success() {
-            return serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
-                crate::AuthError::Decode(format!("device token response parse failed: {e}"))
-            });
-        }
-
-        // Parse the OAuth2 error body.
-        let err: DeviceTokenError = serde_json::from_str(&text).unwrap_or_default();
-        let remaining = (deadline - now()).max(0);
-
-        match err.error.as_deref() {
-            Some("authorization_pending") => {
-                sleep(min_with_margin(interval_ms, remaining)).await;
+        // Classify the response (success vs pending vs terminal error) by
+        // inspecting the body, NOT the HTTP status. GitHub's device-token
+        // endpoint answers HTTP 200 even while the user is still authorizing
+        // (`{"error":"authorization_pending",...}` with no `access_token`), so
+        // status alone would misclassify a pending poll as a parse failure.
+        // (Mirrors opencode's Copilot polling; RFC 8628 §3.5 permits the
+        // pending/slow_down errors to arrive as either 200 or 400.)
+        match classify_token_response(status.as_u16(), &text) {
+            TokenPollOutcome::Success(tokens) => return Ok(tokens),
+            TokenPollOutcome::KeepPolling(interval_bump) => {
+                if let Some(bump) = interval_bump {
+                    interval_ms += bump;
+                }
+                sleep(min_with_margin(interval_ms, remaining_ms(&deadline, &now))).await;
                 continue;
             }
-            Some("slow_down") => {
-                interval_ms += DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
-                sleep(min_with_margin(interval_ms, remaining)).await;
-                continue;
-            }
-            Some("access_denied" | "authorization_denied") => {
+            TokenPollOutcome::Denied => {
                 return Err(crate::AuthError::DeviceCode(
                     "device authorization was denied".to_string(),
                 ));
             }
-            Some("expired_token") => {
+            TokenPollOutcome::Expired => {
                 return Err(crate::AuthError::DeviceCode(
                     "device code expired - please re-run login".to_string(),
                 ));
             }
-            _ => {
-                let detail = err
-                    .error_description
-                    .as_deref()
-                    .or(err.error.as_deref())
-                    .unwrap_or("");
+            TokenPollOutcome::Terminal(detail) => {
                 return Err(crate::AuthError::TokenEndpoint {
                     status: status.as_u16(),
-                    body: detail.to_string(),
+                    body: detail,
                 });
             }
         }
     }
+}
+
+/// The outcome of polling the device-token endpoint once, decoupled from HTTP
+/// so it can be unit-tested without a mock server.
+#[derive(Debug)]
+enum TokenPollOutcome {
+    /// A token set was returned — login is complete.
+    Success(TokenResponse),
+    /// The user has not finished yet; keep polling. A non-`None` value is the
+    /// RFC 8628 `slow_down` increment to add to the current interval (ms).
+    KeepPolling(Option<u64>),
+    /// The user denied authorization.
+    Denied,
+    /// The device code expired.
+    Expired,
+    /// Any other terminal error; carries a human-readable detail string.
+    Terminal(String),
+}
+
+/// Classify a single device-token poll response. Status is a hint, not the
+/// source of truth: GitHub returns 200 for `authorization_pending`, so the body
+/// is authoritative. A response is only `Success` when an `access_token` is
+/// actually present.
+fn classify_token_response(status: u16, text: &str) -> TokenPollOutcome {
+    // Success only when an access_token is present, regardless of status.
+    if let Ok(tokens) = serde_json::from_str::<TokenResponse>(text)
+        && !tokens.access_token.is_empty()
+    {
+        return TokenPollOutcome::Success(tokens);
+    }
+    // Otherwise inspect the OAuth2 error field (present for pending/slow_down/
+    // expired/denied, on both 200 and 4xx).
+    let err: DeviceTokenError = serde_json::from_str(text).unwrap_or_default();
+    match err.error.as_deref() {
+        Some("authorization_pending") => TokenPollOutcome::KeepPolling(None),
+        Some("slow_down") => {
+            TokenPollOutcome::KeepPolling(Some(DEVICE_CODE_SLOW_DOWN_INCREMENT_MS))
+        }
+        Some("access_denied" | "authorization_denied") => TokenPollOutcome::Denied,
+        Some("expired_token") => TokenPollOutcome::Expired,
+        _ => {
+            let detail = err
+                .error_description
+                .as_deref()
+                .or(err.error.as_deref())
+                .unwrap_or("")
+                .to_string();
+            TokenPollOutcome::Terminal(format!("HTTP {status}: {detail}"))
+        }
+    }
+}
+
+fn remaining_ms(deadline: &i64, now: &dyn Fn() -> i64) -> i64 {
+    (deadline - now()).max(0)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -264,5 +309,58 @@ mod tests {
         assert_eq!(min_with_margin(10_000, 2_000), 5_000);
         // Interval smaller than remaining → interval plus margin.
         assert_eq!(min_with_margin(1_000, 60_000), 4_000);
+    }
+
+    #[test]
+    fn classify_200_authorization_pending_keeps_polling() {
+        // GitHub returns HTTP 200 with this body while the user is still
+        // authorizing. The old code parsed it as a TokenResponse and failed
+        // ("missing field access_token"); the fix must treat it as keep-polling.
+        let body = r#"{"error":"authorization_pending","error_description":"...","interval":5,"expires_in":900,"correlation_id":"x"}"#;
+        assert!(matches!(
+            classify_token_response(200, body),
+            TokenPollOutcome::KeepPolling(None)
+        ));
+    }
+
+    #[test]
+    fn classify_400_authorization_pending_also_keeps_polling() {
+        // Some providers (xAI) return 400 for the same pending state; both
+        // statuses must keep polling.
+        let body = r#"{"error":"authorization_pending"}"#;
+        assert!(matches!(
+            classify_token_response(400, body),
+            TokenPollOutcome::KeepPolling(None)
+        ));
+    }
+
+    #[test]
+    fn classify_200_with_access_token_is_success() {
+        let body = r#"{"access_token":"gho_x","token_type":"bearer","scope":"read:user"}"#;
+        let TokenPollOutcome::Success(tokens) = classify_token_response(200, body) else {
+            panic!("expected Success");
+        };
+        assert_eq!(tokens.access_token, "gho_x");
+    }
+
+    #[test]
+    fn classify_slow_down_bumps_interval() {
+        let body = r#"{"error":"slow_down","interval":10}"#;
+        assert!(matches!(
+            classify_token_response(200, body),
+            TokenPollOutcome::KeepPolling(Some(_))
+        ));
+    }
+
+    #[test]
+    fn classify_denied_and_expired_are_terminal() {
+        assert!(matches!(
+            classify_token_response(200, r#"{"error":"access_denied"}"#),
+            TokenPollOutcome::Denied
+        ));
+        assert!(matches!(
+            classify_token_response(400, r#"{"error":"expired_token"}"#),
+            TokenPollOutcome::Expired
+        ));
     }
 }

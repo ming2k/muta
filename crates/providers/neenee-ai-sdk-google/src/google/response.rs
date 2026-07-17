@@ -20,23 +20,31 @@ pub struct StreamPayload {
 }
 
 /// Parse Gemini's `usageMetadata` into a [`TokenUsage`]. Returns `None` when
-/// the object is absent or has no numeric fields. Gemini has no explicit
-/// prompt-cache surface, so the cache counters stay zero.
+/// the object is absent or has no numeric fields. Gemini's implicit context
+/// caching discount surfaces as `cachedContentTokenCount`; it is surfaced in
+/// [`TokenUsage::cache_read_input_tokens`] so the token-source report shows the
+/// hit rate. Gemini exposes no separate cache-write counter.
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let prompt = usage["promptTokenCount"].as_i64();
     let completion = usage["candidatesTokenCount"].as_i64();
     let total = usage["totalTokenCount"].as_i64();
+    // Route cache-read accounting through the shared helper so the cache
+    // policy is enforced in one place (ADR-0067). Gemini hides the discount in
+    // `cachedContentTokenCount`, which the helper reads.
+    let cached = neenee_core::cache::read_cached_tokens(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: prompt.unwrap_or(0),
             completion_tokens: completion.unwrap_or(0),
             total_tokens: t,
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
     }
@@ -433,5 +441,19 @@ mod tests {
         let message = super::message(&value).unwrap();
         assert_eq!(message.content, "part one part two");
         assert!(message.reasoning_content.is_none());
+    }
+
+    #[test]
+    fn usage_surfaces_gemini_cached_content_tokens_as_read() {
+        let u = usage(&serde_json::json!({
+            "promptTokenCount": 900,
+            "candidatesTokenCount": 30,
+            "totalTokenCount": 930,
+            "cachedContentTokenCount": 600
+        }))
+        .unwrap();
+        assert_eq!(u.prompt_tokens, 900);
+        assert_eq!(u.cache_read_input_tokens, 600);
+        assert_eq!(u.cache_creation_input_tokens, 0);
     }
 }

@@ -21,9 +21,11 @@ pub mod cron;
 pub use cron::CronExpr;
 pub mod colorschemeconfig;
 pub use colorschemeconfig::ColorSchemeConfig;
+pub mod cache;
+pub use cache::CachePolicy;
 pub mod pursuits;
 pub mod repeat;
-pub use pursuits::{Pursuit, RoundOutcome, RoundTimer, ThreadPursuit, TokenUsage};
+pub use pursuits::{Pursuit, PursuitBudget, RoundOutcome, RoundTimer, ThreadPursuit, TokenUsage};
 pub use repeat::{DEFAULT_MAX_AGE_DAYS, RepeatJob};
 
 pub mod error;

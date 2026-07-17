@@ -68,17 +68,23 @@ pub enum Transport {
         user_agent: String,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
-    /// subscription backend (`chatgpt.com/backend-api/codex/responses`). Unlike
+    /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by
+    /// the GitHub Copilot subscription backend
+    /// (`api.githubcopilot.com/responses`). Unlike
     /// [`OpenAiCompat`](Self::OpenAiCompat) (chat completions), the Responses
     /// API takes `instructions` + an `input` items array and streams
     /// `response.*` events. `account_id` is sent as the `ChatGPT-Account-Id`
     /// header (resolved from the OAuth `chatgpt_account_id` claim); `None` is
-    /// valid for single-account users.
+    /// valid for single-account users. `copilot` flips the per-request header
+    /// set to Copilot's required headers (`x-initiator`, `Openai-Intent`,
+    /// `X-GitHub-Api-Version`, and `Copilot-Vision-Request` when vision is
+    /// used) and drops the ChatGPT account-id header.
     OpenAiResponses {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
         account_id: Option<String>,
+        copilot: bool,
     },
 }
 

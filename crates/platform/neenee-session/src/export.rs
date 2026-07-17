@@ -295,6 +295,7 @@ mod tests {
         let pursuit = Pursuit {
             objective: "Ship /export".to_string(),
             is_complete: false,
+            ..Default::default()
         };
         let out = format_export_markdown(
             ExportContext {

@@ -35,6 +35,12 @@ pub struct OpenAiCompatProvider {
     pub endpoint: Endpoint,
     pub turn: TurnState,
     pub reasoning_effort: Option<Effort>,
+    /// Optional session-scoped prompt-cache key (Moonshot / Kimi). Set once per
+    /// session via [`with_prompt_cache_key`](Self::with_prompt_cache_key); when
+    /// present, every request carries `prompt_cache_key` so the server-side
+    /// cache namespaces per session and repeated prefixes hit at a discount.
+    /// Resolved from the model's [`neenee_core::CachePolicy`] by the registry.
+    pub prompt_cache_key: Option<String>,
 }
 
 impl OpenAiCompatProvider {
@@ -67,6 +73,7 @@ impl OpenAiCompatProvider {
             },
             turn: TurnState::new(),
             reasoning_effort: None,
+            prompt_cache_key: None,
         }
     }
 
@@ -81,6 +88,16 @@ impl OpenAiCompatProvider {
     /// `None` keeps the provider default.
     pub fn with_reasoning_effort(mut self, effort: Option<Effort>) -> Self {
         self.reasoning_effort = effort;
+        self
+    }
+
+    /// Set the session-scoped `prompt_cache_key` (Moonshot / Kimi). Typically the
+    /// session id, so all turns in a session share a server-side cache namespace.
+    /// Only takes effect for model families whose [`neenee_core::CachePolicy`] is
+    /// [`SessionKey`](neenee_core::CachePolicy::SessionKey); the registry decides
+    /// whether to set this. Returns `self` for chaining.
+    pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
+        self.prompt_cache_key = key;
         self
     }
 
@@ -143,6 +160,7 @@ impl Provider for OpenAiCompatProvider {
                 stream: false,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
         );
 
@@ -192,6 +210,7 @@ impl Provider for OpenAiCompatProvider {
                 stream: true,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
         );
 
@@ -223,6 +242,7 @@ impl Provider for OpenAiCompatProvider {
                 stream: true,
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
+                prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
         );
 
@@ -341,6 +361,7 @@ mod tests {
                 stream: false,
                 tool_specs: Some(&tool_specs),
                 reasoning_effort: None,
+                prompt_cache_key: None,
             },
         )
     }

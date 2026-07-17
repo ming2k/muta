@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Modular prompt-cache control (ADR-0067).** A pure-domain `CachePolicy`
+  classifier now resolves each model family's caching strategy
+  (`Breakpoints`/`SessionKey`/`Automatic`). As a result the token-source report
+  surfaces cache-hit counts for **every** provider — OpenAI's
+  `prompt_tokens_details.cached_tokens`, Gemini's `cachedContentTokenCount`, and
+  Moonshot's top-level `cached_tokens` — not just Anthropic. Moonshot/Kimi
+  sessions now send the session id as `prompt_cache_key` so repeated prefixes
+  hit a server-side cache at a discount. See
+  [ADR-0067](docs/adr/0067-modular-prompt-cache-control.md).
+
+- **System-reminder dynamic injection (ADR-0068).** A two-tier XML trust model
+  gives event-driven, mid-turn instructions a canonical channel: authoritative
+  `<system-reminder>` directives the model must follow vs `<untrusted_…>`
+  escaped data it must treat as data. Two new `InjectionKind` variants
+  (`SystemReminder`/`UntrustedDirective`) keep provenance traceable. See
+  [ADR-0068](docs/adr/0068-system-reminder-dynamic-injection.md).
+
+- **Pursuit budgets and runtime stats (ADR-0069).** `/pursue budget
+  turns=N tokens=N time=Ms` sets opt-in hard budgets on an active pursuit;
+  reaching any budget stops the loop with a named `terminal_reason` and a usage
+  summary. `/pursue status` now shows live turns/tokens/elapsed, and a
+  convergence reminder fires past 75% of a budget. The marker-based stop-gate
+  is preserved (no LLM judge). See
+  [ADR-0069](docs/adr/0069-pursuit-budgets-and-stats.md).
+
 - **Configurable TUI color schemes.** The redesigned flat `/config` Settings
   overlay now includes live-previewed Zen, Midnight, Nord, Catppuccin, and
   Paper presets plus an editable eight-color custom palette. Appearance and
@@ -86,6 +111,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replacement completion is short-circuited instead of executing its side
   effects again.
 
+- **A `/provider` switch now survives a restart.** The switch handler and the
+  add-provider flow persist the provider/model selection as the global
+  `config.toml` default (`default_provider`/`default_model`) in addition to
+  pinning it to the session, so the next launch lands on the switched model
+  instead of reverting to the startup default. The session pin still wins for
+  resume: reopening a session restores its own model exactly, while a fresh
+  session follows the new global default. Other live sessions keep their
+  in-memory selection. Non-selection mutations (favorites, metadata edits,
+  TUI layout and color scheme) keep preserving the on-disk selection. See
+  [ADR-0066](docs/adr/0066-dual-write-provider-selection.md).
+
 - **Context request usage now follows the conversation's turn and round
   structure.** The report lists one total per turn and opens each turn into
   its model rounds, instead of grouping requests by provider and model.
@@ -136,6 +172,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of requiring a manual `LD_LIBRARY_PATH`. Explicit `--paper` and
   `--longport-live` launch profiles keep simulated and real-account entry
   points separate; live mode still starts disarmed.
+
+- **Expanded edit-diff scroll height no longer depends on the scroll offset.**
+  The renderer accounted a logical row in `content_lines` only when it was
+  painted on screen, so once the viewport clipped the body mid-hunk the
+  measured step height shrank — and since the app loop derives `max_scroll`
+  from it, the scroll position oscillated and the frame flickered during the
+  animation heartbeat. Every logical row is now counted through one
+  `RenderCtx::paint` call, decoupling height from scroll position.
 
 ## [0.20.3] - 2026-07-12
 

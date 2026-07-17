@@ -98,6 +98,12 @@ deep-dive references, read as a pair:
     attributes every token as reported vs. estimated, and the report modal that
     makes that accuracy visible. Read this to understand the unit the previous
     two layers operate on.
+16. [Prompt caching](prompt-caching.md) — the cost counterpart to token
+    accounting: how a cached prefix is billed at ~0.1× (or folded into a
+    discount), the three provider strategies (`Breakpoints` / `SessionKey` /
+    `Automatic`), and the single rule that keeps the savings honest — every
+    cache-read goes through one shared helper, because a missed field is a
+    missed discount is a billing error.
 
 ## How a round flows through the canon
 

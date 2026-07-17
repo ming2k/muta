@@ -33,6 +33,11 @@ pub struct ResponsesProvider {
     /// The ChatGPT account id, sent as `ChatGPT-Account-Id`. `None` is valid
     /// for single-account users (the header is simply omitted).
     pub account_id: Option<String>,
+    /// When `true`, inject GitHub Copilot's required per-request headers
+    /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
+    /// `Copilot-Vision-Request` for vision turns) instead of the ChatGPT
+    /// account-id header. Flipped on by the catalog for Copilot OAuth channels.
+    pub copilot: bool,
 }
 
 impl ResponsesProvider {
@@ -53,6 +58,7 @@ impl ResponsesProvider {
             turn: TurnState::new(),
             reasoning_effort: None,
             account_id,
+            copilot: false,
         }
     }
 
@@ -71,7 +77,18 @@ impl ResponsesProvider {
         self
     }
 
-    /// Apply the per-request auth + user-agent headers.
+    /// Flip on Copilot-mode request headers (see [`Self::copilot`]).
+    pub fn with_copilot(mut self, copilot: bool) -> Self {
+        self.copilot = copilot;
+        self
+    }
+
+    /// Apply the per-request auth + user-agent headers. In Copilot mode the
+    /// header set is Copilot's (`x-initiator`, `Openai-Intent`,
+    /// `X-GitHub-Api-Version`) and the ChatGPT account-id header is omitted.
+    /// Copilot also requires `Copilot-Vision-Request: true` on any turn that
+    /// carries an image, detected here by scanning the Responses `input` array
+    /// for an `input_image` part.
     fn build_request(
         &self,
         client: &reqwest::Client,
@@ -81,8 +98,16 @@ impl ResponsesProvider {
             .post(self.endpoint.base_url())
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
-        for (name, value) in request::headers(self.endpoint.api_key(), self.account_id.as_deref()) {
+        let is_copilot_vision = self.copilot && request::has_input_image(body);
+        for (name, value) in request::headers(
+            self.endpoint.api_key(),
+            self.account_id.as_deref(),
+            self.copilot,
+        ) {
             req = req.header(name, value);
+        }
+        if is_copilot_vision {
+            req = req.header("Copilot-Vision-Request", "true");
         }
         req
     }

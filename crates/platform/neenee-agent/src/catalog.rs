@@ -38,6 +38,12 @@ pub fn default_provider_id(config: &Config) -> &str {
 /// access token as a bearer plus the `ChatGPT-Account-Id` header.
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
+/// The GitHub Copilot subscription backend (Responses API). A Copilot OAuth
+/// channel routes here, sending the GitHub OAuth access token as a bearer plus
+/// Copilot's required request headers (`x-initiator`, `Openai-Intent`,
+/// `X-GitHub-Api-Version`, and `Copilot-Vision-Request` for vision turns).
+pub const COPILOT_RESPONSES_URL: &str = "https://api.githubcopilot.com/responses";
+
 /// Convert a user-defined channel config into a resolved [`Channel`].
 ///
 /// Resolution rules mirror the built-in path: an `api_key_env` value wins over
@@ -56,6 +62,18 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
             (
                 tokens.map(|t| t.access.clone()).unwrap_or_default(),
                 tokens.and_then(|t| t.account_id.clone()),
+            )
+        }
+        neenee_core::ChannelAuth::CopilotOAuth => {
+            // Copilot's bearer is the GitHub OAuth access token; there is no
+            // account id (unlike ChatGPT's chatgpt_account_id claim).
+            let store = neenee_auth::AuthStore::load();
+            (
+                store
+                    .get("copilot")
+                    .map(|tokens| tokens.access.clone())
+                    .unwrap_or_default(),
+                None,
             )
         }
         neenee_core::ChannelAuth::XaiOAuth => {
@@ -91,7 +109,26 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                 .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
             effort: uc.effort.as_deref().and_then(Effort::parse),
             account_id,
+            copilot: false,
         },
+        neenee_core::ChannelAuth::CopilotOAuth => {
+            // Copilot speaks the Responses API against api.githubcopilot.com.
+            // There is no account id; the Copilot-specific request headers are
+            // gated by `copilot: true` and injected by the Responses provider.
+            Transport::OpenAiResponses {
+                base_url: uc
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| COPILOT_RESPONSES_URL.to_string()),
+                user_agent: uc
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+                effort: uc.effort.as_deref().and_then(Effort::parse),
+                account_id: None,
+                copilot: true,
+            }
+        }
         _ => match uc.transport {
             UserTransport::GeminiNative => Transport::GeminiNative {
                 base_url: uc
@@ -355,10 +392,14 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         }
     }
 
+    // Strip the legacy per-provider fields the migration above consumes.
+    // `default_model` is NOT legacy: the switch handler persists it as the
+    // global model pointer and the runtime honors it as the active model when
+    // the default provider serves it — taking it would erase the persisted
+    // selection on every startup.
     if config.openai_model.take().is_some()
         | config.moonshot_model.take().is_some()
         | config.zai_model.take().is_some()
-        | config.default_model.take().is_some()
         | config.gemini_base_url.take().is_some()
         | config.anthropic_base_url.take().is_some()
         | config.anthropic_effort.take().is_some()
@@ -899,7 +940,7 @@ fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
 /// the single replacement for the resolution logic that used to be duplicated
 /// at startup and in the `SwitchProvider` handler.
 pub fn build_provider_for(config: &Config, id: &str) -> std::sync::Arc<dyn neenee_core::Provider> {
-    build_provider_for_model(config, id, config.default_model.as_deref())
+    build_provider_for_model(config, id, config.default_model.as_deref(), None)
 }
 
 /// Resolve the provider for `provider_id`, selecting the channel that carries
@@ -907,10 +948,16 @@ pub fn build_provider_for(config: &Config, id: &str) -> std::sync::Arc<dyn neene
 /// entry's default channel). Runtime switches that carry an explicit model
 /// (e.g. selecting `minimax-m3` under opencode-go) route through here so the
 /// per-model transport is picked correctly.
+///
+/// `session_id` flows into prompt-cache control (ADR-0067): when the active
+/// model's [`neenee_core::CachePolicy`] is `SessionKey` (Moonshot / Kimi), the
+/// session id becomes the provider's `prompt_cache_key`. Pass `None` at shared
+/// bootstrap; pass the live session id on session create / model switch.
 pub fn build_provider_for_model(
     config: &Config,
     provider_id: &str,
     model_id: Option<&str>,
+    session_id: Option<&str>,
 ) -> std::sync::Arc<dyn neenee_core::Provider> {
     let entries = build_catalog(config);
     let Some(entry) = entries.iter().find(|e| e.id == provider_id) else {
@@ -921,7 +968,9 @@ pub fn build_provider_for_model(
         .and_then(|m| entry.channel_for_model(m))
         .or_else(|| entry.default_channel());
     match channel {
-        Some(channel) => neenee_providers::build_provider_for_channel(channel, &entry.id),
+        Some(channel) => {
+            neenee_providers::build_provider_for_channel(channel, &entry.id, session_id)
+        }
         None => std::sync::Arc::new(neenee_providers::MockProvider),
     }
 }
@@ -1165,7 +1214,10 @@ mod tests {
 
         assert!(migrate_legacy_provider_instances(&mut config));
         assert!(config.openai_api_key.is_none());
-        assert!(config.default_model.is_none());
+        // `default_model` is a live field (the switch handler persists it), so
+        // the migration must NOT strip it — only seed the instance's default
+        // channel from it.
+        assert_eq!(config.default_model.as_deref(), Some("gpt-5.4-mini"));
         assert_eq!(config.default_provider, "openai");
 
         let entry = build_catalog(&config)
@@ -1176,6 +1228,34 @@ mod tests {
         assert_eq!(entry.default_channel().unwrap().model, "gpt-5.4-mini");
         assert_eq!(entry.default_channel().unwrap().api_key, "sk-old");
         assert!(!entry.builtin);
+    }
+
+    #[test]
+    fn migration_strips_legacy_model_slots_but_preserves_default_model() {
+        let mut config = bare_config();
+        config.default_provider = "kimi-code".to_string();
+        config.default_model = Some("k3".to_string());
+        config.moonshot_model = Some("k3".to_string());
+        // An existing kimi-code instance (created by an earlier migration or
+        // the add-provider flow) — the migration has nothing to create, only
+        // legacy fields to strip.
+        config.providers.push(UserProviderConfig {
+            id: "kimi-code".to_string(),
+            channels: vec![UserChannelConfig {
+                label: "k3".to_string(),
+                model: Some("k3".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert!(migrate_legacy_provider_instances(&mut config));
+        // Legacy per-provider model slots are consumed…
+        assert!(config.moonshot_model.is_none());
+        // …but the persisted global model pointer survives, so a fresh
+        // session lands on the model the user last switched to.
+        assert_eq!(config.default_model.as_deref(), Some("k3"));
+        assert_eq!(config.default_provider, "kimi-code");
     }
 
     /// A provider instance created from a template, pre-stamped with its
@@ -1926,7 +2006,8 @@ mod tests {
             resolved_model_name(&config, "anthropic"),
             "claude-sonnet-4-6"
         );
-        let provider = build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"));
+        let provider =
+            build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"), None);
         assert_eq!(provider.model(), "claude-sonnet-4-6");
         assert_eq!(provider.provider_id(), "anthropic");
     }
@@ -1951,7 +2032,7 @@ mod tests {
         // model id is minimax-m3 (the Anthropic /messages path), proving the
         // per-model transport routing reaches construction.
         let config = bare_config();
-        let provider = build_provider_for_model(&config, "opencode-go", Some("minimax-m3"));
+        let provider = build_provider_for_model(&config, "opencode-go", Some("minimax-m3"), None);
         assert_eq!(provider.model(), "minimax-m3");
         assert_eq!(provider.provider_id(), "opencode-go");
     }

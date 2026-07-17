@@ -94,7 +94,12 @@ request.
 
 The resume path restores the visible transcript, the model window, the archived
 transcript, hidden harness context, projection metadata, task state, pursuit
-state, and any blobs that are still referenced by messages. Once this state is
+state, and any blobs that are still referenced by messages. It also restores
+the session's **provider/model pin** — if the session had switched providers or
+models, resume lands back on that choice rather than the global default, so a
+reopened session talks to the same model it was using. For the dual-write
+selection decision, see
+[ADR-0066](../../adr/0066-dual-write-provider-selection.md). Once this state is
 loaded, the next model request uses the restored model window as its live
 conversation history.
 

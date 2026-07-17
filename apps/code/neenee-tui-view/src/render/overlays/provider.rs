@@ -863,7 +863,21 @@ pub fn draw_oauth_pending(
     );
 
     if let Some(fo) = f.footer {
-        render_modal_footer(frame, fo, &[FooterHint::always("Esc", "cancel")], theme);
+        // The copy affordances are only useful when the relevant field is
+        // populated: the device code once the device-code request has returned,
+        // and the URL alongside it. On the error branch neither is offered, so
+        // only the cancel hint shows.
+        let mut hints: Vec<FooterHint> = Vec::new();
+        if error.is_none() {
+            if !user_code.is_empty() {
+                hints.push(FooterHint::secondary("c", "copy code"));
+            }
+            if !url.is_empty() {
+                hints.push(FooterHint::secondary("u", "copy url"));
+            }
+        }
+        hints.push(FooterHint::always("Esc", "cancel"));
+        render_modal_footer(frame, fo, &hints, theme);
     }
     area
 }

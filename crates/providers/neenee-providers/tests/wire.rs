@@ -467,7 +467,7 @@ async fn assert_factory_body(mut channel: Channel, expected: Value) {
         .create_async()
         .await;
 
-    let provider = build_provider_for_channel(&channel, "anthropic");
+    let provider = build_provider_for_channel(&channel, "anthropic", None);
     let msg = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await

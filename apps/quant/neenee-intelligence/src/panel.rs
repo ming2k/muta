@@ -108,6 +108,7 @@ impl AiCompletion for NeeneeGateway {
             &self.config,
             &self.provider_id,
             self.model_id.as_deref(),
+            None,
         );
         if provider.provider_id() == "mock" {
             return Err("no configured AI provider is available for expert review".to_string());

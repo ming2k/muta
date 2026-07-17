@@ -46,7 +46,7 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent_setup::active_context_window;
-use crate::pursuits::format_pursuit_status;
+use crate::pursuits::{format_pursuit_budget, format_pursuit_status, parse_pursuit_budget};
 use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
 use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
@@ -699,7 +699,15 @@ pub async fn dispatch(
                     Some(pursuit) => {
                         let mut m = format_pursuit_status(&pursuit);
                         if armed {
-                            m.push_str(&format!("\nPursuit active · gate iteration {iterations}"));
+                            let stats = agent.pursuit_stats();
+                            m.push_str(&format!(
+                                "\nPursuit active · gate iteration {iterations} · \
+                                 {} turn{}, {} tokens, {:.0}s",
+                                stats.turns,
+                                if stats.turns == 1 { "" } else { "s" },
+                                stats.tokens,
+                                stats.wall_clock_ms as f64 / 1000.0
+                            ));
                         }
                         m
                     }
@@ -776,13 +784,54 @@ pub async fn dispatch(
                         }
                     }
                 }
-            } else if rest == "pause" || rest == "resume" || rest.starts_with("budget ") {
+            } else if rest == "pause" || rest == "resume" {
                 let _ = resp_tx.send(AgentResponse::Error(
-                    "/pursue pause, /pursue resume, and /pursue budget are not \
-                                     supported. Use /pursue <condition>, /pursue edit, /pursue \
-                                     done, /pursue clear, /pursue status, or /pursue stop."
+                    "/pursue pause and /pursue resume are not supported. Use /pursue \
+                     <condition>, /pursue edit, /pursue done, /pursue clear, /pursue status, \
+                     /pursue budget, or /pursue stop."
                         .to_string(),
                 ));
+            } else if rest == "budget" || rest.starts_with("budget ") {
+                // `/pursue budget turns=20 tokens=500000 time=1800000` sets hard
+                // budgets on the active pursuit (ADR-0069). Any subset may be
+                // given; an axis omitted leaves it uncapped. `/pursue budget`
+                // (no args) clears the budget. Budgets are opt-in only and never
+                // invented by the model.
+                let args = rest.strip_prefix("budget").unwrap_or("").trim();
+                match session.pursuit().await {
+                    Some(mut pursuit) if !pursuit.is_complete => match parse_pursuit_budget(args) {
+                        Ok(budget) => {
+                            pursuit.budget = budget;
+                            match session.set_pursuit(Some(pursuit.clone())).await {
+                                Ok(_) => {
+                                    agent.set_pursuit(pursuit.clone());
+                                    emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
+                                    let label = format_pursuit_budget(pursuit.budget);
+                                    let _ = resp_tx.send(turn(
+                                        &thread_id,
+                                        RoundEvent::Text(format!("Pursuit budget {label}.")),
+                                    ));
+                                }
+                                Err(error) => {
+                                    let _ = resp_tx.send(AgentResponse::Error(error));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let _ = resp_tx.send(AgentResponse::Error(error));
+                        }
+                    },
+                    Some(_) => {
+                        let _ = resp_tx.send(AgentResponse::Error(
+                            "Cannot set a budget on a completed pursuit.".to_string(),
+                        ));
+                    }
+                    None => {
+                        let _ = resp_tx.send(AgentResponse::Error(
+                            "No pursuit to budget. Start one with /pursue <condition>.".to_string(),
+                        ));
+                    }
+                }
             } else {
                 // `/pursue <condition>` sets a fresh condition and drives it;
                 // `/pursue` (empty) re-arms and drives the existing pursuit.
@@ -810,6 +859,7 @@ pub async fn dispatch(
                     let pursuit = Pursuit {
                         objective: rest.to_string(),
                         is_complete: false,
+                        ..Default::default()
                     };
                     match session.set_pursuit(Some(pursuit.clone())).await {
                         Ok(_) => {

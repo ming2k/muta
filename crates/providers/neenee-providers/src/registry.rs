@@ -165,10 +165,25 @@ pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
 /// GPT-5.x models served over the ChatGPT subscription backend (the Codex
-/// Responses API). These are the models a ChatGPT Pro/Plus plan unlocks; the
+/// Responses API). These are the models a ChatGPT Pro/PLUS plan unlocks; the
 /// Responses transport routes them to `chatgpt.com/backend-api/codex/responses`.
 /// Each id exists in the model registry.
 pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+];
+
+/// GPT-5.x models served over the GitHub Copilot subscription backend. Copilot
+/// fronts the same GPT-5.x family as the ChatGPT subscription (the plan-unlocked
+/// set is fixed), so the id list mirrors [`CHATGPT_BUILTIN_MODELS`]. Copilot's
+/// own `/models` endpoint would advertise the live set, but live discovery is
+/// disabled here for the same reason as ChatGPT: keep the curated, registry-known
+/// ids rather than overwrite them at runtime. Each id exists in the model registry.
+pub const COPILOT_BUILTIN_MODELS: &[&str] = &[
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
@@ -372,6 +387,17 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
         fitting: false,
     },
     ProviderTemplateSpec {
+        id: "copilot-oauth",
+        // Copilot speaks the OpenAI Responses wire family against
+        // api.githubcopilot.com. Same rationale as chatgpt-oauth: discovery is
+        // disabled because the plan-unlocked model set is fixed, and we keep
+        // the curated, registry-known GPT-5.x ids rather than overwrite them.
+        protocol: "openai",
+        models: COPILOT_BUILTIN_MODELS,
+        discovery: false,
+        fitting: false,
+    },
+    ProviderTemplateSpec {
         id: "kimi-code",
         protocol: "openai",
         // The Kimi Code platform exposes a live /models endpoint, so instances
@@ -466,7 +492,19 @@ impl OpenAiProviderSpec {
 /// domain crate stays free of HTTP I/O. `entry_id` becomes the provider's
 /// attribution id (`Provider::provider_id`) so assistant responses are
 /// attributed to the logical model even after a mid-session switch.
-pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn Provider> {
+///
+/// `session_id` participates in prompt-cache control (ADR-0067): when the
+/// resolved [`neenee_core::CachePolicy`] for the model's family is
+/// [`SessionKey`](neenee_core::CachePolicy::SessionKey) (Moonshot / Kimi), the
+/// session id is stamped as the provider's `prompt_cache_key` so the server-side
+/// cache namespaces per conversation and repeated prefixes hit at a discount.
+/// Pass `None` when no session is known yet (shared bootstrap); the key is then
+/// left unset and the provider caches at the server's default granularity.
+pub fn build_provider_for_channel(
+    channel: &Channel,
+    entry_id: &str,
+    session_id: Option<&str>,
+) -> Arc<dyn Provider> {
     match &channel.transport {
         Transport::GeminiNative {
             base_url,
@@ -521,6 +559,14 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             user_agent,
             effort,
         } => {
+            let policy = neenee_core::CachePolicy::for_family(
+                neenee_core::model::resolve(&channel.model).family,
+            );
+            let cache_key = if policy.injects_session_key() {
+                session_id.map(str::to_string)
+            } else {
+                None
+            };
             let provider = OpenAiCompatProvider::with_base_url_and_user_agent(
                 channel.api_key.clone(),
                 channel.model.clone(),
@@ -528,6 +574,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
                 user_agent,
             )
             .with_reasoning_effort(*effort)
+            .with_prompt_cache_key(cache_key)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -536,6 +583,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             user_agent,
             effort,
             account_id,
+            copilot,
         } => {
             let provider = ResponsesProvider::new(
                 channel.api_key.clone(),
@@ -545,6 +593,7 @@ pub fn build_provider_for_channel(channel: &Channel, entry_id: &str) -> Arc<dyn 
             )
             .with_user_agent(user_agent)
             .with_reasoning_effort(*effort)
+            .with_copilot(*copilot)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -641,7 +690,7 @@ mod build_tests {
             api_key: "k".to_string(),
             model: "gpt-4o".to_string(),
         };
-        let provider = build_provider_for_channel(&channel, "openai");
+        let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
         assert_eq!(provider.model(), "gpt-4o");
     }
@@ -663,7 +712,7 @@ mod build_tests {
             api_key: "go-key".to_string(),
             model: "minimax-m3".to_string(),
         };
-        let provider = build_provider_for_channel(&channel, "opencode-go");
+        let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");
         assert_eq!(provider.model(), "minimax-m3");
     }
@@ -732,6 +781,11 @@ mod build_tests {
             )
             .chain(
                 crate::CHATGPT_BUILTIN_MODELS
+                    .iter()
+                    .map(|id| (id, WireFormat::OpenAiCompat)),
+            )
+            .chain(
+                crate::COPILOT_BUILTIN_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAiCompat)),
             )

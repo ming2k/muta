@@ -31,7 +31,7 @@ pub use chatgpt_device::{
     request_device_code as request_chatgpt_device_code,
     verification_url as chatgpt_verification_url,
 };
-pub use config::{CHATGPT, OAuthConfig, XAI, config_by_provider_id};
+pub use config::{CHATGPT, COPILOT, OAuthConfig, XAI, config_by_provider_id};
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
 pub use pkce::{PkceCodes, new_nonce, new_state};
 pub use store::{AuthStore, TokenSet};
@@ -119,6 +119,11 @@ impl OAuth {
     /// Convenience constructor for the ChatGPT/Codex subscription provider.
     pub fn chatgpt() -> Self {
         Self::new(CHATGPT)
+    }
+
+    /// Convenience constructor for the GitHub Copilot subscription provider.
+    pub fn copilot() -> Self {
+        Self::new(COPILOT)
     }
 
     /// The provider config this OAuth instance authenticates against.

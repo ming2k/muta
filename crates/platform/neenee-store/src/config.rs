@@ -1009,11 +1009,12 @@ impl Config {
     }
 
     /// Persist config while leaving the on-disk `default_provider` /
-    /// `default_model` selection untouched. Used by session-scoped mutations
-    /// (the `/provider` switch, per-session edits) that carry an *effective*
-    /// `Config` already overlaid with a session's provider pin: writing that
-    /// pin to `config.toml` would leak one session's choice into every other
-    /// concurrent session and the next fresh session.
+    /// `default_model` selection untouched. Used by mutations that are not
+    /// selection changes (favorites, provider metadata edits, TUI
+    /// preferences) so they never leak the in-memory selection — which may
+    /// carry a resumed session's provider pin — into `config.toml`. The
+    /// `/provider` switch itself calls [`Config::save`]: updating the global
+    /// default is its whole point.
     ///
     /// The lock + disk read makes this cross-process safe: another `neenee`
     /// writing its own selection concurrently is not clobbered, and this

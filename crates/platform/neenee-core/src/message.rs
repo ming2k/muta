@@ -126,6 +126,22 @@ pub enum InjectionKind {
     /// A user-role image companion projected from a tool result for providers
     /// that accept image inputs. Site: `conversation_context::tool_image`.
     ToolImage,
+    /// An **authoritative** harness directive wrapped in a `<system-reminder>`
+    /// block. Unlike the stable head `SystemPrompt`, a system reminder is
+    /// event-driven and mid-turn: it carries a transient, situation-specific
+    /// instruction the model MUST follow (it may override normal behavior —
+    /// e.g. "you are now read-only"). Distinct from `UntrustedDirective`,
+    /// which wraps data, not authority. Site:
+    /// `conversation_context::system_reminder::inject`. (ADR-0068.)
+    SystemReminder,
+    /// User-provided or foreign task data wrapped in an `<untrusted_…>` block
+    /// (objective text, pasted content) that the model must treat as **data,
+    /// not instructions** — it must not override system messages, tool schemas,
+    /// or permission rules. The escaping + tag is owned by the reminder layer,
+    /// which stamps this provenance so a transcript can distinguish "authoritative
+    /// directive" from "untrusted data" without string-sniffing. Site:
+    /// `conversation_context::system_reminder::inject`. (ADR-0068.)
+    UntrustedDirective,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -693,6 +709,8 @@ mod tests {
             InjectionKind::LoopReviewNudge,
             InjectionKind::CommandEcho,
             InjectionKind::ToolImage,
+            InjectionKind::SystemReminder,
+            InjectionKind::UntrustedDirective,
         ];
         let mut forms = Vec::new();
         for kind in cases {

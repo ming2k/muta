@@ -1652,6 +1652,7 @@ pub(super) async fn run_app_loop(
                     Modal::OauthPending => {
                         let title: &'static str = match app.custom_auth {
                             neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
+                            neenee_core::ChannelAuth::CopilotOAuth => "Copilot",
                             neenee_core::ChannelAuth::XaiOAuth => "xAI",
                             neenee_core::ChannelAuth::ApiKey => "OAuth",
                         };
@@ -2581,9 +2582,12 @@ pub(super) async fn run_app_loop(
                                     app.restore_model_draft();
                                     app.active_modal = Modal::None;
                                 } else if app.provider_row_auth(&id).is_oauth() {
+                                    let auth = app.provider_row_auth(&id);
                                     let _ = app.tx.send(AgentRequest::ConnectProvider {
                                         id,
-                                        method: neenee_core::LoginMethod::Browser,
+                                        method: auth
+                                            .default_login_method()
+                                            .unwrap_or(neenee_core::LoginMethod::Device),
                                     });
                                     app.restore_model_draft();
                                     app.active_modal = Modal::None;
@@ -2653,7 +2657,10 @@ pub(super) async fn run_app_loop(
                         if template.oauth_first() {
                             app.begin_oauth_add(template);
                             let _ = app.tx.send(AgentRequest::AuthorizeOAuth {
-                                method: neenee_core::LoginMethod::Browser,
+                                method: template
+                                    .auth
+                                    .default_login_method()
+                                    .unwrap_or(neenee_core::LoginMethod::Device),
                                 auth: template.auth,
                             });
                         } else {
@@ -2669,6 +2676,20 @@ pub(super) async fn run_app_loop(
                         app.oauth_pending_message.clear();
                         app.oauth_pending_error = None;
                         app.open_provider_template_chooser();
+                    }
+                }
+                input::InputAction::CopyOauthContent { target } => {
+                    // Copy the OAuth pending sheet's primary field to the
+                    // system clipboard. Mouse drag-select does not reach modal
+                    // body text (mouse events are captured), so these are the
+                    // in-app copy affordances. Nothing else changes: the sheet
+                    // stays open and keeps waiting for authorization.
+                    let text = match target {
+                        input::OauthCopyTarget::UserCode => app.oauth_pending_user_code.clone(),
+                        input::OauthCopyTarget::Url => app.oauth_pending_url.clone(),
+                    };
+                    if !text.is_empty() {
+                        clipboard_ops::spawn_clipboard_copy(&copy_tx, copy_pending.clone(), text);
                     }
                 }
                 input::InputAction::CancelProviderTemplate => {

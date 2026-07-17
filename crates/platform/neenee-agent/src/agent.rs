@@ -1422,6 +1422,14 @@ impl Agent {
         self.pursuit_state.iterations()
     }
 
+    /// A snapshot of the per-pursuit runtime counters (turns / tokens /
+    /// wall-clock), zeroed when the pursuit is armed and accumulated each
+    /// continuation round (ADR-0069). Used to surface usage in the stop
+    /// summary and to enforce [`neenee_core::PursuitBudget`].
+    pub fn pursuit_stats(&self) -> PursuitStats {
+        self.pursuit_state.stats()
+    }
+
     /// Restore the stop-gate runtime view (armed + iterations) from persisted
     /// state on resume (ADR-0048 Phase 2). Does not reset the iteration
     /// counter — an armed pursuit mid-iteration resumes with its count intact.
@@ -1456,6 +1464,46 @@ impl Agent {
             )
             .await
             .map(|prompt| (prompt, InjectionKind::Hook(HookEventKind::Stop)))
+    }
+
+    /// Book the just-finished turn's usage into the active pursuit's runtime
+    /// stats and, when a budget is ≥75% consumed, inject a convergence reminder
+    /// (ADR-0069). Called at every turn-exit gate so each continuation round and
+    /// the final round are accounted. No-op when no pursuit is armed.
+    ///
+    /// The reminder rides the [`<system-reminder>`] authoritative channel so the
+    /// model treats "converge now" as a directive, not a suggestion — mirroring
+    /// kimi-code's budget-band guidance.
+    ///
+    /// [`<system-reminder>`]: crate::conversation_context::system_reminder
+    fn book_pursuit_turn(&self, state: &TurnState, messages: &mut Vec<Message>, duration_ms: u64) {
+        if !self.pursuit_state.is_armed() {
+            return;
+        }
+        self.pursuit_state.book_turn(state.token_usage, duration_ms);
+        let stats = self.pursuit_state.stats();
+        // Convergence guidance: once any budget axis crosses 75%, steer the
+        // model toward finishing rather than starting new optional work. Fires
+        // once per crossing band to avoid repeating the same nudge each round.
+        if let Some(pursuit) = self.pursuit_state.get()
+            && let Some(budget) = pursuit.budget
+            && let Some(fraction) =
+                budget.usage_fraction(stats.turns, stats.tokens, stats.wall_clock_ms)
+            && (0.75..1.0).contains(&fraction)
+        {
+            crate::conversation_context::inject_reminders(messages, |sink| {
+                sink.remind(format!(
+                    "Pursuit budget is {:.0}% consumed (turns {}, tokens {}, {:.0}s). \
+                     Converge on the objective: finish in-flight work, verify it, and \
+                     emit {marker} rather than starting new optional work.",
+                    fraction * 100.0,
+                    stats.turns,
+                    stats.tokens,
+                    stats.wall_clock_ms as f64 / 1000.0,
+                    marker = crate::PURSUIT_COMPLETE_MARKER,
+                ));
+            });
+        }
     }
 
     pub fn thread_id(&self) -> Option<String> {
@@ -2186,6 +2234,9 @@ impl Agent {
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
+                // Book the turn's usage + maybe inject a convergence reminder
+                // before forcing another round (ADR-0069).
+                self.book_pursuit_turn(&state, messages, turn_start.elapsed().as_millis() as u64);
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
@@ -2212,10 +2263,18 @@ impl Agent {
             // Turn end: clear every scoped disable so the toolset is fresh for
             // the next user request.
             self.restore_scoped_turn_end();
+            let duration_ms = turn_start.elapsed().as_millis() as u64;
+            // Book the final turn's usage into the pursuit (ADR-0069). When the
+            // gate already booked a continuation round above this is a no-op
+            // double-count guard only if the gate did not fire — so we book only
+            // when the gate did not already book this round.
+            if !continue_round {
+                self.book_pursuit_turn(&state, messages, duration_ms);
+            }
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: state.token_usage,
-                duration_ms: turn_start.elapsed().as_millis() as u64,
+                duration_ms,
             });
         }
     }
@@ -2555,6 +2614,11 @@ impl Agent {
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
+                self.book_pursuit_turn(
+                    &turn.state,
+                    messages,
+                    turn.started_at.elapsed().as_millis() as u64,
+                );
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
@@ -2582,10 +2646,14 @@ impl Agent {
             // Turn end: clear every scoped disable so the toolset is fresh for
             // the next user request.
             self.restore_scoped_turn_end();
+            let duration_ms = turn.started_at.elapsed().as_millis() as u64;
+            if !continue_round {
+                self.book_pursuit_turn(&turn.state, messages, duration_ms);
+            }
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: turn.state.token_usage,
-                duration_ms: turn.started_at.elapsed().as_millis() as u64,
+                duration_ms,
             });
         }
     }

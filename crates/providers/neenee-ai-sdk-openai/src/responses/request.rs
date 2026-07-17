@@ -246,15 +246,56 @@ fn flatten_tools(tool_specs: Option<&[Value]>) -> Option<Value> {
     }
 }
 
-/// The per-request auth + account headers for the Responses surface. Beyond the
-/// always-present `User-Agent`, the bearer is required and the ChatGPT account
-/// id is attached when known.
-pub fn headers(access_token: &str, account_id: Option<&str>) -> Vec<(&'static str, String)> {
+/// The per-request auth + provider headers for the Responses surface. Beyond
+/// the always-present `Authorization: Bearer`:
+/// - **ChatGPT mode** (`copilot == false`): the ChatGPT account id is attached
+///   as `ChatGPT-Account-Id` when known.
+/// - **Copilot mode** (`copilot == true`): GitHub Copilot's required headers
+///   are attached instead — `x-initiator` (treated as a user-initiated turn by
+///   default; the harness does not currently distinguish agent turns),
+///   `Openai-Intent: conversation-edits`, and `X-GitHub-Api-Version`. The
+///   ChatGPT account-id header is omitted. Vision turns additionally need
+///   `Copilot-Vision-Request: true`, but that depends on the request body
+///   (whether an `input_image` part is present), so it is injected by the
+///   provider's request builder (see [`has_input_image`]) rather than this
+///   header list.
+pub fn headers(
+    access_token: &str,
+    account_id: Option<&str>,
+    copilot: bool,
+) -> Vec<(&'static str, String)> {
     let mut h = vec![("Authorization", format!("Bearer {access_token}"))];
+    if copilot {
+        h.push(("x-initiator", "user".to_string()));
+        h.push(("Openai-Intent", "conversation-edits".to_string()));
+        h.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
+        return h;
+    }
     if let Some(id) = account_id.filter(|id| !id.trim().is_empty()) {
         h.push(("ChatGPT-Account-Id", id.to_string()));
     }
     h
+}
+
+/// Whether a Responses request body carries an image input, i.e. any
+/// `input_image` content part anywhere in the `input` items array. Copilot
+/// requires `Copilot-Vision-Request: true` on such turns; this scan is the
+/// signal the provider's request builder uses to set it. Defensive: a missing
+/// or non-array `input` is treated as no image.
+pub fn has_input_image(body: &Value) -> bool {
+    body.get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|parts| {
+                        parts.iter().any(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("input_image")
+                        })
+                    })
+            })
+        })
 }
 
 #[cfg(test)]
@@ -367,11 +408,57 @@ mod tests {
 
     #[test]
     fn headers_include_account_id_when_present() {
-        let h = headers("tok", Some("acct-1"));
+        let h = headers("tok", Some("acct-1"), false);
         assert_eq!(h[0].0, "Authorization");
         assert_eq!(h[1].0, "ChatGPT-Account-Id");
         assert_eq!(h[1].1, "acct-1");
         // No account id → no header.
-        assert_eq!(headers("tok", None).len(), 1);
+        assert_eq!(headers("tok", None, false).len(), 1);
+    }
+
+    #[test]
+    fn headers_inject_copilot_set_and_drop_account_id() {
+        // Copilot mode: the account id is ignored and Copilot's required
+        // headers replace the ChatGPT account-id header.
+        let h = headers("tok", Some("acct-1"), true);
+        assert_eq!(h[0].0, "Authorization");
+        assert_eq!(h[0].1, "Bearer tok");
+        let names: Vec<&str> = h.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            [
+                "Authorization",
+                "x-initiator",
+                "Openai-Intent",
+                "X-GitHub-Api-Version"
+            ]
+        );
+        assert_eq!(h[1].1, "user");
+        assert_eq!(h[2].1, "conversation-edits");
+        assert_eq!(h[3].1, "2026-06-01");
+        // No ChatGPT-Account-Id leaks through in Copilot mode.
+        assert!(h.iter().all(|(n, _)| *n != "ChatGPT-Account-Id"));
+    }
+
+    #[test]
+    fn has_input_image_detects_image_parts() {
+        let with_image = json!({
+            "input": [
+                {"role": "user", "content": [
+                    {"type": "input_text", "text": "what is this?"},
+                    {"type": "input_image", "image_url": "data:..."}
+                ]}
+            ]
+        });
+        assert!(has_input_image(&with_image));
+
+        let text_only = json!({
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        });
+        assert!(!has_input_image(&text_only));
+
+        // Defensive: a missing or non-array input is no image.
+        assert!(!has_input_image(&json!({"model": "x"})));
+        assert!(!has_input_image(&json!({"input": "not-an-array"})));
     }
 }

@@ -54,5 +54,6 @@ pub fn read_legacy_pursuit(db_path: &Path, session_id: &str) -> Option<Pursuit> 
     Some(Pursuit {
         objective,
         is_complete: status == "complete",
+        ..Default::default()
     })
 }

@@ -1233,6 +1233,103 @@ mod tests {
     }
 
     #[test]
+    fn expanded_edit_diff_height_is_scroll_independent() {
+        // Regression: the expanded edit-diff renderer must account every
+        // logical row in `content_lines` even when the viewport clips the
+        // body mid-hunk. An early return once the viewport filled made the
+        // measured height depend on the scroll offset; the app loop derives
+        // `max_scroll` from it, so the scroll position oscillated and the
+        // frame flickered during the animation heartbeat.
+        let theme = Theme::default();
+
+        // A completed edit whose diff body is several times taller than the
+        // viewport, so mid-range scroll offsets clip inside the hunk rows.
+        let old: String = (1..=60).map(|i| format!("let v{i} = {i};\n")).collect();
+        let new: String = (1..=60)
+            .map(|i| format!("let v{i} = {};\n", i * 10))
+            .collect();
+        let mut m = TranscriptMessage::tool_step(
+            "call_test",
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"…","new_string":"…"}"#,
+        );
+        let structured = neenee_core::ToolOutput::Patch {
+            path: "a.rs".into(),
+            op: neenee_core::PatchOp::Edit,
+            old,
+            new,
+            start_line: 0,
+        };
+        m.finish_tool_step("call_test", structured.to_text(), structured, 0);
+        if let crate::document::MessageKind::ToolStep { expanded, .. } = &mut m.kind {
+            *expanded = true;
+        }
+        let messages = vec![m];
+
+        let (width, height) = (80u16, 24u16);
+        let measure = |scroll: u16, cache: &mut HeightCache| -> usize {
+            let mut terminal = neenee_tui::TestTerminal::new(width, height);
+            let mut layout_map = LayoutMap::new();
+            let mut lines = 0usize;
+            terminal.draw(|f| {
+                let r = draw_transcript(
+                    f,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity: "",
+                        spinner_phase: 0,
+                        input: "",
+                        byte_cursor: 0,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::render::layout::Strategy::default(),
+                        height_cache: Some(cache),
+                    },
+                );
+                lines = r.content_lines;
+            });
+            lines
+        };
+
+        let mut cache = HeightCache::default();
+        let at_top = measure(0, &mut cache);
+        assert!(
+            at_top > height as usize,
+            "the diff must overflow the viewport for this test to mean anything"
+        );
+        // Every offset that clips into the diff body must report the same
+        // total height, through both cold and warm height-cache paths.
+        for scroll in [1u16, 7, 20, 40, 60] {
+            assert_eq!(
+                measure(scroll, &mut cache),
+                at_top,
+                "content_lines must not depend on the scroll offset (scroll = {scroll})"
+            );
+        }
+        let mut fresh_cache = HeightCache::default();
+        assert_eq!(
+            measure(20, &mut fresh_cache),
+            at_top,
+            "a cold height cache must measure the same height as a warm one"
+        );
+    }
+
+    #[test]
     fn completed_diff_cache_survives_height_invalidation_and_resize() {
         let mut cache = HeightCache::default();
         let first = cache.diff_cache.patch(42, "old", "new", 10);

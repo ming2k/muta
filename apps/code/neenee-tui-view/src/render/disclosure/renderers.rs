@@ -1361,6 +1361,12 @@ fn bash_command_for(structured: Option<&neenee_core::ToolOutput>, arguments: &st
 /// with dual old/new line-number gutters and colored change signs. Hunk
 /// grouping and ranges are derived before rendering; this function only
 /// paints them and never infers source semantics from presentation rows.
+///
+/// Every logical row goes through [`RenderCtx::paint`], which counts it in
+/// `content_lines` even when scroll-skip or viewport clip keeps it off
+/// screen. Undercounting here would make the measured step height (and thus
+/// `max_scroll`) depend on the scroll position, feeding back as jumpy scroll
+/// and flicker while the transcript animates.
 fn draw_diff_content(
     ctx: &mut RenderCtx<'_, '_>,
     hunks: &[DiffHunk],
@@ -1414,18 +1420,7 @@ fn draw_diff_content(
                 Style::default().bg(code_bg),
             ));
 
-            *ctx.content_lines += 1;
-            if *ctx.skip_rows > 0 {
-                *ctx.skip_rows = ctx.skip_rows.saturating_sub(1);
-            } else {
-                if *ctx.y >= ctx.area.y + ctx.area.height {
-                    return;
-                }
-                let line_rect = Rect::new(ctx.area.x, *ctx.y, ctx.area.width, 1);
-                ctx.frame
-                    .render_widget(Paragraph::new(Line::from(spans)), line_rect);
-                *ctx.y += 1;
-            }
+            ctx.paint(Line::from(spans));
         }
 
         for line in &hunk.lines {
@@ -1497,18 +1492,7 @@ fn draw_diff_content(
                 }
                 let used = indent + gutter_cols + sign_w + wl.text.width();
                 spans.push(Span::styled(padded_tail(ctx.full_width, used), pad));
-                let row = Line::from(spans);
-                *ctx.content_lines += 1;
-                if *ctx.skip_rows > 0 {
-                    *ctx.skip_rows = ctx.skip_rows.saturating_sub(1);
-                    continue;
-                }
-                if *ctx.y >= ctx.area.y + ctx.area.height {
-                    return;
-                }
-                let line_rect = Rect::new(ctx.area.x, *ctx.y, ctx.area.width, 1);
-                ctx.frame.render_widget(Paragraph::new(row), line_rect);
-                *ctx.y += 1;
+                ctx.paint(Line::from(spans));
             }
         }
     }

@@ -1328,8 +1328,15 @@ impl App {
     pub fn begin_oauth_add(&mut self, template: &ProviderTemplate) {
         self.seed_custom_provider_from_template(template);
         self.awaiting_oauth_add = true;
-        self.oauth_pending_message =
-            "Complete authorization in your browser (or open the link below).".to_string();
+        // The default message mirrors the provider's default login method: the
+        // device flow (Copilot/xAI/ChatGPT default) prints a URL + user code,
+        // while the browser flow opens a loopback callback. The auth runner
+        // overwrites this with the live URL/code as soon as the device-code
+        // request returns.
+        self.oauth_pending_message = match template.auth.default_login_method() {
+            Some(neenee_core::LoginMethod::Device) => "Requesting device code…".to_string(),
+            _ => "Complete authorization in your browser (or open the link below).".to_string(),
+        };
         self.oauth_pending_url.clear();
         self.oauth_pending_user_code.clear();
         self.oauth_pending_error = None;
@@ -1353,6 +1360,7 @@ impl App {
         self.custom_edit_id = None;
         let default_name = match self.custom_auth {
             neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
+            neenee_core::ChannelAuth::CopilotOAuth => "Copilot",
             _ => "xAI",
         };
         self.custom_name = default_name.to_string();

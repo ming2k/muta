@@ -401,6 +401,7 @@ pub fn activity() -> io::Result<()> {
     let pursuit = Pursuit {
         objective: "Land the component showcase framework".into(),
         is_complete: false,
+        ..Default::default()
     };
     let todos = TodoList {
         items: vec![

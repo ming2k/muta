@@ -1539,12 +1539,28 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
                         status: "interrupted".to_string(),
                     }))
                     .await;
-                let _ = context.tx.send(turn(
-                    &context.session_id,
-                    RoundEvent::Text(
-                        "Pursuit stopped: safety cap reached or no completion signal.".to_string(),
-                    ),
-                ));
+                // Surface *why* the loop stopped when a budget tripped
+                // (ADR-0060), plus a usage summary so the cost is visible.
+                let stats = context.agent.pursuit_stats();
+                let reason = context
+                    .agent
+                    .get_pursuit()
+                    .and_then(|p| p.terminal_reason)
+                    .unwrap_or_else(|| "safety cap reached or no completion signal".to_string());
+                let summary = if stats.turns > 0 {
+                    format!(
+                        "Pursuit stopped: {reason} ({} turn{}, {} tokens, {:.0}s).",
+                        stats.turns,
+                        if stats.turns == 1 { "" } else { "s" },
+                        stats.tokens,
+                        stats.wall_clock_ms as f64 / 1000.0
+                    )
+                } else {
+                    format!("Pursuit stopped: {reason}.")
+                };
+                let _ = context
+                    .tx
+                    .send(turn(&context.session_id, RoundEvent::Text(summary)));
             }
             Err(HarnessError::Interrupted) => {
                 let _ = context

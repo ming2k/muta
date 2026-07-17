@@ -193,6 +193,22 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_core::ChannelAuth::ChatGptOAuth,
     },
     ProviderTemplate {
+        id: "copilot-oauth",
+        label: "Copilot (login)",
+        description: "GPT-5.x via GitHub Copilot subscription (device OAuth)",
+        protocol: "openai",
+        models: neenee_providers::COPILOT_BUILTIN_MODELS,
+        // Copilot's Responses backend is fixed; the editor hides the Base URL
+        // field. Login is the GitHub device flow (code entered at
+        // github.com/login/device), so it works headless.
+        needs_url: false,
+        url_hint: "https://api.githubcopilot.com/responses",
+        needs_model: false,
+        default_url: Some("https://api.githubcopilot.com/responses"),
+        user_agent: None,
+        auth: neenee_core::ChannelAuth::CopilotOAuth,
+    },
+    ProviderTemplate {
         id: "kimi-code",
         label: "Kimi Code",
         description: "Moonshot Kimi coding-plan endpoint",
@@ -729,6 +745,7 @@ mod tests {
             "DeepSeek",
             "xAI OAuth",
             "ChatGPT (login)",
+            "Copilot (login)",
             "Kimi Code",
             "ZAI Code",
             "OpenCode Go",

@@ -137,11 +137,43 @@ pub const CHATGPT: OAuthConfig = OAuthConfig {
     device_redirect_uri: "https://auth.openai.com/deviceauth/callback",
 };
 
-/// Resolve a config by its `auth.toml` provider-id key (`"xai"` / `"chatgpt"`).
+/// GitHub Copilot subscription OAuth client. neenee reuses its own registered
+/// GitHub OAuth App (`Ov23liqD3VLLXQ7XZkMJ`, callback left as the project
+/// homepage since the device flow never invokes it). The flow is plain RFC 8628
+/// — `read:user` scope is all Copilot's token endpoint needs to mint a
+/// subscription-scoped token; the returned access token is sent verbatim as a
+/// bearer to `api.githubcopilot.com` (the Responses backend URL is wired in the
+/// catalog layer, not here). The token does not expire on a schedule (GitHub
+/// returns no `expires_in`), so the refresh path is effectively a no-op — it
+/// stays valid until the user revokes the app.
+pub const COPILOT: OAuthConfig = OAuthConfig {
+    provider_id: "copilot",
+    client_id: "Ov23liqD3VLLXQ7XZkMJ",
+    authorize_url: "https://github.com/login/oauth/authorize",
+    token_url: "https://github.com/login/oauth/access_token",
+    device_authorization_url: "https://github.com/login/device/code",
+    grant_type_device: "urn:ietf:params:oauth:grant-type:device_code",
+    scope: "read:user",
+    extra_authorize_params: &[],
+    oauth_host: "127.0.0.1",
+    // Unused by the device flow; kept consistent with the other configs. A
+    // Copilot browser flow is not offered, so this port is never bound.
+    oauth_port: 42195,
+    oauth_path: "/callback",
+    redirect_host: "127.0.0.1",
+    send_nonce: false,
+    device_flow: DeviceFlow::Rfc8628,
+    device_token_url: "https://github.com/login/oauth/access_token",
+    device_redirect_uri: "",
+};
+
+/// Resolve a config by its `auth.toml` provider-id key (`"xai"` / `"chatgpt"`
+/// / `"copilot"`).
 pub fn config_by_provider_id(id: &str) -> Option<&'static OAuthConfig> {
     match id {
         "xai" => Some(&XAI),
         "chatgpt" => Some(&CHATGPT),
+        "copilot" => Some(&COPILOT),
         _ => None,
     }
 }
@@ -177,6 +209,25 @@ mod tests {
             config_by_provider_id("chatgpt").unwrap().provider_id,
             "chatgpt"
         );
+        assert_eq!(
+            config_by_provider_id("copilot").unwrap().provider_id,
+            "copilot"
+        );
         assert!(config_by_provider_id("nope").is_none());
+    }
+
+    #[test]
+    fn copilot_speaks_rfc8628_with_read_user_scope() {
+        // Copilot uses the standard device flow (not ChatGPT's JSON variant)
+        // and the minimal scope the Copilot token endpoint requires.
+        assert_eq!(COPILOT.device_flow, DeviceFlow::Rfc8628);
+        assert_eq!(COPILOT.scope, "read:user");
+        assert_eq!(
+            COPILOT.device_authorization_url,
+            "https://github.com/login/device/code"
+        );
+        // The polled token endpoint equals the regular token endpoint for
+        // RFC 8628 (unlike ChatGPT, which polls a separate deviceauth/token).
+        assert_eq!(COPILOT.device_token_url, COPILOT.token_url);
     }
 }

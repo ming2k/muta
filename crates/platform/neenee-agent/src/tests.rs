@@ -314,6 +314,7 @@ fn active_pursuit(objective: &str) -> Pursuit {
     Pursuit {
         objective: objective.to_string(),
         is_complete: false,
+        ..Default::default()
     }
 }
 

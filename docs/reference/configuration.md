@@ -90,7 +90,8 @@ window = 8
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `default_provider` | `""` (empty) | Provider id activated at startup and after `/provider` reset; empty leaves the choice to the `/provider` picker |
+| `default_provider` | `""` (empty) | Provider id for the **fresh-session default**: used at startup and updated by a `/provider` switch so the next launch follows it; empty leaves the choice to the `/provider` picker. A switch also pins the selection to the session so resume restores it |
+| `default_model` | `""` (empty) | Active model id within the selected provider, written by a `/provider` switch or add-provider flow alongside `default_provider`. The startup migration seeds a provider instance's default channel from it but no longer strips it |
 | `provider_retry_max_attempts` | `6` | Max retry attempts for a transient provider error within a turn |
 | `provider_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
 | `provider_retry_max_ms` | `30000` | Cap on the backoff delay, in milliseconds |

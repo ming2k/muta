@@ -27,13 +27,25 @@ pub enum ChannelAuth {
     /// (`https://chatgpt.com/backend-api/codex/responses`). Refreshed at
     /// activate/switch time.
     ChatGptOAuth,
+    /// GitHub Copilot subscription: resolve the live OAuth access token from
+    /// `auth.toml` (key `"copilot"`) and route inference to the Copilot
+    /// Responses backend (`https://api.githubcopilot.com/responses`). The token
+    /// is the GitHub OAuth access token from the RFC 8628 device flow; it does
+    /// not expire on a schedule, so the refresh path is a no-op until the user
+    /// revokes the app. Copilot-specific request headers
+    /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`) are injected by
+    /// the Responses provider when it detects this auth mode.
+    CopilotOAuth,
 }
 
 impl ChannelAuth {
     /// Whether this variant resolves its bearer from the OAuth token store
     /// rather than from an API key. Covers every subscription/OAuth provider.
     pub fn is_oauth(self) -> bool {
-        matches!(self, ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth)
+        matches!(
+            self,
+            ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth | ChannelAuth::CopilotOAuth
+        )
     }
 
     /// The `auth.toml` provider-id key for this OAuth variant, or `None` for
@@ -42,6 +54,24 @@ impl ChannelAuth {
         match self {
             ChannelAuth::XaiOAuth => Some("xai"),
             ChannelAuth::ChatGptOAuth => Some("chatgpt"),
+            ChannelAuth::CopilotOAuth => Some("copilot"),
+            ChannelAuth::ApiKey => None,
+        }
+    }
+
+    /// The default login flow for this OAuth provider. **Device flow is the
+    /// default** for every subscription provider: it works headless (SSH, VPS,
+    /// Docker) and needs no registered browser callback URL, so it cannot hit
+    /// "redirect_uri is not associated with this application". The browser flow
+    /// remains available as an opt-in only when the provider's callback is
+    /// registered and the user is on a desktop with a reachable loopback port.
+    ///
+    /// Returns `None` for API-key channels (no OAuth login to run).
+    pub fn default_login_method(self) -> Option<LoginMethod> {
+        match self {
+            ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth | ChannelAuth::CopilotOAuth => {
+                Some(LoginMethod::Device)
+            }
             ChannelAuth::ApiKey => None,
         }
     }
@@ -59,4 +89,35 @@ pub enum LoginMethod {
     /// Browser loopback OAuth — local desktop. Binds `127.0.0.1:56121` and
     /// opens the authorize URL.
     Browser,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_providers_default_to_device_flow() {
+        // The device flow is the universal default for every subscription
+        // provider: it works headless and needs no registered callback URL, so
+        // it cannot hit "redirect_uri is not associated with this application".
+        // This guards against the TUI regressing back to a hardcoded browser
+        // flow that breaks Copilot (whose callback is not a loopback URL).
+        assert_eq!(
+            ChannelAuth::CopilotOAuth.default_login_method(),
+            Some(LoginMethod::Device)
+        );
+        assert_eq!(
+            ChannelAuth::ChatGptOAuth.default_login_method(),
+            Some(LoginMethod::Device)
+        );
+        assert_eq!(
+            ChannelAuth::XaiOAuth.default_login_method(),
+            Some(LoginMethod::Device)
+        );
+    }
+
+    #[test]
+    fn api_key_channels_have_no_login_method() {
+        assert_eq!(ChannelAuth::ApiKey.default_login_method(), None);
+    }
 }

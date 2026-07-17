@@ -40,6 +40,7 @@ before the individual docs.
 | [Skills](agent-design/skills.md) | On-demand domain expertise: the catalog/body two-channel model, the source/priority cascade, and explicit versus implicit invocation |
 | [Lifecycle hooks](agent-design/hooks.md) | User-configured actions on the agent's lifecycle events (PreToolUse, Stop, SessionStart, PreCompact…): one event axis with capability implied by the event |
 | [Token accounting](agent-design/token-accounting.md) | How token counts are measured: upstream `usage` preferred with a char-class estimation fallback, the reported-vs-estimated ledger, and the accuracy report modal |
+| [Prompt caching](agent-design/prompt-caching.md) | How prompt caching saves cost across providers: the three strategies (`Breakpoints` / `SessionKey` / `Automatic`), the per-protocol JSON paths, and the single rule that keeps cache savings honest (no inline reads) |
 
 
 ## Provider protocol and UI

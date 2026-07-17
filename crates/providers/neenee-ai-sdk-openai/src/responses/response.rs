@@ -20,24 +20,32 @@ use serde_json::Value;
 /// `total_tokens`) into a [`TokenUsage`]. Returns `None` when absent or without
 /// numeric fields. The Responses API reports reasoning tokens under
 /// `output_tokens_details.reasoning_tokens`; they are folded into the
-/// completion count (mirroring how chat-completions reports them).
+/// completion count (mirroring how chat-completions reports them). Its
+/// auto-cache discount surfaces as `input_tokens_details.cached_tokens` and is
+/// surfaced in [`TokenUsage::cache_read_input_tokens`].
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
     let input = usage["input_tokens"].as_i64();
     let output = usage["output_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
     let prompt = input;
     let completion = output.or_else(|| total.zip(prompt).map(|(t, p)| (t - p).max(0)));
+    // Route cache-read accounting through the shared helper so the cache
+    // policy is enforced in one place (ADR-0067). The Responses API hides the
+    // discount in `input_tokens_details.cached_tokens`, which the helper reads.
+    let cached = neenee_core::cache::read_cached_tokens(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,
             completion_tokens: c,
             total_tokens: total.unwrap_or(p + c),
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
         _ => total.map(|t| TokenUsage {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: t,
+            cache_read_input_tokens: cached.unwrap_or(0),
             ..Default::default()
         }),
     }
@@ -436,5 +444,18 @@ mod tests {
             }
             _ => panic!("expected reasoning delta"),
         }
+    }
+
+    #[test]
+    fn usage_surfaces_responses_cached_tokens_as_read() {
+        let u = usage(&serde_json::json!({
+            "input_tokens": 800,
+            "output_tokens": 40,
+            "input_tokens_details": { "cached_tokens": 500 }
+        }))
+        .unwrap();
+        assert_eq!(u.prompt_tokens, 800);
+        assert_eq!(u.cache_read_input_tokens, 500);
+        assert_eq!(u.cache_creation_input_tokens, 0);
     }
 }
