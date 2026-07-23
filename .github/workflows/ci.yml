@@ -18,13 +18,6 @@ env:
   # reproducible, cache-friendly CI.
   RUSTFLAGS: "-D warnings"
 
-# Workspace-selection policy: `neenee-quant` and `neenee-quant-gui` are still
-# under active development and are explicitly excluded from compile, test,
-# documentation, and coverage jobs below. They remain workspace members (so
-# they inherit shared dependencies, profiles, and lints), while the cheap fmt
-# job covers every member without compiling native or optional dependencies.
-# When a crate is ready to be gated, drop its exclusions from those jobs.
-
 # Least privilege: everything below is read-only by default. Jobs that need
 # more (the audit job posts a check run) widen their own scope.
 permissions:
@@ -32,13 +25,10 @@ permissions:
 
 jobs:
   # First line of defense: the committed Cargo.lock must resolve against
-  # Cargo.toml *without* any local path override. The optics packages (iris,
-  # flux, ...) are git deps in Cargo.toml but get rewritten to source-less
-  # path entries when Cargo.lock is regenerated with this repo's gitignored
-  # .cargo/config.toml patch active — and a lock in that state makes every
-  # later `--locked` step fail with "cannot update the lock file". This job
-  # catches that in ~20s instead of at the first compile step. It needs
-  # network access to fetch the pinned git rev, so it can't use --offline.
+  # Cargo.toml. A `cargo fetch --locked` fails (exit 101) if Cargo.lock is out
+  # of sync with Cargo.toml; a clean run proves the lock is committable as-is.
+  # This catches drift in ~20s instead of at the first compile step, and it
+  # needs network access to fetch git deps, so it can't use --offline.
   lockfile:
     name: Lockfile resolves (--locked)
     runs-on: ubuntu-latest
@@ -74,7 +64,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # -D warnings comes from the workflow-level RUSTFLAGS.
-      - run: cargo clippy --workspace --all-targets --locked --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo clippy --workspace --all-targets --locked
 
   check:
     name: Check (${{ matrix.os }})
@@ -88,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets --locked --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo check --workspace --all-targets --locked
 
   test:
     name: Test (${{ matrix.os }})
@@ -102,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --locked --no-fail-fast --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo test --workspace --locked --no-fail-fast
 
   msrv:
     name: MSRV (1.95)
@@ -119,7 +109,7 @@ jobs:
         with:
           key: msrv-1.95
       # `--locked` guarantees the Cargo.lock resolves under this toolchain.
-      - run: cargo check --workspace --all-targets --locked --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo check --workspace --all-targets --locked
 
   doc:
     name: Docs
@@ -127,7 +117,7 @@ jobs:
     timeout-minutes: 30
     # Treat rustdoc warnings (broken intra-doc links, etc.) as failures so the
     # job can't quietly regress. The one prior broken link (`EXPLORE`) was fixed
-    # in `crates/platform/neenee-agent/src/task_tool.rs`.
+    # in `crates/neenee-agent/src/task_tool.rs`.
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
@@ -135,7 +125,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Build docs for the whole workspace; catches hard rustdoc failures.
-      - run: cargo doc --workspace --no-deps --document-private-items --locked --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo doc --workspace --no-deps --document-private-items --locked
 
   coverage:
     name: Coverage
@@ -160,8 +150,8 @@ jobs:
       # Generate an lcov report and print a textual summary to the log.
       # `--exclude` mirrors the workspace-selection policy above so coverage
       # only tracks the crates we actually gate.
-      - run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info --exclude neenee-quant --exclude neenee-quant-gui
-      - run: cargo llvm-cov --workspace --locked --summary-only --exclude neenee-quant --exclude neenee-quant-gui
+      - run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - run: cargo llvm-cov --workspace --locked --summary-only
       # Persist the report as a workflow artifact so it can be downloaded and
       # viewed locally without wiring up a third-party coverage service.
       - uses: actions/upload-artifact@v4

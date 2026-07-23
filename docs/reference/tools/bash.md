@@ -1,6 +1,6 @@
 # `bash`
 
-`BashTool` (`crates/platform/neenee-tools/src/lib.rs`) executes a shell command. It is
+`BashTool` (`crates/neenee-tools/src/lib.rs`) executes a shell command. It is
 the one built-in tool in the `Execute` access tier — it runs commands but is
 not a file-mutation primitive, so it sits between pure reads and file writes.
 The permission broker still gates it (`Execute > Read`). It is excluded from

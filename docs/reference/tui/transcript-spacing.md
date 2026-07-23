@@ -13,10 +13,10 @@ In practice:
 
 | Layer | Owner | Do | Avoid |
 |-------|-------|----|-------|
-| Transcript horizontal gutter | `render/mod.rs::transcript_band_rect` | Apply `TRANSCRIPT_H_INSET` once before the stream is rendered | Re-applying the same gutter inside message components |
+| Transcript horizontal gutter | `view.rs::transcript_band_rect` | Apply `TRANSCRIPT_H_INSET` once before the stream is rendered | Re-applying the same gutter inside message components |
 | Inter-message / group spacing | `render/layout/*` through `Stream::gap` / `Stream::message_gap` | Add blank rows through the shared stream helpers so scroll height and clipping stay correct | Drawing ad-hoc blank rows in a component to separate it from the next message |
 | Component interior | The component renderer, using `render/design.rs` tokens | Use named tokens such as `USER_MESSAGE_TEXT_GAP_COLS`, `TOOL_STEP_BODY_TOP_GAP_ROWS`, `REASONING_TRACE_BLOCK_GAP_ROWS` | Hard-coding `2`, `1`, `repeat(2)`, or local `h_inset` values for visual spacing |
-| Shared one-line metadata | `render/components/meta_strip.rs` | Compose `turn N · time` / `round N · model · time` with `MetaStrip` | Rebuilding separator and tone spacing by hand |
+| Shared one-line metadata | `components/meta_strip.rs` | Compose `turn N · time` / `round N · model · time` with `MetaStrip` | Rebuilding separator and tone spacing by hand |
 
 ## Horizontal gutter contract
 

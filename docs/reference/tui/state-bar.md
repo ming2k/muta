@@ -54,6 +54,6 @@ so it carries its meaning without any chrome.
 ## Source
 
 `draw_state_bar` in `render/chrome.rs`. The row's height and placement
-are resolved in `draw_transcript` (`render/mod.rs`) from
+are resolved in `draw_transcript` (`view.rs`) from
 `STATE_BAR_ROWS` (`render/design.rs`); the `unattended` flag arrives
 through `TranscriptView::unattended`.

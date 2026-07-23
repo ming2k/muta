@@ -1,12 +1,6 @@
 [workspace]
-members = [
-    "apps/code/*",
-    "apps/editor/*",
-    "apps/quant/*",
-    "crates/platform/*",
-    "crates/providers/*",
-]
-default-members = ["apps/code/neenee-code"]
+members = ["crates/*"]
+default-members = ["crates/neenee"]
 resolver = "2"
 
 [workspace.package]
@@ -42,12 +36,11 @@ inventory = "0.3"
 rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
-longport = { version = "4.3.3", features = ["blocking"] }
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is
 # pinned once here. `neenee-tui` is the in-house grid + diff rendering engine
-# (ADR-0038) and `neenee-code` consumes it.
+# (ADR-0038) and `neenee` consumes it.
 crossterm = { version = "0.29", features = ["event-stream"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
@@ -59,10 +52,6 @@ tracing-appender = "0.2"
 insta = "1.48"
 mockito = "1"
 tempfile = "3"
-
-# GUI members share one optics revision. Individual crates opt into it with
-# `optional = true` so headless workspace builds remain available.
-iris = { git = "https://github.com/ming2k/optics.git", rev = "0c9d4a2aa083f015addd7f012720015fc3f98de4" }
 
 # Workspace-wide lint policy (inherited by every member via `lints.workspace =
 # true`). `unwrap_used` / `expect_used` are *warnings*, not denies: keeping them

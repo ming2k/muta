@@ -2,13 +2,13 @@
 
 The neenee terminal UI is split into three layers — see
 [architecture.md](architecture.md) for the full picture. In short: the in-house
-[neenee-tui](../../../apps/code/neenee-tui/src/lib.rs) engine (ADR-0038) is a
+[neenee-tui-engine](../../../crates/neenee-tui-engine/src/lib.rs) engine (ADR-0038) is a
 retained cell grid with write-marks-dirty tracking, a back/front diff, and a
 crossterm backend; the **view layer**
-([neenee-tui-view](../../../apps/code/neenee-tui-view/src/lib.rs)) holds the widget
-tree (entry point `render/mod.rs`) and the semantic document model, rendering
+([neenee-tui-view](../../../crates/neenee-tui-view/src/lib.rs)) holds the widget
+tree (entry point `view.rs`) and the semantic document model, rendering
 *into* the engine's grid via `Frame::render_widget`; and the **app shell**
-(`apps/code/neenee-code/src/tui`) owns `App` state, the event loop, and input
+(`crates/neenee/src/tui`) owns `App` state, the event loop, and input
 mapping, driving the view layer through the borrowed `TranscriptView` seam.
 
 ## Frame layout
@@ -77,28 +77,28 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 See [architecture.md](architecture.md) for how these three groups depend on each
 other. Paths below are relative to each crate's `src/`.
 
-### View layer — `apps/code/neenee-tui-view/src/`
+### View layer — `crates/neenee-tui-view/src/`
 
 | File | Responsibility |
 |------|---------------|
-| `render/mod.rs` | Draw orchestration: `draw_transcript`, `TranscriptView`, `TranscriptRender`, `transcript_band_rect`, `TRANSCRIPT_H_INSET` |
+| `view.rs` | Draw orchestration: `draw_transcript`, `TranscriptView`, `TranscriptRender`, `transcript_band_rect`, `TRANSCRIPT_H_INSET` |
 | `render/design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
 | `render/theme.rs` | `Theme` (all color tokens) |
-| `render/primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |
-| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, question option rows, and one-line metadata strips (`MetaStrip`) |
-| `render/text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
-| `render/message_body.rs` | `draw_message_body` (markdown text, user panels, code blocks) |
-| `render/disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |
-| `render/disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
-| `render/disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
+| `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |
+| `components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, question option rows, and one-line metadata strips (`MetaStrip`) |
+| `text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
+| `message_body.rs` | `draw_message_body` (markdown text, user panels, code blocks) |
+| `disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |
+| `disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
+| `disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
 | `render/layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
-| `render/tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
+| `tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `render/composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
 | `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
-| `render/overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
+| `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `render/empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
-| `render/notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `render/components/notice.rs` |
-| `render/markdown_table.rs` | `build_table_render`, `shrink_column_widths` |
+| `notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `components/notice.rs` |
+| `markdown_table.rs` | `build_table_render`, `shrink_column_widths` |
 | `document.rs` | Document model: `TranscriptMessage`, `Block` enum, `MessageKind`, markdown parsing, `parse_arguments_kv` |
 | `layout.rs` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing |
 | `selection.rs` | `SelectionState`, `get_selected_text`, character-boundary snapping |
@@ -107,7 +107,7 @@ other. Paths below are relative to each crate's `src/`.
 | `modal.rs` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` |
 | `completion.rs` | Completion-menu data types: `Completion`, `CompletionKind` (matching logic stays in the shell) |
 
-### App shell — `apps/code/neenee-code/src/tui/`
+### App shell — `crates/neenee/src/tui/`
 
 | File | Responsibility |
 |------|---------------|

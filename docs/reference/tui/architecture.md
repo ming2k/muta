@@ -8,7 +8,7 @@ secretly reach into application state.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-tui  ·  ENGINE                                  (ADR-0038)     │
+│  neenee-tui-engine  ·  ENGINE                                  (ADR-0038)     │
 │  Retained cell grid · write-marks-dirty tracking · back/front diff ·   │
 │  crossterm backend · Frame / Rect / Layout / Span primitives.         │
 │  Knows nothing about neenee — pure terminal drawing.                  │
@@ -25,7 +25,7 @@ secretly reach into application state.
                           ▲  the shell fills in a borrowed
                           │  TranscriptView<'a> each frame
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-code::tui  ·  APP SHELL                                       │
+│  neenee::tui  ·  APP SHELL                                       │
 │  App state · event loop · input→action mapping · terminal lifecycle · │
 │  completion logic · clipboard · session wiring.                       │
 │  Owns the data; drives the view layer; depends on neenee-tui-view.    │
@@ -34,7 +34,7 @@ secretly reach into application state.
 
 ## The three layers
 
-### Engine — `apps/code/neenee-tui`
+### Engine — `crates/neenee-tui-engine`
 
 The in-house grid engine (ADR-0038). A retained 2-D cell grid with
 write-marks-dirty tracking, a back/front buffer diff, and a crossterm backend.
@@ -42,28 +42,31 @@ It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
 and friends. It has **no neenee dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `apps/code/neenee-tui-view`
+### View — `crates/neenee-tui-view`
 
 The widget layer and the semantic document model. Everything here is a pure
 function of borrowed data: it reads `neenee_core` domain types and a `Theme`
-and writes cells into the engine's grid. It depends on `neenee-tui` (to draw),
+and writes cells into the engine's grid. It depends on `neenee-tui-engine` (to draw),
 `neenee-core` (the domain types it renders), and `neenee-providers` (the model
-catalog the picker ranks). It **does not** depend on `neenee-code` — the
+catalog the picker ranks). It **does not** depend on `neenee` — the
 compiler enforces the one-way boundary.
+
+The drawing tree lives flat at the crate root, grouped by concern:
 
 | Module | Responsibility |
 |--------|----------------|
-| `render/` | The widget tree (transcript, steps, tools, overlays, chrome, composer). Entry point `render/mod.rs`. |
-| `render/components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
-| `document` | Semantic document model: `TranscriptMessage`, `Block`, `MessageKind`, markdown parsing. |
-| `layout` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing. |
-| `selection` | `SelectionState`, text/cell selection, character-boundary snapping. |
-| `fuzzy` | Fuzzy matcher used by the history / provider overlays. |
-| `providers` | Provider/model picker ranking + display helpers (`model_display_name`, …). |
-| `modal` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` (see below). |
-| `completion` | Completion-menu data types (`Completion`, `CompletionKind`) — the *matching logic* stays in the shell. |
+| `view.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
+| `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
+| `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
+| `tools/` | Per-tool-step renderers (bash, edit, read, grep, web, ask_user, diff, …). |
+| `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
+| `layout/` | Transcript arrangement strategies (`default` / `legacy`). |
+| `theme.rs` / `design.rs` | Color scheme + non-color design tokens (spacing, gutters, row counts). |
+| `chrome.rs` / `composer.rs` / `primitives.rs` / `text_layout.rs` / … | Drawing leaves: activity/state/hint bars, input composer, rect helpers, text wrapping. |
+| `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
+| `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
 
-### App shell — `apps/code/neenee-code/src/tui`
+### App shell — `crates/neenee/src/tui`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the
@@ -85,7 +88,7 @@ mutable state and drives the view layer once per frame. It depends on
 ## The seam — `TranscriptView<'a>`
 
 The shell and the view layer communicate through one borrowed struct,
-`render::TranscriptView<'a>`, that the event loop fills in each frame. It
+`view::TranscriptView<'a>`, that the event loop fills in each frame. It
 carries **only borrowed data** — `&[TranscriptMessage]`, `&SelectionState`,
 `&Theme`, scroll/activity/pursuit/todo snapshots — and crucially **no
 reference to `App`**. This is what keeps the view layer a pure rendering

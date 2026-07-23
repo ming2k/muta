@@ -1,0 +1,16 @@
+//! OpenAI wire protocols.
+//!
+//! Two surfaces live under the OpenAI umbrella, each in its own module:
+//!
+//! - [`chat`] — the OpenAI-compatible **chat-completions** surface
+//!   (`/v1/chat/completions`), served by OpenAI itself, OpenAI-compatible
+//!   relays, and GitHub Copilot's chat channel ([`OpenAiProvider`]).
+//! - [`responses`] — the OpenAI **Responses API** surface, spoken by the
+//!   ChatGPT subscription backend and the Copilot Responses channel
+//!   ([`ResponsesProvider`]).
+
+pub mod chat;
+pub mod responses;
+
+pub use chat::OpenAiProvider;
+pub use responses::ResponsesProvider;

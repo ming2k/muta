@@ -6,21 +6,23 @@ symbol, the symbol is backticked and never abbreviated.
 
 ## Execution model
 
-neenee names its two execution layers the inverse of most LLM-agent
-tooling: a **turn** is the user-perceived exchange (one submitted
-message and one final reply), and a **round** is one iteration of the
-ReAct loop inside it. See [Rounds and turns](../explanation/agent-design/rounds-and-turns.md)
-and [ADR-0047](../adr/0047-round-contains-turn-vocabulary.md).
+neenee names its two execution layers after
+[ADR-0047](../adr/0047-round-contains-turn-vocabulary.md): a **round** is the
+user-perceived exchange (one submitted message and one final reply), and a
+**turn** is one iteration of the ReAct loop inside it. This is the inverse of
+the pre-ADR-0047 convention, which older documents may still use. See
+[Rounds and turns](../explanation/agent-design/rounds-and-turns.md).
 
 | Term | Definition |
 |------|------------|
-| **turn** | The unit the user perceives: one submitted message and one final reply. Opens on submit, closes when the agent emits a final assistant message carrying no tool call. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
-| **round** | One pass through the ReAct loop inside a turn: one model request plus the tool work that follows. The round counter resets every turn. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
-| **turn counter** | A separate monotonic counter that persists across rounds, for concerns that measure passage between rounds (plan staleness, pursuit accounting). [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
-| **ReAct loop** | The model-request → tool-call → result loop a round iterates on. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **round** | The unit the user perceives: one submitted message and one final reply. Opens on submit, closes when the agent emits a final assistant message carrying no tool call. Driven by `execute_round`. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **turn** | One pass through the ReAct loop inside a round: one model request plus the tool work that follows. The in-round iteration count resets every round. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **round lifecycle** | The at-most-one-active-round protocol per session, owned by `RoundLifecycle`: a new round supersedes its predecessor (generation bump + fresh cancellation token); interrupt cancels without superseding, so the unwinding round still emits its own cleanup. [ADR-0078](../adr/0078-round-lifecycle-type.md) |
+| **`turn_counter`** | Monotonic counter bumped once per round and persisted across resume; stamps todo staleness and pursuit accounting. The symbol name predates the ADR-0047 vocabulary swap — it counts rounds. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **ReAct loop** | The model-request → tool-call → result loop iterated once per turn inside a round. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **harness** | The control plane around provider calls; keeps model output inside explicit state, execution, and safety boundaries. Owns steering, pursuit, retry, and the autonomous loop. [Harness architecture](../explanation/agent-design/harness.md) |
 | **transcript** | The append-mostly message history resent in full on every request — the model's only memory between requests. Never edited to change meaning. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
-| **catalog** (tool catalog) | The list of tool schemas published to the provider on every request; ephemeral to the runtime, republished each round. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **catalog** (tool catalog) | The list of tool schemas published to the provider on every request; ephemeral to the runtime, republished each turn. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **gating stack** | The ordered checks every tool call crosses before running: lookup → write-scope gate → permission broker. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **native tool-call path** | The runtime carries tool calls in its own structured field; nothing executes until the response terminates. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **fallback tool-call path** | For providers without native function calling: the model emits a call as ordinary text, the agent extracts it and promotes it onto the assistant message. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
@@ -120,7 +122,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/provider` switch. [Providers](providers.md) |
 | **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, transport, and optional provider-scoped remote metadata; one per `[[providers.channels]]` entry. [Model Metadata](model-metadata.md) |
-| **transport** | The wire protocol a channel uses (`OpenAiCompat`, `Anthropic`, `GeminiNative`). [Configuration](configuration.md) |
+| **transport** | The wire protocol a channel uses (`OpenAi`, `Anthropic`, `Google`). [Configuration](configuration.md) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[NEENEE_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
@@ -163,22 +165,19 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | Term | Definition |
 |------|------------|
 | **`neenee-core`** | Zero-I/O contract crate: shared provider/tool traits, `ModelRequest`, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
-| **`neenee-store`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| **`neenee-providers`** | Provider implementations and the `build_provider_for_channel` factory, built on the shared AI SDK substrate and protocol-specific SDK crates. [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-persistence`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| **`neenee-transport`** | The transport layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` hot-attach WebSocket bridge, `/btw` side sessions, MCP runtime ownership, pursuits, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| **`neenee-llm-client`** | The multi-protocol HTTP client: pooled transport (`Client`, `Endpoint`, SSE, retry/error) plus one module per wire protocol (OpenAI chat-completions + Responses, Anthropic Messages, Google native). [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery and the mock provider; selects which backend, with `neenee-llm-client` knowing how. [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-oauth`** | OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store. API-key auth is not here — it is config resolution in `neenee-persistence`. [ADR-0052](../adr/0052-xai-supergrok-provider.md), [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
 | **`neenee-tools`** | Built-in domain tools; filesystem/web/todo tools implement core contracts, while project/search facilities also consume store-owned services. It never depends on agent orchestration. [Crate layering](../explanation/crate-layering.md) |
 | **`neenee-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`neenee-mcp`** | MCP transport, server processes, tool adapters, live runtime, and refresh catalog. Session owns runtime instances; Agent sees only dynamically published tools. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`SessionDriver`** | The server-side owner of one live session's request receiver, runtime state, and dispatch loop; external clients interact through a `SessionHandle`. [Crate layering](../explanation/crate-layering.md) |
 | **`neenee-agent`** | The orchestration layer; primary export is the `Agent` struct. Owns turn behavior and agent-specific policy, consumes built-in tools and optional skills through downward dependencies, and accepts connector tools through `DynamicToolSink`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
-| **`neenee-code`** | The crate producing the `neenee-code` binary; assembles concrete tool/provider instances and contains the TUI. The *coding* application. [ADR-0035](../adr/0035-application-layer-split.md) |
-| **`neenee-quant`** | The quantitative-trading domain/tool crate; depends on core and agent contracts, with `neenee-quant-gui` as its current application surface. [ADR-0035](../adr/0035-application-layer-split.md) |
-| **`neenee-intelligence`** | The reusable application-service crate for public-web topic aggregation, hyperlink change observation, and structured expert meetings. It has no broker or order adapter. [ADR-0063](../adr/0063-intelligence-workbench-and-expert-council.md) |
-| **expert council** | Five scenario-specific AI perspectives, each run independently and then through cross-examination before a separate meeting manager synthesizes a conclusion. [Intelligence workbench](../how-to/use-intelligence-workbench.md) |
-| **meeting manager** | The non-voting AI role that summarizes consensus, disagreements, next actions, and stop conditions from a completed expert transcript. It cannot submit trades. [ADR-0063](../adr/0063-intelligence-workbench-and-expert-council.md) |
-| **LongPort OpenAPI** | Longbridge's official programmatic quote and trading interface; `neenee-quant` uses one SDK adapter for market data and live brokerage. [ADR-0062](../adr/0062-longport-openapi-quant-adapter.md) |
+| **`neenee`** | The crate producing the `neenee` binary; assembles concrete tool/provider instances and contains the TUI. The *coding* application. [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
 | **`Agent`** | The central type in `neenee-agent`; owns the turn/round loop, gates, pursuit state, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **strict layering** | An acyclic dependency rule: shared contracts point toward core, concrete implementations point only downward, orchestration may consume implementations, and session/application layers never acquire reverse edges. [Crate layering](../explanation/crate-layering.md) |
-| **`QUANT` profile** | A bounded envoy profile admitting read-only quant tools (`market_data`, `backtest`, `list_positions`) plus shared read-only inspection, while excluding live trading (`place_order`) and all coding write/edit/exec tools — domain isolation between the coding and quant applications. [ADR-0035](../adr/0035-application-layer-split.md) |
 | **MCP server** | A local stdio MCP server exposing dynamically discovered tools; surfaces as `mcp__<server>__<tool>`. [MCP servers](../explanation/agent-design/mcp.md) |
 
 ## Legacy terms
@@ -188,9 +187,13 @@ documentation and ADRs.
 
 | Term | Superseded by | Reference |
 |------|---------------|-----------|
-| `neenee-app` | `neenee-store` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| `neenee-cli` | `neenee-code` | [ADR-0035](../adr/0035-application-layer-split.md) |
-| `neenee` (binary) | `neenee-code` | [ADR-0035](../adr/0035-application-layer-split.md) |
+| `neenee-app` | `neenee-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| `neenee-cli` | `neenee` | [ADR-0035](../adr/0035-application-layer-split.md), [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
+| `neenee-code` | `neenee` | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
+| `neenee-server` | `neenee-transport` | [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| `neenee-session` | `neenee-transport` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| `neenee-store` | `neenee-persistence` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| `neenee-auth` | `neenee-oauth` | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
 | `neenee-harness` | `neenee-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | `/goal` + `/loop` | `/pursue` + `/repeat` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
 | `[NEENEE_GOAL_COMPLETE]` | `[NEENEE_PURSUIT_COMPLETE]` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |

@@ -1,6 +1,6 @@
 # 0064. Product-family workspace layout
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0073
 - **Date:** 2026-07-14
 
 ## Context

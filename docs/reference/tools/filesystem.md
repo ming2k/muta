@@ -2,7 +2,7 @@
 
 Read and mutate files and directory listings. `read_file` / `read_image` /
 `grep` / `glob` / `list_dir` are `Read`; `write_file` / `edit_file` are
-`Write`. Source: `crates/platform/neenee-tools/src/lib.rs`.
+`Write`. Source: `crates/neenee-tools/src/lib.rs`.
 
 ## `read_file`
 
@@ -63,7 +63,7 @@ truncation notice; `--max-count` bounds matches per file at 50.
 | `pattern` | string | yes | — | Glob, e.g. `**/*.rs` |
 | `path` | string | no | `.` | Search root |
 
-Capped at `GLOB_MAX_RESULTS = 200` (`crates/platform/neenee-tools/src/lib.rs`).
+Capped at `GLOB_MAX_RESULTS = 200` (`crates/neenee-tools/src/lib.rs`).
 
 ## `list_dir`
 

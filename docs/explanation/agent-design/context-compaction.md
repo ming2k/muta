@@ -54,7 +54,7 @@ completion.
 
 The entry point is `compact_turn_history`
 (`neenee-agent/src/orchestration.rs`), which delegates the heavy lifting to
-`run_compaction` (`neenee-store/src/session.rs`). The boundary is the **start of
+`run_compaction` (`neenee-persistence/src/session.rs`). The boundary is the **start of
 an older complete user round** — never mid-round — so the model-visible history
 always begins coherently.
 
@@ -131,5 +131,5 @@ that notice knows a real summarization happened.
   the transcript notice.
 - ADR-0040 — session state and model-context projection vocabulary.
 - [Context pruning](context-pruning.md) — the cheaper layer that runs first.
-- `neenee-store/src/session.rs` — `run_compaction`, `CompactionSelection`,
+- `neenee-persistence/src/session.rs` — `run_compaction`, `CompactionSelection`,
   `CHECKPOINT_HEADER`, `CompactionHooks`.

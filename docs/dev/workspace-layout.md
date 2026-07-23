@@ -1,76 +1,63 @@
 # Workspace layout
 
-The repository is one Cargo workspace organized by package ownership. Cargo
-package boundaries express dependency and test boundaries; directories express
-which product or shared subsystem owns each package.
+The repository is one Cargo workspace whose members live directly under
+`crates/`. Cargo package boundaries express dependency and test boundaries; the
+single flat directory keeps every member one level deep so package ownership
+and the `cargo -p <name>` selector stay obvious.
 
 ## Directory map
 
 ```text
-apps/
-  code/
-    neenee-code/
-    neenee-tui/
-    neenee-tui-view/
-  editor/
-    neenee-editor/
-  quant/
-    neenee-quant/
-    neenee-intelligence/
-    neenee-quant-gui/
-
 crates/
-  platform/
-    neenee-core/
-    neenee-store/
-    neenee-auth/
-    neenee-tools/
-    neenee-skills/
-    neenee-mcp/
-    neenee-agent/
-    neenee-session/
-  providers/
-    neenee-ai-sdk-core/
-    neenee-ai-sdk-openai/
-    neenee-ai-sdk-anthropic/
-    neenee-ai-sdk-google/
-    neenee-providers/
+  neenee/          # the application binary (default workspace member)
+  neenee-tui-engine/           # in-house grid + diff rendering engine
+  neenee-tui-view/      # semantic view layer (widgets, document model)
+  neenee-transport/       # session harness, handlers, serve transport
+  neenee-agent/         # orchestration: the turn/round loop
+  neenee-tools/         # built-in tools (bash, read, grep, glob, webfetch, …)
+  neenee-skills/        # skill discovery, registry, and tool adapters
+  neenee-mcp/           # MCP stdio transport and tool publication
+  neenee-persistence/         # durable state: session store, config, paths
+  neenee-oauth/         # OAuth credential acquisition (PKCE, device flow, token store)
+  neenee-core/          # shared domain and wire contracts (no deps)
+  neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)
+  neenee-providers/     # channel registry, factory, discovery + provider facade
 ```
 
 ## Ownership rules
 
-- Put a product binary and packages used only by that product under its
-  `apps/<product>/` family.
-- Put a package under `crates/platform/` only when multiple application
-  families consume its contracts or behavior.
-- Put model-provider protocols and their common facade under
-  `crates/providers/`.
+- Every workspace member lives directly under `crates/`. There is no
+  intermediate grouping directory; a package is selected by name, not by
+  location.
+- Put shared contracts in `neenee-core`, orchestration in `neenee-agent`, and
+  the application binary in `neenee`. See
+  [Crate layering](../explanation/crate-layering.md) for the dependency DAG.
 - Do not infer a dependency from directory containment. Cargo manifests remain
   the authoritative dependency graph.
-- Promote an application-owned package to `crates/` when a second independent
-  application consumes it and the API is stable enough to share.
+- The product focus is the coding agent. Application-specific support packages
+  (`neenee-tui-engine`, `neenee-tui-view`) stay alongside the platform and provider
+  crates because they are consumed by the single application.
 
 ## Cargo commands
 
-Package names do not change with their directories. Continue to select focused
-checks by package name:
+Package names match their directory names. Select focused checks by package
+name:
 
 ```bash
-cargo check -p neenee-store
+cargo check -p neenee-persistence
 cargo test -p neenee-agent
-cargo check -p neenee-quant
 ```
 
-Running Cargo without `--workspace` or `-p` selects `neenee-code`, the configured
-default workspace member. Workspace-wide checks continue to use the shared
-`Cargo.lock`, profiles, dependency versions, and lint policy.
+Running Cargo without `--workspace` or `-p` selects `neenee`, the
+configured default workspace member. Workspace-wide checks continue to use the
+shared `Cargo.lock`, profiles, dependency versions, and lint policy.
 
 ## Repository boundaries
 
-Keep an application in this repository while changes commonly cross its code
-and shared platform packages. Consider a separate repository only when the
-application has distinct ownership or access control, an independent release
-cadence, and a stable versioned platform interface.
+Keep a package in this repository while changes commonly cross it and shared
+platform packages. Consider a separate repository only when a package has
+distinct ownership or access control, an independent release cadence, and a
+stable versioned platform interface.
 
-See [ADR-0064](../adr/0064-product-family-workspace-layout.md) for the decision
-and alternatives.
+See [ADR-0073](../adr/0073-flat-coding-focused-workspace.md) for the decision
+and the superseded product-family layout.

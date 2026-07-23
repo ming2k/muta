@@ -64,5 +64,5 @@ steps. `Enter` / `Space` opens or closes the focused thinking step.
 ## Source
 
 `draw_reasoning_trace` (and `draw_reasoning_trace_header`) in
-`apps/code/neenee-tui-view/src/render/disclosure/renderers.rs`. Header data from
+`crates/neenee-tui-view/src/disclosure/renderers.rs`. Header data from
 `thinking_header()` in `document.rs`.

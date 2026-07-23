@@ -1,7 +1,8 @@
 # 0005. Strictly-layered topology + scenario-bound store
 
 - **Status:** Accepted (revised by ADR-0035 for the application-layer rename
-  `neenee-cli` → `neenee-code`, by ADR-0059 for the normal downward
+  `neenee-cli` → `neenee-code` — itself reversed by ADR-0075, which restored
+  the bare `neenee` binary name; by ADR-0059 for the normal downward
   `neenee-agent` → `neenee-tools` dependency, and by ADR-0060 for skill/MCP
   extraction; the reverse-edge prohibition and `app`/`harness` renames below
   still stand)

@@ -86,7 +86,7 @@ runtimes implement. Two runtime behaviors matter to neenee:
 Providers that do not implement `stream_chat_events` fall back to the trait
 default, which wraps `stream_chat` and emits only `TextDelta` events. They
 cannot surface reasoning or stream tool-call deltas even when the underlying
-service might support them. Gemini implements this event path for text,
+service might support them. Google implements this event path for text,
 usage, and native function-call parts, but it does not currently surface a
 reasoning channel.
 
@@ -105,17 +105,17 @@ layers:
 - **Anthropic** (`AnthropicMessagesProvider`) speaks the `/messages` wire
   format with `x-api-key` auth; neenee converts the internal tool schema
   into Anthropic `tools` and replays results as `tool_result` blocks.
-- **Gemini** (`GoogleProvider`) speaks a different request shape
+- **Google** (`GoogleProvider`) speaks a different request shape
   (`systemInstruction`, `model`/`user` roles, and
-  `tools[].functionDeclarations`). neenee bridges Gemini's native
+  `tools[].functionDeclarations`). neenee bridges Google's native
   function-calling API by converting the internal OpenAI-shaped tool schema
-  into Gemini declarations, reading `functionCall` parts, and replaying tool
+  into Google declarations, reading `functionCall` parts, and replaying tool
   results as `functionResponse` parts.
 - **ChatGPT Responses** (`ResponsesProvider`) speaks the OpenAI Responses
   API (`/responses` endpoint, `response.*` SSE events) used by the ChatGPT
   subscription backend.
 
-The practical consequence: OpenAI-compatible, Anthropic, and Gemini providers
+The practical consequence: OpenAI-compatible, Anthropic, and Google providers
 can use native structured tool calls. On any provider that omits native tool
 support, the model must emit
 `{"tool": "<name>", "arguments": {…}}` as ordinary assistant text, which the

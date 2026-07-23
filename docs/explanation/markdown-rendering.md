@@ -156,7 +156,7 @@ draw_message_body()          [message_body.rs]
   │   └─ Break    → blank row
   └─ for each rendered line:
       ├─ record BlockRegion in LayoutMap
-      └─ paint into neenee-tui Grid via Frame
+      └─ paint into neenee-tui-engine Grid via Frame
 ```
 
 `draw_message_body` walks each message's blocks sequentially, tracks the
@@ -164,7 +164,7 @@ current Y position, and respects `skip_rows` for scroll offset. Each block
 type has its own rendering branch, but they all share:
 
 - `wrap_text()` for width-aware wrapping with CJK kinsoku line-breaking
-  (ported from `neenee-tui::text`).
+  (ported from `neenee-tui-engine::text`).
 - `line_selection()` / `line_spans_rich()` for painting the selection
   highlight across multi-span lines (code, bold, and plain segments within
   one wrapped line).
@@ -207,7 +207,7 @@ readable rather than collapsing all columns equally.
 It is Unicode-width-aware (via `unicode_width`) and handles:
 
 - **CJK characters** — width-2 glyphs count as 2 display columns.
-- **Kinsoku line-breaking** — inherited from `neenee-tui::text`, prevents
+- **Kinsoku line-breaking** — inherited from `neenee-tui-engine::text`, prevents
   certain characters from starting or ending a line in CJK text.
 - **Code gutter** — `code_gutter_line()` produces the line-number column
   for code blocks, with a `│` separator and muted numbering.
@@ -283,12 +283,12 @@ transparent and maintainable.
 
 | Concern | File |
 |---------|------|
-| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `apps/code/neenee-tui-view/src/document.rs` |
-| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `apps/code/neenee-tui-view/src/document.rs` |
-| Message body renderer (`draw_message_body`) | `apps/code/neenee-tui-view/src/render/message_body.rs` |
-| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `apps/code/neenee-tui-view/src/render/markdown_table.rs` |
-| Text wrapping, CJK, code gutter, selection helpers | `apps/code/neenee-tui-view/src/render/text_layout.rs` |
-| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `apps/code/neenee-tui-view/src/layout.rs` |
-| Selection extraction (`get_selected_text`) | `apps/code/neenee-tui-view/src/selection.rs` |
-| Grid engine (`Grid`, `diff`, `Backend`) | `apps/code/neenee-tui/src/` |
-| Export-to-markdown (clipboard handoff) | `crates/platform/neenee-session/src/export.rs` |
+| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `crates/neenee-tui-view/src/document.rs` |
+| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `crates/neenee-tui-view/src/document.rs` |
+| Message body renderer (`draw_message_body`) | `crates/neenee-tui-view/src/message_body.rs` |
+| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `crates/neenee-tui-view/src/markdown_table.rs` |
+| Text wrapping, CJK, code gutter, selection helpers | `crates/neenee-tui-view/src/text_layout.rs` |
+| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `crates/neenee-tui-view/src/layout.rs` |
+| Selection extraction (`get_selected_text`) | `crates/neenee-tui-view/src/selection.rs` |
+| Grid engine (`Grid`, `diff`, `Backend`) | `crates/neenee-tui-engine/src/` |
+| Export-to-markdown (clipboard handoff) | `crates/neenee-transport/src/export.rs` |

@@ -112,19 +112,19 @@ for help (no byte collision) and `Alt+Backspace` for word-delete.
 
 A signal guard catches `SIGTERM`, `SIGINT`, `SIGHUP`, and `SIGQUIT`, then
 restores the terminal. Without it, an
-external `pkill neenee-code` would terminate the process before normal
+external `pkill neenee` would terminate the process before normal
 cleanup, leaving the host terminal stranded in raw mode with mouse
 capture on, so every mouse motion would spew SGR escape codes into the
 shell.
 
 ## Retained-grid rendering
 
-Rendering is built on **`neenee-tui`**, neenee's in-house terminal engine
+Rendering is built on **`neenee-tui-engine`**, neenee's in-house terminal engine
 (ADR-0038): a *retained-mode* cell grid, a back/front diff, and a crossterm
 backend that emits the minimal escape-code delta per frame. This is the
 vim/nvim `ScreenGrid` model, not an immediate-mode rebuild.
 
-The back [`Grid`](../../apps/code/neenee-tui/src/grid.rs) is the single source of
+The back [`Grid`](../../crates/neenee-tui-engine/src/grid.rs) is the single source of
 truth for what the application wants on screen, and it is **retained** — not
 rebuilt from scratch each frame. Every write (`set`, `put`, `fill_rect`) marks
 the touched row dirty from the changed column leftward at *write time* (the
@@ -154,19 +154,19 @@ therefore repaints once instead of once per character.
 
 ## Three layers, one-way seam
 
-`neenee-tui` is the *bottom* of a three-layer stack. Each layer is its own
+`neenee-tui-engine` is the *bottom* of a three-layer stack. Each layer is its own
 crate, and dependencies point strictly downward — the compiler enforces
 that no higher layer's types leak into a lower one:
 
 ```text
-neenee-tui          engine: retained cell grid, back/front diff, crossterm
+neenee-tui-engine          engine: retained cell grid, back/front diff, crossterm
                     (ADR-0038). Knows nothing about neenee.
       ▲  widgets render into the grid
 neenee-tui-view     view: the widget tree + the semantic document model
                     (ADR-0045). Renders neenee-core domain types, so it
                     depends on neenee-core — but never on the shell.
       ▲  the shell hands it borrowed data each frame
-neenee-code::tui    app shell: App state, the event loop, input→action
+neenee::tui    app shell: App state, the event loop, input→action
                     mapping, terminal lifecycle. Owns the data.
 ```
 
@@ -418,5 +418,5 @@ live in the lookup reference:
 - [Request flow](request-flow.md) — how streamed tokens reach the TUI
   over SSE.
 
-[neenee-tui]: ../../apps/code/neenee-tui/src/lib.rs
+[neenee-tui-engine]: ../../crates/neenee-tui-engine/src/lib.rs
 [Markdown rendering]: markdown-rendering.md

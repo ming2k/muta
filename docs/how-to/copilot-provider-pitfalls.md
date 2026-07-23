@@ -17,7 +17,7 @@ that opencode and several community integrations also use. If you replace it
 with your own GitHub OAuth App, the backend will usually return only the
 always-available GPT-4o family, not the account's full subscription catalog.
 
-**Check:** the client id is compiled into `crates/platform/neenee-auth/src/config.rs`.
+**Check:** the client id is compiled into `crates/neenee-oauth/src/config.rs`.
 If you fork neenee and change `COPILOT.client_id`, you are also changing the
 model set GitHub exposes.
 

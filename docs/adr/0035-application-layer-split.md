@@ -1,6 +1,8 @@
 # 0035. Application-layer split: `neenee-code` + `neenee-quant`
 
-- **Status:** Accepted (dependency diagram revised by ADR-0059)
+- **Status:** Superseded by ADR-0073 (the `neenee-quant` application was
+  removed) and ADR-0075 (the `neenee-cli` → `neenee-code` rename is reversed,
+  restoring the bare `neenee` binary name)
 - **Date:** 2026-06-26
 - **Revises:** ADR-0005 (the "binary stays `neenee` / crate is `neenee-cli`"
   sub-decision); instantiates the application-layer sibling ADR-0005

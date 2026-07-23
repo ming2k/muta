@@ -9,7 +9,7 @@ session history. All are `Read` and bypass the permission broker.
 |-----------|------|----------|-------|
 | `name` | string | yes | Skill name from frontmatter |
 
-`UseSkillTool` (`crates/platform/neenee-skills/src/tools.rs`) loads the skill body
+`UseSkillTool` (`crates/neenee-skills/src/tools.rs`) loads the skill body
 into the conversation.
 
 ## `list_skills`
@@ -29,7 +29,7 @@ enabled state. Useful for seeing what the agent can load before calling
 | `query` | string | yes | — | Natural-language query |
 | `limit` | integer | no | `5` | Maximum results |
 
-`SearchHistoryTool` (`crates/platform/neenee-store/src/search_tool.rs`) runs a semantic
+`SearchHistoryTool` (`crates/neenee-persistence/src/search_tool.rs`) runs a semantic
 search over the current project's session history and returns the most relevant
 past messages.
 
@@ -61,7 +61,7 @@ Skill body injected into the context on demand.
 
 ## Discovery
 
-The skill registry (`crates/platform/neenee-skills/src/discovery.rs`) discovers
+The skill registry (`crates/neenee-skills/src/discovery.rs`) discovers
 skills from, in priority order (later sources override earlier ones):
 
 1. **Remote skill repositories** configured under `[skills] urls` in
@@ -77,7 +77,7 @@ skills from, in priority order (later sources override earlier ones):
    (highest priority).
 
 All user-level paths resolve through the central `Dirs` layer
-(`crates/platform/neenee-store/src/paths.rs`) and honour the standard XDG overrides
+(`crates/neenee-persistence/src/paths.rs`) and honour the standard XDG overrides
 (`$XDG_DATA_HOME`, `$XDG_CACHE_HOME`) plus the app-specific overrides
 (`$NEENEE_DATA_DIR`, `$NEENEE_CACHE_DIR`). See [Paths](../paths.md) for
 the full override stack and [Persistence and the XDG

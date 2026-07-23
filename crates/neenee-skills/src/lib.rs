@@ -1,0 +1,189 @@
+//! Skill discovery, metadata, registries, and model-facing tool adapters.
+//!
+//! Skills are markdown files with YAML frontmatter, stored (in priority order,
+//! lowest first) across:
+//!   - Remote skill repositories fetched into `$XDG_CACHE_HOME/neenee/skills/remote/`.
+//!   - User-global skills: `$XDG_DATA_HOME/neenee/skills/` (XDG-resolved via
+//!     [`neenee_persistence::paths`]).
+//!   - External user-global formats: `~/.agents/skills/`, `~/.claude/skills/`
+//!     (someone else's convention).
+//!   - Configured extra paths (`[skills] paths = [...]` in `config.toml`).
+//!   - Project-local skills: `.neenee/skills/<name>/SKILL.md` (highest priority).
+//!
+//! Frontmatter schema:
+//!   ```yaml
+//!   ---
+//!   name: rust-expert
+//!   description: "Use when writing or debugging Rust code"
+//!   short-description: "Rust help"
+//!   version: "1.0.0"
+//!   tags: [rust, cargo]
+//!   policy:
+//!     allow_implicit_invocation: true
+//!   dependencies:
+//!     - type: mcp
+//!       value: context7
+//!   ---
+//!   ```
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+mod catalog;
+pub mod discovery;
+pub mod metadata;
+pub mod remote;
+pub mod render;
+pub mod tools;
+
+pub use catalog::SkillCatalog;
+pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
+pub use neenee_core::SkillsConfig;
+pub use render::resolve_mentions;
+pub use tools::{ListSkillsTool, UseSkillTool};
+
+use discovery::discover_all;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+/// Thread-safe in-memory registry of discovered skills.
+#[derive(Clone)]
+pub struct SkillRegistry {
+    inner: Arc<RwLock<RegistryInner>>,
+    /// Lazily-populated cache of skill bodies, keyed by skill name. A body is
+    /// read from disk (via [`Skill::load_body`]) the first time it is
+    /// requested, then reused so repeated `use_skill` / implicit loads in the
+    /// same session never re-read the file.
+    bodies: Arc<RwLock<HashMap<String, String>>>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct RegistryInner {
+    skills: Vec<Skill>,
+    errors: Vec<String>,
+    config: SkillsConfig,
+}
+
+impl SkillRegistry {
+    /// Create an empty registry with no configuration. `reload()` on such a
+    /// registry re-runs discovery with a default (empty) config, so prefer
+    /// [`SkillRegistry::empty_with_config`] when the real config is known.
+    pub fn empty() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(RegistryInner::default())),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Create an empty registry that remembers `config`. The registry starts
+    /// with no discovered skills, but a subsequent [`reload`](Self::reload)
+    /// (e.g. from the background refresh loop) re-runs discovery using this
+    /// config and populates the registry in place. This is the entry point
+    /// for non-blocking startup: hand back an empty registry immediately, let
+    /// the background task fill it.
+    pub fn empty_with_config(config: &SkillsConfig) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(RegistryInner {
+                skills: Vec::new(),
+                errors: Vec::new(),
+                config: config.clone(),
+            })),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Discover skills from all configured sources.
+    pub async fn load(config: &SkillsConfig) -> Self {
+        let result = discover_all(config).await;
+        if !result.errors.is_empty() {
+            for err in &result.errors {
+                tracing::warn!("skill discovery error: {}", err);
+            }
+        }
+        Self {
+            inner: Arc::new(RwLock::new(RegistryInner {
+                skills: result.skills,
+                errors: result.errors,
+                config: config.clone(),
+            })),
+            bodies: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Rescan all sources using the same configuration that was originally
+    /// supplied. If no configuration was stored, performs a default scan.
+    pub async fn reload(&self) {
+        let config = {
+            match self.inner.read() {
+                Ok(inner) => inner.config.clone(),
+                Err(err) => err.into_inner().config.clone(),
+            }
+        };
+        let result = discover_all(&config).await;
+        if let Ok(mut inner) = self.inner.write() {
+            inner.skills = result.skills;
+            inner.errors = result.errors;
+        }
+    }
+
+    /// Acquire a read lock on the registry.
+    pub fn lock(&self) -> RegistryGuard<'_> {
+        RegistryGuard {
+            guard: self.inner.read().unwrap_or_else(|e| e.into_inner()),
+        }
+    }
+
+    /// Replace the registry contents directly, used during tests or when the
+    /// caller wants to build a registry without disk discovery.
+    pub fn replace(&self, skills: Vec<Skill>) {
+        if let Ok(mut inner) = self.inner.write() {
+            inner.skills = skills;
+            inner.errors.clear();
+        }
+        if let Ok(mut bodies) = self.bodies.write() {
+            bodies.clear();
+        }
+    }
+
+    /// Resolve a skill's body by name, loading it from disk on first access
+    /// and caching the result for the lifetime of this registry.
+    ///
+    /// Returns `None` when no skill with that name is registered, and an
+    /// `Err` only if the body genuinely cannot be read.
+    pub fn body_for(&self, name: &str) -> Option<Result<String, String>> {
+        let skill = self.lock().get(name)?;
+        if let Ok(bodies) = self.bodies.read()
+            && let Some(cached) = bodies.get(name)
+        {
+            return Some(Ok(cached.clone()));
+        }
+        let body = skill.load_body();
+        if let Ok(ref text) = body
+            && let Ok(mut bodies) = self.bodies.write()
+        {
+            bodies.insert(name.to_string(), text.clone());
+        }
+        Some(body)
+    }
+}
+
+/// Read guard exposing registry contents.
+pub struct RegistryGuard<'a> {
+    guard: std::sync::RwLockReadGuard<'a, RegistryInner>,
+}
+
+impl RegistryGuard<'_> {
+    pub fn get(&self, name: &str) -> Option<Skill> {
+        self.guard.skills.iter().find(|s| s.name == name).cloned()
+    }
+
+    pub fn list(&self) -> Vec<Skill> {
+        self.guard.skills.clone()
+    }
+
+    pub fn resolve_mentions(&self, text: &str) -> Vec<Skill> {
+        render::resolve_mentions(text, &self.guard.skills)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+}

@@ -1,0 +1,18 @@
+---
+source: crates/neenee/src/tui/question_model.rs
+assertion_line: 1176
+expression: film
+---
+=== open: Question 1/2 ===
+
+
+
+
+          Question 1/2
+
+          first?
+
+             x
+             Other
+
+          ↑↓ navigate · Enter submit · Esc cancel

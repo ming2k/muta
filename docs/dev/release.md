@@ -53,47 +53,29 @@ If the list is empty, there is nothing to release.
 ### 2. Run the full CI matrix locally
 
 Each command maps to a `ci.yml` job. The gating jobs use `-D warnings`
-exactly as CI does, so a green local run is a green CI run. The
-`--exclude neenee-quant --exclude neenee-quant-gui` flags mirror the
-workspace-selection policy: those crates are work-in-progress and not
-gated or shipped.
+exactly as CI does, so a green local run is a green CI run.
 
 ```bash
-# Format (fmt job). cargo fmt has no --exclude, so select gated crates.
-cargo fmt --all --check \
-  -p neenee-core -p neenee-store -p neenee-providers -p neenee-tools \
-  -p neenee-agent -p neenee-code -p neenee-session \
-  -p neenee-tui -p neenee-tui-view -p neenee-editor
+# Format (fmt job).
+cargo fmt --all --check
 
 # Clippy (clippy job).
-RUSTFLAGS="-D warnings" cargo clippy \
-  --workspace --all-targets --locked \
-  --exclude neenee-quant --exclude neenee-quant-gui
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --locked
 
 # Tests (test job).
-cargo test --workspace --locked --no-fail-fast \
-  --exclude neenee-quant --exclude neenee-quant-gui
+cargo test --workspace --locked --no-fail-fast
 
 # Docs (doc job). Catches broken intra-doc links and private-item links.
 RUSTDOCFLAGS="-D warnings" cargo doc \
-  --workspace --no-deps --document-private-items --locked \
-  --exclude neenee-quant --exclude neenee-quant-gui
+  --workspace --no-deps --document-private-items --locked
 
 # MSRV (msrv job). Pin the toolchain to the declared rust-version (1.95).
-rustup run 1.95.0 cargo check \
-  --workspace --all-targets --locked \
-  --exclude neenee-quant --exclude neenee-quant-gui
+rustup run 1.95.0 cargo check --workspace --all-targets --locked
 ```
 
 A failure here blocks the release. Fix the code, not the checklist.
 The common failure modes are documented in
 [Fixing common failures](#fixing-common-failures).
-
-The `neenee-editor` crate's default `gui` feature depends on the optics C
-libraries; in CI those must be provided by the pinned optics git dependencies
-and the runner image. If a local checkout uses `.cargo/config.toml` to point at
-`../optics`, make sure that sibling build is healthy before treating local GUI
-checks as release evidence.
 
 The `audit` and `deny` jobs run in CI only (they need the GitHub token
 and a network fetch of the advisory database). Glance at their result on
@@ -107,8 +89,7 @@ fixes. The commit message follows the established convention
 `release: bump version to vX.Y.Z`.
 
 Bump the workspace package version once. Every member inherits this value, so
-Cargo applies the release version consistently across the grouped application,
-platform, and provider directories.
+Cargo applies the release version consistently across the workspace.
 
 ```bash
 # Edit `[workspace.package] version` in the root manifest.
@@ -119,8 +100,7 @@ Refresh `Cargo.lock` so it carries the new version. `cargo check`
 rewrites the lock for the workspace members:
 
 ```bash
-cargo check --workspace \
-  --exclude neenee-quant --exclude neenee-quant-gui
+cargo check --workspace
 ```
 
 Verify all members moved together:

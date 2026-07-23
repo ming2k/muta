@@ -28,7 +28,7 @@ only cells kept as pure `app_bg` on every frame.
 ```
 
 The viewport rect itself comes from `viewport_rect(frame)` in
-`apps/code/neenee-tui-view/src/render/primitives.rs`.
+`crates/neenee-tui-view/src/primitives.rs`.
 
 ## Root conversation view
 
@@ -174,7 +174,7 @@ Every transcript-area component is inset by `TRANSCRIPT_H_INSET = 2` cols
 on each side so no band, bar, or text touches the terminal frame. The two
 gutters stay `app_bg` via the global frame fill. Solid-background regions
 (code blocks, child tool steps) render into `transcript_band_rect`
-(`render/mod.rs`), which is the transcript area minus both gutters; user
+(`view.rs`), which is the transcript area minus both gutters; user
 panels and code blocks render their own equivalent gutters; markdown text
 wraps with `TRANSCRIPT_H_INSET` cells of slack on the right.
 
@@ -243,10 +243,10 @@ the transcript content above.
 
 | File | Responsibility |
 |------|----------------|
-| `render/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
+| `view.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `STATUS_BAR_ROWS`, `HINT_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
-| `render/primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
+| `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
 | `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (persistent session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `render/composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
-| `render/disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
+| `disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
 | `app.rs` | `in_envoy_view`, `focus_stack`, `follow_bottom`, scroll clamping |

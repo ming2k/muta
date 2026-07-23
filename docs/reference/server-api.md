@@ -1,6 +1,6 @@
 # Server WebSocket API
 
-This page is the frontend integration guide for the current `neenee-session`
+This page is the frontend integration guide for the current `neenee-transport`
 hot-attach transport. Its machine-readable contract is
 [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
@@ -14,7 +14,7 @@ hot-attach transport. Its machine-readable contract is
 
 ## Scope and current limitations
 
-This contract describes `crates/platform/neenee-session/src/serve.rs` as it exists now:
+This contract describes `crates/neenee-transport/src/serve.rs` as it exists now:
 
 - `/serve [port] [--public]` starts a listener attached to the **currently
   running TUI session**.
@@ -49,7 +49,7 @@ See ADR-0054 for the rationale.
 
 ## Start and connect
 
-From a running `neenee-code` TUI, default loopback (no auth):
+From a running `neenee` TUI, default loopback (no auth):
 
 ```text
 /serve 8765
@@ -307,10 +307,10 @@ A production frontend should:
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/platform/neenee-session/src/serve.rs` (`Wire`)
-- requests/responses/events: `crates/platform/neenee-core/src/events.rs`
-- transcript: `crates/platform/neenee-core/src/message.rs`
-- tool output: `crates/platform/neenee-core/src/tool_output.rs`
+- envelope: `crates/neenee-transport/src/serve.rs` (`Wire`)
+- requests/responses/events: `crates/neenee-core/src/events.rs`
+- transcript: `crates/neenee-core/src/message.rs`
+- tool output: `crates/neenee-core/src/tool_output.rs`
 
 Any wire-visible change to those types must update
 `docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and the

@@ -1,6 +1,6 @@
 # How to use sub2api relays
 
-Use a sub2api relay when the service exposes an OpenAI, Anthropic, or Gemini
+Use a sub2api relay when the service exposes an OpenAI, Anthropic, or Google
 compatible HTTP surface and gives you a token plus a relay URL. neenee's
 provider editor creates a named provider instance, stores the token, and seeds
 the model list from the selected template.
@@ -69,7 +69,7 @@ Anthropic relays use the `/messages` endpoint, not
 model from the provider's model list when the relay exposes a Claude alias that
 is not listed.
 
-## Add the Antigravity Gemini relay
+## Add the Antigravity Google relay
 
 1. Open the provider picker with `Ctrl+M`.
 2. Select `＋ Add provider`.
@@ -79,7 +79,7 @@ is not listed.
    `https://relay.example.com/antigravity/v1beta`.
 6. Press `Enter` to save and activate the provider.
 
-Gemini-native relays use the versioned base URL. neenee appends
+Google-native relays use the versioned base URL. neenee appends
 `/models/{model}:generateContent` for each request.
 
 ## Configure a relay in `config.toml`
@@ -97,7 +97,7 @@ name = "Example OpenAI"
 
 [[providers.channels]]
 label = "gpt-5.5"
-transport = "OpenAiCompat"
+transport = "OpenAi"
 base_url = "https://relay.example.com/v1/chat/completions"
 api_key_env = "RELAY_API_KEY"
 model = "gpt-5.5"
@@ -120,7 +120,7 @@ api_key_env = "RELAY_API_KEY"
 model = "claude-sonnet-5"
 ```
 
-For Gemini-native Antigravity:
+For Google-native Antigravity:
 
 ```toml
 default_provider = "antigravity"
@@ -131,7 +131,7 @@ name = "Antigravity"
 
 [[providers.channels]]
 label = "gemini-3-flash"
-transport = "GeminiNative"
+transport = "Google"
 base_url = "https://relay.example.com/antigravity/v1beta"
 api_key_env = "RELAY_API_KEY"
 model = "gemini-3-flash"

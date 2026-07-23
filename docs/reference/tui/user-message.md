@@ -35,4 +35,4 @@ Character-level semantic selection — only the dragged substring gets
 ## Source
 
 `draw_message_body` → `Block::Text` with `is_user == true` in
-`render/message_body.rs`.
+`message_body.rs`.

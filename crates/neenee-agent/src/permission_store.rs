@@ -1,0 +1,336 @@
+//! Permission allowlist + pending-request registry, extracted from the
+//! `Agent` god-object.
+//!
+//! Owns the "always allow" rule set (optionally persisted to disk per
+//! project), the map of pending permission requests awaiting a user reply,
+//! and the project root used for persistence. The [`crate::Agent`] owns a
+//! single `PermissionStore` and delegates its permission-related public
+//! methods here.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+
+use neenee_core::PermissionDecision;
+use tokio::sync::oneshot;
+
+/// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct PermissionRule {
+    pub tool: String,
+    pub scope: String,
+}
+
+/// On-disk shape of the persisted "always allow" allowlist, versioned for
+/// future schema evolution. Readers reject unknown future versions rather
+/// than guessing, so a downgrade silently ignores the file.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PersistedPermissions {
+    version: u32,
+    rules: Vec<PermissionRule>,
+}
+
+impl PersistedPermissions {
+    const CURRENT_VERSION: u32 = 1;
+}
+
+#[derive(Default)]
+struct PermissionState {
+    always: HashSet<PermissionRule>,
+    pending: HashMap<String, oneshot::Sender<PermissionDecision>>,
+}
+
+/// In-memory permission state: the "always allow" allowlist, the pending
+/// request channels, and the optional project root for on-disk persistence.
+pub struct PermissionStore {
+    state: Mutex<PermissionState>,
+    project_root: Mutex<Option<std::path::PathBuf>>,
+    /// When true, the agent runs **unattended** — without human intervention:
+    /// no permission confirmations, no questions. Operationally this skips the
+    /// permission prompt entirely (and bypasses the allowlist wholesale), but
+    /// the flag's meaning is "no human in the loop," not just "skip prompts."
+    unattended: Mutex<bool>,
+}
+
+impl PermissionStore {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(PermissionState::default()),
+            project_root: Mutex::new(None),
+            unattended: Mutex::new(false),
+        }
+    }
+
+    // ── unattended ────────────────────────────────────────────────────
+
+    pub fn unattended(&self) -> bool {
+        *lock(&self.unattended)
+    }
+
+    pub fn set_unattended(&self, value: bool) {
+        *lock(&self.unattended) = value;
+    }
+
+    // ── pending requests ────────────────────────────────────────────────
+
+    /// Register a pending permission request and return the receiver the
+    /// caller should `await` for the user's decision.
+    pub fn park_request(&self, request_id: String) -> oneshot::Receiver<PermissionDecision> {
+        let (sender, receiver) = oneshot::channel();
+        lock(&self.state).pending.insert(request_id, sender);
+        receiver
+    }
+
+    /// Resolve a pending permission request. Rejecting one aborts the turn,
+    /// so every other pending request in the same batch is also resolved with
+    /// `Reject` to avoid deadlocking the `join_all`. Returns whether a sender
+    /// was found.
+    pub fn reply(&self, request_id: &str, decision: PermissionDecision) -> bool {
+        let mut perms = lock(&self.state);
+        let sender = perms.pending.remove(request_id);
+        let sent = sender.is_some_and(|sender| sender.send(decision).is_ok());
+        if sent && decision == PermissionDecision::Reject {
+            for (_, pending_sender) in perms.pending.drain() {
+                let _ = pending_sender.send(PermissionDecision::Reject);
+            }
+        }
+        sent
+    }
+
+    /// Reject every pending permission request (e.g. on turn abort).
+    pub fn reject_pending(&self) {
+        let pending = std::mem::take(&mut lock(&self.state).pending);
+        for (_, sender) in pending {
+            let _ = sender.send(PermissionDecision::Reject);
+        }
+    }
+
+    // ── allowlist ───────────────────────────────────────────────────────
+
+    /// Check whether a rule is in the "always allow" set. A stored scope of
+    /// `"*"` is a wildcard for that tool, matching the documented
+    /// `[[permissions.allow]] tool = "bash", scope = "*"` behaviour.
+    pub fn is_always_allowed(&self, rule: &PermissionRule) -> bool {
+        let state = lock(&self.state);
+        state.always.contains(rule)
+            || state.always.contains(&PermissionRule {
+                tool: rule.tool.clone(),
+                scope: "*".to_string(),
+            })
+    }
+
+    /// Add a rule to the "always allow" set and persist.
+    pub fn add_always(&self, rule: PermissionRule) {
+        lock(&self.state).always.insert(rule);
+        self.persist();
+    }
+
+    pub fn allowed_tools(&self) -> Vec<String> {
+        let mut tools = lock(&self.state)
+            .always
+            .iter()
+            .map(|rule| format!("{} {}", rule.tool, rule.scope))
+            .collect::<Vec<_>>();
+        tools.sort();
+        tools
+    }
+
+    pub fn allowed_tools_structured(&self) -> Vec<neenee_core::PermissionRuleInfo> {
+        let mut rules: Vec<neenee_core::PermissionRuleInfo> = lock(&self.state)
+            .always
+            .iter()
+            .map(|rule| neenee_core::PermissionRuleInfo {
+                tool: rule.tool.clone(),
+                scope: rule.scope.clone(),
+            })
+            .collect();
+        rules.sort_by(|a, b| a.tool.cmp(&b.tool).then_with(|| a.scope.cmp(&b.scope)));
+        rules
+    }
+
+    pub fn clear_allowed(&self) {
+        lock(&self.state).always.clear();
+        self.persist();
+    }
+
+    pub fn revoke_allowed(&self, tool: &str, scope: &str) -> bool {
+        let rule = PermissionRule {
+            tool: tool.to_string(),
+            scope: scope.to_string(),
+        };
+        let removed = lock(&self.state).always.remove(&rule);
+        if removed {
+            self.persist();
+        }
+        removed
+    }
+
+    // ── persistence ─────────────────────────────────────────────────────
+
+    /// Seed the allowlist from declarative `[permissions]` config rules. Called
+    /// at startup after `set_project_root` (so persistent rules are already
+    /// loaded). Config rules are **not** persisted to `permissions.json` — they
+    /// are re-applied on every start from `config.toml`, keeping them
+    /// declarative and version-controllable. Rules already present (from disk)
+    /// are not duplicated.
+    pub fn seed_from_config(&self, rules: &[neenee_persistence::config::PermissionRuleConfig]) {
+        let mut state = lock(&self.state);
+        let mut added = 0;
+        for rule in rules {
+            let permission_rule = PermissionRule {
+                tool: rule.tool.clone(),
+                scope: rule.scope.clone(),
+            };
+            if state.always.insert(permission_rule) {
+                added += 1;
+            }
+        }
+        drop(state);
+        if added > 0 {
+            tracing::info!(added, "seeded {} permission rules from config", added);
+        }
+    }
+
+    /// The persisted project root, if any.
+    pub fn project_root(&self) -> Option<std::path::PathBuf> {
+        lock(&self.project_root).clone()
+    }
+
+    /// Designate the project whose bucket backs the persistent "always"
+    /// allowlist, and load any rules already on disk into the in-memory set.
+    /// Pass `None` to disable persistence (envoys and most tests do this).
+    pub fn set_project_root(&self, root: Option<std::path::PathBuf>) {
+        {
+            *lock(&self.project_root) = root.clone();
+        }
+        if let Some(root) = root {
+            self.load_persistent(&root);
+        }
+    }
+
+    fn load_persistent(&self, root: &std::path::Path) {
+        let path = neenee_persistence::paths::get().project_permissions(root);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        match serde_json::from_str::<PersistedPermissions>(&text) {
+            Ok(persisted) if persisted.version == PersistedPermissions::CURRENT_VERSION => {
+                let mut perms = lock(&self.state);
+                let count = persisted.rules.len();
+                for rule in persisted.rules {
+                    perms.always.insert(rule);
+                }
+                tracing::info!(count, path = %path.display(), "loaded persistent permission rules");
+            }
+            Ok(other) => {
+                tracing::warn!(
+                    version = other.version,
+                    path = %path.display(),
+                    "unsupported persisted permissions version; ignoring file",
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "could not parse persistent permissions file; ignoring",
+                );
+            }
+        }
+    }
+
+    /// Atomically mirror the current `always` allowlist into the project
+    /// bucket. Best-effort: logs on failure and never propagates the error.
+    fn persist(&self) {
+        let root = lock(&self.project_root).clone();
+        let Some(root) = root else {
+            return;
+        };
+        let path = neenee_persistence::paths::get().project_permissions(&root);
+        let snapshot = {
+            let perms = lock(&self.state);
+            let mut rules: Vec<PermissionRule> = perms.always.iter().cloned().collect();
+            rules.sort_by(|a, b| a.tool.cmp(&b.tool).then_with(|| a.scope.cmp(&b.scope)));
+            PersistedPermissions {
+                version: PersistedPermissions::CURRENT_VERSION,
+                rules,
+            }
+        };
+        if let Err(e) = neenee_persistence::fsutil::atomic_write_json(&path, &snapshot) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "could not persist permission rules",
+            );
+        }
+    }
+}
+
+impl Default for PermissionStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neenee_persistence::config::PermissionRuleConfig;
+
+    #[test]
+    fn seed_from_config_adds_rules_to_allowlist() {
+        let store = PermissionStore::new();
+        // No project root → no persistence, so seeding is purely in-memory.
+        let rules = vec![
+            PermissionRuleConfig {
+                tool: "bash".to_string(),
+                scope: "*".to_string(),
+            },
+            PermissionRuleConfig {
+                tool: "read_text".to_string(),
+                scope: "*".to_string(),
+            },
+        ];
+        store.seed_from_config(&rules);
+        assert!(store.is_always_allowed(&PermissionRule {
+            tool: "bash".to_string(),
+            scope: "*".to_string(),
+        }));
+        assert!(store.is_always_allowed(&PermissionRule {
+            tool: "read_text".to_string(),
+            scope: "*".to_string(),
+        }));
+    }
+
+    #[test]
+    fn wildcard_scope_allows_any_scope_for_same_tool() {
+        let store = PermissionStore::new();
+        store.seed_from_config(&[PermissionRuleConfig {
+            tool: "bash".to_string(),
+            scope: "*".to_string(),
+        }]);
+        assert!(store.is_always_allowed(&PermissionRule {
+            tool: "bash".to_string(),
+            scope: "git status".to_string(),
+        }));
+        assert!(!store.is_always_allowed(&PermissionRule {
+            tool: "edit_file".to_string(),
+            scope: "*".to_string(),
+        }));
+    }
+
+    #[test]
+    fn seed_from_config_does_not_duplicate_existing_rules() {
+        let store = PermissionStore::new();
+        let rule = PermissionRuleConfig {
+            tool: "bash".to_string(),
+            scope: "*".to_string(),
+        };
+        store.seed_from_config(std::slice::from_ref(&rule));
+        store.seed_from_config(std::slice::from_ref(&rule)); // idempotent
+        assert_eq!(store.allowed_tools().len(), 1);
+    }
+}

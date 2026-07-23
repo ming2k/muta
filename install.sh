@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install.sh — one-line installer for neenee-code.
+# install.sh — one-line installer for neenee.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
@@ -8,7 +8,7 @@
 # Or, to pin a version:
 #   NEENEE_VERSION=0.10.0 curl -fsSL .../install.sh | bash
 #
-# Installs the `neenee-code` binary into ~/.local/bin (or $INSTALL_DIR if set).
+# Installs the `neenee` binary into ~/.local/bin (or $INSTALL_DIR if set).
 # Detects OS + architecture and pulls the matching release tarball from GitHub.
 
 set -euo pipefail
@@ -17,8 +17,8 @@ set -euo pipefail
 
 REPO="ming2k/neenee"
 # Binary name as published inside the release tarball (matches `[[bin]]` in
-# `apps/code/neenee-code/Cargo.toml`).
-BIN_NAME="neenee-code"
+# `crates/neenee/Cargo.toml`).
+BIN_NAME="neenee"
 # Where the binary lands. Honour an explicit override, otherwise ~/.local/bin
 # (no sudo needed; create it if missing).
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
@@ -93,7 +93,7 @@ if [[ -z "$NEENEE_VERSION" ]]; then
 fi
 # Allow the user to pass either "0.10.0" or "v0.10.0".
 version="${NEENEE_VERSION#v}"
-info "Installing ${fmt_bold}neenee-code v${version}${fmt_reset}"
+info "Installing ${fmt_bold}neenee v${version}${fmt_reset}"
 
 # --- download + extract -------------------------------------------------
 
@@ -136,5 +136,5 @@ esac
 # Shell-completion hint: the binary can print its own completions, but that
 # is left to the user. Finish with a friendly next-step.
 printf "\n"
-good "Done! Run ${fmt_bold}neenee-code${fmt_reset} to start."
+good "Done! Run ${fmt_bold}neenee${fmt_reset} to start."
 printf "  First launch: press ${fmt_bold}Ctrl+M${fmt_reset} to pick a provider.\n"

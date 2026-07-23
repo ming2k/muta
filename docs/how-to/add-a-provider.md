@@ -6,10 +6,10 @@ capability model that decides which path to take, see
 [Provider capabilities](../explanation/provider-capabilities.md).
 
 neenee resolves every provider through one catalog
-(`build_catalog` in `crates/platform/neenee-agent/src/catalog.rs`): it materializes
+(`build_catalog` in `crates/neenee-agent/src/catalog.rs`): it materializes
 registry presets, bespoke built-ins, and user-defined entries into channels
 with fully resolved credentials, then constructs the concrete `Provider` via
-`build_provider_for_channel` in `crates/providers/neenee-providers/src/registry.rs`.
+`build_provider_for_channel` in `crates/neenee-providers/src/registry.rs`.
 Startup and `/provider switch` share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
 
@@ -26,7 +26,7 @@ path for a vendor preset every neenee user would want.
 
 ## Path 1: User-defined entry (no code)
 
-Any OpenAI-compatible, Gemini-native, or Llama endpoint can be added from
+Any OpenAI-compatible, Google-native, or Llama endpoint can be added from
 `config.toml` without touching code. Add a `[[providers]]` table whose `id`
 either overrides a built-in or introduces a new model:
 
@@ -39,13 +39,13 @@ name = "Acme"
 
 [[providers.channels]]
 label = "default"
-transport = "OpenAiCompat"          # or "Anthropic" or "GeminiNative"
+transport = "OpenAi"          # or "Anthropic" or "Google"
 base_url = "https://api.acme.example/v1/chat/completions"
 api_key_env = "ACME_API_KEY"        # env var wins over the inline key below
 model = "acme-1"
 ```
 
-A **native-Gemini relay / 中转站** uses `GeminiNative`. The `base_url` is the
+A **native-Google relay / 中转站** uses `Google`. The `base_url` is the
 versioned base (carry the `/v1beta` prefix — the `/models/{id}:generateContent`
 path is appended for you). Auth stays on the `?key=` query param:
 
@@ -54,11 +54,11 @@ default_provider = "my-gemini-relay"
 
 [[providers]]
 id = "my-gemini-relay"
-name = "My Gemini Relay"
+name = "My Google Relay"
 
 [[providers.channels]]
 label = "default"
-transport = "GeminiNative"
+transport = "Google"
 base_url = "https://relay.example.com/v1beta"
 api_key_env = "GEMINI_RELAY_KEY"
 model = "gemini-2.5-flash"
@@ -77,14 +77,14 @@ Per-channel fields:
 
 | Field | Meaning |
 |-------|---------|
-| `transport` | `OpenAiCompat`, `Anthropic`, or `GeminiNative` |
-| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), or **versioned Gemini base** (native Gemini, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
+| `transport` | `OpenAi`, `Anthropic`, or `Google` |
+| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
 | `api_key_env` | Env var name read first; empty values fall through |
 | `api_key` | Inline key, used when `api_key_env` is unset or empty |
 | `model` | Wire model id; falls back to the entry `id` when omitted |
-| `user_agent` | OpenAI-compatible and native Gemini |
+| `user_agent` | OpenAI-compatible and native Google |
 | `effort` | Optional reasoning depth for OpenAI or Anthropic reasoning models; clamped to the model's supported levels |
-| `thinking` | Optional Anthropic thinking on/off switch; ignored by OpenAI and Gemini |
+| `thinking` | Optional Anthropic thinking on/off switch; ignored by OpenAI and Google |
 
 An entry whose `id` matches a built-in replaces it entirely; a new `id` is
 appended. One entry may carry several `channels` (e.g. a model reachable
@@ -94,7 +94,7 @@ through several relays), with `default_channel` selecting the active one. See
 ## Path 2: Registry entry (built-in OpenAI-compatible preset)
 
 Add one row to the `OPENAI_PROVIDER_SPECS` const table in
-`crates/providers/neenee-providers/src/registry.rs`:
+`crates/neenee-providers/src/registry.rs`:
 
 ```rust
 OpenAiProviderSpec {
@@ -120,7 +120,7 @@ OpenAiProviderSpec {
 
 That single entry is the whole change for a pure-env-var preset. The catalog
 loops over `OPENAI_PROVIDER_SPECS` automatically, so no `match` arm is needed.
-`OpenAiProviderSpec::build` constructs the concrete `OpenAiCompatProvider`,
+`OpenAiProviderSpec::build` constructs the concrete `OpenAiProvider`,
 stamping the preset `id` so assistant messages are attributed correctly. The
 preset inherits native tool serialization, `stream_chat_events`, and the full
 `chat` / `stream_chat` implementations.
@@ -129,18 +129,18 @@ preset inherits native tool serialization, `stream_chat_events`, and the full
 
 By default a registry preset reads its API key and model from the environment
 variables above. To also let users persist them in `config.toml`, add the
-field pair to `Config` in `crates/platform/neenee-store/src/config.rs` and an arm to
+field pair to `Config` in `crates/neenee-persistence/src/config.rs` and an arm to
 `config_key_for` / `config_model_for` in
-`crates/platform/neenee-agent/src/catalog.rs`, keyed by the same `id`. This is a
+`crates/neenee-agent/src/catalog.rs`, keyed by the same `id`. This is a
 convenience layer over env vars, not a requirement — a preset with no config
 arms still works through its env vars.
 
 ## Path 3: Standalone adapter (incompatible contract)
 
 Use this path only when the provider's contract is genuinely incompatible with
-OpenAI Chat Completions. `GoogleProvider` (`GeminiNative`) and
+OpenAI Chat Completions. `GoogleProvider` (`Google`) and
 `AnthropicMessagesProvider` (`Anthropic`) are the existing examples, exposed
-through the `neenee-ai-sdk-*` crates and re-exported by `neenee-providers`.
+through `neenee-llm-client` and re-exported by `neenee-providers`.
 
 Implement a `Provider` struct with at minimum `chat` and `stream_chat`. Both
 methods receive one `ModelRequest` containing the messages and tool
@@ -163,12 +163,12 @@ fallback parser directly.
 
 Then wire the adapter into the two construction sites:
 
-1. Add a `Transport` variant in `crates/platform/neenee-core/src/catalog.rs` and an arm
+1. Add a `Transport` variant in `crates/neenee-core/src/catalog.rs` and an arm
    in `build_provider_for_channel`
-   (`crates/providers/neenee-providers/src/registry.rs`) that constructs the adapter from
+   (`crates/neenee-providers/src/registry.rs`) that constructs the adapter from
    the channel.
 2. Materialize the entry in `build_catalog`
-   (`crates/platform/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
+   (`crates/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
 
 Map neenee's `Role` enum to the provider's role names in both `chat` and
 `stream_chat`. The universal fallback assumes assistant text is reachable

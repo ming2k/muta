@@ -1,0 +1,835 @@
+//! Integration test: panicking on assertion failure is the desired
+//! behaviour here, so the workspace `unwrap_used`/`expect_used` lints
+//! are relaxed for this file. (Lib/bin code stays linted.)
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+//! Wire-level integration tests for the chat/streaming provider implementations.
+//!
+//! The in-module unit tests can only exercise the *pure* parsing helpers
+//! (`parse_openai_stream_data`, `parse_anthropic_stream_data`, the echo filter)
+//! because the `chat` / `stream_chat_events` methods build a live `reqwest`
+//! request. These tests stand up a localhost mock HTTP server (mockito) and
+//! drive the full request → HTTP → SSE-byte-reassembly → event-parse path, so
+//! the integration behaviour — header attachment, error classification, and
+//! echo suppression over a real stream — is covered.
+
+use futures::StreamExt;
+use mockito::{Matcher, Server};
+use neenee_core::{Message, Provider, ProviderStreamEvent, Role, SecretString};
+use neenee_providers::{AnthropicMessagesProvider, OpenAiProvider};
+use serde_json::{Value, json};
+
+/// Join SSE `data:` events into a single response body. Each event becomes one
+/// `data: <payload>\n\n` frame — the shape `sse::data_payloads` decodes.
+fn sse_body(events: &[&str]) -> String {
+    events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect()
+}
+
+/// Collect a stream of provider events into a flat `Vec`, failing if any item
+/// is itself an `Err`. Mirrors how the harness drains a turn's event stream.
+async fn collect_events(
+    stream: futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>,
+) -> Vec<ProviderStreamEvent> {
+    let mut out = Vec::new();
+    for item in stream.collect::<Vec<_>>().await {
+        out.push(item.expect("stream item must be Ok"));
+    }
+    out
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// OpenAI-compatible provider
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn openai_chat_parses_content_reasoning_tool_calls_and_headers() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        // The bearer token and chosen user agent must reach the wire.
+        .match_header("authorization", "Bearer test-key")
+        .match_header("user-agent", "neenee-test/1")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"choices":[{"message":{"content":"Hello!","reasoning_content":"thinking","tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}]}"#,
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url_and_user_agent(
+        "test-key".to_string(),
+        "gpt-test".to_string(),
+        &url,
+        "neenee-test/1",
+    );
+    let message = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("chat should succeed");
+
+    assert_eq!(message.content, "Hello!");
+    assert_eq!(
+        message.reasoning_content.as_deref(),
+        Some("thinking"),
+        "reasoning_content must be parsed"
+    );
+    let calls = message
+        .tool_calls
+        .as_ref()
+        .expect("tool_calls must be present");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call_1");
+    assert_eq!(calls[0].name, "bash");
+    assert_eq!(calls[0].arguments, r#"{"command":"ls"}"#);
+}
+
+#[tokio::test]
+async fn openai_chat_strips_tool_call_echo_when_native_calls_present() {
+    // GLM/Qwen leak: the same tool call arrives both as `content` text and as a
+    // native `tool_calls` entry. The native call wins and the textual mirror is
+    // suppressed so raw JSON never reaches the UI.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"choices":[{"message":{"content":"{\"tool\":\"bash\",\"arguments\":{\"command\":\"ls\"}}","tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}]}"#,
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let message = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("chat should succeed");
+
+    assert!(
+        message.content.is_empty(),
+        "mirrored echo must be stripped when native tool calls are present: got {:?}",
+        message.content
+    );
+    assert_eq!(
+        message.tool_calls.as_ref().expect("native call")[0].name,
+        "bash"
+    );
+}
+
+#[tokio::test]
+async fn openai_chat_classifies_server_error_as_retryable() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(500)
+        .with_body("upstream boom")
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let error = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect_err("5xx must surface as an error");
+
+    // ensure_success tags 5xx as retryable so the harness backs off and retries.
+    assert!(
+        neenee_core::parse_retryable_error(&error).is_some(),
+        "5xx must be classified retryable: {error}"
+    );
+    assert!(error.contains("HTTP 500"));
+}
+
+#[tokio::test]
+async fn openai_chat_omits_auth_header_when_api_key_is_empty() {
+    // Keyless servers (a local `llama-server` started without `--api-key`) must
+    // not receive an empty `Authorization: Bearer ` header, which some servers
+    // reject even when they would otherwise ignore the key.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"choices":[{"message":{"content":"ok"}}]}"#)
+        .create_async()
+        .await;
+
+    let provider =
+        OpenAiProvider::with_base_url_and_user_agent(String::new(), "m".to_string(), &url, "ua");
+    let message = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("keyless chat should succeed");
+    assert_eq!(message.content, "ok");
+}
+
+#[tokio::test]
+async fn openai_chat_decode_failure_embeds_raw_body() {
+    // A gateway/CDN interstitial returns 200 with an HTML body instead of JSON.
+    // reqwest's own `.json()` would surface only "error decoding response body"
+    // with no hint of the cause; the decode helper must embed the raw text.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body>502 Bad Gateway</body></html>")
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let error = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect_err("non-JSON 200 must surface as a decode error");
+
+    assert!(
+        error.contains("error decoding response body"),
+        "should name the decode failure: {error}"
+    );
+    assert!(
+        error.contains("502 Bad Gateway"),
+        "should embed the raw body preview so the cause is diagnosable: {error}"
+    );
+}
+
+#[tokio::test]
+async fn openai_stream_parses_text_reasoning_and_tool_call_deltas() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let body = sse_body(&[
+        r#"{"choices":[{"delta":{"content":"Hel"}}]}"#,
+        r#"{"choices":[{"delta":{"content":"lo"}}]}"#,
+        r#"{"choices":[{"delta":{"reasoning_content":"hm"}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"bash","arguments":"{\"command\":\"pwd\"}"}}]}}]}"#,
+        "[DONE]",
+    ]);
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        // The streaming path must request a stream.
+        .match_body(Matcher::PartialJson(json!({"stream": true})))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let stream = provider
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("stream should open");
+    let events = collect_events(stream).await;
+
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::TextDelta(delta) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "Hello");
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderStreamEvent::ReasoningDelta(reasoning) if reasoning == "hm"
+    )));
+    let tool_calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::ToolCallDelta { name, .. } => name.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_calls, vec!["bash".to_string()]);
+}
+
+#[tokio::test]
+async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
+    // Over a real stream: the textual tool-call mirror and the native tool-call
+    // delta both arrive. The echo filter must hold the mirror and drop it once
+    // the native call is observed, so no raw JSON leaks as a TextDelta.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/chat/completions", server.url());
+    let body = sse_body(&[
+        r#"{"choices":[{"delta":{"content":"{\"tool\":\"bash\",\"arguments\":{\"command\":\"ls\"}}"}}"#,
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}]}}]}"#,
+        "[DONE]",
+    ]);
+    let _mock = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let stream = provider
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("stream should open");
+    let events = collect_events(stream).await;
+
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::TextDelta(_))),
+        "no TextDelta should survive: the echo must be stripped, got {events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderStreamEvent::ToolCallDelta { name, .. } if name.as_deref() == Some("bash")
+    )));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Anthropic-compatible /messages provider
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn anthropic_chat_assembles_text_thinking_and_tool_use() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/messages", server.url());
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        // The Messages surface identifies via x-api-key + anthropic-version.
+        .match_header("x-api-key", "test-key")
+        .match_header("anthropic-version", "2023-06-01")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"content":[
+                {"type":"thinking","thinking":"deliberating"},
+                {"type":"text","text":"Done."},
+                {"type":"tool_use","id":"toolu_1","name":"bash","input":{"command":"ls"}}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
+        "test-key".to_string(),
+        "minimax-m3".to_string(),
+        &url,
+        "ua",
+    );
+    let message = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("chat should succeed");
+
+    assert_eq!(message.content, "Done.");
+    assert_eq!(message.reasoning_content.as_deref(), Some("deliberating"));
+    let calls = message
+        .tool_calls
+        .as_ref()
+        .expect("tool_use must map to tool_calls");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "toolu_1");
+    assert_eq!(calls[0].name, "bash");
+    // The `input` object is serialized back to a JSON argument string.
+    let input: Value = serde_json::from_str(&calls[0].arguments).expect("input is valid json");
+    assert_eq!(input["command"], "ls");
+}
+
+#[tokio::test]
+async fn anthropic_stream_parses_tool_use_block_and_argument_fragments() {
+    // A tool_use block opens at index 1 (id + name up front), then its argument
+    // JSON streams in as `input_json_delta` fragments the harness concatenates.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/messages", server.url());
+    let body = sse_body(&[
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash"}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"comm"}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"and\":\"ls\"}"}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]);
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
+        "k".to_string(),
+        "minimax-m3".to_string(),
+        &url,
+        "ua",
+    );
+    let stream = provider
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("stream should open");
+    let events = collect_events(stream).await;
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ProviderStreamEvent::TextDelta(text) if text == "Hi"
+    )));
+    // The opening block carries id + name; the two argument fragments follow.
+    let tool_events: Vec<&ProviderStreamEvent> = events
+        .iter()
+        .filter(|event| matches!(event, ProviderStreamEvent::ToolCallDelta { .. }))
+        .collect();
+    assert_eq!(tool_events.len(), 3, "open + 2 fragments");
+    assert!(matches!(
+        tool_events[0],
+        ProviderStreamEvent::ToolCallDelta { id, name, .. }
+            if id.as_deref() == Some("toolu_1") && name.as_deref() == Some("bash")
+    ));
+}
+
+#[tokio::test]
+async fn anthropic_stream_surfaces_in_band_error_event() {
+    // Anthropic can emit an `error` event mid-stream (e.g. overloaded); the
+    // parser must surface it as an Err item rather than a silent empty stream.
+    let mut server = Server::new_async().await;
+    let url = format!("{}/v1/messages", server.url());
+    let body = sse_body(&[
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+    ]);
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
+        "k".to_string(),
+        "minimax-m3".to_string(),
+        &url,
+        "ua",
+    );
+    let stream = provider
+        .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("stream should open");
+    let items = stream.collect::<Vec<_>>().await;
+    let errored = items.iter().any(|item| {
+        item.as_ref()
+            .is_err_and(|error| error.contains("Overloaded"))
+    });
+    assert!(
+        errored,
+        "in-band error must surface as an Err item: {items:?}"
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// End-to-end through the production factory: Transport::Anthropic{effort,thinking}
+// → build_provider_for_channel → request_body → HTTP. This is the regression
+// suite for the effort/thinking decoupling + the high-effort-swallow fix. It
+// drives the *real* public API (not the private request_body), so it proves the
+// wire body a configured channel actually publishes.
+// ═════════════════════════════════════════════════════════════════════════════
+
+use neenee_core::catalog::{Channel, Transport};
+use neenee_core::{Effort, ThinkingMode};
+use neenee_providers::build_provider_for_channel;
+
+/// Build a channel → factory provider, send one turn to a mockito server that
+/// asserts the request body matches `expected` (partial JSON), and confirm the
+/// call succeeds. The shared harness for the three decoupling regressions.
+async fn assert_factory_body(mut channel: Channel, expected: Value) {
+    let mut server = Server::new_async().await;
+    // Point the channel at the mock server by rewriting its base_url in place.
+    let url = format!("{}/v1/messages", server.url());
+    if let Transport::Anthropic { base_url, .. } = &mut channel.transport {
+        *base_url = url;
+    }
+    let _mock = server
+        .mock("POST", "/v1/messages")
+        .match_body(Matcher::PartialJson(expected))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"content":[{"type":"text","text":"ok"}]}"#)
+        .create_async()
+        .await;
+
+    let provider = build_provider_for_channel(&channel, "anthropic", None);
+    let msg = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("factory-built provider chat must succeed");
+    assert_eq!(msg.content, "ok");
+}
+
+/// Regression #1: an explicit `effort = "high"` MUST publish
+/// `output_config.effort = "high"`. Before the fix the value `High` was
+/// treated as "the default" and silently dropped, so a channel pinned to high
+/// was a no-op on the wire.
+#[tokio::test]
+async fn factory_publishes_explicit_high_effort() {
+    let channel = Channel {
+        id: "claude-opus-4-8".into(),
+        label: "Opus".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(), // rewritten by the harness
+            user_agent: "ua".into(),
+            effort: Some(Effort::High),
+            thinking: None,
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-opus-4-8".into(),
+        remote: None,
+    };
+    assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
+}
+
+/// Regression #2: effort and thinking stay DECOUPLED. A channel with an effort
+/// override but thinking OFF must publish effort while the model won't reason.
+/// (Previously setting effort forced `thinking:{adaptive}` on.) The pure-mode
+/// contract (no `thinking` field) is asserted in the unit test
+/// `effort_without_thinking_stays_decoupled`; this test proves the factory
+/// honors an explicit `ThinkingMode::Off` together with an effort override end
+/// to end — i.e. the two overrides reach the provider independently.
+#[tokio::test]
+async fn factory_keeps_effort_decoupled_from_thinking_off() {
+    let channel = Channel {
+        id: "claude-opus-4-8".into(),
+        label: "Opus".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(),
+            user_agent: "ua".into(),
+            effort: Some(Effort::Medium),
+            thinking: Some(ThinkingMode::Off),
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-opus-4-8".into(),
+        remote: None,
+    };
+    // The request publishes the effort override; the absence of a `thinking`
+    // field is verified by the companion unit test.
+    assert_factory_body(channel, json!({ "output_config": { "effort": "medium" } })).await;
+}
+
+/// Regression #3: a thinking ON override with no effort publishes
+/// `thinking:{adaptive}` and omits `output_config` (no explicit effort).
+#[tokio::test]
+async fn factory_publishes_thinking_without_output_config() {
+    let channel = Channel {
+        id: "claude-opus-4-8".into(),
+        label: "Opus".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(),
+            user_agent: "ua".into(),
+            effort: None,
+            thinking: Some(ThinkingMode::Adaptive),
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-opus-4-8".into(),
+        remote: None,
+    };
+    assert_factory_body(
+        channel,
+        json!({ "thinking": { "type": "adaptive", "display": "summarized" } }),
+    )
+    .await;
+}
+
+/// Sonnet 5 thinking is ON by default when the `thinking` field is omitted, so
+/// an explicit opt-OUT (`ThinkingMode::Off`) MUST publish
+/// `thinking:{type:"disabled"}`. Omitting the field would leave the model
+/// reasoning and billing against the user's ADR-0046 opt-out intent — the
+/// regression this variant exists to catch.
+#[tokio::test]
+async fn sonnet5_opt_out_emits_explicit_disabled() {
+    let channel = Channel {
+        id: "claude-sonnet-5".into(),
+        label: "Sonnet 5".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(),
+            user_agent: "ua".into(),
+            effort: Some(Effort::High),
+            thinking: Some(ThinkingMode::Off),
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-sonnet-5".into(),
+        remote: None,
+    };
+    assert_factory_body(
+        channel,
+        json!({
+            "thinking": { "type": "disabled" },
+            "output_config": { "effort": "high" }
+        }),
+    )
+    .await;
+}
+
+/// Sonnet 5 opt-IN publishes adaptive thinking (not `disabled`), and honors the
+/// full effort range — here `xhigh`, which Sonnet 4.6 would reject.
+#[tokio::test]
+async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
+    let channel = Channel {
+        id: "claude-sonnet-5".into(),
+        label: "Sonnet 5".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(),
+            user_agent: "ua".into(),
+            effort: Some(Effort::Xhigh),
+            thinking: Some(ThinkingMode::Adaptive),
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-sonnet-5".into(),
+        remote: None,
+    };
+    assert_factory_body(
+        channel,
+        json!({
+            "thinking": { "type": "adaptive", "display": "summarized" },
+            "output_config": { "effort": "xhigh" }
+        }),
+    )
+    .await;
+}
+
+/// Fable 5 thinking is ALWAYS ON and cannot be disabled; even an explicit
+/// `ThinkingMode::Off` override is a no-op on the wire, which still publishes
+/// `thinking:{type:"adaptive"}`.
+#[tokio::test]
+async fn fable5_always_on_thinking_ignores_off_override() {
+    let channel = Channel {
+        id: "claude-fable-5".into(),
+        label: "Fable 5".into(),
+        transport: Transport::Anthropic {
+            base_url: String::new(),
+            user_agent: "ua".into(),
+            effort: None,
+            thinking: Some(ThinkingMode::Off),
+            copilot: false,
+        },
+        api_key: "k".into(),
+        model: "claude-fable-5".into(),
+        remote: None,
+    };
+    assert_factory_body(
+        channel,
+        json!({ "thinking": { "type": "adaptive", "display": "summarized" } }),
+    )
+    .await;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Live model-list discovery (list_models)
+// ═════════════════════════════════════════════════════════ Alternate */
+//
+// The in-module unit tests cover the pure parsers + endpoint derivation; these
+// wire tests stand up a localhost mock and drive the full GET → JSON → parse
+// path per protocol, asserting the exact headers/auth a chat request would send
+// and that the returned ids are sorted + de-duplicated.
+
+use neenee_providers::{DiscoveryProtocol, ModelDiscoveryRequest, ModelListError, list_models};
+
+#[tokio::test]
+async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
+    let mut server = Server::new_async().await;
+    let chat_url = format!("{}/v1/chat/completions", server.url());
+    // The mock must be on the derived /v1/models path.
+    let _mock = server
+        .mock("GET", "/v1/models")
+        // Auth matches the chat path: a bearer when a key is set.
+        .match_header("authorization", "Bearer sk-live")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":[
+                {"id":"zeta-last"},
+                {"id":"alpha-first"},
+                {"id":"alpha-first"},
+                {"id":"mid-model"}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let key = SecretString::from("sk-live");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &chat_url,
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let models = list_models(req).await.expect("discovery succeeds");
+    // Sorted + de-duplicated, regardless of the API's ordering or duplicates.
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["alpha-first", "mid-model", "zeta-last"]);
+}
+
+#[tokio::test]
+async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
+    // A keyless relay sends NO Authorization header at all (mirrors the chat
+    // path); the mock rejects any request carrying one.
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", Matcher::Missing)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[{"id":"relay-only"}]}"#)
+        .create_async()
+        .await;
+
+    let key = SecretString::default();
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let models = list_models(req).await.expect("keyless discovery succeeds");
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["relay-only"]);
+}
+
+#[tokio::test]
+async fn anthropic_list_models_sends_api_key_and_version_headers() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        // Anthropic auth: x-api-key + the pinned anthropic-version header.
+        .match_header("x-api-key", "sk-ant")
+        .match_header(
+            "anthropic-version",
+            neenee_llm_client::protocol::anthropic::request::ANTHROPIC_VERSION,
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":[
+                {"id":"claude-sonnet-5","display_name":"Sonnet"},
+                {"id":"claude-opus-4-8","display_name":"Opus"}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let key = SecretString::from("sk-ant");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Anthropic,
+        base_url: &format!("{}/v1/messages", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let models = list_models(req)
+        .await
+        .expect("anthropic discovery succeeds");
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-5"]);
+    // The display name rides along; capability fields stay None on this shape.
+    assert_eq!(models[0].display_name.as_deref(), Some("Opus"));
+    assert_eq!(models[0].context_window, None);
+}
+
+#[tokio::test]
+async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1beta/models")
+        // Gemini auth: the key is a query param, never a header.
+        .match_query(Matcher::UrlEncoded(
+            "key".to_string(),
+            "gem-key".to_string(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"models":[
+                {"name":"models/gemini-2.5-pro","supportedGenerationMethods":["generateContent"]},
+                {"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let key = SecretString::from("gem-key");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Gemini,
+        base_url: &format!("{}/v1beta", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let models = list_models(req).await.expect("gemini discovery succeeds");
+    // The embedding-only model is filtered out.
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["gemini-2.5-pro"]);
+}
+
+#[tokio::test]
+async fn list_models_returns_status_error_on_non_2xx() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .with_status(401)
+        .with_body(r#"{"error":"invalid_api_key"}"#)
+        .create_async()
+        .await;
+
+    let key = SecretString::from("bad");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    match list_models(req).await {
+        Err(ModelListError::Status(401, body)) => {
+            assert!(
+                body.contains("invalid_api_key"),
+                "body surfaces in error: {body}"
+            );
+        }
+        other => panic!("expected Status(401), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn list_models_returns_empty_error_when_data_array_is_empty() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"data":[]}"#)
+        .create_async()
+        .await;
+
+    let key = SecretString::from("k");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpenAi,
+        base_url: &format!("{}/v1/chat/completions", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    // An empty live list is reported as Empty (a failure), so the catalog
+    // keeps the snapshot rather than blanking the instance.
+    assert!(matches!(list_models(req).await, Err(ModelListError::Empty)));
+}

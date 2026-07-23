@@ -1,6 +1,6 @@
 # 0062. Direct LongPort OpenAPI adapter for quantitative trading
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0073
 - **Date:** 2026-07-14
 
 ## Context

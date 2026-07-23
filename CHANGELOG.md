@@ -83,6 +83,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Round lifecycle consolidated into `RoundLifecycle`; `loop_status` is now
+  typed (ADR-0078).** The cancellation-token + generation protocol that
+  guards "at most one active round per session" was copied inline across
+  nine sites (interactive rounds, pursuits, `!` shell commands, `/btw` side
+  sessions, session-switch slash commands, interrupt); it now lives in one
+  `neenee_agent::RoundLifecycle` type whose API (`begin` / `supersede` /
+  `cancel_current` / `finish`) makes the interrupt-vs-session-switch
+  distinction explicit instead of comment-only. `HarnessSnapshot.loop_status`
+  changed from `String` to the `LoopStatus` enum (`idle` / `running` /
+  `pursue`) — the `/serve` wire format is unchanged, but mismatches are now
+  compile errors. No user-visible behavior change. See
+  [ADR-0078](docs/adr/0078-round-lifecycle-type.md).
+
+- **Renamed `neenee-auth` → `neenee-oauth` (ADR-0077).** The crate does only
+  OAuth2 credential acquisition (PKCE, device flow, proactive refresh, the
+  `auth.toml` token store) — API-key auth lives in `neenee-persistence`. The
+  old name overstated its scope and collided with the `ChannelAuth` concept in
+  `neenee-core`; the new name matches the `OAuth` facade and ADR-0074's
+  "name the job" test. Workspace-internal rename (not published): path
+  dependencies and `use neenee_auth::` references update to `neenee-oauth` /
+  `use neenee_oauth::`. See
+  [ADR-0077](docs/adr/0077-rename-neenee-auth-to-neenee-oauth.md).
+
+- **Breaking: renamed the application binary `neenee-code` → `neenee`
+  (ADR-0075).** With the editor and quant products removed (ADR-0073), the
+  `-code` suffix no longer disambiguates a sibling domain binary, so the sole
+  product ships under its bare product name. The crate, the `[[bin]]` target,
+  the `crates/neenee-code/` directory, the release artefact, the install
+  script's `BIN_NAME`, and the default workspace member all become `neenee`.
+  **Migration:** reinstall (`curl ... install.sh | bash`) so `~/.local/bin`
+  holds `neenee`, or `ln -s neenee-code neenee` as a temporary bridge; update
+  any shell aliases, completion scripts, and `RUST_LOG=neenee_code=…` targets
+  (now `neenee=…`). See
+  [ADR-0075](docs/adr/0075-rename-neenee-code-to-neenee.md).
+
+- **Breaking: renamed `neenee-session` → `neenee-transport` and `neenee-store`
+  → `neenee-persistence` (ADR-0076).** Vocabulary cleanup companion to
+  ADR-0075. `neenee-session` collided with the `neenee-store::session` storage
+  module (two different things both called "session"); it owns the request loop,
+  handlers, and `/serve` WebSocket bridge — i.e. the **transport** a frontend
+  attaches to, which is what its own docs already called it. `neenee-store`
+  held config, paths, advisory locks, and telemetry alongside storage, so
+  "store" described only half the crate; **persistence** spans all of it. The
+  word "session" now means one thing across the workspace: the persisted
+  conversation in `neenee-persistence::session`. **Migration:** update path
+  dependencies (`Cargo.toml`) and `use neenee_session::` / `use neenee_store::`
+  references to `neenee_transport` / `neenee_persistence`. Internal `Session*`
+  type names (`SessionDriver`, …) are unchanged. See
+  [ADR-0076](docs/adr/0076-rename-session-and-store-crates.md).
+
+- **Consolidated LLM client crate (ADR-0074).** The four `neenee-ai-sdk-*`
+  crates (core + openai/anthropic/google) are merged into one
+  `neenee-llm-client` crate: a pooled transport layer (`Client`, `Endpoint`,
+  SSE, retry/error) plus one module per wire protocol
+  (`protocol::{openai, anthropic, google}`). Providers now embed a single
+  `Client` that reuses one `reqwest::Client` connection pool across every turn,
+  replacing the previous per-request `reqwest::Client::new()` (which discarded
+  keep-alive and TLS session reuse on every call). Runtime behaviour is
+  unchanged apart from connection pooling. `neenee-providers` remains the
+  channel registry/facade. See
+  [ADR-0074](docs/adr/0074-consolidate-llm-client-crate.md).
+
+- **Flat coding-focused workspace (ADR-0073).** All workspace members now live
+  directly under `crates/`; the `apps/{code,editor,quant}/` and
+  `crates/{platform,providers}/` grouping directories are gone. Package names
+  and the dependency graph are unchanged, so `cargo -p <name>` is unaffected.
+  `iris`/optics and `longport` workspace dependencies were dropped along with
+  the products that used them. See
+  [ADR-0073](docs/adr/0073-flat-coding-focused-workspace.md).
+
 - **State bar relocated below the input and lowercased.** The persistent
   session-state row now sits directly under the input box (above the hint bar)
   rather than between the activity bar and the input, so `unattended` reads as
@@ -188,6 +258,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   16,000-character cap the other search backends already applied.
 
 ### Removed
+
+- **Editor and quant products.** `neenee-editor`, `neenee-quant`,
+  `neenee-quant-gui`, and `neenee-intelligence` are deleted; the repository
+  now ships the `neenee-code` coding agent only. Their how-to guides
+  (`enable-live-quant-broker`, `use-intelligence-workbench`) and the
+  "Quant runtime" / "Intelligence workbench" configuration sections are gone.
+  ADR-0062 and ADR-0063 are superseded by ADR-0073.
 
 - **Dormant ADR-0037 §6 server-move scaffolding.** `SessionRegistry`,
   `SessionHandle`, and `SharedState` — every method returned

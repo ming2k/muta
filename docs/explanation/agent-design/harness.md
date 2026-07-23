@@ -17,7 +17,7 @@ Streaming remains inside the harness. Text fallback JSON is withdrawn from the
 visible transcript before its tool step is emitted.
 
 Provider adapters must preserve the harness system context. OpenAI-compatible
-providers use system messages; Gemini maps them to `systemInstruction` and
+providers use system messages; Google maps them to `systemInstruction` and
 returns fallback tool results as user-context text.
 
 The TUI merges each tool call and result into a semantic step. Steps are
@@ -49,7 +49,7 @@ The OpenAI-compatible providers declare schemas natively: the registry
 presets (`kimi-code`, `zai-code`) and the catalog-built `openai`/`deepseek`
 multi-model entries all share one adapter, so they inherit native tool
 declaration. The Anthropic adapter declares Anthropic-format `tools`; the
-Gemini adapter converts the same schema set into Gemini
+Google adapter converts the same schema set into Google
 `functionDeclarations` and replays results as `functionResponse` parts.
 A provider that does not serialize the supplied declarations never sends a
 native tools field; tool calls on it travel only through the universal

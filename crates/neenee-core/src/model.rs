@@ -1,0 +1,1317 @@
+//! Canonical model registry — baseline metadata for models whose provider does
+//! not publish a complete live model catalogue.
+//!
+//! A [`ProviderEntry`](crate::catalog::ProviderEntry) references a model by its
+//! wire id (e.g. `"glm-5.2"`); this module supplies conservative defaults for
+//! that id. A trusted provider may instead attach a [`RemoteModelMetadata`]
+//! snapshot to its channel. Such metadata is scoped to the provider because an
+//! endpoint, account entitlement, and serving runtime can change a model's
+//! available API surface and capabilities.
+//!
+//! The [`WireFormat`] on each model is the baseline wire protocol when no live
+//! provider metadata supplies a more specific endpoint. A remote catalogue can
+//! legitimately route the same model id through a different surface.
+
+use crate::thinking::ThinkingSupport;
+
+/// The baseline wire protocol used when a provider has no live endpoint
+/// metadata. A remote catalogue may select a different route for the same model
+/// id, so this is not an invariant of a model id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WireFormat {
+    /// OpenAI chat-completions (`/v1/chat/completions`). The common case.
+    #[default]
+    OpenAi,
+    /// Anthropic Messages (`/v1/messages`). Used by opencode-go for
+    /// MiniMax/Qwen, and by any Anthropic-compatible relay.
+    AnthropicCompat,
+    /// Google native (`generativelanguage.googleapis.com`).
+    Google,
+}
+
+/// A provider-selected inference surface from a trusted remote model catalogue.
+///
+/// This deliberately lives beside provider-scoped metadata rather than
+/// [`WireFormat`]: a single model id can be exposed through different APIs by
+/// different providers, plans, or accounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteModelEndpoint {
+    ChatCompletions,
+    Responses,
+    Messages,
+}
+
+/// A canonical baseline model definition.
+///
+/// The [`KNOWN_MODELS`] registry is authoritative only when a channel has no
+/// trusted remote metadata for the requested field. Use
+/// [`ModelCapabilities::for_channel`] for request-time behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct Model {
+    /// Wire model id sent in API requests, e.g. `"glm-5.2"`.
+    pub id: &'static str,
+    /// Human-readable display name, e.g. `"GLM-5.2"`.
+    pub name: &'static str,
+    /// Model family for grouping, e.g. `"glm"`, `"gpt"`, `"gemini"`.
+    pub family: &'static str,
+    /// Context window in tokens. `0` means unknown.
+    pub context_window: usize,
+    /// What extended thinking this model supports and how it is encoded on the
+    /// wire. The single source of truth for thinking capability; the coarse
+    /// "does it reason" bool used for display derives from it via
+    /// [`Model::reasoning`]. See [`ThinkingSupport`].
+    pub thinking: ThinkingSupport,
+    /// Whether the model supports native tool/function calling.
+    pub tool_call: bool,
+    /// Whether the model supports vision (image inputs via `image_url`/
+    /// `inline_data`). When `false`, images attached to messages are
+    /// silently stripped before the request hits the wire.
+    pub vision: bool,
+    /// Wire protocol used to reach this model. See [`WireFormat`].
+    pub format: WireFormat,
+    /// Model-specific prompt guidance injected into the system prompt as a
+    /// `ModelGuidance` section. Because each model behaves differently,
+    /// this is the per-model hook for any behavioral nudge a model needs.
+    /// Empty for all known models today; a model entry is free to carry
+    /// non-empty guidance when it needs one. The model entry is the single
+    /// source of truth; the prompt engine just renders whatever the resolved
+    /// model carries.
+    pub model_guidance: &'static str,
+    /// The reasoning-effort levels this model honors, ascending. Used as the
+    /// clamp range when a user requests an effort the model doesn't support.
+    /// `&[]` means effort control does not apply (non-reasoning models, or
+    /// protocols without an effort field). First-party Claude models carry
+    /// [`crate::effort::EFFORT_CLAUDE_FULL`]; models behind
+    /// Anthropic-compatible relays with unknown effort support carry
+    /// [`crate::effort::EFFORT_COMMON`] (conservative); non-reasoning / non-
+    /// Anthropic-protocol models carry `&[]`.
+    pub effort_levels: &'static [crate::effort::Effort],
+}
+
+impl Model {
+    /// Coarse "does this model reason at all" flag, for capability display.
+    /// Derives from [`Self::thinking`] so there is one source of truth.
+    pub const fn reasoning(&self) -> bool {
+        self.thinking.reasons()
+    }
+}
+
+/// Capability metadata received from a trusted provider's live model catalogue.
+///
+/// Every field is optional so an omitted remote field falls back to the static
+/// baseline. A present `false` is meaningful: it explicitly overrides a more
+/// optimistic local default. This record belongs to the channel that received
+/// it, never globally by model id, because availability and protocol routing are
+/// provider- and account-specific.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RemoteModelMetadata {
+    /// Exact API surface advertised for this model by the provider. When absent,
+    /// the channel's configured transport remains authoritative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<RemoteModelEndpoint>,
+    /// Provider-supplied picker/display label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Provider's model-family label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Maximum full request context in tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    /// Maximum generated tokens, when declared by the endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Exact reasoning representation supported by the advertised endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingSupport>,
+    /// Whether native tool/function calls are accepted by this endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    /// Whether image input is accepted by this endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Endpoint-advertised reasoning effort values. An empty vector explicitly
+    /// means that the model accepts no effort control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_levels: Option<Vec<crate::Effort>>,
+}
+
+/// Effective capabilities for one provider channel.
+///
+/// This owned view combines the local baseline with the channel's remote
+/// snapshot. One model id can therefore have different capabilities or routes
+/// at different providers without one account's discovery changing another
+/// provider's behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCapabilities {
+    pub display_name: String,
+    pub family: String,
+    pub context_window: usize,
+    pub max_output_tokens: Option<u32>,
+    pub thinking: ThinkingSupport,
+    pub tool_call: bool,
+    pub vision: bool,
+    pub effort_levels: Vec<crate::Effort>,
+}
+
+impl ModelCapabilities {
+    /// Resolve effective capabilities for `model_id`, applying all explicitly
+    /// advertised remote fields over the local baseline.
+    pub fn for_channel(model_id: &str, remote: Option<&RemoteModelMetadata>) -> Self {
+        let baseline = resolve(model_id);
+        let remote = remote.cloned().unwrap_or_default();
+        Self {
+            display_name: remote.display_name.unwrap_or_else(|| {
+                if baseline.name.is_empty() {
+                    model_id.to_string()
+                } else {
+                    baseline.name.to_string()
+                }
+            }),
+            family: remote.family.unwrap_or_else(|| {
+                if baseline.family.is_empty() {
+                    model_id.to_string()
+                } else {
+                    baseline.family.to_string()
+                }
+            }),
+            context_window: remote.context_window.unwrap_or(baseline.context_window),
+            max_output_tokens: remote.max_output_tokens,
+            thinking: remote.thinking.unwrap_or(baseline.thinking),
+            tool_call: remote.tool_call.unwrap_or(baseline.tool_call),
+            vision: remote.vision.unwrap_or(baseline.vision),
+            effort_levels: remote
+                .effort_levels
+                .unwrap_or_else(|| baseline.effort_levels.to_vec()),
+        }
+    }
+
+    /// Coarse reasoning capability used by picker and request construction.
+    pub const fn reasoning(&self) -> bool {
+        self.thinking.reasons()
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[test]
+    fn remote_metadata_overrides_only_the_fields_it_declares() {
+        let remote = RemoteModelMetadata {
+            display_name: Some("Copilot GPT-4o".to_string()),
+            context_window: Some(64_000),
+            vision: Some(false),
+            tool_call: Some(false),
+            ..Default::default()
+        };
+
+        let effective = ModelCapabilities::for_channel("gpt-4o", Some(&remote));
+
+        assert_eq!(effective.display_name, "Copilot GPT-4o");
+        assert_eq!(effective.context_window, 64_000);
+        assert!(!effective.vision);
+        assert!(!effective.tool_call);
+        // The provider omitted reasoning, so the static GPT-4o baseline remains.
+        assert_eq!(effective.thinking, ThinkingSupport::None);
+    }
+
+    #[test]
+    fn remote_effort_levels_can_explicitly_clear_the_static_baseline() {
+        let remote = RemoteModelMetadata {
+            effort_levels: Some(Vec::new()),
+            ..Default::default()
+        };
+
+        let effective = ModelCapabilities::for_channel("gpt-5.5", Some(&remote));
+
+        assert!(effective.effort_levels.is_empty());
+    }
+}
+
+/// The canonical registry of known models. Add a model here when it is
+/// referenced by any built-in provider preset; user-defined models that are not
+/// in this list fall back to [`fallback_model`] at resolution time.
+///
+/// `fallback_model` is defined in this module.
+///
+pub const KNOWN_MODELS: &[Model] = &[
+    // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
+    Model {
+        id: "glm-5.2",
+        name: "GLM-5.2",
+        family: "glm",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "glm-5.1",
+        name: "GLM-5.1",
+        family: "glm",
+        context_window: 200_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "glm-5",
+        name: "GLM-5",
+        family: "glm",
+        context_window: 200_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "glm-4.7",
+        name: "GLM-4.7",
+        family: "glm",
+        context_window: 200_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
+    Model {
+        // The Kimi Code platform's current flagship. The platform's live
+        // `GET /models` advertises `k3` with a 1M context window, image/video
+        // inputs, and always-on thinking (`supports_thinking_type: "only"`,
+        // single `max` effort tier) — over the OpenAI-compatible wire the
+        // always-on reasoning simply streams back as `reasoning_content`, so
+        // there is no thinking switch to model.
+        id: "k3",
+        name: "Kimi K3",
+        family: "kimi",
+        context_window: 1_048_576,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "kimi-k2.7-code",
+        name: "Kimi K2.7 Code",
+        family: "kimi",
+        context_window: 262_144,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        family: "kimi",
+        context_window: 262_144,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        family: "kimi",
+        context_window: 262_144,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
+    // Served over the Anthropic Messages wire format. Relays forward to
+    // Anthropic's own `/messages` surface, so these carry
+    // `WireFormat::AnthropicCompat`.
+    Model {
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        family: "claude",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::AnthropicAdaptive,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        // Opus 4.8 honors the full effort range including `xhigh`/`max`.
+        effort_levels: crate::effort::EFFORT_CLAUDE_FULL,
+    },
+    Model {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        family: "claude",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::AnthropicAdaptive,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
+        effort_levels: crate::effort::EFFORT_CLAUDE_NO_XHIGH,
+    },
+    Model {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        family: "claude",
+        context_window: 1_000_000,
+        // Fable 5 thinking is ALWAYS ON; an explicit `{type:"disabled"}` is
+        // rejected with 400. `AnthropicAdaptiveAlwaysOn` makes the transport
+        // emit `thinking:{type:"adaptive"}` regardless of the user's on/off
+        // choice (an opt-out is a no-op on this model). Manual `type:"enabled"`
+        // also returns 400.
+        thinking: ThinkingSupport::AnthropicAdaptiveAlwaysOn,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        // Fable 5 honors the full effort range including `xhigh`/`max`.
+        effort_levels: crate::effort::EFFORT_CLAUDE_FULL,
+    },
+    Model {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        family: "claude",
+        context_window: 1_000_000,
+        // Sonnet 5: omitting the `thinking` field RUNS adaptive thinking; to
+        // actually disable it you must send `{type:"disabled"}`. This is neither
+        // `AnthropicAdaptive` (omit disables) nor `AnthropicAdaptiveAlwaysOn`
+        // (cannot disable) — so the transport emits an explicit `disabled` on
+        // opt-out to honor ADR-0046. Manual `type:"enabled"` returns 400.
+        thinking: ThinkingSupport::AnthropicAdaptiveOnByDefault,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        // Sonnet 5 honors the full range INCLUDING `xhigh` — the key difference
+        // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
+        effort_levels: crate::effort::EFFORT_CLAUDE_FULL,
+    },
+    Model {
+        id: "claude-haiku-4-5-20251001",
+        name: "Claude Haiku 4.5",
+        family: "claude",
+        context_window: 200_000,
+        // Haiku 4.5 supports only MANUAL extended thinking
+        // (`thinking:{type:"enabled",budget_tokens}`); it has no adaptive mode
+        // and rejects the `effort` parameter (400), hence empty `effort_levels`.
+        thinking: ThinkingSupport::AnthropicManual,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── GPT-5.6 (OpenAI) ───────────────────────────────────────────────────
+    // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
+    // Sol (flagship) / Terra (balanced) / Luna (efficient, high-volume).
+    // `gpt-5.6` is an alias that routes to `gpt-5.6-sol`. All speak the
+    // standard OpenAI chat-completions API and reason via `reasoning_content`.
+    // GPT-5.6 honors the `max` effort level, so these carry the 5.6-specific
+    // effort set rather than the xhigh-capped `EFFORT_OPENAI_GPT`.
+    // OpenAI has not published the context window; use the GPT-5.5-class 1M
+    // window conservatively for all three tiers and the alias.
+    Model {
+        id: "gpt-5.6",
+        name: "GPT-5.6",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    Model {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT_5_6,
+    },
+    // ── GPT (OpenAI) ───────────────────────────────────────────────────────
+    // The current frontier chat family served over the OpenAI chat-completions
+    // API. All reason (surfaced via the `reasoning_content` stream) and take
+    // text+image input. Context windows and pricing per OpenAI's model docs;
+    // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
+    Model {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        family: "gpt",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        family: "gpt",
+        context_window: 400_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    // OpenAI sub2api relays can expose additional text aliases not used by the
+    // official built-in template. Keep their metadata conservative when the
+    // exact serving contract is relay-defined.
+    Model {
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2-chat-latest",
+        name: "GPT-5.2 Chat Latest",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
+        id: "gpt-5.2-pro",
+        name: "GPT-5.2 Pro",
+        family: "gpt",
+        context_window: 0,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_OPENAI_GPT,
+    },
+    // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
+    // remains only behind the TTS/transcribe specialized models) but kept
+    // registered so existing configs and older sessions still resolve metadata.
+    Model {
+        id: "gpt-4o",
+        name: "GPT-4o",
+        family: "gpt",
+        context_window: 128_000,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        family: "gpt",
+        context_window: 128_000,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── Google (native) ────────────────────────────────────────────────────
+    // Native Google REST surface (`generateContent`/`streamGenerateContent`).
+    // The id strings mirror Google's official naming and the ids relay/中转站
+    // gateways advertise — so a relay-served model resolves to real metadata
+    // instead of a generic fallback. See ADR for the configurable
+    // `gemini_base_url`.
+    Model {
+        id: "gemini-3.5-flash",
+        name: "Gemini 3.5 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
+        id: "gemini-3.1-pro-preview-customtools",
+        name: "Gemini 3.1 Pro Preview (Custom Tools)",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── sub2api / antigravity relay models ────────────────────────────────
+    // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
+    // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
+    // surface (`/v1beta/models/{id}:generateContent`), so the metadata mirrors
+    // the Gemini family; the relay forwards the model id verbatim. The wire
+    // responses include `thoughtSignature`/`thoughtsTokenCount`, so these
+    // reason like the rest of the 3.x family.
+    Model {
+        id: "gemini-3.1-pro-high",
+        name: "Gemini 3.1 Pro High",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3.1-pro-low",
+        name: "Gemini 3.1 Pro Low",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-3-flash",
+        name: "Gemini 3 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.5-flash-lite",
+        name: "Gemini 2.5 Flash-Lite",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "gemini-2.0-flash",
+        name: "Gemini 2.0 Flash",
+        family: "gemini",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
+    Model {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
+    Model {
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        family: "mimo",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        family: "mimo",
+        context_window: 1_048_576,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "mimo-v2-pro",
+        name: "MiMo V2 Pro",
+        family: "mimo",
+        context_window: 1_048_576,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "mimo-v2-omni",
+        name: "MiMo V2 Omni",
+        family: "mimo",
+        context_window: 262_144,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
+    Model {
+        id: "minimax-m3",
+        name: "MiniMax M3",
+        family: "minimax",
+        context_window: 512_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    Model {
+        id: "minimax-m2.7",
+        name: "MiniMax M2.7",
+        family: "minimax",
+        context_window: 204_800,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    Model {
+        id: "minimax-m2.5",
+        name: "MiniMax M2.5",
+        family: "minimax",
+        context_window: 204_800,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::AnthropicCompat,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
+    // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
+    // opencode-go; the KNOWN_MODELS fallback mirrors that so the offline
+    // fallback path matches the live catalog.
+    Model {
+        id: "qwen3.7-max",
+        name: "Qwen3.7 Max",
+        family: "qwen",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    Model {
+        id: "qwen3.7-plus",
+        name: "Qwen3.7 Plus",
+        family: "qwen",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    Model {
+        id: "qwen3.6-plus",
+        name: "Qwen3.6 Plus",
+        family: "qwen",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    Model {
+        id: "qwen3.5-plus",
+        name: "Qwen3.5 Plus",
+        family: "qwen",
+        context_window: 262_144,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_COMMON,
+    },
+    // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
+    Model {
+        id: "grok-4.5",
+        name: "Grok 4.5",
+        family: "grok",
+        context_window: 256_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_XAI_GROK,
+    },
+    Model {
+        id: "grok-4.20",
+        name: "Grok 4.20",
+        family: "grok",
+        context_window: 256_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_XAI_GROK,
+    },
+    Model {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        family: "grok",
+        context_window: 256_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_XAI_GROK,
+    },
+    Model {
+        id: "grok-build-0.1",
+        name: "Grok Build 0.1",
+        family: "grok",
+        context_window: 256_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: crate::effort::EFFORT_XAI_GROK,
+    },
+];
+
+/// Look up a known model by its wire id. Returns `None` for user-defined or
+/// unrecognized model ids; callers should fall back to [`fallback_model`].
+pub fn model_by_id(id: &str) -> Option<&'static Model> {
+    KNOWN_MODELS.iter().find(|m| m.id == id)
+}
+
+/// A conservative fallback for model ids not in [`KNOWN_MODELS`] (local models,
+/// user-defined relays, unreleased models). Assumes tool calling (the harness
+/// depends on it) and nothing else.
+pub fn fallback_model(_id: &str) -> Model {
+    Model {
+        id: "",
+        name: "",
+        family: "",
+        context_window: 0,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    }
+}
+
+/// Resolve any model id to its metadata, in precedence order: the vetted
+/// static registry entry when known, then the runtime-fitted overlay (see
+/// [`register_fitted_models`]) for ids a trusted provider advertised, then a
+/// conservative fallback. Never returns `None` so callers need not branch on
+/// absence.
+pub fn resolve(id: &str) -> Model {
+    if let Some(model) = model_by_id(id) {
+        return *model;
+    }
+    if let Some(model) = fitted_models()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+    {
+        return *model;
+    }
+    fallback_model(id)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Runtime-fitted models (capability overlay)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Capability metadata for a model id the static registry does not know,
+/// learned at runtime from a provider's live model list (ADR-0065).
+///
+/// Only **trusted** providers may feed this overlay (official endpoints whose
+/// `/models` advertises real capability fields, opted in via their template);
+/// an arbitrary relay cannot use it to inflate a model's context window or
+/// capabilities. Registration is ignored for ids present in [`KNOWN_MODELS`]
+/// — the vetted static entry always wins, so a provider can never
+/// *downgrade* a known model either.
+#[derive(Debug, Clone)]
+pub struct FittedModel {
+    /// Wire model id as advertised by the provider.
+    pub id: String,
+    /// Provider-supplied display name; falls back to the id when absent.
+    pub display_name: Option<String>,
+    /// Grouping family (the feeding template's id, e.g. `"kimi-code"`).
+    pub family: String,
+    /// Advertised context window in tokens; `0` means the endpoint did not
+    /// say (the model resolves with an unknown window, like the fallback).
+    pub context_window: usize,
+    /// The endpoint advertises reasoning (a `reasoning_content` stream).
+    pub reasoning: bool,
+    /// The endpoint advertises image inputs.
+    pub vision: bool,
+    /// Wire protocol the feeding provider speaks for this model.
+    pub format: WireFormat,
+    /// Advertised reasoning-effort levels (any order; stored ascending via
+    /// [`Effort::ORDER`](crate::effort::Effort::ORDER)).
+    pub effort_levels: Vec<crate::effort::Effort>,
+}
+
+/// Process-wide overlay of runtime-fitted models. Populated at startup from
+/// persisted discovery results and refreshed after a live fetch (the feeding
+/// layer lives in `neenee_agent::catalog`).
+static FITTED_MODELS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<&'static str, Model>>,
+> = std::sync::OnceLock::new();
+
+fn fitted_models() -> &'static std::sync::RwLock<std::collections::HashMap<&'static str, Model>> {
+    FITTED_MODELS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Register (or replace) runtime-fitted models. Ids already in
+/// [`KNOWN_MODELS`] are skipped — the static registry is vetted and always
+/// wins. Strings and slices are interned via `Box::leak` because [`Model`]
+/// is `Copy` over `&'static str`; the set of distinct fitted ids is bounded
+/// by what a provider advertises, so the one-time leak per registration is
+/// negligible.
+pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
+    let mut overlay = fitted_models().write().unwrap_or_else(|e| e.into_inner());
+    for fitted in models {
+        if model_by_id(&fitted.id).is_some() {
+            continue;
+        }
+        let id: &'static str = Box::leak(fitted.id.into_boxed_str());
+        let name: &'static str = Box::leak(
+            fitted
+                .display_name
+                .unwrap_or_else(|| id.to_string())
+                .into_boxed_str(),
+        );
+        let mut levels = fitted.effort_levels;
+        levels.sort_by_key(|level| {
+            crate::effort::Effort::ORDER
+                .iter()
+                .position(|ordered| ordered == level)
+                .unwrap_or(usize::MAX)
+        });
+        levels.dedup();
+        overlay.insert(
+            id,
+            Model {
+                id,
+                name,
+                family: Box::leak(fitted.family.into_boxed_str()),
+                context_window: fitted.context_window,
+                thinking: if fitted.reasoning {
+                    ThinkingSupport::ReasoningContent
+                } else {
+                    ThinkingSupport::None
+                },
+                // The harness depends on tool calling; an advertised coding
+                // model is assumed capable (same assumption as the fallback).
+                tool_call: true,
+                vision: fitted.vision,
+                format: fitted.format,
+                model_guidance: "",
+                effort_levels: Box::leak(levels.into_boxed_slice()),
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_models_have_unique_ids() {
+        let mut ids: Vec<&str> = KNOWN_MODELS.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        let dups: Vec<&str> = ids
+            .windows(2)
+            .filter(|w| w[0] == w[1])
+            .map(|w| w[0])
+            .collect();
+        assert!(dups.is_empty(), "duplicate model ids: {dups:?}");
+    }
+
+    #[test]
+    fn resolve_returns_known_model() {
+        let m = resolve("glm-5.2");
+        assert_eq!(m.name, "GLM-5.2");
+        assert_eq!(m.context_window, 1_000_000);
+        assert!(m.reasoning());
+    }
+
+    #[test]
+    fn claude_fable_5_and_sonnet_5_resolve() {
+        // Fable 5: thinking always on, cannot be disabled.
+        let f = resolve("claude-fable-5");
+        assert_eq!(f.name, "Claude Fable 5");
+        assert_eq!(f.family, "claude");
+        assert_eq!(f.context_window, 1_000_000);
+        assert!(f.reasoning());
+        assert_eq!(f.format, WireFormat::AnthropicCompat);
+        assert_eq!(
+            f.thinking,
+            crate::thinking::ThinkingSupport::AnthropicAdaptiveAlwaysOn
+        );
+        assert!(f.effort_levels.contains(&crate::effort::Effort::Xhigh));
+        assert!(f.effort_levels.contains(&crate::effort::Effort::Max));
+
+        // Sonnet 5: on-by-default but disableable thinking; honors xhigh
+        // (unlike Sonnet 4.6, which rejects it).
+        let s = resolve("claude-sonnet-5");
+        assert_eq!(s.name, "Claude Sonnet 5");
+        assert_eq!(s.context_window, 1_000_000);
+        assert!(s.reasoning());
+        assert_eq!(
+            s.thinking,
+            crate::thinking::ThinkingSupport::AnthropicAdaptiveOnByDefault
+        );
+        assert!(s.effort_levels.contains(&crate::effort::Effort::Xhigh));
+
+        // Sanity: Sonnet 4.6 does NOT carry xhigh — confirms 5 differs.
+        let s46 = resolve("claude-sonnet-4-6");
+        assert!(!s46.effort_levels.contains(&crate::effort::Effort::Xhigh));
+    }
+
+    #[test]
+    fn gpt_reasoning_models_expose_openai_effort_levels() {
+        let gpt = resolve("gpt-5.5");
+        assert_eq!(gpt.format, WireFormat::OpenAi);
+        assert!(gpt.reasoning());
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::Medium));
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::High));
+        assert!(gpt.effort_levels.contains(&crate::effort::Effort::Xhigh));
+        assert!(!gpt.effort_levels.contains(&crate::effort::Effort::Max));
+    }
+
+    #[test]
+    fn gpt_5_6_family_resolves_with_max_effort() {
+        // `gpt-5.6` is an alias routing to Sol, so it must resolve like Sol.
+        for id in ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            let m = resolve(id);
+            assert_eq!(m.format, WireFormat::OpenAi, "{id} wire format");
+            assert_eq!(m.family, "gpt", "{id} family");
+            assert!(m.reasoning(), "{id} is a reasoning model");
+            assert!(m.tool_call, "{id} supports tool calls");
+            assert!(m.vision, "{id} is multimodal");
+            // GPT-5.6 is the first OpenAI family to honor `max`.
+            assert!(
+                m.effort_levels.contains(&crate::effort::Effort::Max),
+                "{id} must expose the max effort level"
+            );
+            assert!(
+                m.effort_levels.contains(&crate::effort::Effort::Xhigh),
+                "{id} must expose xhigh"
+            );
+        }
+        // Sanity: earlier GPT-5.x still does NOT carry max (confirms 5.6 differs).
+        let legacy = resolve("gpt-5.5");
+        assert!(!legacy.effort_levels.contains(&crate::effort::Effort::Max));
+    }
+
+    #[test]
+    fn resolve_falls_back_for_unknown() {
+        let m = resolve("some-local-model");
+        assert_eq!(m.context_window, 0);
+        assert!(!m.reasoning());
+        // The harness depends on tool calling, so even the fallback assumes it.
+        assert!(m.tool_call);
+    }
+
+    #[test]
+    fn fitted_overlay_supplies_metadata_for_unregistered_ids() {
+        register_fitted_models(vec![FittedModel {
+            id: "fitted-future-k9".to_string(),
+            display_name: Some("Future K9".to_string()),
+            family: "kimi-code".to_string(),
+            context_window: 2_000_000,
+            reasoning: true,
+            vision: true,
+            format: WireFormat::OpenAi,
+            // Unsorted input with a duplicate: stored ascending, deduped.
+            effort_levels: vec![
+                crate::effort::Effort::Max,
+                crate::effort::Effort::Low,
+                crate::effort::Effort::Low,
+            ],
+        }]);
+        let m = resolve("fitted-future-k9");
+        assert_eq!(m.id, "fitted-future-k9");
+        assert_eq!(m.name, "Future K9");
+        assert_eq!(m.context_window, 2_000_000);
+        assert!(m.reasoning());
+        assert!(m.vision);
+        assert_eq!(
+            m.effort_levels,
+            &[crate::effort::Effort::Low, crate::effort::Effort::Max]
+        );
+    }
+
+    #[test]
+    fn fitted_overlay_never_overrides_the_static_registry() {
+        register_fitted_models(vec![FittedModel {
+            id: "glm-5.2".to_string(),
+            display_name: Some("bogus".to_string()),
+            family: "bogus".to_string(),
+            context_window: 1,
+            reasoning: false,
+            vision: true,
+            format: WireFormat::Google,
+            effort_levels: vec![crate::effort::Effort::Max],
+        }]);
+        // The vetted static entry wins on every field.
+        let m = resolve("glm-5.2");
+        assert_eq!(m.name, "GLM-5.2");
+        assert_eq!(m.context_window, 1_000_000);
+        assert_eq!(m.format, WireFormat::OpenAi);
+        assert!(!m.vision);
+    }
+
+    #[test]
+    fn opencode_go_models_carry_their_wire_format() {
+        // OpenAI-format models served by opencode-go.
+        assert_eq!(resolve("glm-5.2").format, WireFormat::OpenAi);
+        assert_eq!(resolve("kimi-k2.6").format, WireFormat::OpenAi);
+        assert_eq!(resolve("deepseek-v4-flash").format, WireFormat::OpenAi);
+        assert_eq!(resolve("mimo-v2.5-pro").format, WireFormat::OpenAi);
+        // Anthropic-/messages-format models served by opencode-go.
+        assert_eq!(resolve("minimax-m3").format, WireFormat::AnthropicCompat);
+        // models.dev records qwen3.* as openai-compatible under opencode-go.
+        assert_eq!(resolve("qwen3.7-max").format, WireFormat::OpenAi);
+    }
+
+    #[test]
+    fn gemini_models_resolve_with_native_format_and_family() {
+        // Every id the google/中转站 relay advertises must resolve to real
+        // metadata (native Gemini wire format + the gemini family), so a
+        // Custom Gemini channel never falls back to the generic OpenAI-shaped
+        // stub. Newer preview ids are the ones that previously resolved to the
+        // fallback — this guards them.
+        for id in [
+            "gemini-3.5-flash",
+            "gemini-3-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "gemini-3-flash",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ] {
+            let m = resolve(id);
+            assert_eq!(m.format, WireFormat::Google, "{id} must be native Gemini");
+            assert_eq!(m.family, "gemini", "{id} family");
+            assert!(m.tool_call, "{id} must support tool calls");
+            assert!(m.vision, "{id} must be multimodal");
+            assert!(
+                m.context_window >= 1_000_000,
+                "{id} context window: {}",
+                m.context_window
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_format_is_openai_compat() {
+        assert_eq!(fallback_model("anything").format, WireFormat::OpenAi);
+    }
+}

@@ -1,7 +1,7 @@
 # How to configure TUI appearance
 
 Use the `/config` Settings overlay to select a built-in color scheme or create
-a custom palette without restarting `neenee-code`.
+a custom palette without restarting `neenee`.
 
 ## Apply a preset
 

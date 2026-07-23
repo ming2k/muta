@@ -47,7 +47,7 @@ schemas:
 | `tool_choice` | same condition as `tools` |
 
 Providers with a different native contract convert the same cached schema set
-at the adapter boundary. `GoogleProvider` sends Gemini
+at the adapter boundary. `GoogleProvider` sends Google
 `functionDeclarations` instead of OpenAI `tools`/`tool_choice`.
 Providers with no native function calling send no tool declaration and rely
 on the universal text fallback. See

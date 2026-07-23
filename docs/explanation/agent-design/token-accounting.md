@@ -40,7 +40,7 @@ guesses.
 ## The priority chain
 
 At the single booking point (`Agent::book_turn_usage`,
-`crates/platform/neenee-agent/src/agent.rs`), each round's usage is resolved through this
+`crates/neenee-agent/src/agent.rs`), each round's usage is resolved through this
 chain, in order:
 
 ```text
@@ -81,7 +81,7 @@ makes "we already have the streamed number" short-circuit cleanly.
 ## The local char-class estimator
 
 When no upstream usage is available, neenee estimates locally. The estimator
-lives in `crates/platform/neenee-core/src/pressure.rs` (`count_tokens`) and replaces the
+lives in `crates/neenee-core/src/pressure.rs` (`count_tokens`) and replaces the
 old flat `bytes / 4` heuristic that the codebase carried for years.
 
 ### Why `bytes / 4` was wrong
@@ -235,7 +235,7 @@ the `usage` object it previously discarded:
 |----------|---------------|-----------|
 | **Anthropic** (`anthropic_compat.rs`) | top-level `usage.input_tokens` / `output_tokens` | `message_delta` event's cumulative `usage` → `Usage` event |
 | **OpenAI-compat** (`openai_compat.rs`) | top-level `usage.{prompt,completion,total}_tokens` | requests `stream_options.include_usage`; terminal chunk's `usage` → `Usage` event |
-| **Gemini** (`neenee-ai-sdk-google`) | `usageMetadata.{prompt,candidates,total}TokenCount` | `usageMetadata` in stream payloads → `Usage` event |
+| **Gemini** (`neenee-llm-client`) | `usageMetadata.{prompt,candidates,total}TokenCount` | `usageMetadata` in stream payloads → `Usage` event |
 
 Each adapter implements `Provider::usage_supported() -> true` and stashes the
 parsed `TokenUsage` in an internal `Mutex`, drained by `take_last_usage()`. The

@@ -41,7 +41,7 @@ A pursuit is two things:
 | **Objective** | The condition to pursue — a durable statement of the end state |
 | **`is_complete`** | A single boolean mirroring the persisted column |
 
-Both persist as a field on `SessionData` (`crates/platform/neenee-store/src/session.rs`),
+Both persist as a field on `SessionData` (`crates/neenee-persistence/src/session.rs`),
 the event-sourced per-session store (ADR-0032). Pursuit is `Option<Pursuit>`
 written via `SessionEvent::PursuitSet`; it survives restarts and `/resume`
 because the session snapshot + event log is the single durable authority.

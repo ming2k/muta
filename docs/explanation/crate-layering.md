@@ -7,31 +7,26 @@ head before reading any individual crate or ADR.
 ## The layer diagram
 
 ```text
-neenee-code ──► neenee-session ──► neenee-agent ──► neenee-tools ──► neenee-store
+neenee ──► neenee-transport ──► neenee-agent ──► neenee-tools ──► neenee-persistence
                      │                  ├──► neenee-skills ────────────────┤
                      │                  └──► neenee-providers              │
                      ├──► neenee-mcp ─────────────────────────────────────┤
                      └─────────────────────────────────────────────────────┴──► neenee-core
 
-neenee-code ──► neenee-tui-view ──► neenee-tui
-
-neenee-quant-gui ──► neenee-quant
-        │
-        └──► neenee-intelligence ──► neenee-agent
-                         ├─────────► neenee-tools
-                         └─────────► neenee-store
+neenee ──► neenee-tui-view ──► neenee-tui-engine
 ```
 
 An arrow means “depends on.” The diagram shows the important responsibility
 edges rather than every direct Cargo edge. Higher layers may depend on
-`neenee-core` directly for contracts. Provider implementations also build on
-the protocol SDK crates and shared AI SDK substrate; authentication is another
-downward dependency of `neenee-agent`.
+`neenee-core` directly for contracts. Provider implementations build on
+`neenee-llm-client`, the multi-protocol HTTP client (shared transport +
+OpenAI/Anthropic/Google wire protocols); authentication is another downward
+dependency of `neenee-agent`.
 
 The graph remains acyclic, but the foundation is not a set of three symmetric
 peers: tools use store-owned project/search facilities, while provider
-implementations build on protocol-specific SDK crates. The invariant from
-ADR-0005 is dependency direction, not visual symmetry.
+implementations build on the `neenee-llm-client` protocol layer. The invariant
+from ADR-0005 is dependency direction, not visual symmetry.
 
 ## Per-layer responsibility
 
@@ -52,15 +47,20 @@ agent even when it performs no I/O (ADR-0057).
 
 These crates implement the contracts below orchestration:
 
-- **`neenee-providers`** — concrete LLM provider impls (OpenAI, Anthropic,
-  Google, xAI…) behind the `Provider` trait. Protocol-specific SDK crates own
-  request/response semantics and share transport mechanics through
-  `neenee-ai-sdk-core`.
+- **`neenee-llm-client`** — the multi-protocol HTTP client. Owns the pooled
+  transport (`Client`, `Endpoint`, SSE byte reassembly, retry/error
+  classification) and one module per wire protocol
+  (`protocol::{openai, anthropic, google}`) holding the per-vendor
+  request/response semantics. Each provider embeds a shared `Client` so a
+  single connection pool is reused across every turn.
+- **`neenee-providers`** — the channel registry and `build_provider_for_channel`
+  factory, plus live model-list discovery and the in-memory mock provider. It
+  selects *which* backend to talk to; `neenee-llm-client` knows *how*.
 - **`neenee-tools`** — built-in tools (`bash`, `read_text`, `grep`, `glob`,
   `webfetch`, todo management, …). Most self-register via `inventory`;
   stateful todo tools receive an agent-owned context from
   `neenee-agent::tool_integration`. Store-backed tools and project helpers
-  depend on `neenee-store`.
+  depend on `neenee-persistence`.
 - **`neenee-skills`** — skill metadata, discovery, remote caching, registry,
   periodic refresh, and `use_skill` / `list_skills` tool adapters. The agent
   consumes the registry for model-context injection; Session also reads and
@@ -68,7 +68,7 @@ These crates implement the contracts below orchestration:
 - **`neenee-mcp`** — stdio JSON-RPC transport, MCP server lifecycle, tool
   adapters, live runtime, and catalog refresh. It publishes tools through the
   core `DynamicToolSink` contract and has no dependency on Agent or Session.
-- **`neenee-store`** — durable state: `SessionStore`, `Config`, embedding index,
+- **`neenee-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
   repeat store, XDG paths (ADR-0014).
 
 ### `neenee-agent` — orchestration
@@ -88,7 +88,7 @@ The `agent -> tools` and `agent -> skills` edges are intentional layering, not
 cycles: neither implementation crate depends on agent orchestration.
 `EnvoyTool` remains in Agent because it constructs and controls agents.
 
-### `neenee-session` — session harness
+### `neenee-transport` — session harness
 
 The layer that turns "an engine that can run a turn" into "a running agent
 session a frontend can drive." It owns:
@@ -119,42 +119,31 @@ daemon (ADR-0037 Step 6) remains a future migration step; its dormant
 returned `Err("not yet populated")` — reintroduce it when the server move
 resumes.
 
-### Application layer — `neenee-code` and the quant decision workspace
+### Application layer — `neenee`
 
-The binary. `neenee-code`:
+The binary. `neenee`:
 
 1. Constructs the `Agent` (using `neenee-agent` APIs directly — supplying the
    provider, configured toolset, identity), then attaches a live skill registry
    when that application enables skills. The agent adds tools tied to its own
    runtime state.
 2. Binds its principal (`apply_principal_profile(&principal_code())`) — the
-   identity + principal live in `neenee-code/src/identity.rs`, **not** in the
+   identity + principal live in `neenee/src/identity.rs`, **not** in the
    server (ADR-0054).
 3. Builds a `SessionDriver` and spawns its `run` method.
 4. Runs the TUI in the main thread, holding `req_tx` / `resp_rx`.
 
-> **Note on the current `neenee-code` dependency shape.** `neenee-code` depends
-> on `neenee-agent`, `neenee-store`, `neenee-tools`, `neenee-skills`,
+> **Note on the current `neenee` dependency shape.** `neenee` depends
+> on `neenee-agent`, `neenee-persistence`, `neenee-tools`, `neenee-skills`,
 > `neenee-mcp`, and `neenee-providers`
-> *directly*, not only on `neenee-session`. This is because `SessionDriver`
+> *directly*, not only on `neenee-transport`. This is because `SessionDriver`
 > assembly (provider/configured-toolset/agent construction) still lives in
 > `main.rs` rather than behind a session-layer factory. If a session-layer
 > factory is reintroduced (ADR-0037 Step 6; the first dormant scaffolding was
-> removed), that assembly moves into the session layer and `neenee-code` can
-> depend on `neenee-session` alone for orchestration. The direct deps are an
+> removed), that assembly moves into the session layer and `neenee` can
+> depend on `neenee-transport` alone for orchestration. The direct deps are an
 > interim “reach-through,” not a design intent — see ADR-0037 §1 for the
 > target DAG.
-
-The quant application uses a different composition. `neenee-quant` owns market
-data, backtesting, portfolio state, risk checks, paper brokerage, and live
-broker adapters. `neenee-intelligence` owns public-web aggregation, explicit
-link observation, and structured expert meetings. `neenee-quant-gui` is the
-application shell that presents both services through optics/iris.
-
-That composition preserves a hard execution boundary. The intelligence crate
-has no dependency on the quant crate and no broker adapter. Expert conclusions
-remain evidence for a user decision; only an explicit, armed quant action can
-mutate an account. See ADR-0063.
 
 ## How a request flows across the layers
 
@@ -162,7 +151,7 @@ mutate an account. See ADR-0063.
 TUI keystroke / WS client
         │  AgentRequest (over mpsc, no source metadata)
         ▼
-neenee-session: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
+neenee-transport: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
         │                                                  │
         │  AgentResponse (over mpsc → TUI; cloned → broadcast → WS)  ◄──┘
         ▼
@@ -190,5 +179,3 @@ multi-frontend transport details.
   agent-to-tools integration and stateful tool construction.
 - [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) — separate
   skill/MCP capability crates and dynamic tool publication.
-- [ADR-0063](../adr/0063-intelligence-workbench-and-expert-council.md) — the
-  intelligence service and quant GUI composition boundary.

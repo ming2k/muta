@@ -1,6 +1,6 @@
 # TUI render components
 
-`apps/code/neenee-tui-view/src/render/components/` contains reusable view-layer
+`crates/neenee-tui-view/src/components/` contains reusable view-layer
 components built above low-level drawing primitives and below per-feature
 renderers. Components are pure render helpers: callers pass borrowed state,
 theme tokens, body lines, scroll cursors, and selection indices; components
@@ -44,9 +44,9 @@ view layer so the app shell cannot depend on component internals.
 |-----------------|-------|
 | Palette and semantic color mapping | `render/theme.rs` |
 | Fixed spacing, gutters, row counts, width constants | `render/design.rs` |
-| Modal/footer/row/option composition styles | `render/components/` |
-| Raw rect carving, panel fills, contrast, backdrop, body scrolling | `render/primitives.rs` |
-| Text wrapping, code gutters, source-line spans | `render/text_layout.rs` |
+| Modal/footer/row/option composition styles | `components/` |
+| Raw rect carving, panel fills, contrast, backdrop, body scrolling | `primitives.rs` |
+| Text wrapping, code gutters, source-line spans | `text_layout.rs` |
 
 Component styles should read from `Theme` and `design` tokens rather than
 hard-coding colors or dimensions. If a style is shared by several composed
@@ -64,10 +64,10 @@ Interaction logic remains in the app shell or in shell-owned state machines:
 
 | Behavior | Owner |
 |----------|-------|
-| Keyboard and mouse event dispatch | `apps/code/neenee-code/src/tui/input/` |
-| Modal open/close and action handling | `apps/code/neenee-code/src/tui/event_loop.rs` |
-| Question-modal state machine | `apps/code/neenee-code/src/tui/question_model.rs` |
-| Transcript-step focus and toggles | `apps/code/neenee-code/src/tui/step_interaction.rs` |
+| Keyboard and mouse event dispatch | `crates/neenee/src/tui/input/` |
+| Modal open/close and action handling | `crates/neenee/src/tui/event_loop.rs` |
+| Question-modal state machine | `crates/neenee/src/tui/question_model.rs` |
+| Transcript-step focus and toggles | `crates/neenee/src/tui/step_interaction.rs` |
 | Hit-region storage and lookup | `LayoutMap` / `ModalHitMap`, owned by the shell and filled by renderers |
 
 This keeps the view layer React-like in composition, but not React-like in
@@ -91,5 +91,5 @@ feature and is unlikely to be reused.
 ## Compatibility Re-exports
 
 Some modal footer symbols are still re-exported through
-`render/primitives.rs` while older overlay renderers are migrated. New code
+`primitives.rs` while older overlay renderers are migrated. New code
 should import modal footer helpers from `components::footer` directly.

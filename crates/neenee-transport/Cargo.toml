@@ -1,0 +1,35 @@
+[package]
+name = "neenee-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+neenee-core = { path = "../neenee-core" }
+neenee-persistence = { path = "../neenee-persistence" }
+neenee-providers = { path = "../neenee-providers" }
+neenee-tools = { path = "../neenee-tools" }
+neenee-skills = { path = "../neenee-skills" }
+neenee-mcp = { path = "../neenee-mcp" }
+neenee-agent = { path = "../neenee-agent" }
+neenee-oauth = { path = "../neenee-oauth" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

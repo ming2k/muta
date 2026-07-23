@@ -131,7 +131,7 @@ default_channel = 0
 
   [[providers.channels]]
   label = "Default"
-  transport = "OpenAiCompat"    # OpenAiCompat | Anthropic | GeminiNative
+  transport = "OpenAi"    # OpenAi | Anthropic | Google
   model = "acme-7b"
   base_url = "https://relay.example.com/v1"
   api_key_env = "ACME_API_KEY"  # env var name; wins over api_key
@@ -148,7 +148,7 @@ Reasoning controls are **per model**, not per provider. `effort` is the
 reasoning-depth throttle. `thinking` is an Anthropic-only on/off switch.
 
 OpenAI GPT reasoning models use the channel-level `effort` field on
-`OpenAiCompat` channels. Valid values are clamped to the model's supported
+`OpenAi` channels. Valid values are clamped to the model's supported
 levels; GPT models can expose `none`, `minimal`, `low`, `medium`, `high`, and
 `xhigh`.
 
@@ -188,112 +188,6 @@ The legacy flat fields `anthropic_effort` / `anthropic_thinking` are
 **deprecated** and no longer read — they only still load so an existing
 `config.toml` does not break. Migrate by moving their values into a
 `[model_reasoning]` entry.
-
-## Quant runtime
-
-`neenee-quant` reads a JSON config from `NEENEE_QUANT_CONFIG`, then applies
-environment overrides. Missing values keep the defaults.
-
-### Market data
-
-| Environment variable | Default | Meaning |
-|----------------------|---------|---------|
-| `NEENEE_QUANT_MARKET_DATA` | `synthetic` | Market-data adapter: `synthetic`, `synthetic-paper`, `binance`, `binance-http`, `longport`, or `longbridge` |
-| `NEENEE_QUANT_BINANCE_BASE_URL` | `https://api.binance.com` | Binance-compatible HTTP base URL |
-
-### Broker
-
-| Environment variable | Default | Meaning |
-|----------------------|---------|---------|
-| `NEENEE_QUANT_BROKER` | `paper` | Broker adapter: `paper`, `paper-trading`, `longport`, `longbridge`, or `live-http` |
-| `NEENEE_QUANT_LIVE_BROKER_URL` | empty | HTTPS broker gateway base URL for `live-http`. Local development may use `http://localhost:*`, `http://127.0.0.1:*`, or `http://[::1]:*` |
-| `NEENEE_QUANT_LIVE_BROKER_TOKEN_ENV` | `NEENEE_QUANT_LIVE_BROKER_TOKEN` | Environment variable that contains the live broker bearer token |
-| `NEENEE_QUANT_LIVE_BROKER_TOKEN` | empty | Direct live broker bearer token override |
-
-`live-http` never enables implicitly. It fails startup unless a non-empty
-token and an accepted gateway URL are present.
-
-The live broker gateway contract is:
-
-| Method | Path | Request | Response |
-|--------|------|---------|----------|
-| `GET` | `/portfolio` | Optional `symbol` query parameter | `PortfolioSnapshot` JSON |
-| `POST` | `/orders` | Order request plus `client_order_id` and `quote` | `OrderDecision` JSON |
-| `POST` | `/orders/{order_id}/cancel` | `order_id` and `client_cancel_id` | `OrderDecision` JSON |
-
-`neenee-quant` fetches `/portfolio` and applies local risk checks before
-posting to `/orders`. A local risk rejection does not call the gateway.
-
-### LongPort OpenAPI
-
-Set both `NEENEE_QUANT_MARKET_DATA` and `NEENEE_QUANT_BROKER` to `longport`
-for direct Longbridge quote and live-trading access through the official Rust
-SDK. `longbridge` is an alias for the same adapter.
-The live LongPort broker rejects any other market-data adapter so local risk
-checks cannot use synthetic or broker-incompatible prices.
-
-LongPort support is compiled only when `neenee-quant` enables its `longport`
-feature. The GUI exposes it through the feature of the same name; launch the
-live profile with `--features gui,longport`. Paper and backtest builds do not
-compile the LongPort SDK.
-
-| Environment variable | Default | Meaning |
-|----------------------|---------|---------|
-| `NEENEE_QUANT_LONGPORT_AUTH` | `apikey` | Authentication mode: `apikey` or `oauth` |
-| `LONGPORT_APP_KEY` | empty | LongPort app key for `apikey`; environment only |
-| `LONGPORT_APP_SECRET` | empty | LongPort app secret for `apikey`; environment only |
-| `LONGPORT_ACCESS_TOKEN` | empty | LongPort access token for `apikey`; environment only |
-| `NEENEE_QUANT_LONGPORT_OAUTH_CLIENT_ID` | empty | Registered OAuth client ID for `oauth` |
-| `NEENEE_QUANT_LONGPORT_ACCOUNT_CURRENCY` | `USD` | Currency used for the live account summary and risk preflight |
-| `LONGPORT_REGION` | automatic | Official SDK access-point override, such as `cn` or `hk` |
-
-API-key credentials are never written to the JSON configuration or included
-in debug output. OAuth prints the authorization URL on first use and delegates
-token storage and refresh to the official SDK.
-
-The adapter accepts LongPort security symbols such as `AAPL.US` and `700.HK`.
-It does not add cryptocurrency trading to LongPort. Quote access still depends
-on the account's market-data entitlements.
-
-The adapter applies a minimum 20 ms interval and a 30-request rolling window
-over LongPort trade calls. The official SDK controls quote-call frequency, but
-LongPort leaves trade-call limiting to the client.
-
-### Paper account, audit, and risk
-
-| Environment variable | Default | Meaning |
-|----------------------|---------|---------|
-| `NEENEE_QUANT_PAPER_STARTING_CASH` | `100000` | Starting cash for the paper account |
-| `NEENEE_QUANT_PAPER_COMMISSION_BPS` | `0` | Paper commission in basis points |
-| `NEENEE_QUANT_PAPER_STATE` | empty | Optional JSON state file for persistent paper account state |
-| `NEENEE_QUANT_AUDIT_LOG` | empty | Optional JSONL audit log for paper and live order decisions |
-| `NEENEE_QUANT_RISK_MAX_ORDER_NOTIONAL` | `50000` | Per-order notional ceiling for paper and live brokers |
-| `NEENEE_QUANT_RISK_MAX_GROSS_EXPOSURE` | `100000` | Gross exposure ceiling for paper and live brokers |
-| `NEENEE_QUANT_RISK_ALLOW_SHORT_SELLING` | `false` | Whether paper or live sell orders may open short exposure |
-
-## Intelligence workbench
-
-The quant GUI composes `neenee-intelligence` with the trading runtime. It uses
-existing global configuration rather than introducing a second provider or
-web-search configuration surface.
-
-| Capability | Configuration | State |
-|------------|---------------|-------|
-| Topic search | `[websearch]` | `intelligence/opinion.json` under XDG State |
-| Link observation | `[websearch]` proxy and timeout | `intelligence/opinion.json` under XDG State |
-| Expert council | `default_provider`, `default_model`, and the selected provider's credentials | `intelligence/expert-meetings.json` under XDG State |
-
-The expert council is unavailable when no provider is configured. One meeting
-makes 11 provider calls: five independent responses, five cross-examinations,
-and one meeting-manager synthesis. The archive retains the 20 most recent
-meetings.
-
-Watched links accept public HTTP and HTTPS URLs. Each response is limited to
-8 MiB. The archive retains a short text preview, validators, and a SHA-256
-fingerprint rather than the full response body.
-
-See [How to use the intelligence workbench](../how-to/use-intelligence-workbench.md)
-for the operator workflow.
 
 ## TUI presentation
 

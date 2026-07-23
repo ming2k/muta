@@ -3,7 +3,7 @@ info:
   title: neenee hot-attach WebSocket API
   version: 0.20.0
   description: |
-    Machine-readable contract for `neenee-session`'s current hot-attach transport.
+    Machine-readable contract for `neenee-transport`'s current hot-attach transport.
     The server is started from a running TUI with `/serve [port] [--public]`; it
     is not yet the multi-session daemon described as a future phase in ADR-0037.
 
@@ -748,7 +748,7 @@ components:
           required: [pursuit, loop_status, unattended]
           properties:
             pursuit: { oneOf: [{ $ref: '#/components/schemas/Pursuit' }, { type: 'null' }] }
-            loop_status: { type: string }
+            loop_status: { type: string, enum: [idle, running, pursue] }
             unattended: { type: boolean }
           additionalProperties: false
       additionalProperties: false
