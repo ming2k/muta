@@ -40,6 +40,8 @@ pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, Tool
 pub mod tool_output;
 pub use tool_output::{PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream};
 
+pub mod tool_validation;
+
 pub mod capability;
 pub mod catalog;
 pub mod channelauth;
@@ -66,6 +68,7 @@ pub use token_ledger::{
     TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
 };
 pub mod doomguardconfig;
+pub mod secret;
 pub mod session_review;
 pub mod session_title;
 pub mod skillsconfig;
@@ -95,8 +98,8 @@ pub use hooks::{
 pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    FittedModel, KNOWN_MODELS, Model, WireFormat, model_by_id, register_fitted_models,
-    resolve as resolve_model,
+    FittedModel, KNOWN_MODELS, Model, ModelCapabilities, RemoteModelEndpoint, RemoteModelMetadata,
+    WireFormat, model_by_id, register_fitted_models, resolve as resolve_model,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
@@ -104,6 +107,7 @@ pub use pressure::{
     estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
 };
 pub use principal::{PrincipalProfile, PrincipalRuntimeConfig};
+pub use secret::SecretString;
 pub use session_review::{DEFAULT_REVIEWER_HARD_STOP, ReviewStatus, ReviewVerdict, SessionReview};
 pub use session_title::{TITLE_MAX_LEN, clean_title};
 pub use skillsconfig::SkillsConfig;

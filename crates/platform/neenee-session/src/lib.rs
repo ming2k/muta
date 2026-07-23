@@ -10,27 +10,19 @@
 //! frontend, which needs a long-running daemon holding multiple concurrent
 //! sessions that several clients can subscribe to.
 //!
-//! This crate owns the three things that makes that possible:
-//!
-//! - **[`SharedState`]** — process-level singletons constructed once at
-//!   bootstrap (the provider holder, skills registry, MCP catalog, config,
-//!   embedding store, repeat store). Every session borrows from it; nothing
-//!   here is session-scoped.
-//! - **[`SessionRegistry`]** — a map of `session_id → Arc<SessionHandle>`. Each
-//!   [`SessionHandle`] owns its own `Agent`, `SessionStore`, request channel,
-//!   and a `broadcast` channel for its responses, so multiple clients can
-//!   subscribe to the same session's event stream.
-//! - **the transport bridge** — (future) WebSocket / SSE adapters that
-//!   translate the wire protocol (`AgentRequest`/`AgentResponse`, now
-//!   `Serialize`/`Deserialize`) to and from the in-process channels.
+//! This crate owns the per-session state that makes that possible — the
+//! session driver, its handlers, and the `/serve` WebSocket bridge that
+//! translates the wire protocol (`AgentRequest`/`AgentResponse`, both
+//! `Serialize`/`Deserialize`) to and from the in-process channels.
 //!
 //! # Migration posture
 //!
 //! The frontend-neutral session driver and its handlers live in this crate.
 //! `neenee-code` still assembles one [`session_driver::SessionDriver`] during
-//! startup; the remaining migration step is to move that assembly behind
-//! [`SessionRegistry::create_session`] so a server process can own multiple
-//! sessions.
+//! startup. The multi-session server scaffolding sketched in ADR-0037 §6
+//! (`SessionRegistry` / `SessionHandle` / `SharedState`) was removed as
+//! dormant — every method returned `Err("not yet populated")`. Reintroduce
+//! it when the server move resumes.
 //!
 //! # Dependency posture
 //!
@@ -63,21 +55,17 @@ pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
 pub mod pursuits;
-pub mod registry;
 pub mod review;
 pub mod serve;
 pub mod session_driver;
 pub mod session_view;
-pub mod shared;
 pub mod shell;
 pub mod side;
 pub mod slash_handler;
 pub mod startup;
 pub mod ui_bridge;
 
-pub use registry::{SessionHandle, SessionRegistry};
 pub use session_driver::SessionDriver;
-pub use shared::SharedState;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 
 // NOTE: identity (`NEENEE_NAME`/`NEENEE_MISSION`/`neenee_identity`/

@@ -13,7 +13,8 @@
 
 use neenee_core::catalog::{Channel, ProviderEntry, Transport, builtin_provider_metadata};
 use neenee_core::{
-    Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ThinkingMode, WireFormat,
+    Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RemoteModelEndpoint,
+    SecretString, ThinkingMode, WireFormat,
 };
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
@@ -38,11 +39,14 @@ pub fn default_provider_id(config: &Config) -> &str {
 /// access token as a bearer plus the `ChatGPT-Account-Id` header.
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
-/// The GitHub Copilot subscription backend (Responses API). A Copilot OAuth
-/// channel routes here, sending the GitHub OAuth access token as a bearer plus
-/// Copilot's required request headers (`x-initiator`, `Openai-Intent`,
-/// `X-GitHub-Api-Version`, and `Copilot-Vision-Request` for vision turns).
-pub const COPILOT_RESPONSES_URL: &str = "https://api.githubcopilot.com/responses";
+/// The GitHub Copilot subscription backend (chat-completions surface). A
+/// Copilot OAuth channel routes here, sending the GitHub OAuth access token as
+/// a bearer plus Copilot's required request headers (`x-initiator`,
+/// `Openai-Intent`, `X-GitHub-Api-Version`). This is the universally available
+/// endpoint — every Copilot plan (incl. Free/Student, which only unlock the
+/// GPT-4o chat family) can speak chat-completions; the Responses API and
+/// GPT-5 require Pro+ and are not assumed.
+pub const COPILOT_CHAT_URL: &str = "https://api.githubcopilot.com/chat/completions";
 
 /// Convert a user-defined channel config into a resolved [`Channel`].
 ///
@@ -111,24 +115,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
             account_id,
             copilot: false,
         },
-        neenee_core::ChannelAuth::CopilotOAuth => {
-            // Copilot speaks the Responses API against api.githubcopilot.com.
-            // There is no account id; the Copilot-specific request headers are
-            // gated by `copilot: true` and injected by the Responses provider.
-            Transport::OpenAiResponses {
-                base_url: uc
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| COPILOT_RESPONSES_URL.to_string()),
-                user_agent: uc
-                    .user_agent
-                    .clone()
-                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
-                effort: uc.effort.as_deref().and_then(Effort::parse),
-                account_id: None,
-                copilot: true,
-            }
-        }
+        neenee_core::ChannelAuth::CopilotOAuth => copilot_transport(uc),
         _ => match uc.transport {
             UserTransport::GeminiNative => Transport::GeminiNative {
                 base_url: uc
@@ -169,6 +156,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                         .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
                     effort,
                     thinking,
+                    copilot: false,
                 }
             }
             UserTransport::OpenAiCompat => Transport::OpenAiCompat {
@@ -181,6 +169,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                     .clone()
                     .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
                 effort: uc.effort.as_deref().and_then(Effort::parse),
+                copilot: false,
             },
         },
     };
@@ -190,6 +179,50 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
         transport,
         api_key,
         model,
+        remote: uc.remote.clone(),
+    }
+}
+
+/// Build a Copilot channel from the endpoint advertised for this model. The
+/// initial seed has no remote metadata and deliberately falls back to Chat
+/// Completions; the first live `/models` refresh replaces it with the exact
+/// route for every plan-unlocked model.
+fn copilot_transport(uc: &UserChannelConfig) -> Transport {
+    let user_agent = uc
+        .user_agent
+        .clone()
+        .unwrap_or_else(|| NEENEE_USER_AGENT.to_string());
+    let effort = uc.effort.as_deref().and_then(Effort::parse);
+    match uc.remote.as_ref().and_then(|remote| remote.endpoint) {
+        Some(RemoteModelEndpoint::Responses) => Transport::OpenAiResponses {
+            base_url: "https://api.githubcopilot.com/responses".to_string(),
+            user_agent,
+            effort,
+            account_id: None,
+            copilot: true,
+        },
+        Some(RemoteModelEndpoint::Messages) => Transport::Anthropic {
+            base_url: "https://api.githubcopilot.com/v1/messages".to_string(),
+            user_agent,
+            effort,
+            thinking: uc.thinking.map(|on| {
+                if on {
+                    ThinkingMode::Adaptive
+                } else {
+                    ThinkingMode::Off
+                }
+            }),
+            copilot: true,
+        },
+        Some(RemoteModelEndpoint::ChatCompletions) | None => Transport::OpenAiCompat {
+            base_url: uc
+                .base_url
+                .clone()
+                .unwrap_or_else(|| COPILOT_CHAT_URL.to_string()),
+            user_agent,
+            effort,
+            copilot: true,
+        },
     }
 }
 
@@ -227,10 +260,14 @@ fn user_provider_to_entry(um: &UserProviderConfig) -> ProviderEntry {
 /// values are treated as unset and fall through to config, which unifies the
 /// pre-catalog construction and readiness paths on one sensible rule: an empty
 /// API key or model is never useful, so an empty env var never silently wins.
-fn env_or_config(env_var: Option<&str>, config_value: Option<String>) -> Option<String> {
+fn env_or_config(
+    env_var: Option<&str>,
+    config_value: Option<SecretString>,
+) -> Option<SecretString> {
     env_var
         .and_then(|name| std::env::var(name).ok())
         .filter(|value| !value.trim().is_empty())
+        .map(SecretString::from)
         .or(config_value)
 }
 
@@ -281,7 +318,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
     ]
     .into_iter()
     .flatten()
-    .any(|key| !key.trim().is_empty());
+    .any(|key| !key.expose_secret().trim().is_empty());
 
     changed |= migrate_legacy_instance(
         config,
@@ -359,7 +396,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
     if let Some(key) = config
         .opencode_go_api_key
         .take()
-        .filter(|k| !k.trim().is_empty())
+        .filter(|k| !k.expose_secret().trim().is_empty())
         && !config.providers.iter().any(|p| p.id == "opencode-go")
     {
         let channels = opencode_go_seed_channels(key);
@@ -560,10 +597,11 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
 /// - **Registry-intersected** (default): only ids both advertised and known
 ///   to the client for the template protocol are materialized. An arbitrary
 ///   relay is an availability signal only, never a metadata source.
-/// - **Fitted** (trusted first-party templates): every advertised id is
-///   materialized, and ids the static registry does not know have their
-///   advertised capability metadata persisted to `fitted_models` for the
-///   dynamic overlay.
+/// - **Fitted** (trusted first-party templates): every advertised picker model
+///   is materialized. Its provider-scoped capability snapshot is persisted on
+///   the channel, so exact endpoints and explicit remote values override the
+///   static baseline; registry-unknown ids are also mirrored to `fitted_models`
+///   for legacy id-only resolution outside a channel.
 ///
 /// Either way, the previous subset (or initial template snapshot) is kept
 /// when fetching fails or the result is empty, so a flaky network, a wrong
@@ -576,11 +614,14 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
 ///   (Z.AI Code, opencode-go), and pure-custom instances keep what the
 ///   synchronous reconcile produced.
 ///
-/// Returns `true` when any instance changed, so the caller can persist only
-/// when necessary. Best-effort: a per-instance failure never aborts the pass —
-/// the remaining instances are still fetched.
-pub async fn discover_provider_models(config: &mut Config) -> bool {
+/// Returns a [`DiscoveryOutcome`] so the caller knows whether to persist and
+/// whether any instance failed to fetch. Best-effort: a per-instance failure
+/// never aborts the pass — the remaining instances are still fetched, and every
+/// failure is reported back so the UI can tell the user *why* their model list
+/// did not update instead of silently keeping the stale seed.
+pub async fn discover_provider_models(config: &mut Config) -> DiscoveryOutcome {
     let mut changed = false;
+    let mut failures: Vec<(String, String)> = Vec::new();
 
     for provider in &mut config.providers {
         // Only template-sourced instances with discovery-enabled templates and
@@ -609,15 +650,65 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
             );
             continue;
         };
-        let api_key = channel.api_key.as_deref().unwrap_or("");
+        // OAuth channels (xAI / ChatGPT / Copilot) store no api_key — their
+        // bearer lives in auth.toml and is resolved at runtime. Discovery must
+        // read the same token a chat request would send, so resolve it here for
+        // OAuth auth modes; API-key channels keep using the stored key.
+        let resolved_bearer: SecretString;
+        let no_key = SecretString::default();
+        let api_key: &SecretString = match channel.auth {
+            neenee_core::ChannelAuth::ApiKey => channel.api_key.as_ref().unwrap_or(&no_key),
+            neenee_core::ChannelAuth::CopilotOAuth => {
+                resolved_bearer = neenee_auth::AuthStore::load()
+                    .get("copilot")
+                    .map(|tokens| tokens.access.clone())
+                    .unwrap_or_default();
+                &resolved_bearer
+            }
+            neenee_core::ChannelAuth::ChatGptOAuth => {
+                resolved_bearer = neenee_auth::AuthStore::load()
+                    .get("chatgpt")
+                    .map(|tokens| tokens.access.clone())
+                    .unwrap_or_default();
+                &resolved_bearer
+            }
+            neenee_core::ChannelAuth::XaiOAuth => {
+                resolved_bearer = neenee_auth::AuthStore::load()
+                    .get("xai")
+                    .map(|tokens| tokens.access.clone())
+                    .unwrap_or_default();
+                &resolved_bearer
+            }
+        };
         let user_agent = channel.user_agent.as_deref();
         let protocol = neenee_providers::DiscoveryProtocol::from_template_protocol(spec.protocol);
+
+        // Copilot's /models requires the same headers a chat request sends —
+        // the client-identity headers (`Copilot-Integration-Id` and friends)
+        // so the backend resolves the account's actual plan entitlements
+        // instead of falling back to the always-available GPT-4o family, plus
+        // the per-turn headers chat requests also send. Other OAuth providers
+        // send standard auth only, so the slice stays empty for them.
+        let copilot_headers: [(&str, &str); 6] = [
+            neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS[0],
+            neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS[1],
+            neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS[2],
+            ("x-initiator", "user"),
+            ("Openai-Intent", "conversation-edits"),
+            ("X-GitHub-Api-Version", "2026-06-01"),
+        ];
+        let extra_headers: &[(&str, &str)] = if spec.id == "copilot-oauth" {
+            &copilot_headers
+        } else {
+            &[]
+        };
 
         let discovery_req = neenee_providers::ModelDiscoveryRequest {
             protocol,
             base_url,
             api_key,
             user_agent,
+            extra_headers,
         };
 
         match neenee_providers::list_models(discovery_req).await {
@@ -637,7 +728,11 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
                         provider.fitted_models = fitted;
                         changed = true;
                     }
-                    models.iter().map(|model| model.id.as_str()).collect()
+                    models
+                        .iter()
+                        .filter(|model| model.picker_enabled != Some(false))
+                        .map(|model| model.id.as_str())
+                        .collect()
                 } else {
                     // Only expose models both advertised by the provider and
                     // known to the client for this wire protocol. Preserve
@@ -657,7 +752,12 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
                 }
                 let reseated = provider
                     .reseed_channels_from_models(&supported, transport_for_protocol(spec.protocol));
-                if reseated {
+                let metadata_updated = if spec.fitting {
+                    persist_remote_model_metadata(provider, &models, spec.id == "copilot-oauth")
+                } else {
+                    false
+                };
+                if reseated || metadata_updated {
                     tracing::info!(
                         provider_id = %provider.id,
                         discovered_count = models.len(),
@@ -669,17 +769,38 @@ pub async fn discover_provider_models(config: &mut Config) -> bool {
             }
             Err(error) => {
                 // The previous valid subset (or initial snapshot) remains in
-                // place; a failed fetch never regresses the provider.
+                // place; a failed fetch never regresses the provider. Report it
+                // back so the caller can surface the cause to the user rather
+                // than letting a silently-stale list read as "login worked, the
+                // account just has one model".
                 tracing::warn!(
                     provider_id = %provider.id,
                     error = %error,
                     "live model discovery failed; keeping previous models"
                 );
+                failures.push((provider.id.clone(), error.to_string()));
             }
         }
     }
 
-    changed
+    DiscoveryOutcome { changed, failures }
+}
+
+/// The result of a live model-discovery pass ([`discover_provider_models`]).
+///
+/// Discovery is best-effort across every template-sourced instance: one
+/// provider failing to fetch never aborts the others. This struct carries both
+/// signals back so the caller can persist only when something changed *and*
+/// surface a per-provider failure to the user instead of letting a silently
+/// stale seed list read as "the account just has these models".
+#[derive(Debug, Default)]
+pub struct DiscoveryOutcome {
+    /// Whether any provider instance changed its model list (or fitted
+    /// metadata). The caller persists config only when this is `true`.
+    pub changed: bool,
+    /// Per-provider fetch failures: `(provider_id, error_message)`. Empty when
+    /// every discovered instance succeeded.
+    pub failures: Vec<(String, String)>,
 }
 
 /// Model ids known to the client and compatible with a provider protocol.
@@ -724,6 +845,44 @@ fn fitted_model_info(model: &neenee_providers::DiscoveredModel) -> FittedModelIn
         efforts: model.effort_levels.clone().unwrap_or_default(),
         display_name: model.display_name.clone(),
     }
+}
+
+/// Persist trusted remote metadata on each currently materialized channel.
+///
+/// A channel is the ownership boundary for a remote model description: the same
+/// id can expose different endpoints and capability values at another provider
+/// or under another Copilot plan. Clearing metadata for models that disappeared
+/// is handled naturally by reseeding before this function runs.
+fn persist_remote_model_metadata(
+    provider: &mut UserProviderConfig,
+    discovered: &[neenee_providers::DiscoveredModel],
+    use_remote_endpoint: bool,
+) -> bool {
+    let discovered = discovered
+        .iter()
+        .filter(|model| model.picker_enabled != Some(false))
+        .map(|model| (model.id.as_str(), model.remote_metadata()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut changed = false;
+    for channel in &mut provider.channels {
+        let Some(model) = channel.model.as_deref() else {
+            continue;
+        };
+        let Some(remote) = discovered.get(model) else {
+            continue;
+        };
+        let mut remote = remote.clone();
+        // Kimi advertises capabilities but its configured coding endpoint owns
+        // routing. Copilot's supported_endpoints are authoritative per model.
+        if !use_remote_endpoint {
+            remote.endpoint = None;
+        }
+        if channel.remote.as_ref() != Some(&remote) {
+            channel.remote = Some(remote);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Feed every instance's persisted fitted-model metadata into the dynamic
@@ -829,11 +988,11 @@ fn migrate_legacy_instance(
     base_url: &str,
     user_agent: Option<&str>,
     models: &[&str],
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
     active_model: Option<&str>,
     template_id: Option<&str>,
 ) -> bool {
-    let Some(api_key) = api_key.filter(|k| !k.trim().is_empty()) else {
+    let Some(api_key) = api_key.filter(|k| !k.expose_secret().trim().is_empty()) else {
         return false;
     };
     if config.providers.iter().any(|p| p.id == id) {
@@ -852,6 +1011,7 @@ fn migrate_legacy_instance(
             effort: None,
             thinking: None,
             auth: Default::default(),
+            remote: None,
         })
         .collect();
     let default_channel = active_model
@@ -891,7 +1051,7 @@ fn migrate_legacy_instance(
 /// format and metadata from the client registry. A model registered for
 /// another provider (e.g. Kimi `k3`, `glm-4.7`) must not leak in here — an
 /// unserved channel only ever answers "model not found".
-fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
+fn opencode_go_seed_channels(api_key: SecretString) -> Vec<UserChannelConfig> {
     let mut models: Vec<_> = neenee_core::KNOWN_MODELS
         .iter()
         .filter(|m| OPENCODE_GO_SERVED_MODELS.contains(&m.id))
@@ -925,21 +1085,26 @@ fn opencode_go_seed_channels(api_key: String) -> Vec<UserChannelConfig> {
                 user_agent: None,
                 effort: None,
                 thinking: None,
+                remote: None,
             }
         })
         .collect()
 }
 
 /// Resolve the active provider for a given provider id from `config`. Returns
-/// the mock provider when the id is unknown or the entry has no usable channel,
-/// so callers never have to branch on absence.
+/// `None` when the id is unknown or the entry has no usable channel — the
+/// caller is expected to refuse the action and surface a notification rather
+/// than silently fall back to a placeholder.
 ///
 /// Channel selection honors `config.default_model`: for a multi-model provider
 /// like opencode-go, the channel carrying that model (and thus the matching
 /// transport) is chosen; otherwise the entry's default channel is used. This is
 /// the single replacement for the resolution logic that used to be duplicated
 /// at startup and in the `SwitchProvider` handler.
-pub fn build_provider_for(config: &Config, id: &str) -> std::sync::Arc<dyn neenee_core::Provider> {
+pub fn build_provider_for(
+    config: &Config,
+    id: &str,
+) -> Option<std::sync::Arc<dyn neenee_core::Provider>> {
     build_provider_for_model(config, id, config.default_model.as_deref(), None)
 }
 
@@ -948,6 +1113,12 @@ pub fn build_provider_for(config: &Config, id: &str) -> std::sync::Arc<dyn neene
 /// entry's default channel). Runtime switches that carry an explicit model
 /// (e.g. selecting `minimax-m3` under opencode-go) route through here so the
 /// per-model transport is picked correctly.
+///
+/// Returns `None` when the provider id is unknown or the entry has no resolvable
+/// channel. Callers must surface a user-facing notification in that case rather
+/// than silently installing a placeholder — see [`crate::NoProvider`] for the
+/// explicit sentinel installed only at startup so the shared holder satisfies
+/// its `Arc<dyn Provider>` type.
 ///
 /// `session_id` flows into prompt-cache control (ADR-0067): when the active
 /// model's [`neenee_core::CachePolicy`] is `SessionKey` (Moonshot / Kimi), the
@@ -958,48 +1129,48 @@ pub fn build_provider_for_model(
     provider_id: &str,
     model_id: Option<&str>,
     session_id: Option<&str>,
-) -> std::sync::Arc<dyn neenee_core::Provider> {
+) -> Option<std::sync::Arc<dyn neenee_core::Provider>> {
     let entries = build_catalog(config);
-    let Some(entry) = entries.iter().find(|e| e.id == provider_id) else {
-        return std::sync::Arc::new(neenee_providers::MockProvider);
-    };
+    let entry = entries.iter().find(|e| e.id == provider_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
     let channel = wanted
         .and_then(|m| entry.channel_for_model(m))
         .or_else(|| entry.default_channel());
-    match channel {
-        Some(channel) => {
-            neenee_providers::build_provider_for_channel(channel, &entry.id, session_id)
-        }
-        None => std::sync::Arc::new(neenee_providers::MockProvider),
-    }
+    channel
+        .map(|channel| neenee_providers::build_provider_for_channel(channel, &entry.id, session_id))
 }
 
 /// The display model name for a given provider id, as resolved from `config`.
-/// Falls back to `"mock-model"` when the id is unknown. Replaces the former
-/// `initial_m_name` block in `main.rs`.
+/// Returns `None` when the id is unknown or no model can be resolved, so
+/// callers can distinguish "no provider configured" from a real (possibly
+/// empty-string) model id. Replaces the former `initial_m_name` block in
+/// `main.rs`.
 ///
 /// For multi-model providers, the active model is `config.default_model` when
 /// set (and served by the provider); otherwise the entry's default-channel
 /// model. (Does not consult usage telemetry — startup paths that only know
 /// the config use this; the picker uses [`active_model_id_for_entry`].)
-pub fn resolved_model_name(config: &Config, id: &str) -> String {
+pub fn resolved_model_name(config: &Config, id: &str) -> Option<String> {
     resolved_model_name_inner(config, id, &ProviderUsage::default())
 }
 
 /// The active model name resolved with usage telemetry so the last-activated
 /// model per provider wins over the bare default-channel fallback. Used where
-/// a live `usage` is available (status surfaces, re-activation).
-pub fn resolved_model_name_with_usage(config: &Config, id: &str, usage: &ProviderUsage) -> String {
+/// a live `usage` is available (status surfaces, re-activation). Returns
+/// `None` when the provider id is unknown or has no resolvable model.
+pub fn resolved_model_name_with_usage(
+    config: &Config,
+    id: &str,
+    usage: &ProviderUsage,
+) -> Option<String> {
     resolved_model_name_inner(config, id, usage)
 }
 
-fn resolved_model_name_inner(config: &Config, id: &str, usage: &ProviderUsage) -> String {
+fn resolved_model_name_inner(config: &Config, id: &str, usage: &ProviderUsage) -> Option<String> {
     build_catalog(config)
         .iter()
         .find(|e| e.id == id)
-        .map(|entry| active_model_id_for_entry(config, entry, usage))
-        .unwrap_or_else(|| "mock-model".to_string())
+        .and_then(|entry| active_model_id_for_entry(config, entry, usage))
 }
 
 /// The active wire model id for an already-built entry, resolved from usage
@@ -1007,12 +1178,14 @@ fn resolved_model_name_inner(config: &Config, id: &str, usage: &ProviderUsage) -
 /// the provider's last-activated model (so re-opening a provider lands on the
 /// exact model it was left at), finally the entry's default-channel model.
 /// Shared by [`resolved_model_name`] and [`build_picker_state`] so both pick
-/// the same active model without rebuilding the catalog per row.
+/// the same active model without rebuilding the catalog per row. Returns
+/// `None` when no model can be resolved (the entry has no channels, or every
+/// candidate fails the `offers_model` filter).
 fn active_model_id_for_entry(
     config: &Config,
     entry: &ProviderEntry,
     usage: &ProviderUsage,
-) -> String {
+) -> Option<String> {
     config
         .default_model
         .as_deref()
@@ -1025,7 +1198,6 @@ fn active_model_id_for_entry(
                 .map(|m| m.to_string())
         })
         .or_else(|| entry.default_channel().map(|channel| channel.model.clone()))
-        .unwrap_or_else(|| "mock-model".to_string())
 }
 
 /// The model ids a provider serves, in catalog order. Used by the picker to
@@ -1054,7 +1226,7 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 .default_channel()
                 .map(channel_protocol_and_base_url)
                 .unwrap_or_default();
-            let model = active_model_id_for_entry(config, entry, usage);
+            let model = active_model_id_for_entry(config, entry, usage).unwrap_or_default();
             let model_info = entry
                 .channels
                 .iter()
@@ -1199,10 +1371,7 @@ mod tests {
                 .len(),
             0
         );
-        assert_eq!(
-            build_provider_for(&config, default_provider_id(&config)).provider_id(),
-            "mock"
-        );
+        assert!(build_provider_for(&config, default_provider_id(&config)).is_none());
     }
 
     #[test]
@@ -1210,7 +1379,7 @@ mod tests {
         let mut config = bare_config();
         config.default_provider = "openai".to_string();
         config.default_model = Some("gpt-5.4-mini".to_string());
-        config.openai_api_key = Some("sk-old".to_string());
+        config.openai_api_key = Some("sk-old".into());
 
         assert!(migrate_legacy_provider_instances(&mut config));
         assert!(config.openai_api_key.is_none());
@@ -1271,13 +1440,14 @@ mod tests {
                     label: m.to_string(),
                     transport: UserTransport::OpenAiCompat,
                     api_key_env: None,
-                    api_key: Some("sk-test".to_string()),
+                    api_key: Some("sk-test".into()),
                     model: Some(m.to_string()),
                     base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
                     auth: Default::default(),
+                    remote: None,
                 })
                 .collect(),
             default_channel: 0,
@@ -1341,13 +1511,14 @@ mod tests {
                     label: m.clone(),
                     transport: UserTransport::OpenAiCompat,
                     api_key_env: None,
-                    api_key: Some("sk".to_string()),
+                    api_key: Some("sk".into()),
                     model: Some(m.clone()),
                     base_url: Some("https://relay.example.com".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
                     auth: Default::default(),
+                    remote: None,
                 })
                 .collect(),
             default_channel: 0,
@@ -1417,10 +1588,11 @@ mod tests {
         // The shared key configured on the surviving channel is copied onto the
         // newly added channels so the instance keeps working.
         assert!(
-            config.providers[0]
-                .channels
-                .iter()
-                .all(|c| c.api_key.as_deref() == Some("sk-test")),
+            config.providers[0].channels.iter().all(|c| c
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret)
+                == Some("sk-test")),
             "shared key is preserved across the reseed"
         );
     }
@@ -1453,7 +1625,10 @@ mod tests {
         assert!(reconcile_provider_models(&mut config));
         assert_eq!(config.providers[0].channel_models(), vec![kept]);
         let channel = &config.providers[0].channels[0];
-        assert_eq!(channel.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(
+            channel.api_key.as_ref().map(SecretString::expose_secret),
+            Some("sk-test")
+        );
         assert_eq!(
             channel.base_url.as_deref(),
             Some("https://relay.example.com/v1/chat/completions")
@@ -1505,13 +1680,14 @@ mod tests {
                 label: "only-model".to_string(),
                 transport: UserTransport::OpenAiCompat,
                 api_key_env: None,
-                api_key: Some("sk".to_string()),
+                api_key: Some("sk".into()),
                 model: Some("only-model".to_string()),
                 base_url: Some("https://x.example.com".to_string()),
                 user_agent: None,
                 effort: None,
                 thinking: None,
                 auth: Default::default(),
+                remote: None,
             }],
             default_channel: 0,
             template_id: Some("removed-template".to_string()),
@@ -1609,7 +1785,7 @@ mod tests {
 
     #[test]
     fn opencode_go_seed_channels_only_include_models_the_relay_serves() {
-        let channels = opencode_go_seed_channels("go-key".to_string());
+        let channels = opencode_go_seed_channels("go-key".into());
         let ids: Vec<&str> = channels.iter().filter_map(|c| c.model.as_deref()).collect();
         // Models registered for other providers but not served by the relay
         // must not be seeded: an unserved channel only answers "model not
@@ -1789,16 +1965,16 @@ mod tests {
 
         // No usage → default channel model (alpha).
         assert_eq!(
-            resolved_model_name_with_usage(&config, "relay", &ProviderUsage::default()),
-            "alpha"
+            resolved_model_name_with_usage(&config, "relay", &ProviderUsage::default()).as_deref(),
+            Some("alpha")
         );
 
         // Record `beta` under `relay`: it becomes the resolved active model.
         let mut usage = ProviderUsage::default();
         usage.record_model("relay", "beta");
         assert_eq!(
-            resolved_model_name_with_usage(&config, "relay", &usage),
-            "beta"
+            resolved_model_name_with_usage(&config, "relay", &usage).as_deref(),
+            Some("beta")
         );
 
         // The picker row's `model` (the displayed active model) mirrors this.
@@ -1855,11 +2031,15 @@ mod tests {
         // config-only precedence `build_provider_for` uses, and what
         // `SessionDriver::run` now records via `record_model`.
         let boot_model = resolved_model_name(&config, "relay");
-        assert_eq!(boot_model, "beta", "boot resolves to the pinned model");
+        assert_eq!(
+            boot_model.as_deref(),
+            Some("beta"),
+            "boot resolves to the pinned model"
+        );
 
         let mut usage = ProviderUsage::default();
         usage.record("relay");
-        usage.record_model("relay", &boot_model);
+        usage.record_model("relay", boot_model.as_deref().unwrap());
 
         // ── Next launch: a fresh session with no `default_model` pin. ──
         // (Session pins live in `SessionData`, not config.toml, so a fresh
@@ -1868,8 +2048,8 @@ mod tests {
         let mut next_config = config.clone();
         next_config.default_model = None;
         assert_eq!(
-            resolved_model_name_with_usage(&next_config, "relay", &usage),
-            "beta",
+            resolved_model_name_with_usage(&next_config, "relay", &usage).as_deref(),
+            Some("beta"),
             "next launch must reopen on the recorded boot model"
         );
 
@@ -1882,8 +2062,8 @@ mod tests {
             u
         };
         assert_eq!(
-            resolved_model_name_with_usage(&next_config, "relay", &provider_only_usage),
-            "alpha",
+            resolved_model_name_with_usage(&next_config, "relay", &provider_only_usage).as_deref(),
+            Some("alpha"),
             "without record_model the default-channel model wins (the bug)"
         );
     }
@@ -2003,11 +2183,12 @@ mod tests {
         let mut config = bare_config();
         config.default_model = Some("claude-sonnet-4-6".to_string());
         assert_eq!(
-            resolved_model_name(&config, "anthropic"),
-            "claude-sonnet-4-6"
+            resolved_model_name(&config, "anthropic").as_deref(),
+            Some("claude-sonnet-4-6")
         );
         let provider =
-            build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"), None);
+            build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"), None)
+                .expect("anthropic provider should build");
         assert_eq!(provider.model(), "claude-sonnet-4-6");
         assert_eq!(provider.provider_id(), "anthropic");
     }
@@ -2018,7 +2199,10 @@ mod tests {
         let mut config = bare_config();
         config.default_model = Some("minimax-m3".to_string());
         // resolved_model_name honors default_model when the provider serves it.
-        assert_eq!(resolved_model_name(&config, "opencode-go"), "minimax-m3");
+        assert_eq!(
+            resolved_model_name(&config, "opencode-go").as_deref(),
+            Some("minimax-m3")
+        );
         // models_for_provider lists every served model for the picker.
         let models = models_for_provider(&config, "opencode-go");
         assert!(models.contains(&"glm-5.2".to_string()));
@@ -2032,7 +2216,8 @@ mod tests {
         // model id is minimax-m3 (the Anthropic /messages path), proving the
         // per-model transport routing reaches construction.
         let config = bare_config();
-        let provider = build_provider_for_model(&config, "opencode-go", Some("minimax-m3"), None);
+        let provider = build_provider_for_model(&config, "opencode-go", Some("minimax-m3"), None)
+            .expect("opencode-go minimax-m3 channel should build");
         assert_eq!(provider.model(), "minimax-m3");
         assert_eq!(provider.provider_id(), "opencode-go");
     }
@@ -2119,23 +2304,20 @@ mod tests {
 
     #[test]
     fn resolved_model_name_falls_back_for_unknown_id() {
-        assert_eq!(resolved_model_name(&bare_config(), "nope"), "mock-model");
+        assert!(resolved_model_name(&bare_config(), "nope").is_none());
     }
 
     #[test]
-    fn build_provider_for_unknown_id_returns_mock() {
-        let provider = build_provider_for(&bare_config(), "does-not-exist");
-        assert_eq!(provider.provider_id(), "mock");
+    fn build_provider_for_unknown_id_returns_none() {
+        assert!(build_provider_for(&bare_config(), "does-not-exist").is_none());
     }
 
     #[test]
     fn split_deepseek_ids_no_longer_resolve_as_providers() {
         // The pre-merge provider ids are gone; only the merged `deepseek` id is a
-        // provider now, so the old ids fall back to mock.
-        let provider = build_provider_for(&bare_config(), "deepseek-v4-flash");
-        assert_eq!(provider.provider_id(), "mock");
-        let provider = build_provider_for(&bare_config(), "deepseek-v4-pro");
-        assert_eq!(provider.provider_id(), "mock");
+        // provider now, so the old ids no longer resolve.
+        assert!(build_provider_for(&bare_config(), "deepseek-v4-flash").is_none());
+        assert!(build_provider_for(&bare_config(), "deepseek-v4-pro").is_none());
     }
 
     #[test]
@@ -2175,7 +2357,7 @@ mod tests {
                     label: "Relay".to_string(),
                     transport: UserTransport::OpenAiCompat,
                     base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
-                    api_key: Some("inline-key".to_string()),
+                    api_key: Some("inline-key".into()),
                     model: Some("gemini-2.5-flash".to_string()),
                     ..Default::default()
                 },
@@ -2231,14 +2413,14 @@ mod tests {
                 UserChannelConfig {
                     label: "default".to_string(),
                     transport: UserTransport::OpenAiCompat,
-                    api_key: Some("k".to_string()),
+                    api_key: Some("k".into()),
                     model: Some("gpt-5.5".to_string()),
                     ..Default::default()
                 },
                 UserChannelConfig {
                     label: "xhigh".to_string(),
                     transport: UserTransport::OpenAiCompat,
-                    api_key: Some("k".to_string()),
+                    api_key: Some("k".into()),
                     model: Some("gpt-5.2".to_string()),
                     effort: Some("xhigh".to_string()),
                     ..Default::default()
@@ -2304,7 +2486,7 @@ mod tests {
             channels: vec![UserChannelConfig {
                 label: "default".to_string(),
                 transport: UserTransport::GeminiNative,
-                api_key: Some("k".to_string()),
+                api_key: Some("k".into()),
                 model: Some("gemini-2.5-flash".to_string()),
                 ..Default::default()
             }],
@@ -2357,7 +2539,7 @@ mod tests {
                 label: "default".to_string(),
                 transport: UserTransport::OpenAiCompat,
                 base_url: Some("https://my.example.com/v1/chat/completions".to_string()),
-                api_key: Some("k".to_string()),
+                api_key: Some("k".into()),
                 model: Some("my-model".to_string()),
                 ..Default::default()
             }],
@@ -2485,10 +2667,10 @@ mod tests {
         let mut config = bare_config();
         config.providers.push(instance);
 
-        assert!(discover_provider_models(&mut config).await);
+        assert!(discover_provider_models(&mut config).await.changed);
         assert_eq!(config.providers[0].channel_models(), expected);
         assert!(config.providers[0].channels.iter().all(|channel| {
-            channel.api_key.as_deref() == Some("sk-test")
+            channel.api_key.as_ref().map(SecretString::expose_secret) == Some("sk-test")
                 && channel.api_key_env.as_deref() == Some("RELAY_API_KEY")
                 && channel.base_url.as_deref() == Some(chat_url.as_str())
                 && channel.user_agent.as_deref() == Some("relay-client/1.0")
@@ -2522,10 +2704,10 @@ mod tests {
         let mut config = bare_config();
         config.providers.push(instance);
 
-        assert!(!discover_provider_models(&mut config).await);
+        assert!(!discover_provider_models(&mut config).await.changed);
         assert_eq!(config.providers[0].channel_models(), before);
         assert!(config.providers[0].channels.iter().all(|channel| {
-            channel.api_key.as_deref() == Some("sk-test")
+            channel.api_key.as_ref().map(SecretString::expose_secret) == Some("sk-test")
                 && channel.base_url.as_deref() == Some(chat_url.as_str())
         }));
     }
@@ -2546,7 +2728,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        let changed = discover_provider_models(&mut config).await;
+        let changed = discover_provider_models(&mut config).await.changed;
 
         assert!(!changed, "Fixed instance must not be discovered");
         let after: Vec<String> = config.providers[0]
@@ -2572,7 +2754,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        let changed = discover_provider_models(&mut config).await;
+        let changed = discover_provider_models(&mut config).await.changed;
 
         assert!(
             !changed,
@@ -2603,7 +2785,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        let changed = discover_provider_models(&mut config).await;
+        let changed = discover_provider_models(&mut config).await.changed;
 
         assert!(!changed, "discovery-disabled template must be skipped");
         let after: Vec<String> = config.providers[0]
@@ -2628,7 +2810,7 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
 
-        let changed = discover_provider_models(&mut config).await;
+        let changed = discover_provider_models(&mut config).await.changed;
 
         assert!(!changed, "pure-custom instance must not be discovered");
         let after: Vec<String> = config.providers[0]
@@ -2655,13 +2837,14 @@ mod tests {
                     label: m.clone(),
                     transport: UserTransport::OpenAiCompat,
                     api_key_env: None,
-                    api_key: Some("sk".to_string()),
+                    api_key: Some("sk".into()),
                     model: Some(m.clone()),
                     base_url: Some("https://relay.example.com".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
                     auth: Default::default(),
+                    remote: None,
                 })
                 .collect(),
             default_channel: 0,
@@ -2697,13 +2880,14 @@ mod tests {
                     label: m.clone(),
                     transport: UserTransport::OpenAiCompat,
                     api_key_env: None,
-                    api_key: Some("sk".to_string()),
+                    api_key: Some("sk".into()),
                     model: Some(m.clone()),
                     base_url: Some("https://zai.example.com".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
                     auth: Default::default(),
+                    remote: None,
                 })
                 .collect(),
             default_channel: 0,
@@ -2800,7 +2984,7 @@ mod tests {
         let mut config = bare_config();
         config.providers.push(instance);
 
-        assert!(discover_provider_models(&mut config).await);
+        assert!(discover_provider_models(&mut config).await.changed);
         // Every advertised id is materialized (sorted by id), including the
         // platform-native ids the static registry does not know.
         assert_eq!(
@@ -2822,6 +3006,94 @@ mod tests {
         assert_eq!(
             fitted["kimi-for-coding-highspeed"].display_name.as_deref(),
             Some("kimi-for-coding-highspeed")
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_copilot_uses_remote_picker_models_and_persists_routes() {
+        let body = r#"{"data":[
+            {
+                "id":"gpt-5",
+                "name":"GPT-5",
+                "model_picker_enabled":true,
+                "supported_endpoints":["/responses"],
+                "capabilities":{
+                    "type":"chat",
+                    "family":"gpt-5",
+                    "limits":{"max_context_window_tokens":200000,"max_output_tokens":16384},
+                    "supports":{"tool_calls":true,"vision":true,"reasoning_effort":["low","high"]}
+                }
+            },
+            {
+                "id":"claude-opus-4.7",
+                "name":"Claude Opus 4.7",
+                "model_picker_enabled":true,
+                "supported_endpoints":["/v1/messages"],
+                "capabilities":{
+                    "type":"chat",
+                    "family":"claude-opus",
+                    "limits":{"max_context_window_tokens":144000,"max_output_tokens":64000},
+                    "supports":{"adaptive_thinking":true,"tool_calls":true,"vision":true}
+                }
+            },
+            {
+                "id":"internal-title",
+                "name":"Internal title model",
+                "model_picker_enabled":false,
+                "supported_endpoints":["/responses"],
+                "capabilities":{
+                    "type":"chat",
+                    "family":"internal",
+                    "limits":{"max_output_tokens":1024},
+                    "supports":{"tool_calls":false}
+                }
+            }
+        ]}"#;
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/models")
+            .match_header("authorization", "Bearer copilot-token")
+            .match_header("copilot-integration-id", "vscode-chat")
+            .match_header("x-initiator", "user")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let mut instance = template_instance("copilot-oauth", &["gpt-4o-mini"]);
+        instance.model_source = ModelSource::Api;
+        for channel in &mut instance.channels {
+            channel.api_key = Some("copilot-token".into());
+            channel.base_url = Some(format!("{}/chat/completions", server.url()));
+        }
+        let mut config = bare_config();
+        config.providers.push(instance);
+
+        let changed = discover_provider_models(&mut config).await.changed;
+
+        assert!(changed);
+        assert_eq!(
+            config.providers[0].channel_models(),
+            vec!["claude-opus-4.7".to_string(), "gpt-5".to_string()]
+        );
+        let gpt = config.providers[0]
+            .channels
+            .iter()
+            .find(|channel| channel.model.as_deref() == Some("gpt-5"))
+            .unwrap();
+        assert_eq!(
+            gpt.remote.as_ref().and_then(|remote| remote.endpoint),
+            Some(RemoteModelEndpoint::Responses)
+        );
+        let claude = config.providers[0]
+            .channels
+            .iter()
+            .find(|channel| channel.model.as_deref() == Some("claude-opus-4.7"))
+            .unwrap();
+        assert_eq!(
+            claude.remote.as_ref().and_then(|remote| remote.endpoint),
+            Some(RemoteModelEndpoint::Messages)
         );
     }
 
@@ -2851,5 +3123,92 @@ mod tests {
         assert!(model.reasoning());
         assert!(model.vision);
         assert_eq!(model.effort_levels, &[Effort::Low, Effort::High]);
+    }
+
+    #[test]
+    fn copilot_remote_endpoint_selects_the_advertised_transport() {
+        use neenee_core::{RemoteModelMetadata, ThinkingSupport};
+
+        let base = UserChannelConfig {
+            label: "remote-model".to_string(),
+            model: Some("remote-model".to_string()),
+            auth: neenee_core::ChannelAuth::CopilotOAuth,
+            remote: Some(RemoteModelMetadata {
+                endpoint: Some(RemoteModelEndpoint::Messages),
+                max_output_tokens: Some(64_000),
+                thinking: Some(ThinkingSupport::AnthropicAdaptive),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let messages = user_channel_to_channel(&base, "remote-model");
+        assert!(matches!(
+            messages.transport,
+            Transport::Anthropic { copilot: true, .. }
+        ));
+
+        let mut responses = base.clone();
+        responses.remote.as_mut().unwrap().endpoint = Some(RemoteModelEndpoint::Responses);
+        let responses = user_channel_to_channel(&responses, "remote-model");
+        assert!(matches!(
+            responses.transport,
+            Transport::OpenAiResponses { copilot: true, .. }
+        ));
+
+        let mut chat = base;
+        chat.remote.as_mut().unwrap().endpoint = Some(RemoteModelEndpoint::ChatCompletions);
+        let chat = user_channel_to_channel(&chat, "remote-model");
+        assert!(matches!(
+            chat.transport,
+            Transport::OpenAiCompat { copilot: true, .. }
+        ));
+    }
+
+    #[test]
+    fn trusted_remote_metadata_is_persisted_only_for_picker_models() {
+        let mut provider = template_instance("copilot-oauth", &["gpt-5", "internal-title"]);
+        let discovered = vec![
+            neenee_providers::DiscoveredModel {
+                id: "gpt-5".to_string(),
+                picker_enabled: Some(true),
+                endpoint: Some(RemoteModelEndpoint::Responses),
+                family: Some("gpt-5".to_string()),
+                context_window: Some(200_000),
+                max_output_tokens: Some(16_384),
+                reasoning: Some(true),
+                thinking: Some(neenee_core::ThinkingSupport::ReasoningSummary),
+                tool_call: Some(true),
+                vision: Some(true),
+                effort_levels: Some(vec!["low".to_string(), "high".to_string()]),
+                display_name: Some("GPT-5".to_string()),
+            },
+            neenee_providers::DiscoveredModel {
+                id: "internal-title".to_string(),
+                picker_enabled: Some(false),
+                endpoint: Some(RemoteModelEndpoint::Responses),
+                ..Default::default()
+            },
+        ];
+
+        assert!(persist_remote_model_metadata(
+            &mut provider,
+            &discovered,
+            true
+        ));
+        let gpt5 = provider
+            .channels
+            .iter()
+            .find(|channel| channel.model.as_deref() == Some("gpt-5"))
+            .unwrap();
+        assert_eq!(
+            gpt5.remote.as_ref().and_then(|remote| remote.endpoint),
+            Some(RemoteModelEndpoint::Responses)
+        );
+        let internal = provider
+            .channels
+            .iter()
+            .find(|channel| channel.model.as_deref() == Some("internal-title"))
+            .unwrap();
+        assert!(internal.remote.is_none());
     }
 }

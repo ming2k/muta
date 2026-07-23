@@ -29,14 +29,14 @@ pub struct WebSearchConfig {
     /// Per-request timeout in seconds (default 20).
     pub timeout_secs: u64,
     /// Exa API key (optional; anonymous use works without it).
-    pub exa_api_key: Option<String>,
+    pub exa_api_key: Option<crate::SecretString>,
     /// Parallel Search API key (optional; anonymous use works without it).
-    pub parallel_api_key: Option<String>,
+    pub parallel_api_key: Option<crate::SecretString>,
     /// SearXNG JSON search endpoint, e.g. `http://localhost:8080/search`.
     /// Required when `provider = "searxng"`.
     pub searxng_url: Option<String>,
     /// Tavily API key. Required when `provider = "tavily"`.
-    pub tavily_api_key: Option<String>,
+    pub tavily_api_key: Option<crate::SecretString>,
 }
 
 impl Default for WebSearchConfig {

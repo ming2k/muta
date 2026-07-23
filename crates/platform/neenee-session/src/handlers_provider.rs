@@ -7,7 +7,7 @@
 
 use neenee_agent::Agent;
 use neenee_agent::catalog;
-use neenee_core::{AgentResponse, Provider};
+use neenee_core::{AgentResponse, Provider, SecretString};
 use neenee_store::{
     config::Config,
     provider_usage::ProviderUsage,
@@ -45,19 +45,19 @@ fn is_multi_model_provider(config: &Config, id: &str) -> bool {
 /// channels are skipped: their bearer is owned by the auth flow.
 fn apply_switch_api_key(config: &mut Config, provider_type: &str, key: &str) {
     match provider_type {
-        "openai" => config.openai_api_key = Some(key.to_string()),
-        "google" => config.gemini_api_key = Some(key.to_string()),
-        "kimi-code" => config.moonshot_api_key = Some(key.to_string()),
-        "deepseek" => config.deepseek_api_key = Some(key.to_string()),
-        "zai-code" => config.zai_api_key = Some(key.to_string()),
-        "opencode-go" => config.opencode_go_api_key = Some(key.to_string()),
-        "anthropic" => config.anthropic_api_key = Some(key.to_string()),
+        "openai" => config.openai_api_key = Some(key.into()),
+        "google" => config.gemini_api_key = Some(key.into()),
+        "kimi-code" => config.moonshot_api_key = Some(key.into()),
+        "deepseek" => config.deepseek_api_key = Some(key.into()),
+        "zai-code" => config.zai_api_key = Some(key.into()),
+        "opencode-go" => config.opencode_go_api_key = Some(key.into()),
+        "anthropic" => config.anthropic_api_key = Some(key.into()),
         _ => {}
     }
     if let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_type) {
         for channel in &mut provider.channels {
             if !channel.auth.is_oauth() {
-                channel.api_key = Some(key.to_string());
+                channel.api_key = Some(key.into());
             }
         }
     }
@@ -84,13 +84,13 @@ pub async fn switch(
     provider_usage: &mut ProviderUsage,
     provider_type: String,
     model: String,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
     base_url: Option<String>,
 ) {
     // A key entered in the TUI is persisted and wins over
     // config; environment variables still take precedence.
     if let Some(key) = api_key {
-        apply_switch_api_key(config, &provider_type, &key);
+        apply_switch_api_key(config, &provider_type, key.expose_secret());
     }
     if let Some(url) = base_url
         && provider_type.as_str() == "anthropic"
@@ -168,7 +168,7 @@ pub async fn add(
     name: String,
     protocol: String,
     base_url: String,
-    api_key: String,
+    api_key: SecretString,
     user_agent: Option<String>,
     models: Vec<String>,
     auth: neenee_core::ChannelAuth,
@@ -183,8 +183,8 @@ pub async fn add(
         // Default (and explicit "openai"): the OpenAI-compatible chat surface.
         _ => UserTransport::OpenAiCompat,
     };
-    let trimmed_key = api_key.trim();
-    let api_key = (!trimmed_key.is_empty()).then(|| trimmed_key.to_string());
+    let trimmed_key = api_key.expose_secret().trim();
+    let api_key = (!trimmed_key.is_empty()).then(|| SecretString::from(trimmed_key));
     // Pasted API key on an OAuth template → ordinary ApiKey auth.
     let auth = match (auth, api_key.is_some()) {
         (a, true) if a.is_oauth() => neenee_core::ChannelAuth::ApiKey,
@@ -215,6 +215,7 @@ pub async fn add(
             effort: None,
             thinking: None,
             auth,
+            remote: None,
         })
         .collect();
     // A provider must serve at least one model; a template with no usable model
@@ -268,6 +269,27 @@ pub async fn add(
     {
         tracing::warn!(?error, "could not persist session provider selection");
     }
+    // For OAuth providers, run live model discovery right away so the picker
+    // shows the account's real entitlements immediately rather than the seed
+    // list. A failure keeps the seed; each failure is reported back as a
+    // warning so the user knows the list may be incomplete.
+    if auth.is_oauth() {
+        let outcome = catalog::discover_provider_models(config).await;
+        if outcome.changed {
+            catalog::sync_fitted_model_registry(config);
+            if let Err(error) = config.save_preserving_provider_selection() {
+                tracing::warn!(?error, "live discovery after add: could not persist");
+            }
+        }
+        for (failed_provider, message) in &outcome.failures {
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                neenee_core::ConnectStatus::DiscoveryWarning {
+                    provider: failed_provider.clone(),
+                    message: message.clone(),
+                },
+            ));
+        }
+    }
     activate(
         config,
         agent,
@@ -299,7 +321,7 @@ pub async fn edit(
     name: String,
     protocol: String,
     base_url: String,
-    api_key: String,
+    api_key: SecretString,
 ) {
     use neenee_store::config::UserTransport;
 
@@ -309,7 +331,7 @@ pub async fn edit(
         _ => UserTransport::OpenAiCompat,
     };
     let trimmed_url = base_url.trim();
-    let trimmed_key = api_key.trim();
+    let trimmed_key = api_key.expose_secret().trim();
     let trimmed_name = name.trim();
     let Some(provider) = config.providers.iter_mut().find(|p| p.id == id) else {
         return;
@@ -331,7 +353,7 @@ pub async fn edit(
         channel.base_url = (!trimmed_url.is_empty()).then(|| trimmed_url.to_string());
         // An empty key keeps whatever the channel already had.
         if !trimmed_key.is_empty() {
-            channel.api_key = Some(trimmed_key.to_string());
+            channel.api_key = Some(SecretString::from(trimmed_key));
         }
         // ADR-0046: reasoning (effort/thinking) is no longer edited here — it
         // is per-model, via `EditProviderModel`. Editing provider metadata
@@ -342,7 +364,8 @@ pub async fn edit(
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted config + the picker snapshot without switching.
     if config.default_provider == id {
-        let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage);
+        let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage)
+            .unwrap_or_default();
         activate(
             config,
             agent,
@@ -447,7 +470,8 @@ pub async fn edit_model(
     }
 
     let active_model =
-        catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage);
+        catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage)
+            .unwrap_or_default();
     if config.default_provider == provider_id && active_model == model {
         activate(
             config,
@@ -502,7 +526,8 @@ pub async fn edit_model_reasoning(
 
     // Re-activate if this model is the live one so the change applies now.
     let provider_id = &config.default_provider;
-    let active_model = catalog::resolved_model_name_with_usage(config, provider_id, provider_usage);
+    let active_model = catalog::resolved_model_name_with_usage(config, provider_id, provider_usage)
+        .unwrap_or_default();
     if active_model == model {
         activate(
             config,
@@ -564,7 +589,8 @@ pub async fn delete(
 
     if was_active {
         let fallback = config.default_provider.clone();
-        let model = catalog::resolved_model_name_with_usage(config, &fallback, provider_usage);
+        let model = catalog::resolved_model_name_with_usage(config, &fallback, provider_usage)
+            .unwrap_or_default();
         activate(
             config,
             agent,
@@ -620,6 +646,7 @@ pub async fn reapply_session_selection(
     };
     let model = model_id.filter(|m| !m.is_empty()).unwrap_or_else(|| {
         catalog::resolved_model_name_with_usage(&effective, &provider_id, provider_usage)
+            .unwrap_or_default()
     });
     activate(
         &effective,
@@ -702,8 +729,13 @@ pub async fn authorize(
 
 /// `AgentRequest::ConnectProvider` — re-auth an existing OAuth provider, then
 /// activate it.
+///
+/// After a successful login, runs live model discovery so the provider's
+/// model list reflects the account's real entitlements immediately (rather
+/// than waiting for the next launch). Discovery failures are non-fatal: the
+/// provider keeps its previous model subset.
 pub async fn connect(
-    config: &Config,
+    config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -738,6 +770,25 @@ pub async fn connect(
             provider: provider_id.clone(),
         },
     ));
+    // Live model discovery: fetch the provider's actual model list with the
+    // fresh token so the picker shows the account's real entitlements right
+    // away. A failure keeps the previous subset; each failure is reported back
+    // as a warning so the user knows *why* the list did not refresh.
+    let outcome = catalog::discover_provider_models(config).await;
+    if outcome.changed {
+        catalog::sync_fitted_model_registry(config);
+        if let Err(error) = config.save_preserving_provider_selection() {
+            tracing::warn!(?error, "live discovery after login: could not persist");
+        }
+    }
+    for (failed_provider, message) in &outcome.failures {
+        let _ = resp_tx.send(AgentResponse::ConnectStatus(
+            neenee_core::ConnectStatus::DiscoveryWarning {
+                provider: failed_provider.clone(),
+                message: message.clone(),
+            },
+        ));
+    }
     let model = catalog::build_picker_state(config, provider_usage)
         .rows
         .into_iter()
@@ -884,8 +935,9 @@ async fn run_oauth(
     // carry no such claim, so this is `None` for them.
     let account_id = tokens
         .id_token
-        .as_deref()
-        .or(Some(tokens.access_token.as_str()))
+        .as_ref()
+        .map(SecretString::expose_secret)
+        .or(Some(tokens.access_token.expose_secret()))
         .and_then(neenee_auth::chatgpt_account_id);
 
     let set = neenee_auth::TokenSet {
@@ -970,17 +1022,31 @@ async fn activate(
     let session_id = agent.thread_id();
     // For multi-model providers the explicit model selects the channel (and thus
     // the per-model transport); build_provider_for_model reads `default_model` as
-    // a fallback.
-    let new_p: Arc<dyn Provider> = match catalog::build_provider_for_model(
+    // a fallback. Returns `None` when the provider id is unknown or has no
+    // resolvable channel — refuse the switch with a user-facing error instead
+    // of silently installing a non-functional placeholder.
+    let Some(new_p) = catalog::build_provider_for_model(
         config,
         &provider_type,
         Some(&model),
         session_id.as_deref(),
-    ) {
-        provider if provider.provider_id() != "mock" => provider,
-        // Fall back to the catalog default if explicit-model resolution hit
-        // the mock sentinel (e.g. an unknown model id).
-        _ => catalog::build_provider_for(config, &provider_type),
+    )
+    .or_else(|| catalog::build_provider_for(config, &provider_type)) else {
+        tracing::warn!(
+            provider_type = %provider_type,
+            model = %model,
+            "activate refused: catalog could not resolve a real provider/channel",
+        );
+        let _ = resp_tx.send(AgentResponse::Error(format!(
+            "No provider configured for '{provider_type}'. \
+             Add one with /provider before sending a message."
+        )));
+        // Re-push the picker so the UI reflects that nothing switched.
+        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+            config,
+            provider_usage,
+        )));
+        return;
     };
     *provider_for_task
         .write()
@@ -1051,12 +1117,29 @@ pub async fn set_default_model(
     if let Err(error) = config.save() {
         tracing::warn!(?error, "could not persist default model");
     }
-    let new_p = catalog::build_provider_for_model(
+    // Same refusal contract as `activate`: when the catalog cannot resolve a
+    // real provider/channel, surface an error and leave the live holder alone
+    // rather than silently falling back to a placeholder.
+    let Some(new_p) = catalog::build_provider_for_model(
         config,
         &id,
         config.default_model.as_deref(),
         agent.thread_id().as_deref(),
-    );
+    ) else {
+        tracing::warn!(
+            provider_id = %id,
+            "set_default_model refused: catalog could not resolve a real provider/channel",
+        );
+        let _ = resp_tx.send(AgentResponse::Error(format!(
+            "No provider configured for '{id}'. \
+             Add one with /provider before sending a message."
+        )));
+        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+            config,
+            provider_usage,
+        )));
+        return;
+    };
     *provider_for_task
         .write()
         .unwrap_or_else(|error| error.into_inner()) = new_p;
@@ -1065,9 +1148,17 @@ pub async fn set_default_model(
     reseed_prune_threshold(agent, config);
     // Tool-description overrides track the live model id.
     reseed_tool_variants(agent, config);
-    let model_name = catalog::resolved_model_name_with_usage(config, &id, provider_usage);
+    // `resolved_model_name_with_usage` returns `None` only when the entry has
+    // no resolvable model — but `build_provider_for_model` above already
+    // succeeded, so the entry has at least its default-channel model. Fall
+    // back to the empty string defensively; the wire model is what the holder
+    // actually carries.
+    let model_name =
+        catalog::resolved_model_name_with_usage(config, &id, provider_usage).unwrap_or_default();
     provider_usage.record(&id);
-    provider_usage.record_model(&id, &model_name);
+    if !model_name.is_empty() {
+        provider_usage.record_model(&id, &model_name);
+    }
     if let Err(error) = provider_usage.save() {
         tracing::warn!(?error, "could not persist model usage telemetry");
     }
@@ -1139,7 +1230,7 @@ mod tests {
             channels: vec![
                 UserChannelConfig {
                     label: "k3".to_string(),
-                    api_key: Some("sk-old".to_string()),
+                    api_key: Some("sk-old".into()),
                     ..Default::default()
                 },
                 UserChannelConfig {
@@ -1161,10 +1252,16 @@ mod tests {
             provider
                 .channels
                 .iter()
-                .all(|c| c.api_key.as_deref() == Some("sk-new"))
+                .all(|c| c.api_key.as_ref().map(SecretString::expose_secret) == Some("sk-new"))
         );
         // The legacy field stays in sync for the credentials fold.
-        assert_eq!(config.moonshot_api_key.as_deref(), Some("sk-new"));
+        assert_eq!(
+            config
+                .moonshot_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sk-new")
+        );
     }
 
     #[test]
@@ -1181,7 +1278,7 @@ mod tests {
                 },
                 UserChannelConfig {
                     label: "key-model".to_string(),
-                    api_key: Some("sk-old".to_string()),
+                    api_key: Some("sk-old".into()),
                     ..Default::default()
                 },
             ],
@@ -1195,6 +1292,12 @@ mod tests {
             provider.channels[0].api_key.is_none(),
             "an OAuth channel's bearer is owned by the auth flow"
         );
-        assert_eq!(provider.channels[1].api_key.as_deref(), Some("sk-new"));
+        assert_eq!(
+            provider.channels[1]
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sk-new")
+        );
     }
 }

@@ -20,7 +20,8 @@
 ///
 /// Ordered ascending by depth:
 /// `None < Minimal < Low < Medium < High < Xhigh < Max`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Effort {
     /// Disable reasoning when the provider supports an explicit off value.
     None,

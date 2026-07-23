@@ -544,7 +544,7 @@ impl SelectionDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{Block, TranscriptMessage};
+    use crate::document::{Block, Inline, TranscriptMessage};
     use neenee_core::Role;
 
     #[test]
@@ -668,7 +668,7 @@ mod tests {
             .blocks
             .iter()
             .position(
-                |block| matches!(block, Block::Text { content, .. } if content.contains("README.md")),
+                |block| matches!(block, Block::Text(inline) if inline.content.contains("README.md")),
             )
             .unwrap();
 
@@ -705,20 +705,8 @@ mod tests {
     fn test_range_cross_blocks() {
         let mut msg = TranscriptMessage::new(Role::Assistant, "");
         msg.blocks = vec![
-            Block::Text {
-                content: "First".to_string(),
-                code_ranges: Vec::new(),
-                bold_ranges: Vec::new(),
-                math_ranges: Vec::new(),
-                link_ranges: Vec::new(),
-            },
-            Block::Text {
-                content: "Second".to_string(),
-                code_ranges: Vec::new(),
-                bold_ranges: Vec::new(),
-                math_ranges: Vec::new(),
-                link_ranges: Vec::new(),
-            },
+            Block::Text(Inline::plain("First")),
+            Block::Text(Inline::plain("Second")),
         ];
         let messages = vec![msg];
         let sel = SelectionState::Range {

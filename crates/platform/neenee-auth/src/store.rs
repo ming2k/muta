@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
+use neenee_core::SecretString;
 use neenee_store::paths;
 use serde::{Deserialize, Serialize};
 
@@ -16,10 +17,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenSet {
     /// The bearer access token sent as `Authorization: Bearer <access>`.
-    pub access: String,
+    pub access: SecretString,
     /// The refresh token used to rotate the access token. xAI rotates these,
     /// so every successful refresh updates this field on disk.
-    pub refresh: String,
+    pub refresh: SecretString,
     /// Unix epoch milliseconds when the access token expires (best-effort; some
     /// providers don't always return `expires_in`, so the JWT `exp` check is
     /// the load-bearing freshness signal at request time).
@@ -99,8 +100,8 @@ mod tests {
         store.set(
             "xai",
             TokenSet {
-                access: "acc".to_string(),
-                refresh: "ref".to_string(),
+                access: "acc".into(),
+                refresh: "ref".into(),
                 expires_ms: 1_700_000_000_000,
                 account_id: None,
             },

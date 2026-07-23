@@ -358,7 +358,7 @@ fn haiku_uses_manual_thinking_not_adaptive_when_opted_in() {
         "Haiku rejects effort — output_config must be dropped"
     );
     assert_eq!(
-        request::beta_header(&provider.endpoint.model, provider.thinking),
+        request::beta_header(&provider.capabilities, provider.thinking),
         Some("interleaved-thinking-2025-05-14"),
     );
 }
@@ -376,7 +376,7 @@ fn haiku_omits_thinking_and_beta_when_off() {
     );
     assert!(body.get("thinking").is_none());
     assert_eq!(
-        request::beta_header(&provider.endpoint.model, provider.thinking),
+        request::beta_header(&provider.capabilities, provider.thinking),
         None
     );
 }

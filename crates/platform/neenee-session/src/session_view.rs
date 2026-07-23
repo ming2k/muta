@@ -58,7 +58,7 @@ pub fn build_session_context(
     config: &Config,
 ) -> SessionContextSnapshot {
     let provider_id = catalog::default_provider_id(config).to_string();
-    let model = catalog::resolved_model_name(config, &provider_id);
+    let model = catalog::resolved_model_name(config, &provider_id).unwrap_or_default();
 
     // Catalog entry carries the authoritative display metadata; fall back to
     // the raw model id / empty when the provider isn't a known catalog entry.
@@ -78,7 +78,7 @@ pub fn build_session_context(
 
     let model_info = ModelInfo {
         provider: provider_id,
-        capabilities: derive_capabilities(&model),
+        capabilities: derive_capabilities(&agent.provider.model_capabilities()),
         display_name,
         model,
         context_window,
@@ -128,12 +128,18 @@ pub fn build_session_context(
 }
 
 /// Heuristic model-capability hints for the Tools / Mcp / Skills / Permissions
-/// managers. Per-model capability data is resolved from the [`neenee_core::model`] registry; the harness
-/// depends on tool calling for every provider, so it is always advertised.
-pub fn derive_capabilities(model: &str) -> Vec<String> {
-    let mut caps = vec!["tool calling".to_string()];
-    if neenee_core::resolve_model(model).reasoning() {
+/// managers. The live provider exposes the channel-scoped capability view, so
+/// a provider's remote catalogue can override a static model baseline.
+pub fn derive_capabilities(capabilities: &neenee_core::ModelCapabilities) -> Vec<String> {
+    let mut caps = Vec::new();
+    if capabilities.tool_call {
+        caps.push("tool calling".to_string());
+    }
+    if capabilities.reasoning() {
         caps.push("reasoning".to_string());
+    }
+    if capabilities.vision {
+        caps.push("vision".to_string());
     }
     caps
 }

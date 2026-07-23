@@ -15,7 +15,7 @@
 
 use futures::StreamExt;
 use mockito::{Matcher, Server};
-use neenee_core::{Message, Provider, ProviderStreamEvent, Role};
+use neenee_core::{Message, Provider, ProviderStreamEvent, Role, SecretString};
 use neenee_providers::{AnthropicMessagesProvider, OpenAiCompatProvider};
 use serde_json::{Value, json};
 
@@ -489,9 +489,11 @@ async fn factory_publishes_explicit_high_effort() {
             user_agent: "ua".into(),
             effort: Some(Effort::High),
             thinking: None,
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
+        remote: None,
     };
     assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
 }
@@ -513,9 +515,11 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
             user_agent: "ua".into(),
             effort: Some(Effort::Medium),
             thinking: Some(ThinkingMode::Off),
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
+        remote: None,
     };
     // The request publishes the effort override; the absence of a `thinking`
     // field is verified by the companion unit test.
@@ -534,9 +538,11 @@ async fn factory_publishes_thinking_without_output_config() {
             user_agent: "ua".into(),
             effort: None,
             thinking: Some(ThinkingMode::Adaptive),
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
+        remote: None,
     };
     assert_factory_body(
         channel,
@@ -560,9 +566,11 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
             user_agent: "ua".into(),
             effort: Some(Effort::High),
             thinking: Some(ThinkingMode::Off),
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-sonnet-5".into(),
+        remote: None,
     };
     assert_factory_body(
         channel,
@@ -586,9 +594,11 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
             user_agent: "ua".into(),
             effort: Some(Effort::Xhigh),
             thinking: Some(ThinkingMode::Adaptive),
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-sonnet-5".into(),
+        remote: None,
     };
     assert_factory_body(
         channel,
@@ -613,9 +623,11 @@ async fn fable5_always_on_thinking_ignores_off_override() {
             user_agent: "ua".into(),
             effort: None,
             thinking: Some(ThinkingMode::Off),
+            copilot: false,
         },
         api_key: "k".into(),
         model: "claude-fable-5".into(),
+        remote: None,
     };
     assert_factory_body(
         channel,
@@ -657,11 +669,13 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
         .create_async()
         .await;
 
+    let key = SecretString::from("sk-live");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &chat_url,
-        api_key: "sk-live",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     let models = list_models(req).await.expect("discovery succeeds");
     // Sorted + de-duplicated, regardless of the API's ordering or duplicates.
@@ -683,11 +697,13 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
         .create_async()
         .await;
 
+    let key = SecretString::default();
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
-        api_key: "",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     let models = list_models(req).await.expect("keyless discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
@@ -716,11 +732,13 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         .create_async()
         .await;
 
+    let key = SecretString::from("sk-ant");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::Anthropic,
         base_url: &format!("{}/v1/messages", server.url()),
-        api_key: "sk-ant",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     let models = list_models(req)
         .await
@@ -753,11 +771,13 @@ async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
         .create_async()
         .await;
 
+    let key = SecretString::from("gem-key");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::Gemini,
         base_url: &format!("{}/v1beta", server.url()),
-        api_key: "gem-key",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     let models = list_models(req).await.expect("gemini discovery succeeds");
     // The embedding-only model is filtered out.
@@ -775,11 +795,13 @@ async fn list_models_returns_status_error_on_non_2xx() {
         .create_async()
         .await;
 
+    let key = SecretString::from("bad");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
-        api_key: "bad",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     match list_models(req).await {
         Err(ModelListError::Status(401, body)) => {
@@ -803,11 +825,13 @@ async fn list_models_returns_empty_error_when_data_array_is_empty() {
         .create_async()
         .await;
 
+    let key = SecretString::from("k");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
-        api_key: "k",
+        api_key: &key,
         user_agent: None,
+        extra_headers: &[],
     };
     // An empty live list is reported as Empty (a failure), so the catalog
     // keeps the snapshot rather than blanking the instance.

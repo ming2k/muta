@@ -1110,6 +1110,19 @@ pub async fn run_tui(
                                 format!("{provider} authorized."),
                             );
                         }
+                        neenee_core::ConnectStatus::DiscoveryWarning { provider, message } => {
+                            // Login succeeded but live model discovery failed, so
+                            // the model list may still be the seed subset. Tell
+                            // the user why rather than letting a stale list read
+                            // as "the account only has these models".
+                            push_local_notice(
+                                &mut msgs,
+                                NoticeSeverity::Warning,
+                                format!(
+                                    "{provider}: could not refresh the model list ({message}). Showing the previous list."
+                                ),
+                            );
+                        }
                         neenee_core::ConnectStatus::Failed { provider, message } => {
                             *oauth_add_signal_clone.lock().await =
                                 Some(event_loop::OauthAddSignal::Failed {
@@ -1279,6 +1292,7 @@ pub async fn run_tui(
         oauth_pending_url: String::new(),
         oauth_pending_user_code: String::new(),
         oauth_pending_error: None,
+        oauth_scroll: 0,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,

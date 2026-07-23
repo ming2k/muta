@@ -33,14 +33,24 @@ pub struct BodyInput<'a> {
 /// `function_call_output` references a preceding `function_call`, and every
 /// `function_call` has its output (mirrors the chat-completions builder).
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
+    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    body_with_capabilities(messages, input, &capabilities)
+}
+
+/// Build a request with a provider-channel capability view. The provider calls
+/// this for trusted remote metadata; [`body`] remains the static-baseline entry
+/// point for standalone callers and tests.
+pub fn body_with_capabilities(
+    messages: Vec<Message>,
+    input: BodyInput<'_>,
+    capabilities: &neenee_core::ModelCapabilities,
+) -> Value {
     let BodyInput {
         model: model_id,
         stream,
         tool_specs,
         reasoning_effort,
     } = input;
-
-    let model = neenee_core::model::resolve(model_id);
 
     // Fold system messages into `instructions`, strip images on non-vision
     // models (the Responses API rejects `input_image` on them).
@@ -55,7 +65,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
                 instructions.push_str(&m.content);
             }
             _ => {
-                if !model.vision {
+                if !capabilities.vision {
                     m.images = None;
                 }
                 working.push(m);
@@ -166,11 +176,11 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     let mut reasoning = serde_json::Map::new();
     reasoning.insert("summary".to_string(), json!("detailed"));
     if let Some(effort) = reasoning_effort
-        && !model.effort_levels.is_empty()
+        && !capabilities.effort_levels.is_empty()
     {
         reasoning.insert(
             "effort".to_string(),
-            json!(effort.clamp_to(model.effort_levels).as_str()),
+            json!(effort.clamp_to(&capabilities.effort_levels).as_str()),
         );
     }
     body["reasoning"] = Value::Object(reasoning);
@@ -251,10 +261,13 @@ fn flatten_tools(tool_specs: Option<&[Value]>) -> Option<Value> {
 /// - **ChatGPT mode** (`copilot == false`): the ChatGPT account id is attached
 ///   as `ChatGPT-Account-Id` when known.
 /// - **Copilot mode** (`copilot == true`): GitHub Copilot's required headers
-///   are attached instead — `x-initiator` (treated as a user-initiated turn by
-///   default; the harness does not currently distinguish agent turns),
-///   `Openai-Intent: conversation-edits`, and `X-GitHub-Api-Version`. The
-///   ChatGPT account-id header is omitted. Vision turns additionally need
+///   are attached instead — the client-identity headers
+///   (`Copilot-Integration-Id`, `Editor-Version`, `Editor-Plugin-Version`)
+///   that let the backend resolve the account's actual plan entitlements,
+///   plus the per-turn headers `x-initiator` (treated as a user-initiated
+///   turn by default; the harness does not currently distinguish agent
+///   turns), `Openai-Intent: conversation-edits`, and `X-GitHub-Api-Version`.
+///   The ChatGPT account-id header is omitted. Vision turns additionally need
 ///   `Copilot-Vision-Request: true`, but that depends on the request body
 ///   (whether an `input_image` part is present), so it is injected by the
 ///   provider's request builder (see [`has_input_image`]) rather than this
@@ -266,6 +279,9 @@ pub fn headers(
 ) -> Vec<(&'static str, String)> {
     let mut h = vec![("Authorization", format!("Bearer {access_token}"))];
     if copilot {
+        for (name, value) in neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS {
+            h.push((*name, value.to_string()));
+        }
         h.push(("x-initiator", "user".to_string()));
         h.push(("Openai-Intent", "conversation-edits".to_string()));
         h.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
@@ -428,14 +444,20 @@ mod tests {
             names,
             [
                 "Authorization",
+                "Copilot-Integration-Id",
+                "Editor-Version",
+                "Editor-Plugin-Version",
                 "x-initiator",
                 "Openai-Intent",
                 "X-GitHub-Api-Version"
             ]
         );
-        assert_eq!(h[1].1, "user");
-        assert_eq!(h[2].1, "conversation-edits");
-        assert_eq!(h[3].1, "2026-06-01");
+        assert_eq!(h[1].1, "vscode-chat");
+        assert_eq!(h[2].1, "vscode/1.107.0");
+        assert_eq!(h[3].1, "copilot-chat/0.35.0");
+        assert_eq!(h[4].1, "user");
+        assert_eq!(h[5].1, "conversation-edits");
+        assert_eq!(h[6].1, "2026-06-01");
         // No ChatGPT-Account-Id leaks through in Copilot mode.
         assert!(h.iter().all(|(n, _)| *n != "ChatGPT-Account-Id"));
     }

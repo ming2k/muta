@@ -72,7 +72,7 @@ pub enum AgentRequest {
     SwitchProvider {
         provider_type: String,
         model: String,
-        api_key: Option<String>,
+        api_key: Option<crate::SecretString>,
         base_url: Option<String>,
     },
     /// Add a user-defined provider from a TUI template, persist it to config,
@@ -90,7 +90,7 @@ pub enum AgentRequest {
         name: String,
         protocol: String,
         base_url: String,
-        api_key: String,
+        api_key: crate::SecretString,
         user_agent: Option<String>,
         models: Vec<String>,
         /// How the seeded channels authenticate. Default (`ApiKey`) keeps the
@@ -133,7 +133,7 @@ pub enum AgentRequest {
         name: String,
         protocol: String,
         base_url: String,
-        api_key: String,
+        api_key: crate::SecretString,
     },
     /// Remove a model (channel) from a user-defined provider, persist, and push a
     /// fresh picker snapshot. The last remaining model is kept (a provider must
@@ -700,6 +700,11 @@ pub enum ConnectStatus {
     /// Authorization succeeded; tokens persisted (and provider activated when
     /// this followed [`AgentRequest::ConnectProvider`]).
     Done { provider: String },
+    /// Authorization succeeded but the follow-up live model discovery failed,
+    /// so the provider keeps its previous (often seed-only) model list. The
+    /// UI surfaces this as a warning so the user does not mistake a stale list
+    /// for the account's real entitlements.
+    DiscoveryWarning { provider: String, message: String },
     /// Authorization failed or was denied.
     Failed { provider: String, message: String },
 }

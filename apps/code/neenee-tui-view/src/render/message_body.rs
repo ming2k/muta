@@ -6,7 +6,7 @@
 use neenee_tui::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
-use crate::document::{Block, DeliveryStatus, LinkRange, TranscriptMessage};
+use crate::document::{Block, DeliveryStatus, Inline, LinkRange, TranscriptMessage};
 use crate::layout::{BlockRegion, LayoutMap, LinkHit, TableCellHit, TableCellSegment};
 use crate::render::components::meta_strip::{MetaStrip, MetaTone};
 use crate::selection::{
@@ -261,13 +261,14 @@ pub fn draw_message_body(
         // blank row here used to double that gap (two lines instead of one).
 
         match block {
-            Block::Text {
-                content,
-                code_ranges,
-                bold_ranges,
-                math_ranges,
-                link_ranges,
-            } => {
+            Block::Text(inline) => {
+                let Inline {
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                } = inline;
                 let is_user = msg.role == neenee_core::Role::User;
                 let is_queued = is_user && msg.delivery == DeliveryStatus::Queued;
                 let base = match msg.role {
@@ -1069,14 +1070,14 @@ pub fn draw_message_body(
                     }
                 }
             }
-            Block::Heading {
-                level,
-                content,
-                code_ranges,
-                bold_ranges,
-                math_ranges,
-                link_ranges,
-            } => {
+            Block::Heading { level, inline } => {
+                let Inline {
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                } = inline;
                 let prefix = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
                 let prefix_cols = TRANSCRIPT_BODY_LEADING_INDENT;
                 let modifier = if *level == 1 {
@@ -1183,13 +1184,14 @@ pub fn draw_message_body(
                     *current_y += 1;
                 }
             }
-            Block::Quote {
-                content,
-                code_ranges,
-                bold_ranges,
-                math_ranges,
-                link_ranges,
-            } => {
+            Block::Quote(inline) => {
+                let Inline {
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                } = inline;
                 // 5-col `▎` prefix; the area is already inset so no right gutter.
                 let lines = wrap_text(content, area.width.saturating_sub(5) as usize);
                 *content_lines += lines.len();
@@ -1288,15 +1290,18 @@ pub fn draw_message_body(
                 }
             }
             Block::ListItem {
-                content,
-                code_ranges,
-                bold_ranges,
-                math_ranges,
-                link_ranges,
+                inline,
                 ordered,
                 depth,
                 checked,
             } => {
+                let Inline {
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                } = inline;
                 let marker = match (checked, ordered) {
                     (Some(true), _) => "[x]".to_string(),
                     (Some(false), _) => "[ ]".to_string(),

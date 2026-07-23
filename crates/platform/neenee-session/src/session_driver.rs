@@ -39,8 +39,9 @@ use crate::startup::StartupMode;
 /// The owned state and request loop for one live session.
 ///
 /// A frontend currently assembles the driver after startup wiring and moves it
-/// into a Tokio task. Once [`crate::SessionRegistry::create_session`] owns that
-/// assembly, the fields can become private without changing the driver model.
+/// into a Tokio task. (The ADR-0037 §6 `SessionRegistry` factory was removed
+/// as dormant; if the server move resumes, the fields can become private
+/// without changing the driver model.)
 #[allow(clippy::type_complexity)]
 pub struct SessionDriver {
     /// Inbound requests consumed by this driver.
@@ -197,12 +198,13 @@ impl SessionDriver {
             // is what lets the next launch re-open this provider on the same model.
             let initial_model = catalog::resolved_model_name(&config, &initial_id);
             provider_usage.record(&initial_id);
-            // Skip the model pin for an unbuildable provider (resolved to the
-            // `"mock-model"` sentinel): it has no real channel, so pinning the
-            // sentinel would be a spurious `last_models` entry. The provider
-            // recency bump above still runs so the picker ordering is correct.
-            if initial_model != "mock-model" {
-                provider_usage.record_model(&initial_id, &initial_model);
+            // Skip the model pin when the startup provider is unbuildable
+            // (`resolved_model_name` returns `None`): there is no real channel,
+            // so pinning a (non-existent) model would be a spurious `last_models`
+            // entry. The provider recency bump above still runs so the picker
+            // ordering is correct.
+            if let Some(model) = initial_model.as_deref() {
+                provider_usage.record_model(&initial_id, model);
             }
             if let Err(error) = provider_usage.save() {
                 tracing::warn!(?error, "could not persist provider/model usage telemetry");
@@ -329,7 +331,7 @@ impl SessionDriver {
                 }
                 AgentRequest::ConnectProvider { id, method } => {
                     crate::handlers_provider::connect(
-                        &config,
+                        &mut config,
                         &agent,
                         &provider_for_task,
                         &resp_tx,

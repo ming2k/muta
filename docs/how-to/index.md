@@ -12,3 +12,4 @@ with the relevant reference material.
 | [How to enable the live quant broker](enable-live-quant-broker.md) | Connect `neenee-quant` directly to LongPort OpenAPI with local risk checks |
 | [How to use the intelligence workbench](use-intelligence-workbench.md) | Collect public signals, track link changes, and convene the expert council |
 | [How to use sub2api relays](use-sub2api.md) | Configure OpenAI, Anthropic, and Gemini-compatible sub2api relays |
+| [How to avoid Copilot provider pitfalls](copilot-provider-pitfalls.md) | Diagnose why GitHub Copilot shows fewer models than expected and pick the right OAuth client/token type |

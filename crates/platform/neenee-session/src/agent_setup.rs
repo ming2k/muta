@@ -3,14 +3,14 @@
 //! provider/model switch. Pure reads of the live [`Agent`] + [`Config`].
 
 use neenee_agent::Agent;
-use neenee_core::resolve_model;
 use neenee_store::config::Config;
 
-/// Resolve the active model's context window (tokens) from the live provider.
-/// `0` means unknown (a user-defined or local model not in the registry); the
-/// compaction policy substitutes a conservative fallback at resolve time.
+/// Resolve the active channel's context window (tokens) from the live provider.
+/// A trusted remote catalogue wins over the static model baseline; `0` means
+/// neither source knows the window and the compaction policy substitutes its
+/// conservative fallback at resolve time.
 pub fn active_context_window(agent: &Agent) -> usize {
-    resolve_model(&agent.provider.model()).context_window
+    agent.provider.model_capabilities().context_window
 }
 
 /// Re-seed the mid-turn prune threshold from the active model's context window.

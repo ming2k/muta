@@ -57,14 +57,18 @@ Each `TranscriptMessage` holds three things:
 
 | Block | Carries |
 |-------|---------|
-| `Text` | `content`, plus `code_ranges` and `bold_ranges` for inline paint |
+| `Text` | an `Inline` payload |
 | `Code` | `language` (optional), `content` — the raw fence body |
-| `Heading` | `level` (1–6), `content`, inline ranges |
-| `ListItem` | `content`, `ordered` (optional number), `depth`, `checked` (task list), inline ranges |
-| `Quote` | `content`, inline ranges |
+| `Heading` | `level` (1–6), plus an `Inline` payload |
+| `ListItem` | an `Inline` payload, plus `ordered` (optional number), `depth`, `checked` (task list) |
+| `Quote` | an `Inline` payload |
 | `Table` | `headers`, `rows`, `aligns`, and a `rendered` pre-rendered grid string |
 | `Rule` | (unit variant) |
 | `Break` | (unit variant — a blank-line separator inserted by `push_block`) |
+
+The `Inline` payload is shared by all prose variants: the flattened
+`content` string plus the inline ranges (`code_ranges`, `bold_ranges`,
+`math_ranges`, `link_ranges`) described below.
 
 ### Inline ranges: code and bold as byte spans
 

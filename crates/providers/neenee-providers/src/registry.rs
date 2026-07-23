@@ -177,20 +177,14 @@ pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
     "gpt-5.4-mini",
 ];
 
-/// GPT-5.x models served over the GitHub Copilot subscription backend. Copilot
-/// fronts the same GPT-5.x family as the ChatGPT subscription (the plan-unlocked
-/// set is fixed), so the id list mirrors [`CHATGPT_BUILTIN_MODELS`]. Copilot's
-/// own `/models` endpoint would advertise the live set, but live discovery is
-/// disabled here for the same reason as ChatGPT: keep the curated, registry-known
-/// ids rather than overwrite them at runtime. Each id exists in the model registry.
-pub const COPILOT_BUILTIN_MODELS: &[&str] = &[
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-];
+/// The minimal model seed for a fresh GitHub Copilot instance, before its
+/// first live discovery completes. A Copilot instance uses `discovery: true`
+/// and `fitting: true` (see [`COPILOT`](crate::COPILOT) / the `copilot-oauth`
+/// template), so its real channel set is populated from
+/// `GET api.githubcopilot.com/models` at runtime — this seed only needs one
+/// universally available id so a brand-new instance activates without a 400.
+/// `gpt-4o-mini` is unlocked on every Copilot plan (incl. Free/Student).
+pub const COPILOT_SEED_MODELS: &[&str] = &["gpt-4o-mini"];
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -388,14 +382,20 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
     },
     ProviderTemplateSpec {
         id: "copilot-oauth",
-        // Copilot speaks the OpenAI Responses wire family against
-        // api.githubcopilot.com. Same rationale as chatgpt-oauth: discovery is
-        // disabled because the plan-unlocked model set is fixed, and we keep
-        // the curated, registry-known GPT-5.x ids rather than overwrite them.
+        // Copilot speaks the OpenAI chat-completions wire family against
+        // api.githubcopilot.com. Discovery + fitting are enabled so the
+        // instance tracks the user's actual plan-unlocked model set (which
+        // varies by plan: Free/Student get only the GPT-4o chat family, Pro+
+        // unlocks GPT-5) without a hardcoded model list — every advertised id
+        // the client registry does not know is fitted with its advertised
+        // capability metadata, mirroring the kimi-code flow.
         protocol: "openai",
-        models: COPILOT_BUILTIN_MODELS,
-        discovery: false,
-        fitting: false,
+        discovery: true,
+        fitting: true,
+        // Minimal seed: the id a fresh Copilot instance activates before the
+        // first live discovery completes. `gpt-4o-mini` is universally
+        // available across every Copilot plan, so the seed never 400s.
+        models: COPILOT_SEED_MODELS,
     },
     ProviderTemplateSpec {
         id: "kimi-code",
@@ -509,23 +509,28 @@ pub fn build_provider_for_channel(
         Transport::GeminiNative {
             base_url,
             user_agent,
-        } => Arc::new(
-            GoogleProvider::with_base_url_and_user_agent(
-                channel.api_key.clone(),
-                channel.model.clone(),
-                base_url,
-                user_agent,
+        } => {
+            let capabilities = channel.capabilities();
+            Arc::new(
+                GoogleProvider::with_base_url_and_user_agent(
+                    channel.api_key.expose_secret().to_string(),
+                    channel.model.clone(),
+                    base_url,
+                    user_agent,
+                )
+                .with_model_capabilities(capabilities)
+                .with_id(entry_id.to_string()),
             )
-            .with_id(entry_id.to_string()),
-        ),
+        }
         Transport::Anthropic {
             base_url,
             user_agent,
             effort,
             thinking,
+            copilot,
         } => {
             let mut provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
-                channel.api_key.clone(),
+                channel.api_key.expose_secret().to_string(),
                 channel.model.clone(),
                 base_url,
                 user_agent,
@@ -533,7 +538,11 @@ pub fn build_provider_for_channel(
             .with_id(entry_id.to_string());
             // Cap the response length at the model's registered output limit so
             // high-output models (MiniMax M3) are not truncated by the default.
-            if let Some(max_tokens) = anthropic_model_max_tokens(&channel.model) {
+            let capabilities = channel.capabilities();
+            if let Some(max_tokens) = capabilities
+                .max_output_tokens
+                .or_else(|| anthropic_model_max_tokens(&channel.model))
+            {
                 provider = provider.with_max_tokens(max_tokens);
             }
             // Apply the two reasoning knobs INDEPENDENTLY. effort (depth) and
@@ -551,30 +560,35 @@ pub fn build_provider_for_channel(
             if let Some(effort) = effort {
                 cfg = cfg.with_effort(*effort);
             }
-            provider = provider.with_thinking(cfg);
+            provider = provider
+                .with_thinking(cfg)
+                .with_model_capabilities(capabilities)
+                .with_copilot(*copilot);
             Arc::new(provider)
         }
         Transport::OpenAiCompat {
             base_url,
             user_agent,
             effort,
+            copilot,
         } => {
-            let policy = neenee_core::CachePolicy::for_family(
-                neenee_core::model::resolve(&channel.model).family,
-            );
+            let capabilities = channel.capabilities();
+            let policy = neenee_core::CachePolicy::for_family(&capabilities.family);
             let cache_key = if policy.injects_session_key() {
                 session_id.map(str::to_string)
             } else {
                 None
             };
             let provider = OpenAiCompatProvider::with_base_url_and_user_agent(
-                channel.api_key.clone(),
+                channel.api_key.expose_secret().to_string(),
                 channel.model.clone(),
                 base_url,
                 user_agent,
             )
             .with_reasoning_effort(*effort)
             .with_prompt_cache_key(cache_key)
+            .with_model_capabilities(capabilities)
+            .with_copilot(*copilot)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
@@ -585,14 +599,16 @@ pub fn build_provider_for_channel(
             account_id,
             copilot,
         } => {
+            let capabilities = channel.capabilities();
             let provider = ResponsesProvider::new(
-                channel.api_key.clone(),
+                channel.api_key.expose_secret().to_string(),
                 channel.model.clone(),
                 base_url,
                 account_id.clone(),
             )
             .with_user_agent(user_agent)
             .with_reasoning_effort(*effort)
+            .with_model_capabilities(capabilities)
             .with_copilot(*copilot)
             .with_id(entry_id.to_string());
             Arc::new(provider)
@@ -686,9 +702,11 @@ mod build_tests {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
+                copilot: false,
             },
-            api_key: "k".to_string(),
+            api_key: "k".into(),
             model: "gpt-4o".to_string(),
+            remote: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
@@ -708,9 +726,11 @@ mod build_tests {
                 user_agent: "agent".to_string(),
                 effort: None,
                 thinking: None,
+                copilot: false,
             },
-            api_key: "go-key".to_string(),
+            api_key: "go-key".into(),
             model: "minimax-m3".to_string(),
+            remote: None,
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");
@@ -785,7 +805,7 @@ mod build_tests {
                     .map(|id| (id, WireFormat::OpenAiCompat)),
             )
             .chain(
-                crate::COPILOT_BUILTIN_MODELS
+                crate::COPILOT_SEED_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAiCompat)),
             )

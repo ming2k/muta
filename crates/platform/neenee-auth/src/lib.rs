@@ -42,6 +42,8 @@ pub use token::{
 
 use std::sync::{Arc, Mutex};
 
+use neenee_core::SecretString;
+
 /// Errors from the auth flows. `Display` is human-readable for surfacing in the
 /// login UI / CLI.
 #[derive(Debug)]
@@ -199,11 +201,14 @@ impl OAuth {
     pub async fn resolve_access_token(
         &self,
         stored: TokenSet,
-    ) -> Result<(String, TokenSet), AuthError> {
+    ) -> Result<(SecretString, TokenSet), AuthError> {
         let now = now_ms();
         // Cheap path: token is fresh.
-        if !access_token_is_expiring(Some(&stored.access), ACCESS_TOKEN_REFRESH_SKEW_MS, now)
-            && stored.expires_ms > now + ACCESS_TOKEN_REFRESH_SKEW_MS
+        if !access_token_is_expiring(
+            Some(stored.access.expose_secret()),
+            ACCESS_TOKEN_REFRESH_SKEW_MS,
+            now,
+        ) && stored.expires_ms > now + ACCESS_TOKEN_REFRESH_SKEW_MS
         {
             return Ok((stored.access.clone(), stored));
         }
@@ -228,7 +233,9 @@ impl OAuth {
         if let Some(refreshed) = inner.as_ref() {
             return Ok((refreshed.access.clone(), refreshed.clone()));
         }
-        let refreshed = refresh_access_token(&self.client, &self.config, &stored.refresh).await?;
+        let refreshed =
+            refresh_access_token(&self.client, &self.config, stored.refresh.expose_secret())
+                .await?;
         let new_refresh = refreshed
             .refresh_token
             .clone()
@@ -240,8 +247,9 @@ impl OAuth {
         // the value captured at login is the durable source of truth.
         let account_id = refreshed
             .id_token
-            .as_deref()
-            .or(Some(refreshed.access_token.as_str()))
+            .as_ref()
+            .map(SecretString::expose_secret)
+            .or(Some(refreshed.access_token.expose_secret()))
             .and_then(chatgpt_account_id)
             .or(stored.account_id.clone());
         let tokens = TokenSet {

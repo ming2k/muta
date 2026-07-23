@@ -44,6 +44,18 @@ pub struct BodyInput<'a> {
 
 /// Build the `/messages` request body from the harness message list.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
+    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    body_with_capabilities(messages, input, &capabilities)
+}
+
+/// Build a request with a provider-channel capability view. The provider calls
+/// this for trusted remote metadata; [`body`] remains the static-baseline entry
+/// point for standalone callers and tests.
+pub fn body_with_capabilities(
+    messages: Vec<Message>,
+    input: BodyInput<'_>,
+    capabilities: &neenee_core::ModelCapabilities,
+) -> Value {
     let BodyInput {
         model: model_id,
         stream,
@@ -123,7 +135,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     });
 
     stamp_caching_breakpoints(&mut body, &tool_specs, &system_text);
-    stamp_thinking(&mut body, model_id, max_tokens, thinking);
+    stamp_thinking(&mut body, capabilities, max_tokens, thinking);
     body
 }
 
@@ -134,10 +146,12 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
 /// header. Adaptive-thinking models need no beta header. Returns `None` when
 /// the resolved model is not a manual-thinking model or the user has thinking
 /// turned off.
-pub fn beta_header(model_id: &str, thinking: ThinkingConfig) -> Option<&'static str> {
-    let model = neenee_core::model::resolve(model_id);
+pub fn beta_header(
+    capabilities: &neenee_core::ModelCapabilities,
+    thinking: ThinkingConfig,
+) -> Option<&'static str> {
     thinking
-        .needs_manual_beta(model.thinking)
+        .needs_manual_beta(capabilities.thinking)
         .then_some("interleaved-thinking-2025-05-14")
 }
 
@@ -146,14 +160,28 @@ pub fn beta_header(model_id: &str, thinking: ThinkingConfig) -> Option<&'static 
 /// beta header for manual thinking.
 pub fn headers(
     api_key: &str,
-    model_id: &str,
+    capabilities: &neenee_core::ModelCapabilities,
     thinking: ThinkingConfig,
+    copilot: bool,
 ) -> Vec<(&'static str, String)> {
+    if copilot {
+        let mut headers = vec![("Authorization", format!("Bearer {api_key}"))];
+        for (name, value) in neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS {
+            headers.push((*name, value.to_string()));
+        }
+        headers.push(("x-initiator", "user".to_string()));
+        headers.push(("Openai-Intent", "conversation-edits".to_string()));
+        headers.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
+        if let Some(beta) = beta_header(capabilities, thinking) {
+            headers.push(("anthropic-beta", beta.to_string()));
+        }
+        return headers;
+    }
     let mut headers = vec![
         ("x-api-key", api_key.to_string()),
         ("anthropic-version", ANTHROPIC_VERSION.to_string()),
     ];
-    if let Some(beta) = beta_header(model_id, thinking) {
+    if let Some(beta) = beta_header(capabilities, thinking) {
         headers.push(("anthropic-beta", beta.to_string()));
     }
     headers
@@ -254,13 +282,17 @@ fn manual_thinking_budget(max_tokens: u32) -> u32 {
 ///
 /// See [`super::thinking::ThinkingConfig`] for the orthogonality of the two
 /// knobs and the opt-in default.
-fn stamp_thinking(body: &mut Value, model_id: &str, max_tokens: u32, thinking: ThinkingConfig) {
+fn stamp_thinking(
+    body: &mut Value,
+    capabilities: &neenee_core::ModelCapabilities,
+    max_tokens: u32,
+    thinking: ThinkingConfig,
+) {
     // The model registry (`ThinkingSupport` + `effort_levels`) is the single
     // source of truth for *how* a model reasons on the wire.
-    let model = neenee_core::model::resolve(model_id);
-    let resolved = thinking.resolve_for(model.effort_levels);
+    let resolved = thinking.resolve_for(&capabilities.effort_levels);
     let want = resolved.mode.is_on();
-    match model.thinking {
+    match capabilities.thinking {
         ThinkingSupport::AnthropicManual if want => {
             body["thinking"] = json!({
                 "type": "enabled",
@@ -288,7 +320,7 @@ fn stamp_thinking(body: &mut Value, model_id: &str, max_tokens: u32, thinking: T
     }
     // Effort rides in the top-level `output_config`, never inside `thinking`.
     // Emit ONLY for models that advertise an effort vocabulary.
-    if !model.effort_levels.is_empty()
+    if !capabilities.effort_levels.is_empty()
         && let Some(effort) = resolved.effort
     {
         body["output_config"] = json!({ "effort": effort.as_str() });

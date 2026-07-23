@@ -41,6 +41,16 @@ pub struct OpenAiCompatProvider {
     /// cache namespaces per session and repeated prefixes hit at a discount.
     /// Resolved from the model's [`neenee_core::CachePolicy`] by the registry.
     pub prompt_cache_key: Option<String>,
+    /// Channel-scoped capability view. A trusted remote catalogue overrides the
+    /// static baseline only for this provider/model route.
+    pub capabilities: neenee_core::ModelCapabilities,
+    /// When `true`, inject GitHub Copilot's required per-request headers
+    /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`) in addition to
+    /// the bearer. Flipped on by the catalog for Copilot OAuth channels that
+    /// speak the chat-completions surface (the GPT-4o family and Copilot Free
+    /// accounts, which do not have Responses-API access). Mirrors the same flag
+    /// on [`ResponsesProvider`](crate::ResponsesProvider).
+    pub copilot: bool,
 }
 
 impl OpenAiCompatProvider {
@@ -63,6 +73,7 @@ impl OpenAiCompatProvider {
         base_url: &str,
         user_agent: &str,
     ) -> Self {
+        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -74,6 +85,8 @@ impl OpenAiCompatProvider {
             turn: TurnState::new(),
             reasoning_effort: None,
             prompt_cache_key: None,
+            capabilities,
+            copilot: false,
         }
     }
 
@@ -101,6 +114,27 @@ impl OpenAiCompatProvider {
         self
     }
 
+    /// Attach the effective provider-channel capability view.
+    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Flip on Copilot-mode request headers (see [`Self::copilot`]).
+    pub fn with_copilot(mut self, copilot: bool) -> Self {
+        self.copilot = copilot;
+        self
+    }
+
+    /// Human-readable backend label for error messages and logs. The OpenAI
+    /// chat-completions provider serves both the generic OpenAI-compatible
+    /// surface and the GitHub Copilot chat surface behind one wire format;
+    /// surfacing the right name in errors ("Copilot HTTP 400" vs "OpenAI HTTP
+    /// 400") is essential for diagnosing which backend rejected a request.
+    fn label(&self) -> &'static str {
+        if self.copilot { "Copilot" } else { "OpenAI" }
+    }
+
     // Accessors (base_url / model_id / user_agent / api_key / id) are forwarded
     // from the embedded [`Endpoint`]; see `self.endpoint.*`.
 
@@ -114,7 +148,7 @@ impl OpenAiCompatProvider {
             .post(self.endpoint.base_url())
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
-        for (name, value) in request::headers(self.endpoint.api_key()) {
+        for (name, value) in request::headers(self.endpoint.api_key(), self.copilot) {
             req = req.header(name, value);
         }
         req
@@ -129,6 +163,10 @@ impl Provider for OpenAiCompatProvider {
 
     fn model(&self) -> String {
         self.endpoint.model.clone()
+    }
+
+    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+        self.capabilities.clone()
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
@@ -153,7 +191,7 @@ impl Provider for OpenAiCompatProvider {
     async fn chat(&self, request: ModelRequest) -> Result<neenee_core::Message, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -162,18 +200,20 @@ impl Provider for OpenAiCompatProvider {
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
+            &self.capabilities,
         );
 
+        let label = self.label();
         let response = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|error| transport_error("OpenAI", error))?;
-        let response = ensure_success(response, "OpenAI").await?;
-        let response_json: serde_json::Value = decode_response_json(response, "OpenAI").await?;
+            .map_err(|error| transport_error(label, error))?;
+        let response = ensure_success(response, label).await?;
+        let response_json: serde_json::Value = decode_response_json(response, label).await?;
 
         if let Some(err) = response_json.get("error") {
-            return Err(format!("OpenAI Error: {}", err));
+            return Err(format!("{label} Error: {}", err));
         }
 
         if let Some(usage) = response::usage(&response_json["usage"]) {
@@ -203,7 +243,7 @@ impl Provider for OpenAiCompatProvider {
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -212,16 +252,17 @@ impl Provider for OpenAiCompatProvider {
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
+            &self.capabilities,
         );
 
         let response = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|error| transport_error("OpenAI", error))?;
-        let response = ensure_success(response, "OpenAI").await?;
+            .map_err(|error| transport_error(self.label(), error))?;
+        let response = ensure_success(response, self.label()).await?;
 
-        let stream = neenee_ai_sdk_core::sse::data_payloads(response, "OpenAI").map(|item| {
+        let stream = neenee_ai_sdk_core::sse::data_payloads(response, self.label()).map(|item| {
             let data = item?;
             Ok(response::stream_text(&data))
         });
@@ -235,7 +276,7 @@ impl Provider for OpenAiCompatProvider {
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -244,14 +285,15 @@ impl Provider for OpenAiCompatProvider {
                 reasoning_effort: self.reasoning_effort,
                 prompt_cache_key: self.prompt_cache_key.as_deref(),
             },
+            &self.capabilities,
         );
 
         let response = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|error| transport_error("OpenAI", error))?;
-        let response = ensure_success(response, "OpenAI").await?;
+            .map_err(|error| transport_error(self.label(), error))?;
+        let response = ensure_success(response, self.label()).await?;
 
         // Tool-call echo filter shared between the body and the end-of-stream
         // flush: it suppresses any content that mirrors a native tool call
@@ -261,20 +303,21 @@ impl Provider for OpenAiCompatProvider {
         // event shape and fed through the echo filter.
         let echo_filter = Arc::new(Mutex::new(echo::ToolCallEchoFilter::new()));
         let filter_for_body = Arc::clone(&echo_filter);
-        let body = neenee_ai_sdk_core::sse::data_payloads(response, "OpenAI").map(move |item| {
-            let data = item?;
-            let parsed = response::stream_events(&data);
-            // Recover from a poisoned mutex: a prior panic in this critical
-            // section must not take down subsequent stream chunks.
-            let mut filter = filter_for_body
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let mut events: Vec<Result<ProviderStreamEvent, String>> = Vec::new();
-            for event in parsed {
-                events.extend(filter.observe(event).into_iter().map(Ok));
-            }
-            Ok::<_, String>(events)
-        });
+        let body =
+            neenee_ai_sdk_core::sse::data_payloads(response, self.label()).map(move |item| {
+                let data = item?;
+                let parsed = response::stream_events(&data);
+                // Recover from a poisoned mutex: a prior panic in this critical
+                // section must not take down subsequent stream chunks.
+                let mut filter = filter_for_body
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let mut events: Vec<Result<ProviderStreamEvent, String>> = Vec::new();
+                for event in parsed {
+                    events.extend(filter.observe(event).into_iter().map(Ok));
+                }
+                Ok::<_, String>(events)
+            });
         // Flush any buffered non-echo text once the byte stream ends, and log a
         // per-turn stream summary so empty responses are diagnosable.
         let provider_id = self.endpoint.id.clone();

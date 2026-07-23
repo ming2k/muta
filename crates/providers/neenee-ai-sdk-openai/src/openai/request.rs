@@ -26,13 +26,28 @@ use serde_json::{Value, json};
 
 /// The headers this wire format requires on every request, beyond the
 /// always-present `User-Agent`. For OpenAI that is just the bearer auth header
-/// — omitted when the key is empty (keyless relay).
-pub fn headers(api_key: &str) -> Vec<(&'static str, String)> {
-    if api_key.trim().is_empty() {
-        Vec::new()
-    } else {
-        vec![("Authorization", format!("Bearer {api_key}"))]
+/// — omitted when the key is empty (keyless relay). In Copilot mode the
+/// client-identity headers (`Copilot-Integration-Id`, `Editor-Version`,
+/// `Editor-Plugin-Version`) plus the per-turn headers (`x-initiator`,
+/// `Openai-Intent`, `X-GitHub-Api-Version`) are appended so a
+/// chat-completions request against `api.githubcopilot.com` is recognized as
+/// a real Copilot Chat client (and so resolves the account's actual plan
+/// entitlements) and carries the same metadata a Responses request would
+/// (mirrors `responses::request::headers`).
+pub fn headers(api_key: &str, copilot: bool) -> Vec<(&'static str, String)> {
+    let mut h = Vec::new();
+    if !api_key.trim().is_empty() {
+        h.push(("Authorization", format!("Bearer {api_key}")));
     }
+    if copilot {
+        for (name, value) in neenee_ai_sdk_core::COPILOT_CLIENT_HEADERS {
+            h.push((*name, value.to_string()));
+        }
+        h.push(("x-initiator", "user".to_string()));
+        h.push(("Openai-Intent", "conversation-edits".to_string()));
+        h.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
+    }
+    h
 }
 
 /// Inputs to [`body`]: the model id, whether this is a streaming request, and
@@ -67,6 +82,18 @@ pub struct BodyInput<'a> {
 /// reach the wire. Serialization is therefore a pure projection of the
 /// session: no field on the wire exists that the session did not produce.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
+    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    body_with_capabilities(messages, input, &capabilities)
+}
+
+/// Build a request with a provider-channel capability view. The provider calls
+/// this for trusted remote metadata; [`body`] remains the static-baseline entry
+/// point for standalone callers and tests.
+pub fn body_with_capabilities(
+    messages: Vec<Message>,
+    input: BodyInput<'_>,
+    capabilities: &neenee_core::ModelCapabilities,
+) -> Value {
     let BodyInput {
         model: model_id,
         stream,
@@ -78,8 +105,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     // If the model doesn't support vision, strip inline images so the API
     // doesn't reject the request with "unknown variant `image_url`". The
     // text content is preserved — the model just doesn't see the pixels.
-    let model = neenee_core::model::resolve(model_id);
-    let messages: Vec<Message> = if model.vision {
+    let messages: Vec<Message> = if capabilities.vision {
         messages
     } else {
         messages
@@ -187,9 +213,9 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         body["stream_options"] = json!({ "include_usage": true });
     }
     if let Some(effort) = reasoning_effort
-        && !model.effort_levels.is_empty()
+        && !capabilities.effort_levels.is_empty()
     {
-        body["reasoning_effort"] = json!(effort.clamp_to(model.effort_levels).as_str());
+        body["reasoning_effort"] = json!(effort.clamp_to(&capabilities.effort_levels).as_str());
     }
     if let Some(specs) = tool_specs {
         body["tools"] = specs;

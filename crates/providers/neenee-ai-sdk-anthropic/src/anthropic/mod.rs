@@ -50,6 +50,12 @@ pub struct AnthropicMessagesProvider {
     pub max_tokens: u32,
     /// Resolved thinking/effort knobs stamped onto every request body.
     pub thinking: ThinkingConfig,
+    /// Channel-scoped capability view. A trusted remote catalogue overrides the
+    /// static baseline only for this provider/model route.
+    pub capabilities: neenee_core::ModelCapabilities,
+    /// Use GitHub Copilot's bearer authentication and client headers for its
+    /// `/v1/messages` adapter instead of stock Anthropic API-key headers.
+    pub copilot: bool,
     /// Stash for the signature of the most recent assistant `thinking` block,
     /// accumulated across SSE chunks (streaming) or read once (non-streaming),
     /// drained into the message's `provider_meta` for the next replay.
@@ -87,6 +93,7 @@ impl AnthropicMessagesProvider {
     ) -> Self {
         // Default the thinking/effort config to opt-in off (ADR-0046).
         let thinking = ThinkingConfig::for_model(&neenee_core::model::resolve(&model));
+        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -98,6 +105,8 @@ impl AnthropicMessagesProvider {
             turn: TurnState::new(),
             max_tokens: 8192,
             thinking,
+            capabilities,
+            copilot: false,
             last_thinking_signature: signature::SignatureStash::shared(),
         }
     }
@@ -111,6 +120,18 @@ impl AnthropicMessagesProvider {
     /// Override the thinking/effort configuration.
     pub fn with_thinking(mut self, thinking: ThinkingConfig) -> Self {
         self.thinking = thinking;
+        self
+    }
+
+    /// Attach the effective provider-channel capability view.
+    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Enable GitHub Copilot's Anthropic Messages adapter headers.
+    pub fn with_copilot(mut self, copilot: bool) -> Self {
+        self.copilot = copilot;
         self
     }
 
@@ -132,8 +153,9 @@ impl AnthropicMessagesProvider {
             .json(body);
         for (name, value) in request::headers(
             self.endpoint.api_key(),
-            self.endpoint.model_id(),
+            &self.capabilities,
             self.thinking,
+            self.copilot,
         ) {
             req = req.header(name, value);
         }
@@ -149,6 +171,10 @@ impl Provider for AnthropicMessagesProvider {
 
     fn model(&self) -> String {
         self.endpoint.model.clone()
+    }
+
+    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+        self.capabilities.clone()
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
@@ -186,7 +212,7 @@ impl Provider for AnthropicMessagesProvider {
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -195,6 +221,7 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
             },
+            &self.capabilities,
         );
 
         let response = self
@@ -223,7 +250,7 @@ impl Provider for AnthropicMessagesProvider {
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -232,6 +259,7 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
             },
+            &self.capabilities,
         );
 
         let response = self
@@ -254,7 +282,7 @@ impl Provider for AnthropicMessagesProvider {
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
         let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
+        let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -263,6 +291,7 @@ impl Provider for AnthropicMessagesProvider {
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
             },
+            &self.capabilities,
         );
 
         let response = self
@@ -276,12 +305,16 @@ impl Provider for AnthropicMessagesProvider {
         // (which ignores `signature_delta`), so the assembled assistant turn can
         // carry the full signature in `provider_meta` for the next replay.
         let sig_stash = self.last_thinking_signature.clone();
+        // Usage arrives split across `message_start` (input + cache counters)
+        // and `message_delta` (output); the accumulator merges them so the
+        // emitted Usage events carry the full counts.
+        let mut usage_state = response::StreamUsage::default();
         let stream =
             neenee_ai_sdk_core::sse::data_payloads(response, "Anthropic").flat_map(move |item| {
                 let events: Vec<Result<ProviderStreamEvent, String>> = match item {
                     Ok(payload) => {
                         sig_stash.capture(&payload);
-                        match response::stream_events(&payload) {
+                        match response::stream_events(&payload, &mut usage_state) {
                             Ok(parsed) => parsed.into_iter().map(Ok).collect(),
                             Err(e) => vec![Err(e)],
                         }

@@ -127,11 +127,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `discover_provider_models` for the exact rules.
     tokio::spawn(async move {
         let mut config = Config::load();
-        if catalog::discover_provider_models(&mut config).await {
+        let outcome = catalog::discover_provider_models(&mut config).await;
+        if outcome.changed {
             catalog::sync_fitted_model_registry(&config);
             if let Err(error) = config.save() {
                 tracing::warn!(?error, "live discovery: could not persist refreshed models");
             }
+        }
+        // Startup discovery failures are background-only; log them so the cause
+        // is observable without a UI channel here.
+        for (provider, message) in &outcome.failures {
+            tracing::warn!(provider = %provider, error = %message, "startup live model discovery failed");
         }
     });
 
@@ -245,8 +251,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // The catalog returns `None` when no real channel resolves (empty config or
+    // an unknown default). Install the explicit `NoProvider` sentinel so the
+    // holder type is satisfied; the chat dispatch refuses up-front with a
+    // user-facing notification while this sentinel is live.
     let initial_provider: Arc<dyn Provider> =
-        catalog::build_provider_for(&config, catalog::default_provider_id(&config));
+        catalog::build_provider_for(&config, catalog::default_provider_id(&config))
+            .unwrap_or_else(|| Arc::new(neenee_agent::NoProvider));
 
     let provider_holder = Arc::new(RwLock::new(initial_provider));
     let provider_for_task = provider_holder.clone();
@@ -478,7 +489,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initial values for TUI
     let initial_p_name = catalog::default_provider_id(&config).to_string();
     let initial_m_name =
-        catalog::resolved_model_name_with_usage(&config, &initial_p_name, &provider_usage);
+        catalog::resolved_model_name_with_usage(&config, &initial_p_name, &provider_usage)
+            .unwrap_or_default();
 
     // Spawn Agent Background Task
     // The agent background task takes ownership of `config`; pull the TUI

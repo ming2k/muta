@@ -45,6 +45,9 @@
 
 use std::time::Duration;
 
+use neenee_core::{
+    Effort, RemoteModelEndpoint, RemoteModelMetadata, SecretString, ThinkingSupport,
+};
 use serde_json::Value;
 
 /// The protocol a discovery request speaks. Kept as a string (not the
@@ -84,8 +87,14 @@ pub struct ModelDiscoveryRequest<'a> {
     /// `https://api.openai.com/v1/chat/completions`). The models path is
     /// derived from it via [`models_endpoint_for`].
     pub base_url: &'a str,
-    pub api_key: &'a str,
+    pub api_key: &'a SecretString,
     pub user_agent: Option<&'a str>,
+    /// Extra request headers a provider requires beyond standard auth —
+    /// e.g. GitHub Copilot's `x-initiator` / `Openai-Intent` /
+    /// `X-GitHub-Api-Version`. Empty for stock OpenAI/Anthropic/Gemini.
+    /// Applied to every protocol; a provider that needs per-header logic can
+    /// still set them here since discovery is read-only (GET).
+    pub extra_headers: &'a [(&'a str, &'a str)],
 }
 
 /// Why a live model list could not be obtained. The catalog layer treats every
@@ -144,25 +153,83 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// A model entry discovered from a provider's live `GET /models` list. The
 /// `id` is always present; every capability field is `None` when the endpoint
 /// does not advertise it. The stock OpenAI/Anthropic/Gemini shapes carry no
-/// capability data — the Kimi Code platform (`api.kimi.com/coding`) is the
-/// rich case, advertising context length, reasoning/thinking support, image
-/// input, and effort tiers per model. Consumers decide per template whether
+/// capability data. Two rich shapes are recognized: the Kimi Code platform
+/// (`api.kimi.com/coding`), advertising flat `context_length` /
+/// `supports_reasoning` / `supports_image_in` / `think_efforts` fields per
+/// entry, and GitHub Copilot (`api.githubcopilot.com`), advertising the same
+/// information nested under `capabilities.{limits,supports}` (see
+/// `discovered_model_from_entry`). Consumers decide per template whether
 /// these hints may be trusted (see `ProviderTemplateSpec::fitting`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveredModel {
     pub id: String,
-    /// `context_length` — advertised context window in tokens.
+    /// Whether the provider allows this model to appear in its interactive
+    /// model picker. `None` means the endpoint did not distinguish picker
+    /// models, so callers may include it.
+    pub picker_enabled: Option<bool>,
+    /// Exact API surface advertised for the model. This is provider-scoped: a
+    /// Copilot model can use Messages, Responses, or Chat Completions while the
+    /// same id elsewhere uses another route.
+    pub endpoint: Option<RemoteModelEndpoint>,
+    /// Provider model family, when advertised.
+    pub family: Option<String>,
+    /// Advertised context window in tokens (Kimi's `context_length`, or
+    /// Copilot's `capabilities.limits.max_context_window_tokens`).
     pub context_window: Option<usize>,
-    /// Reasoning support. Precedence mirrors the kimi-code client: an
-    /// explicit `supports_thinking_type` (`"only"`/`"both"` → true, `"no"` →
-    /// false) wins over the legacy `supports_reasoning` boolean.
+    /// Maximum generated tokens, when advertised.
+    pub max_output_tokens: Option<u32>,
+    /// Reasoning support. For Kimi, an explicit `supports_thinking_type`
+    /// (`"only"`/`"both"` → true, `"no"` → false) wins over the legacy
+    /// `supports_reasoning` boolean. For Copilot, a non-empty
+    /// `capabilities.supports.reasoning_effort` list means true.
     pub reasoning: Option<bool>,
-    /// `supports_image_in` — the model accepts image inputs.
+    /// The precise reasoning wire representation when advertised. This is
+    /// stronger than the coarse [`Self::reasoning`] display flag.
+    pub thinking: Option<ThinkingSupport>,
+    /// Native tool/function calling support, when advertised.
+    pub tool_call: Option<bool>,
+    /// Image-input support (Kimi's `supports_image_in`, or Copilot's
+    /// `capabilities.supports.vision`).
     pub vision: Option<bool>,
-    /// `think_efforts.valid_efforts` — advertised reasoning-effort tiers.
+    /// Advertised reasoning-effort tiers (Kimi's
+    /// `think_efforts.valid_efforts`, or Copilot's
+    /// `capabilities.supports.reasoning_effort`).
     pub effort_levels: Option<Vec<String>>,
-    /// `display_name` when the endpoint provides one.
+    /// Display name when the endpoint provides one (Kimi's `display_name`,
+    /// or Copilot's `name`).
     pub display_name: Option<String>,
+}
+
+impl DiscoveredModel {
+    /// Convert live provider facts into the persisted channel-scoped snapshot.
+    /// `None` fields intentionally remain absent so the static baseline may
+    /// provide a conservative fallback for fields the endpoint does not expose.
+    pub fn remote_metadata(&self) -> RemoteModelMetadata {
+        RemoteModelMetadata {
+            endpoint: self.endpoint,
+            display_name: self.display_name.clone(),
+            family: self.family.clone(),
+            context_window: self.context_window,
+            max_output_tokens: self.max_output_tokens,
+            thinking: self.thinking.or_else(|| {
+                self.reasoning.map(|reasoning| {
+                    if reasoning {
+                        ThinkingSupport::ReasoningContent
+                    } else {
+                        ThinkingSupport::None
+                    }
+                })
+            }),
+            tool_call: self.tool_call,
+            vision: self.vision,
+            effort_levels: self.effort_levels.as_ref().map(|levels| {
+                levels
+                    .iter()
+                    .filter_map(|level| Effort::parse(level))
+                    .collect()
+            }),
+        }
+    }
 }
 
 /// Derive the `GET /models` endpoint from a chat endpoint base URL.
@@ -237,8 +304,11 @@ pub async fn list_models(
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
             let mut builder = client.get(&endpoint);
-            if !req.api_key.trim().is_empty() {
-                builder = builder.bearer_auth(req.api_key);
+            if !req.api_key.expose_secret().trim().is_empty() {
+                builder = builder.bearer_auth(req.api_key.expose_secret());
+            }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
             }
             builder.send().await.map_err(ModelListError::Http)?
         }
@@ -248,13 +318,16 @@ pub async fn list_models(
             // models list endpoint.
             let mut builder = client
                 .get(&endpoint)
-                .header("x-api-key", req.api_key)
+                .header("x-api-key", req.api_key.expose_secret())
                 .header("anthropic-version", anthropic_version());
-            if req.api_key.trim().is_empty() {
+            if req.api_key.expose_secret().trim().is_empty() {
                 // A keyless request still sends the headers (harmless) but
                 // most Anthropic relays require a key; the snapshot fallback
                 // covers the keyless-misconfigured case.
                 builder = builder.header("x-api-key", "");
+            }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
             }
             builder.send().await.map_err(ModelListError::Http)?
         }
@@ -263,8 +336,11 @@ pub async fn list_models(
             // request omits it entirely (Google rejects keyless, but a relay
             // might not require it).
             let mut builder = client.get(&endpoint);
-            if !req.api_key.trim().is_empty() {
-                builder = builder.query(&[("key", req.api_key)]);
+            if !req.api_key.expose_secret().trim().is_empty() {
+                builder = builder.query(&[("key", req.api_key.expose_secret())]);
+            }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
             }
             builder.send().await.map_err(ModelListError::Http)?
         }
@@ -325,9 +401,14 @@ fn parse_data_models(json: &Value) -> Vec<DiscoveredModel> {
 
 /// Read one `data[]` entry: the mandatory `id` plus any advertised capability
 /// fields (absent fields stay `None` — the caller decides whether to trust
-/// and persist them).
+/// and persist them). Non-chat entries (Copilot also lists embedding models,
+/// tagged `capabilities.type != "chat"`) are skipped entirely rather than
+/// surfaced with empty capabilities.
 fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
     let id = entry.get("id").and_then(Value::as_str)?.to_string();
+    if let Some(capabilities) = entry.get("capabilities") {
+        return copilot_model_from_capabilities(id, entry, capabilities);
+    }
     // Thinking-type precedence mirrors the kimi-code client: the newer
     // three-state field wins over the legacy boolean when present.
     let reasoning = match entry.get("supports_thinking_type").and_then(Value::as_str) {
@@ -348,11 +429,17 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
         });
     Some(DiscoveredModel {
         id,
+        picker_enabled: None,
+        endpoint: None,
+        family: None,
         context_window: entry
             .get("context_length")
             .and_then(Value::as_u64)
             .map(|length| length as usize),
+        max_output_tokens: None,
         reasoning,
+        thinking: None,
+        tool_call: None,
         vision: entry.get("supports_image_in").and_then(Value::as_bool),
         effort_levels,
         display_name: entry
@@ -360,6 +447,118 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
             .and_then(Value::as_str)
             .map(str::to_string),
     })
+}
+
+/// Read a Copilot-shaped `data[]` entry, whose capability fields live nested
+/// under `capabilities.{limits,supports}` rather than the flat Kimi layout
+/// (schema per `@vscode/copilot-api`'s `CCAModel`/`CCAModelCapabilities`):
+/// `capabilities.limits.max_context_window_tokens`,
+/// `capabilities.supports.vision`, and `capabilities.supports.reasoning_effort`
+/// (a non-empty tier list — `o1`/`o3`/GPT-5-thinking-style models — implies
+/// reasoning support; its entries double as `effort_levels`). Router/tool
+/// entries and non-`"chat"` capability types (embeddings, etc.) are filtered
+/// out here rather than by the caller, since only Copilot's response carries
+/// that distinction.
+fn copilot_model_from_capabilities(
+    id: String,
+    entry: &Value,
+    capabilities: &Value,
+) -> Option<DiscoveredModel> {
+    if let Some(kind) = capabilities.get("type").and_then(Value::as_str)
+        && kind != "chat"
+    {
+        return None;
+    }
+    let limits = capabilities.get("limits");
+    let supports = capabilities.get("supports");
+    let effort_levels: Option<Vec<String>> = supports
+        .and_then(|s| s.get("reasoning_effort"))
+        .and_then(Value::as_array)
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        });
+    let reasoning = effort_levels
+        .as_ref()
+        .map(|levels| !levels.is_empty())
+        .or_else(|| {
+            supports
+                .and_then(|s| s.get("adaptive_thinking"))
+                .and_then(Value::as_bool)
+        });
+    let thinking = if supports
+        .and_then(|s| s.get("adaptive_thinking"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        Some(ThinkingSupport::AnthropicAdaptive)
+    } else if supports
+        .and_then(|s| s.get("max_thinking_budget"))
+        .and_then(Value::as_u64)
+        .is_some()
+    {
+        Some(ThinkingSupport::AnthropicManual)
+    } else {
+        reasoning.map(|enabled| {
+            if enabled {
+                ThinkingSupport::ReasoningContent
+            } else {
+                ThinkingSupport::None
+            }
+        })
+    };
+    let endpoint = copilot_endpoint(entry.get("supported_endpoints"));
+    Some(DiscoveredModel {
+        id,
+        picker_enabled: entry.get("model_picker_enabled").and_then(Value::as_bool),
+        endpoint,
+        family: capabilities
+            .get("family")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        context_window: limits
+            .and_then(|l| l.get("max_context_window_tokens"))
+            .and_then(Value::as_u64)
+            .map(|length| length as usize),
+        max_output_tokens: limits
+            .and_then(|l| l.get("max_output_tokens"))
+            .and_then(Value::as_u64)
+            .and_then(|length| u32::try_from(length).ok()),
+        reasoning,
+        thinking,
+        tool_call: supports
+            .and_then(|s| s.get("tool_calls"))
+            .and_then(Value::as_bool),
+        vision: supports
+            .and_then(|s| s.get("vision"))
+            .and_then(Value::as_bool),
+        effort_levels,
+        display_name: entry
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+/// Decode Copilot's advertised route in deterministic priority order. Messages
+/// is checked first because it requires a distinct wire format; Responses is
+/// next; Chat Completions is the explicit final route. Missing or unfamiliar
+/// entries leave the channel's configured fallback untouched.
+fn copilot_endpoint(value: Option<&Value>) -> Option<RemoteModelEndpoint> {
+    let endpoints = value?.as_array()?;
+    let has = |needle| endpoints.iter().any(|value| value.as_str() == Some(needle));
+    if has("/v1/messages") {
+        Some(RemoteModelEndpoint::Messages)
+    } else if has("/responses") {
+        Some(RemoteModelEndpoint::Responses)
+    } else if has("/chat/completions") {
+        Some(RemoteModelEndpoint::ChatCompletions)
+    } else {
+        None
+    }
 }
 
 /// Extract Gemini `models[]`, keeping only `generateContent`-capable text
@@ -545,6 +744,162 @@ mod tests {
         assert_eq!(models[0].id, "kimi-for-coding");
         assert_eq!(models[0].context_window, Some(262_144));
         assert_eq!(models[0].effort_levels, None);
+    }
+
+    #[test]
+    fn parses_copilot_nested_capability_fields() {
+        // GitHub Copilot's live `/models` shape (per `@vscode/copilot-api`'s
+        // `CCAModel`): capability data is nested under `capabilities`, unlike
+        // Kimi's flat fields. A reasoning model advertises a non-empty
+        // `reasoning_effort` tier list; a non-reasoning chat model has none.
+        let json = serde_json::json!({
+            "data": [
+                {
+                    "id": "gpt-5",
+                    "name": "GPT-5",
+                    "object": "model",
+                    "model_picker_enabled": true,
+                    "capabilities": {
+                        "type": "chat",
+                        "family": "gpt-5",
+                        "limits": {
+                            "max_context_window_tokens": 272_000,
+                            "max_output_tokens": 128_000,
+                            "max_prompt_tokens": 200_000
+                        },
+                        "supports": {
+                            "adaptive_thinking": false,
+                            "streaming": true,
+                            "tool_calls": true,
+                            "vision": true,
+                            "reasoning_effort": ["low", "medium", "high"]
+                        }
+                    }
+                },
+                {
+                    "id": "gpt-4o",
+                    "name": "GPT-4o",
+                    "object": "model",
+                    "model_picker_enabled": true,
+                    "capabilities": {
+                        "type": "chat",
+                        "family": "gpt-4o",
+                        "limits": {
+                            "max_context_window_tokens": 128_000,
+                            "max_output_tokens": 16_384,
+                            "max_prompt_tokens": 96_000
+                        },
+                        "supports": {
+                            "adaptive_thinking": true,
+                            "streaming": true,
+                            "tool_calls": true,
+                            "vision": true
+                        }
+                    }
+                },
+                {
+                    "id": "text-embedding-3-small",
+                    "name": "Embedding V3 small",
+                    "object": "model",
+                    "capabilities": {
+                        "type": "embeddings"
+                    }
+                }
+            ]
+        });
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        // The embeddings entry is filtered out — only chat models surface.
+        assert_eq!(models.len(), 2);
+        let gpt5 = models.iter().find(|m| m.id == "gpt-5").unwrap();
+        assert_eq!(gpt5.context_window, Some(272_000));
+        assert_eq!(gpt5.max_output_tokens, Some(128_000));
+        assert_eq!(gpt5.reasoning, Some(true));
+        assert_eq!(gpt5.thinking, Some(ThinkingSupport::ReasoningContent));
+        assert_eq!(gpt5.tool_call, Some(true));
+        assert_eq!(gpt5.vision, Some(true));
+        assert_eq!(
+            gpt5.effort_levels,
+            Some(vec![
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string()
+            ])
+        );
+        assert_eq!(gpt5.display_name.as_deref(), Some("GPT-5"));
+        let gpt4o = models.iter().find(|m| m.id == "gpt-4o").unwrap();
+        assert_eq!(gpt4o.context_window, Some(128_000));
+        // `adaptive_thinking` explicitly declares reasoning despite the absent
+        // `reasoning_effort` vocabulary.
+        assert_eq!(gpt4o.reasoning, Some(true));
+        assert_eq!(gpt4o.effort_levels, None);
+        assert_eq!(gpt4o.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+    }
+
+    #[test]
+    fn copilot_metadata_preserves_picker_and_endpoint_facts() {
+        let json = serde_json::json!({
+            "data": [
+                {
+                    "id": "claude-opus-4.7",
+                    "name": "Claude Opus 4.7",
+                    "model_picker_enabled": true,
+                    "supported_endpoints": ["/v1/messages"],
+                    "capabilities": {
+                        "type": "chat",
+                        "family": "claude-opus",
+                        "limits": {
+                            "max_context_window_tokens": 144_000,
+                            "max_output_tokens": 64_000
+                        },
+                        "supports": {
+                            "adaptive_thinking": true,
+                            "tool_calls": true,
+                            "vision": true,
+                            "reasoning_effort": ["low", "medium", "high"]
+                        }
+                    }
+                },
+                {
+                    "id": "internal-title-model",
+                    "name": "Internal title model",
+                    "model_picker_enabled": false,
+                    "supported_endpoints": ["/responses"],
+                    "capabilities": {
+                        "type": "chat",
+                        "family": "internal",
+                        "limits": { "max_output_tokens": 1024 },
+                        "supports": { "tool_calls": false }
+                    }
+                }
+            ]
+        });
+
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let claude = models
+            .iter()
+            .find(|model| model.id == "claude-opus-4.7")
+            .unwrap();
+        assert_eq!(claude.picker_enabled, Some(true));
+        assert_eq!(claude.endpoint, Some(RemoteModelEndpoint::Messages));
+        assert_eq!(claude.family.as_deref(), Some("claude-opus"));
+        assert_eq!(claude.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+        assert_eq!(claude.tool_call, Some(true));
+        assert_eq!(claude.max_output_tokens, Some(64_000));
+
+        let remote = claude.remote_metadata();
+        assert_eq!(remote.endpoint, Some(RemoteModelEndpoint::Messages));
+        assert_eq!(
+            remote.effort_levels,
+            Some(vec![Effort::Low, Effort::Medium, Effort::High])
+        );
+        assert_eq!(remote.thinking, Some(ThinkingSupport::AnthropicAdaptive));
+
+        let internal = models
+            .iter()
+            .find(|model| model.id == "internal-title-model")
+            .unwrap();
+        assert_eq!(internal.picker_enabled, Some(false));
+        assert_eq!(internal.endpoint, Some(RemoteModelEndpoint::Responses));
     }
 
     #[test]

@@ -1,26 +1,22 @@
-//! Canonical model registry — the single source of truth for a model's
-//! intrinsic, provider-independent properties (context window, capabilities,
-//! wire format).
+//! Canonical model registry — baseline metadata for models whose provider does
+//! not publish a complete live model catalogue.
 //!
 //! A [`ProviderEntry`](crate::catalog::ProviderEntry) references a model by its
-//! wire id (e.g. `"glm-5.2"`); this module resolves that id to the definitive
-//! metadata. This avoids duplicating per-model facts across every provider that
-//! serves the same model (official endpoint, relay, local proxy, …).
+//! wire id (e.g. `"glm-5.2"`); this module supplies conservative defaults for
+//! that id. A trusted provider may instead attach a [`RemoteModelMetadata`]
+//! snapshot to its channel. Such metadata is scoped to the provider because an
+//! endpoint, account entitlement, and serving runtime can change a model's
+//! available API surface and capabilities.
 //!
-//! The [`WireFormat`] on each model records the wire protocol a provider uses to
-//! reach it. Most models speak OpenAI chat-completions everywhere they are
-//! served; a relay like opencode-go, however, serves MiniMax/Qwen behind an
-//! Anthropic `/messages` surface, so those models carry [`WireFormat::AnthropicCompat`].
-//! The catalog consults this when building the [`crate::catalog::Transport`] so
-//! one provider (`opencode-go`) can host models of mixed formats.
+//! The [`WireFormat`] on each model is the baseline wire protocol when no live
+//! provider metadata supplies a more specific endpoint. A remote catalogue can
+//! legitimately route the same model id through a different surface.
 
 use crate::thinking::ThinkingSupport;
 
-/// The wire protocol a provider uses to reach a model. Determined per model
-/// (not per provider): the same model id is served the same way everywhere in
-/// practice, and opencode-go's mixed-format catalogue is the reason this field
-/// exists. The catalog maps a format to a [`crate::catalog::Transport`] variant
-/// and the endpoint suffix (`/chat/completions` vs `/messages`).
+/// The baseline wire protocol used when a provider has no live endpoint
+/// metadata. A remote catalogue may select a different route for the same model
+/// id, so this is not an invariant of a model id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WireFormat {
     /// OpenAI chat-completions (`/v1/chat/completions`). The common case.
@@ -33,11 +29,24 @@ pub enum WireFormat {
     Gemini,
 }
 
-/// A canonical model definition with its intrinsic properties.
+/// A provider-selected inference surface from a trusted remote model catalogue.
 ///
-/// Provider-independent: whether a model reasons or supports tool calls does
-/// not change depending on which endpoint serves it. The [`KNOWN_MODELS`]
-/// registry is the authoritative list; [`model_by_id`] is the lookup.
+/// This deliberately lives beside provider-scoped metadata rather than
+/// [`WireFormat`]: a single model id can be exposed through different APIs by
+/// different providers, plans, or accounts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteModelEndpoint {
+    ChatCompletions,
+    Responses,
+    Messages,
+}
+
+/// A canonical baseline model definition.
+///
+/// The [`KNOWN_MODELS`] registry is authoritative only when a channel has no
+/// trusted remote metadata for the requested field. Use
+/// [`ModelCapabilities::for_channel`] for request-time behavior.
 #[derive(Debug, Clone, Copy)]
 pub struct Model {
     /// Wire model id sent in API requests, e.g. `"glm-5.2"`.
@@ -85,6 +94,140 @@ impl Model {
     /// Derives from [`Self::thinking`] so there is one source of truth.
     pub const fn reasoning(&self) -> bool {
         self.thinking.reasons()
+    }
+}
+
+/// Capability metadata received from a trusted provider's live model catalogue.
+///
+/// Every field is optional so an omitted remote field falls back to the static
+/// baseline. A present `false` is meaningful: it explicitly overrides a more
+/// optimistic local default. This record belongs to the channel that received
+/// it, never globally by model id, because availability and protocol routing are
+/// provider- and account-specific.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RemoteModelMetadata {
+    /// Exact API surface advertised for this model by the provider. When absent,
+    /// the channel's configured transport remains authoritative.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<RemoteModelEndpoint>,
+    /// Provider-supplied picker/display label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Provider's model-family label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Maximum full request context in tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    /// Maximum generated tokens, when declared by the endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Exact reasoning representation supported by the advertised endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingSupport>,
+    /// Whether native tool/function calls are accepted by this endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    /// Whether image input is accepted by this endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+    /// Endpoint-advertised reasoning effort values. An empty vector explicitly
+    /// means that the model accepts no effort control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_levels: Option<Vec<crate::Effort>>,
+}
+
+/// Effective capabilities for one provider channel.
+///
+/// This owned view combines the local baseline with the channel's remote
+/// snapshot. One model id can therefore have different capabilities or routes
+/// at different providers without one account's discovery changing another
+/// provider's behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCapabilities {
+    pub display_name: String,
+    pub family: String,
+    pub context_window: usize,
+    pub max_output_tokens: Option<u32>,
+    pub thinking: ThinkingSupport,
+    pub tool_call: bool,
+    pub vision: bool,
+    pub effort_levels: Vec<crate::Effort>,
+}
+
+impl ModelCapabilities {
+    /// Resolve effective capabilities for `model_id`, applying all explicitly
+    /// advertised remote fields over the local baseline.
+    pub fn for_channel(model_id: &str, remote: Option<&RemoteModelMetadata>) -> Self {
+        let baseline = resolve(model_id);
+        let remote = remote.cloned().unwrap_or_default();
+        Self {
+            display_name: remote.display_name.unwrap_or_else(|| {
+                if baseline.name.is_empty() {
+                    model_id.to_string()
+                } else {
+                    baseline.name.to_string()
+                }
+            }),
+            family: remote.family.unwrap_or_else(|| {
+                if baseline.family.is_empty() {
+                    model_id.to_string()
+                } else {
+                    baseline.family.to_string()
+                }
+            }),
+            context_window: remote.context_window.unwrap_or(baseline.context_window),
+            max_output_tokens: remote.max_output_tokens,
+            thinking: remote.thinking.unwrap_or(baseline.thinking),
+            tool_call: remote.tool_call.unwrap_or(baseline.tool_call),
+            vision: remote.vision.unwrap_or(baseline.vision),
+            effort_levels: remote
+                .effort_levels
+                .unwrap_or_else(|| baseline.effort_levels.to_vec()),
+        }
+    }
+
+    /// Coarse reasoning capability used by picker and request construction.
+    pub const fn reasoning(&self) -> bool {
+        self.thinking.reasons()
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    #[test]
+    fn remote_metadata_overrides_only_the_fields_it_declares() {
+        let remote = RemoteModelMetadata {
+            display_name: Some("Copilot GPT-4o".to_string()),
+            context_window: Some(64_000),
+            vision: Some(false),
+            tool_call: Some(false),
+            ..Default::default()
+        };
+
+        let effective = ModelCapabilities::for_channel("gpt-4o", Some(&remote));
+
+        assert_eq!(effective.display_name, "Copilot GPT-4o");
+        assert_eq!(effective.context_window, 64_000);
+        assert!(!effective.vision);
+        assert!(!effective.tool_call);
+        // The provider omitted reasoning, so the static GPT-4o baseline remains.
+        assert_eq!(effective.thinking, ThinkingSupport::None);
+    }
+
+    #[test]
+    fn remote_effort_levels_can_explicitly_clear_the_static_baseline() {
+        let remote = RemoteModelMetadata {
+            effort_levels: Some(Vec::new()),
+            ..Default::default()
+        };
+
+        let effective = ModelCapabilities::for_channel("gpt-5.5", Some(&remote));
+
+        assert!(effective.effort_levels.is_empty());
     }
 }
 

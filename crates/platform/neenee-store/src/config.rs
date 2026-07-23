@@ -9,8 +9,8 @@
 use crate::fsutil;
 use crate::paths;
 use neenee_core::{
-    ChannelAuth, CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, SkillsConfig,
-    VariantSelection, WebSearchConfig,
+    ChannelAuth, CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig,
+    RemoteModelMetadata, SecretString, SkillsConfig, VariantSelection, WebSearchConfig,
 };
 
 /// Re-export so server/TUI can use the config-layer path without depending on
@@ -311,7 +311,7 @@ pub struct UserChannelConfig {
     pub api_key_env: Option<String>,
     /// Inline API key. Used when `api_key_env` is unset or empty.
     #[serde(default)]
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
     /// Wire model id sent in the request body. Falls back to the model id.
     #[serde(default)]
     pub model: Option<String>,
@@ -343,6 +343,12 @@ pub struct UserChannelConfig {
     /// reason with depth only. Ignored for non-Anthropic transports.
     #[serde(default)]
     pub thinking: Option<bool>,
+    /// Trusted capability and identity fields returned by this provider for this
+    /// channel's model. Empty for fixed/local models and untrusted relays. The
+    /// record is provider-scoped: the same model id may expose a different
+    /// endpoint or feature set for another provider or account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteModelMetadata>,
 }
 
 /// Capability metadata fitted from a provider's live `GET /models` response
@@ -516,6 +522,7 @@ impl UserProviderConfig {
                             .as_ref()
                             .map(|channel| channel.auth)
                             .unwrap_or(ChannelAuth::ApiKey),
+                        remote: None,
                     }
                 }
             })
@@ -579,9 +586,9 @@ const CREDENTIALED_BUILTINS: &[&str] = &[
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Credentials {
     #[serde(default)]
-    pub builtins: BTreeMap<String, String>,
+    pub builtins: BTreeMap<String, SecretString>,
     #[serde(default)]
-    pub user: BTreeMap<String, BTreeMap<String, String>>,
+    pub user: BTreeMap<String, BTreeMap<String, SecretString>>,
 }
 
 impl Credentials {
@@ -655,11 +662,11 @@ pub struct Config {
     /// itself capped at this value.
     pub provider_retry_max_ms: u64,
     // OpenAI
-    pub openai_api_key: Option<String>,
+    pub openai_api_key: Option<SecretString>,
     pub openai_model: Option<String>,
     // Google / Gemini. The `google` provider is multi-model: the active Gemini
     // model lives in `default_model`, so there is no per-provider model slot.
-    pub gemini_api_key: Option<String>,
+    pub gemini_api_key: Option<SecretString>,
     /// Versioned base URL for the built-in `google` Gemini provider. Defaults to
     /// Google's official API; override (`GEMINI_BASE_URL` env first) to point at
     /// a Gemini-format relay/中转站 (supply its host with the `/v1beta` prefix —
@@ -670,28 +677,28 @@ pub struct Config {
     // Moonshot / Kimi Code (membership platform). The `kimi-code` preset pins
     // its model id via the provider registry, so the model override is kept
     // only for config/schema compatibility.
-    pub moonshot_api_key: Option<String>,
+    pub moonshot_api_key: Option<SecretString>,
     pub moonshot_model: Option<String>,
     // DeepSeek V4 (Flash + Pro); shared API key. The `deepseek` provider is
     // multi-model: the active model lives in `default_model`.
-    pub deepseek_api_key: Option<String>,
+    pub deepseek_api_key: Option<SecretString>,
     // ZAI Code (Z.AI coding-plan platform / Zhipu GLM-5 family). Shares the
     // Zhipu key with the broader ecosystem in practice, but carries its own
     // config field so the z.ai endpoint can be keyed independently.
-    pub zai_api_key: Option<String>,
+    pub zai_api_key: Option<SecretString>,
     pub zai_model: Option<String>,
     // OpenCode Go (opencode.ai relay). One provider hosting many models
     // (GLM/Kimi/DeepSeek/MiMo via OpenAI format, MiniMax/Qwen via Anthropic
     // /messages); a single OPENCODE_API_KEY authenticates all of them. The
     // chosen model id lives in `default_model`.
-    pub opencode_go_api_key: Option<String>,
+    pub opencode_go_api_key: Option<SecretString>,
     // Anthropic `/messages` relay (the built-in `anthropic` provider). A
     // *configurable* Claude relay: `anthropic_base_url` points at the official
     // API by default but can be set to any Anthropic-compatible relay (e.g. a
     // self-hosted proxy), so users with different relay addresses need no code
     // change. One key authenticates every Claude model; the active model id
     // lives in `default_model` (multi-model provider, like opencode-go).
-    pub anthropic_api_key: Option<String>,
+    pub anthropic_api_key: Option<SecretString>,
     /// Full `/messages` endpoint URL for the `anthropic` provider. Defaults to
     /// Anthropic's official API; override with any relay's `/v1/messages` URL.
     pub anthropic_base_url: Option<String>,
@@ -942,13 +949,31 @@ impl Config {
     /// through here so the mapping cannot drift between the two.
     fn builtin_api_key(&self, id: &str) -> Option<&str> {
         match id {
-            "openai" => self.openai_api_key.as_deref(),
-            "google" => self.gemini_api_key.as_deref(),
-            "kimi-code" => self.moonshot_api_key.as_deref(),
-            "deepseek" => self.deepseek_api_key.as_deref(),
-            "zai-code" => self.zai_api_key.as_deref(),
-            "opencode-go" => self.opencode_go_api_key.as_deref(),
-            "anthropic" => self.anthropic_api_key.as_deref(),
+            "openai" => self
+                .openai_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            "google" => self
+                .gemini_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            "kimi-code" => self
+                .moonshot_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            "deepseek" => self
+                .deepseek_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            "zai-code" => self.zai_api_key.as_ref().map(SecretString::expose_secret),
+            "opencode-go" => self
+                .opencode_go_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            "anthropic" => self
+                .anthropic_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
             _ => None,
         }
     }
@@ -956,7 +981,7 @@ impl Config {
     /// Set the inline API key field for a built-in provider id. Unknown ids are
     /// ignored (never panic), so a future/unknown id is a no-op rather than a
     /// crash.
-    fn set_builtin_api_key(&mut self, id: &str, value: Option<String>) {
+    fn set_builtin_api_key(&mut self, id: &str, value: Option<SecretString>) {
         match id {
             "openai" => self.openai_api_key = value,
             "google" => self.gemini_api_key = value,
@@ -985,7 +1010,11 @@ impl Config {
         // secrets out of the shareable `config.toml`.
         let creds = Credentials::load();
         for id in CREDENTIALED_BUILTINS {
-            if let Some(key) = creds.builtins.get(*id).filter(|k| !k.trim().is_empty()) {
+            if let Some(key) = creds
+                .builtins
+                .get(*id)
+                .filter(|k| !k.expose_secret().trim().is_empty())
+            {
                 config.set_builtin_api_key(id, Some(key.clone()));
             }
         }
@@ -994,7 +1023,7 @@ impl Config {
                 for channel in &mut provider.channels {
                     if let Some(key) = channels
                         .get(&channel.label)
-                        .filter(|k| !k.trim().is_empty())
+                        .filter(|k| !k.expose_secret().trim().is_empty())
                     {
                         channel.api_key = Some(key.clone());
                     }
@@ -1073,12 +1102,16 @@ impl Config {
         let mut creds = Credentials::default();
         for id in CREDENTIALED_BUILTINS {
             if let Some(key) = self.builtin_api_key(id).filter(|k| !k.trim().is_empty()) {
-                creds.builtins.insert((*id).to_string(), key.to_string());
+                creds.builtins.insert((*id).to_string(), key.into());
             }
         }
         for provider in &self.providers {
             for channel in &provider.channels {
-                if let Some(key) = channel.api_key.as_ref().filter(|k| !k.trim().is_empty()) {
+                if let Some(key) = channel
+                    .api_key
+                    .as_ref()
+                    .filter(|k| !k.expose_secret().trim().is_empty())
+                {
                     creds
                         .user
                         .entry(provider.id.clone())
@@ -1306,13 +1339,14 @@ mod tests {
                 label: "old-model".to_string(),
                 transport: UserTransport::OpenAiCompat,
                 api_key_env: Some("RELAY_API_KEY".to_string()),
-                api_key: Some("relay-secret".to_string()),
+                api_key: Some("relay-secret".into()),
                 model: Some("old-model".to_string()),
                 base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
                 user_agent: Some("relay-client/1.0".to_string()),
                 effort: Some("high".to_string()),
                 thinking: Some(true),
                 auth: ChannelAuth::ApiKey,
+                remote: None,
             }],
             default_channel: 0,
             template_id: Some("openai-sub2api".to_string()),
@@ -1337,7 +1371,10 @@ mod tests {
         for channel in &provider.channels {
             assert_eq!(channel.transport, UserTransport::OpenAiCompat);
             assert_eq!(channel.api_key_env.as_deref(), Some("RELAY_API_KEY"));
-            assert_eq!(channel.api_key.as_deref(), Some("relay-secret"));
+            assert_eq!(
+                channel.api_key.as_ref().map(SecretString::expose_secret),
+                Some("relay-secret")
+            );
             assert_eq!(
                 channel.base_url.as_deref(),
                 Some("https://relay.example.com/v1/chat/completions")
@@ -1478,7 +1515,7 @@ id = "kimi"
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
 
         let mut cfg = Config {
-            openai_api_key: Some("sk-openai".to_string()),
+            openai_api_key: Some("sk-openai".into()),
             anthropic_base_url: Some("https://relay.example.com/v1/messages".to_string()),
             gemini_base_url: Some("https://gemini-relay.example.com/v1beta".to_string()),
             ..Default::default()
@@ -1489,7 +1526,7 @@ id = "kimi"
             channels: vec![UserChannelConfig {
                 label: "default".to_string(),
                 transport: UserTransport::OpenAiCompat,
-                api_key: Some("relay-secret".to_string()),
+                api_key: Some("relay-secret".into()),
                 base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
                 ..Default::default()
             }],
@@ -1531,9 +1568,18 @@ id = "kimi"
 
         // load() merges them back (no env set → credentials wins over nothing).
         let reloaded = Config::load();
-        assert_eq!(reloaded.openai_api_key.as_deref(), Some("sk-openai"));
         assert_eq!(
-            reloaded.providers[0].channels[0].api_key.as_deref(),
+            reloaded
+                .openai_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sk-openai")
+        );
+        assert_eq!(
+            reloaded.providers[0].channels[0]
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
             Some("relay-secret")
         );
 
@@ -1541,7 +1587,13 @@ id = "kimi"
         // (idempotent — re-saving the redacted form does not lose the key).
         reloaded.save().unwrap();
         let reloaded2 = Config::load();
-        assert_eq!(reloaded2.openai_api_key.as_deref(), Some("sk-openai"));
+        assert_eq!(
+            reloaded2
+                .openai_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("sk-openai")
+        );
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();
@@ -1563,7 +1615,7 @@ id = "kimi"
         let channels = &reloaded.providers[0].channels;
         assert_eq!(channels.len(), 2);
         assert!(channels.iter().all(|channel| {
-            channel.api_key.as_deref() == Some("relay-secret")
+            channel.api_key.as_ref().map(SecretString::expose_secret) == Some("relay-secret")
                 && channel.base_url.as_deref()
                     == Some("https://relay.example.com/v1/chat/completions")
                 && channel.api_key_env.as_deref() == Some("RELAY_API_KEY")
@@ -1608,7 +1660,10 @@ openai = "creds-key"
         }
         let loaded = Config::load();
         assert_eq!(
-            loaded.openai_api_key.as_deref(),
+            loaded
+                .openai_api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
             Some("creds-key"),
             "credentials.toml must override the inline key"
         );

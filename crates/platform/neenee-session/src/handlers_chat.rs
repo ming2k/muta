@@ -6,8 +6,8 @@
 //! `history`, `session`, `ctt_clone`, `generation_clone`, `resp_tx`,
 //! `pursuit_service`, `config`, …) so the body reads exactly as it did inline.
 
-use neenee_agent::Agent;
 use neenee_agent::orchestration::{RoundInput, turn};
+use neenee_agent::{Agent, NoProvider};
 use neenee_core::{AgentResponse, QueuedUserInput, RoundEvent};
 use neenee_store::{config::Config, session::SessionStore};
 use std::sync::Arc;
@@ -34,6 +34,17 @@ pub async fn chat(
     images: Vec<neenee_core::ImagePart>,
     sent_at_ms: Option<u64>,
 ) {
+    // Refuse up-front when no real provider is configured: the shared holder
+    // is parked on the `NoProvider` sentinel (catalog could not resolve a
+    // channel at startup or the last `/provider` switch). Failing here keeps
+    // the user's text out of the transcript and surfaces a single notice
+    // instead of letting the request reach a non-functional provider.
+    if NoProvider::is(agent.provider.as_ref()) {
+        let _ = resp_tx.send(AgentResponse::Error(
+            "No provider configured. Add one with /provider before sending a message.".to_string(),
+        ));
+        return;
+    }
     start_active_turn(
         active_view_side,
         side,

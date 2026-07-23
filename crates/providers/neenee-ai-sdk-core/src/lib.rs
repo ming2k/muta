@@ -11,7 +11,7 @@ pub mod endpoint;
 pub mod json;
 pub mod sse;
 
-pub use endpoint::{Endpoint, NEENEE_USER_AGENT, TurnState};
+pub use endpoint::{COPILOT_CLIENT_HEADERS, Endpoint, NEENEE_USER_AGENT, TurnState};
 
 use neenee_core::retryable_error;
 use std::time::SystemTime;
@@ -124,8 +124,43 @@ fn is_transient_transport_error(error: &reqwest::Error) -> bool {
     chain_has_transient_io(error)
 }
 
+/// Query parameter names that may carry credentials in provider URLs —
+/// Gemini's `?key=` is the notable one; some relays accept `api_key` /
+/// `access_token` the same way. A `reqwest::Error`'s `Display` embeds the
+/// request URL, so formatting it verbatim would leak the credential into
+/// logs and user-facing errors.
+const CREDENTIAL_QUERY_PARAMS: [&str; 4] = ["key", "api_key", "apikey", "access_token"];
+
+/// Mask credential-carrying query parameter values inside a formatted error
+/// message. A value runs until `&`, whitespace, or `)` (reqwest wraps URLs
+/// in parentheses). Only `name=` occurrences immediately preceded by `?` or
+/// `&` count as query parameters, so prose like "key=value" is left alone.
+fn redact_url_credentials(message: &str) -> String {
+    let mut redacted = message.to_string();
+    for name in CREDENTIAL_QUERY_PARAMS {
+        for prefix in [format!("?{name}="), format!("&{name}=")] {
+            let mut search_from = 0;
+            while let Some(found) = redacted[search_from..].find(&prefix) {
+                let value_start = search_from + found + prefix.len();
+                let value_len = redacted[value_start..]
+                    .find(|c: char| c == '&' || c.is_whitespace() || c == ')')
+                    .unwrap_or(redacted.len() - value_start);
+                if value_len > 0 {
+                    redacted.replace_range(value_start..value_start + value_len, "***");
+                    search_from = value_start + 3;
+                } else {
+                    // Empty value: continue from the delimiter so a following
+                    // `&name=` parameter is still scanned.
+                    search_from = value_start;
+                }
+            }
+        }
+    }
+    redacted
+}
+
 pub fn transport_error(provider: &str, error: reqwest::Error) -> String {
-    let message = format!("{} transport error: {}", provider, error);
+    let message = redact_url_credentials(&format!("{} transport error: {}", provider, error));
     if is_transient_transport_error(&error) {
         retryable_error(message, None)
     } else {
@@ -306,6 +341,42 @@ mod tests {
         assert_eq!(
             http_error_body_detail(Some("application/json"), body),
             Some("{\"error\":{\"message\":\"rate limited\"}}".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_url_credentials_masks_gemini_style_key_param() {
+        let message = "google transport error: error sending request for url \
+                       (https://generativelanguage.googleapis.com/v1/models/gemini-3:streamGenerateContent?alt=sse&key=AIza-secret)";
+        let redacted = redact_url_credentials(message);
+        assert!(!redacted.contains("AIza-secret"), "key leaked: {redacted}");
+        assert!(
+            redacted.contains("alt=sse"),
+            "non-secret params stay: {redacted}"
+        );
+        assert!(redacted.contains("key=***"), "masked in place: {redacted}");
+    }
+
+    #[test]
+    fn redact_url_credentials_masks_each_known_param_and_stops_at_ampersand() {
+        let message = "see (https://x.test/v1?api_key=sk-1&model=g) and (https://y.test/v1?access_token=tok%20)";
+        let redacted = redact_url_credentials(message);
+        assert!(!redacted.contains("sk-1"));
+        assert!(!redacted.contains("tok%20"));
+        assert!(redacted.contains("model=g"));
+    }
+
+    #[test]
+    fn redact_url_credentials_leaves_prose_and_empty_values_alone() {
+        // No `?`/`&` immediately before `key=` → not a query parameter.
+        assert_eq!(
+            redact_url_credentials("key=value unchanged"),
+            "key=value unchanged"
+        );
+        // Empty value: nothing to mask, scanner still terminates.
+        assert_eq!(
+            redact_url_credentials("(https://x.test/?key=)"),
+            "(https://x.test/?key=)"
         );
     }
 }

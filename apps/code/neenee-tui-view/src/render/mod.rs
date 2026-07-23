@@ -3042,9 +3042,9 @@ mod tests {
         });
         let render = render_opt.expect("draw_transcript must return a render");
 
-        // 4 logo lines + 1 blank gap + 1 tagline = 6 content lines.
+        // 4 logo lines + 2 blank gap + 1 tagline = 7 content lines.
         assert_eq!(
-            render.content_lines, 6,
+            render.content_lines, 7,
             "user-logo content_lines must be logo rows + gap + tagline"
         );
     }

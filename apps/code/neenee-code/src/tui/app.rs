@@ -565,6 +565,9 @@ pub struct App {
     pub oauth_pending_url: String,
     pub oauth_pending_user_code: String,
     pub oauth_pending_error: Option<String>,
+    /// Scroll offset for the OAuth pending modal body. Reset when the modal
+    /// opens or its content changes.
+    pub oauth_scroll: usize,
     /// Highlight index into the live suggestion list for the provider editor's
     /// Model **filter** field (type to filter, `↑/↓` to move, committed live).
     pub custom_suggest_index: usize,
@@ -1340,6 +1343,7 @@ impl App {
         self.oauth_pending_url.clear();
         self.oauth_pending_user_code.clear();
         self.oauth_pending_error = None;
+        self.oauth_scroll = 0;
         self.active_modal = Modal::OauthPending;
         self.input.clear();
         self.set_cursor(0);
@@ -1354,6 +1358,7 @@ impl App {
         self.oauth_pending_user_code.clear();
         self.oauth_pending_message.clear();
         self.oauth_pending_error = None;
+        self.oauth_scroll = 0;
         self.active_modal = Modal::CustomProvider;
         self.custom_fields = vec![CustomField::Name];
         self.custom_field = 0;

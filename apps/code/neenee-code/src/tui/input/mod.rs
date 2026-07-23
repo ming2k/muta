@@ -1890,7 +1890,7 @@ pub fn process_event(
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: false }
                         }
-                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::OauthPending => InputAction::ScrollUp,
                         super::Modal::CustomProvider => {
                             InputAction::MoveCustomSuggestion { forward: false }
                         }
@@ -1956,7 +1956,7 @@ pub fn process_event(
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: true }
                         }
-                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::OauthPending => InputAction::ScrollDown,
                         super::Modal::CustomProvider => {
                             InputAction::MoveCustomSuggestion { forward: true }
                         }
@@ -1987,7 +1987,10 @@ pub fn process_event(
                 KeyCode::PageUp
                     if matches!(
                         context.active_modal,
-                        super::Modal::None | super::Modal::Permission | super::Modal::Question
+                        super::Modal::None
+                            | super::Modal::Permission
+                            | super::Modal::Question
+                            | super::Modal::OauthPending
                     ) =>
                 {
                     InputAction::ScrollPageUp
@@ -1995,7 +1998,10 @@ pub fn process_event(
                 KeyCode::PageDown
                     if matches!(
                         context.active_modal,
-                        super::Modal::None | super::Modal::Permission | super::Modal::Question
+                        super::Modal::None
+                            | super::Modal::Permission
+                            | super::Modal::Question
+                            | super::Modal::OauthPending
                     ) =>
                 {
                     InputAction::ScrollPageDown
@@ -4978,5 +4984,66 @@ mod tests {
         // A letter that is not the terminator: abort and resync.
         assert!(matches!(g.feed(&leaked_char('Z')), Feed::Accept));
         assert!(g.is_idle());
+    }
+
+    // The OAuth pending sheet shows a device verification code + URL that the
+    // user must copy. Mouse drag-select does not reach modal body text, so `c`
+    // / `u` are the only in-app copy path — guard against regressions.
+    fn oauth_key(c: char) -> InputAction {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        process_event(
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::OauthPending,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::Slash,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
+                picker_in_models_stage: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        )
+    }
+
+    #[test]
+    fn oauth_pending_c_copies_user_code() {
+        assert_eq!(
+            oauth_key('c'),
+            InputAction::CopyOauthContent {
+                target: OauthCopyTarget::UserCode
+            }
+        );
+    }
+
+    #[test]
+    fn oauth_pending_u_copies_url() {
+        assert_eq!(
+            oauth_key('u'),
+            InputAction::CopyOauthContent {
+                target: OauthCopyTarget::Url
+            }
+        );
     }
 }

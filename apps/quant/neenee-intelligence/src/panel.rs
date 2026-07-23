@@ -103,16 +103,18 @@ impl AiCompletion for NeeneeGateway {
     async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
         // Build a fresh provider for every participant. Some transports retain
         // conversation state, so sharing one instance across concurrent expert
-        // calls could accidentally mix identities or response chains.
-        let provider = neenee_agent::catalog::build_provider_for_model(
+        // calls could accidentally mix identities or response chains. The
+        // catalog returns `None` when the id is unknown or has no resolvable
+        // channel — refuse explicitly instead of letting the call reach a
+        // non-functional placeholder.
+        let Some(provider) = neenee_agent::catalog::build_provider_for_model(
             &self.config,
             &self.provider_id,
             self.model_id.as_deref(),
             None,
-        );
-        if provider.provider_id() == "mock" {
+        ) else {
             return Err("no configured AI provider is available for expert review".to_string());
-        }
+        };
         provider
             .chat(ModelRequest::new(vec![
                 Message::new(Role::System, system),

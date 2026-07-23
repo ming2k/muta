@@ -11,11 +11,21 @@
 //! The decoder here accumulates raw bytes and only performs UTF-8 decoding at
 //! `\n` line boundaries, so a multi-byte sequence (or a partial SSE frame)
 //! split across chunks is reassembled before any provider ever observes it.
+//!
+//! Two strictness rules keep a damaged stream from degrading output silently
+//! (the IncompleteEvent / strict-UTF-8 discipline): decoding is *strict* —
+//! `\n` never appears inside a multi-byte UTF-8 sequence, so a complete line
+//! that fails to decode is genuine corruption, surfaced as an explicit stream
+//! error rather than rewritten with `U+FFFD` — and a byte stream that ends
+//! with a partial frame still buffered was cut off by the transport, so the
+//! stream ends with an explicit (retryable) error instead of dropping the
+//! incomplete tail.
 
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
 use crate::transport_error;
+use neenee_core::retryable_error;
 
 /// Decode a streaming SSE response into a flat stream of `data:` payload
 /// strings (the `data:` prefix and surrounding whitespace stripped; the
@@ -29,25 +39,64 @@ pub fn data_payloads(
     response: reqwest::Response,
     provider: &'static str,
 ) -> BoxStream<'static, Result<String, String>> {
-    let mut buffer: Vec<u8> = Vec::new();
-    response
-        .bytes_stream()
-        .map(move |item| {
-            let bytes = match item {
-                Ok(bytes) => bytes,
-                Err(error) => return vec![Err(transport_error(provider, error))],
-            };
-            buffer.extend_from_slice(&bytes);
-            let mut payloads: Vec<Result<String, String>> = Vec::new();
-            for line in drain_complete_lines(&mut buffer) {
-                if let Some(data) = data_payload_from_line(&line) {
-                    payloads.push(Ok(data.to_string()));
+    payloads_from_chunks(response.bytes_stream(), provider)
+}
+
+/// Core decoder over an arbitrary byte-chunk stream, split out from
+/// [`data_payloads`] so tests can drive reassembly without a live HTTP
+/// response.
+fn payloads_from_chunks<C, S>(
+    chunks: S,
+    provider: &'static str,
+) -> BoxStream<'static, Result<String, String>>
+where
+    S: futures::Stream<Item = Result<C, reqwest::Error>> + Send + 'static,
+    C: AsRef<[u8]>,
+{
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let tail_buffer = std::sync::Arc::clone(&buffer);
+    let decoded = chunks.map(move |item| {
+        let chunk = match item {
+            Ok(chunk) => chunk,
+            Err(error) => return vec![Err(transport_error(provider, error))],
+        };
+        let mut buffer = buffer.lock().unwrap_or_else(|error| error.into_inner());
+        buffer.extend_from_slice(chunk.as_ref());
+        let mut payloads: Vec<Result<String, String>> = Vec::new();
+        for line in drain_complete_lines(&mut buffer, provider) {
+            match line {
+                Ok(line) => {
+                    if let Some(data) = data_payload_from_line(&line) {
+                        payloads.push(Ok(data.to_string()));
+                    }
                 }
+                Err(error) => payloads.push(Err(error)),
             }
-            payloads
-        })
-        .flat_map(futures::stream::iter)
-        .boxed()
+        }
+        payloads
+    });
+    // EOF with bytes still buffered means the transport ended the stream
+    // mid-event (connection drop, proxy timeout). The leftover is not a
+    // complete event and must not be delivered as one; surface it as an
+    // explicit retryable error rather than silently ending the stream.
+    let tail = futures::stream::once(async move {
+        let buffer = tail_buffer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if buffer.is_empty() {
+            Vec::new()
+        } else {
+            vec![Err(retryable_error(
+                format!(
+                    "{provider} stream ended with an incomplete SSE event \
+                     ({} trailing byte(s)); the response was likely truncated.",
+                    buffer.len()
+                ),
+                None,
+            ))]
+        }
+    });
+    decoded.chain(tail).flat_map(futures::stream::iter).boxed()
 }
 
 /// Extract the `data:` payload from a single (already complete) SSE line.
@@ -63,10 +112,25 @@ fn data_payload_from_line(line: &str) -> Option<&str> {
 /// Drain complete (`\n`-terminated) lines from a raw byte buffer, decoding
 /// each as UTF-8. Trailing bytes after the final newline are retained so a
 /// partial multi-byte sequence or SSE frame is completed on the next read.
-fn drain_complete_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+///
+/// Decoding is strict: a complete line that is not valid UTF-8 is stream
+/// corruption (not a chunk-boundary artefact — reassembly handles those), so
+/// it yields an `Err` item instead of a lossy `U+FFFD` rewrite. The corrupt
+/// line's bytes are still drained so one bad frame does not wedge the rest
+/// of the stream.
+fn drain_complete_lines(
+    buffer: &mut Vec<u8>,
+    provider: &'static str,
+) -> Vec<Result<String, String>> {
     let mut lines = Vec::new();
     while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
-        let line = String::from_utf8_lossy(&buffer[..pos]).trim().to_string();
+        let line = match std::str::from_utf8(&buffer[..pos]) {
+            Ok(line) => Ok(line.trim().to_string()),
+            Err(error) => Err(retryable_error(
+                format!("{provider} stream carried invalid UTF-8: {error}"),
+                None,
+            )),
+        };
         buffer.drain(..pos + 1);
         lines.push(line);
     }
@@ -76,6 +140,16 @@ fn drain_complete_lines(buffer: &mut Vec<u8>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drive the chunk decoder over scripted network chunks, collecting every
+    /// item the same way a provider stream consumer would.
+    fn collect_payloads(chunks: &[&[u8]]) -> Vec<Result<String, String>> {
+        let chunks: Vec<Result<Vec<u8>, reqwest::Error>> =
+            chunks.iter().map(|chunk| Ok(chunk.to_vec())).collect();
+        futures::executor::block_on(
+            payloads_from_chunks(futures::stream::iter(chunks), "Test").collect::<Vec<_>>(),
+        )
+    }
 
     #[test]
     fn extracts_data_payload_and_strips_prefix() {
@@ -106,21 +180,71 @@ mod tests {
 
         buffer.extend_from_slice(&frame[..split]);
         assert!(
-            drain_complete_lines(&mut buffer).is_empty(),
+            drain_complete_lines(&mut buffer, "Test").is_empty(),
             "no newline yet -> nothing decoded, partial bytes retained"
         );
 
         buffer.extend_from_slice(&frame[split..]);
-        let lines = drain_complete_lines(&mut buffer);
-        assert_eq!(lines, vec!["data: {\"text\":\"😀😁\"}".to_string()]);
+        let lines = drain_complete_lines(&mut buffer, "Test");
+        assert_eq!(lines, vec![Ok("data: {\"text\":\"😀😁\"}".to_string())]);
         assert!(buffer.is_empty(), "buffer must be fully drained");
     }
 
     #[test]
     fn drain_handles_crlf_and_retains_partial_tail() {
         let mut buffer = b"data: one\r\ndata: two\npartial".to_vec();
-        let lines = drain_complete_lines(&mut buffer);
-        assert_eq!(lines, vec!["data: one", "data: two"]);
+        let lines = drain_complete_lines(&mut buffer, "Test");
+        assert_eq!(
+            lines,
+            vec![Ok("data: one".to_string()), Ok("data: two".to_string())]
+        );
         assert_eq!(buffer, b"partial");
+    }
+
+    #[test]
+    fn drain_rejects_invalid_utf8_line_as_retryable_error() {
+        // A *complete* line that is not valid UTF-8 cannot be a chunk-boundary
+        // artefact (reassembly covers those); it is corruption and must
+        // surface explicitly instead of being rewritten with U+FFFD.
+        let mut buffer = b"data: ok\n\xFF\xFE bad\ndata: after\n".to_vec();
+        let lines = drain_complete_lines(&mut buffer, "Test");
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], Ok("data: ok".to_string()));
+        let error = lines[1].as_ref().unwrap_err();
+        assert!(error.contains("invalid UTF-8"), "{error}");
+        assert!(
+            neenee_core::parse_retryable_error(error).is_some(),
+            "corruption is transient transport damage -> retryable: {error}"
+        );
+        assert_eq!(lines[2], Ok("data: after".to_string()));
+        assert!(buffer.is_empty(), "corrupt line must not wedge the stream");
+    }
+
+    #[test]
+    fn stream_ends_cleanly_after_terminated_frames() {
+        let items = collect_payloads(&[b"data: one\n\n", b"data: [DONE]\n\n"]);
+        assert_eq!(items, vec![Ok("one".to_string())]);
+    }
+
+    #[test]
+    fn stream_reassembles_split_frame_without_tail_error() {
+        let items = collect_payloads(&[b"data: {\"a\":", b"1}\n\n"]);
+        assert_eq!(items, vec![Ok("{\"a\":1}".to_string())]);
+    }
+
+    #[test]
+    fn stream_rejects_incomplete_tail_as_retryable_error() {
+        // EOF while a partial frame is still buffered: the transport cut the
+        // stream mid-event. The leftover must surface as an explicit error
+        // rather than vanish (previously the stream just ended).
+        let items = collect_payloads(&[b"data: one\n\n", b"data: {\"trunc"]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], Ok("one".to_string()));
+        let error = items[1].as_ref().unwrap_err();
+        assert!(error.contains("incomplete SSE event"), "{error}");
+        assert!(
+            neenee_core::parse_retryable_error(error).is_some(),
+            "a truncated stream is transient -> retryable: {error}"
+        );
     }
 }

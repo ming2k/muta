@@ -179,7 +179,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     },
     ProviderTemplate {
         id: "chatgpt-oauth",
-        label: "ChatGPT (login)",
+        label: "ChatGPT OAuth",
         description: "GPT-5.x via ChatGPT Pro/Plus subscription (browser OAuth)",
         protocol: "openai",
         models: neenee_providers::CHATGPT_BUILTIN_MODELS,
@@ -194,17 +194,17 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     },
     ProviderTemplate {
         id: "copilot-oauth",
-        label: "Copilot (login)",
-        description: "GPT-5.x via GitHub Copilot subscription (device OAuth)",
+        label: "Copilot OAuth",
+        description: "GPT-4o/5.x via GitHub Copilot subscription (device OAuth)",
         protocol: "openai",
-        models: neenee_providers::COPILOT_BUILTIN_MODELS,
-        // Copilot's Responses backend is fixed; the editor hides the Base URL
-        // field. Login is the GitHub device flow (code entered at
-        // github.com/login/device), so it works headless.
+        models: neenee_providers::COPILOT_SEED_MODELS,
+        // Copilot's chat-completions backend is fixed and universally available
+        // (every plan incl. Free/Student can speak it); the editor hides the
+        // Base URL field. Login is the GitHub device flow.
         needs_url: false,
-        url_hint: "https://api.githubcopilot.com/responses",
+        url_hint: "https://api.githubcopilot.com/chat/completions",
         needs_model: false,
-        default_url: Some("https://api.githubcopilot.com/responses"),
+        default_url: Some("https://api.githubcopilot.com/chat/completions"),
         user_agent: None,
         auth: neenee_core::ChannelAuth::CopilotOAuth,
     },
@@ -744,8 +744,8 @@ mod tests {
             "Google Gemini",
             "DeepSeek",
             "xAI OAuth",
-            "ChatGPT (login)",
-            "Copilot (login)",
+            "ChatGPT OAuth",
+            "Copilot OAuth",
             "Kimi Code",
             "ZAI Code",
             "OpenCode Go",

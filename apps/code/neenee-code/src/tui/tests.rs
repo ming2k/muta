@@ -1081,6 +1081,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         oauth_pending_url: String::new(),
         oauth_pending_user_code: String::new(),
         oauth_pending_error: None,
+        oauth_scroll: 0,
         custom_suggest_index: 0,
         custom_scroll: 0,
         custom_edit_id: None,

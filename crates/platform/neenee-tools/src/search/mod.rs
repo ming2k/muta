@@ -49,20 +49,33 @@ pub(crate) trait SearchProvider: Send + Sync {
 /// default) rather than erroring at construction time, so a typo never leaves
 /// the tool without a working backend; misconfiguration surfaces at call time
 /// from the provider that needs the missing field (e.g. SearXNG/Tavily keys).
+///
+/// Keys are exposed from their redacted config wrapper here, at the tool
+/// boundary: the `pub(crate)` provider structs hold plain `String`s and never
+/// derive `Debug`, so the plaintext cannot leak through formatting.
 pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn SearchProvider> {
     match name {
         "parallel" => Box::new(parallel::ParallelProvider {
-            api_key: cfg.parallel_api_key.clone(),
+            api_key: cfg
+                .parallel_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string()),
         }),
         "duckduckgo" | "ddg" => Box::new(duckduckgo::DdgProvider),
         "searxng" => Box::new(searxng::SearxngProvider {
             url: cfg.searxng_url.clone(),
         }),
         "tavily" => Box::new(tavily::TavilyProvider {
-            api_key: cfg.tavily_api_key.clone(),
+            api_key: cfg
+                .tavily_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string()),
         }),
         _ => Box::new(exa::ExaProvider {
-            api_key: cfg.exa_api_key.clone(),
+            api_key: cfg
+                .exa_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string()),
         }),
     }
 }
@@ -72,7 +85,9 @@ pub(super) const MOZILLA_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) A
     (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /// Render structured results as the standard numbered list. Shared by the
-/// DDG/SearXNG/Tavily backends.
+/// DDG/SearXNG/Tavily backends. Snippet text is server-controlled and
+/// unbounded per item, so the composed list goes through [`cap_output`] —
+/// the same guard the blob-style backends (Exa/Parallel) apply directly.
 pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResult>) -> String {
     if results.is_empty() {
         return format!("No results found for '{}' (via {}).", query, source);
@@ -91,10 +106,10 @@ pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResul
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    format!(
+    cap_output(&format!(
         "Search results for '{}' (via {}):\n\n{}",
         query, source, formatted
-    )
+    ))
 }
 
 /// Guard the model's context window against huge provider payloads.

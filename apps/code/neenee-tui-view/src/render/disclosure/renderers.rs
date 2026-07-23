@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{Disclosure, Interaction, summary_text_color};
 
-use crate::document::{Block, MessageKind, TranscriptMessage};
+use crate::document::{Block, Inline, MessageKind, TranscriptMessage};
 use crate::layout::{BlockRegion, LayoutMap, PROVIDER_RETRY_BLOCK_IDX};
 use crate::selection::{CellDragInfo, SelectionState};
 
@@ -2125,14 +2125,14 @@ pub fn draw_reasoning_trace(
         );
         let mut emitted_any_block = false;
         for (bi, block) in msg.blocks.iter().enumerate() {
-            if let Block::Text {
-                content,
-                code_ranges,
-                bold_ranges,
-                math_ranges,
-                link_ranges,
-            } = block
-            {
+            if let Block::Text(inline) = block {
+                let Inline {
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                } = inline;
                 if emitted_any_block {
                     advance_plain_blank_rows(
                         transcript_area,

@@ -84,7 +84,15 @@ Notes:
   (e.g. `kimi-for-coding`) are materialized with the capability metadata the
   platform advertises — context window, reasoning, vision, effort tiers — so
   new platform models become usable with zero client changes
-  ([ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md)).
+   ([ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md)).
+- `copilot-oauth` tracks GitHub Copilot's authenticated `/models` list. Only
+  `model_picker_enabled` models are selectable; each model uses the endpoint it
+  advertises (`/chat/completions`, `/responses`, or `/v1/messages`) and its
+  provider-scoped limits and capabilities. See [Model Metadata](model-metadata.md).
+  The login flow uses the public Copilot OAuth App client id shared with
+  opencode; a self-registered OAuth App is likely to receive only the
+  always-available GPT-4o family because GitHub filters models by client id.
+  See [Copilot Provider Pitfalls](../how-to/copilot-provider-pitfalls.md).
 - `opencode-go` is a runtime-derived entry whose model list is built from
   `KNOWN_MODELS` at startup, spanning OpenAI- and Anthropic-compatible
   models (e.g. MiniMax, Qwen) behind opencode-go's endpoints.

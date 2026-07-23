@@ -769,6 +769,7 @@ fn suggestion_lines(
 }
 
 /// Draw the OAuth-in-progress sheet: instruction, URL, optional user code, status.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_oauth_pending(
     title: &str,
     message: &str,
@@ -777,6 +778,7 @@ pub fn draw_oauth_pending(
     error: Option<&str>,
     frame: &mut Frame,
     theme: &Theme,
+    scroll: &mut usize,
 ) -> neenee_tui::Rect {
     let area = modal_area(frame, FixedModalSpec::OAUTH_PENDING);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -850,15 +852,14 @@ pub fn draw_oauth_pending(
         )));
     }
 
-    let mut scroll = 0usize;
     render_body(
         frame,
         f.body,
         body,
-        &mut scroll,
+        scroll,
         None,
         SCROLL_EDGE_MARGIN,
-        false,
+        true,
         theme,
     );
 

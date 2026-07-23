@@ -27,11 +27,14 @@ pub enum Transport {
     /// OpenAI-compatible chat-completions endpoint at `base_url`. The
     /// `user_agent` is sent verbatim on every request. `effort`, when set,
     /// becomes the OpenAI `reasoning_effort` field for models that expose that
-    /// throttle.
+    /// throttle. `copilot` flips on GitHub Copilot's required per-request
+    /// headers for a Copilot OAuth channel that speaks chat-completions (the
+    /// GPT-4o family and Copilot Free accounts, which have no Responses access).
     OpenAiCompat {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
+        copilot: bool,
     },
     /// Anthropic-compatible `/messages` endpoint at `base_url` (the full URL).
     /// Auth uses the `x-api-key` header plus `anthropic-version`. Models served
@@ -57,6 +60,9 @@ pub enum Transport {
         user_agent: String,
         effort: Option<crate::Effort>,
         thinking: Option<crate::ThinkingMode>,
+        /// GitHub Copilot's `/v1/messages` adapter uses a bearer and the
+        /// Copilot client headers rather than Anthropic's `x-api-key` auth.
+        copilot: bool,
     },
     /// Google Gemini native API (`generativelanguage.googleapis.com`). The model
     /// id and API key are read from the owning [`Channel`]. `base_url` is the
@@ -121,9 +127,16 @@ pub struct Channel {
     pub transport: Transport,
     /// Resolved API key (env var first, then config field). Empty for keyless
     /// channels; never absent so construction never branches on `Option`.
-    pub api_key: String,
+    /// Redacted from `Debug` output — read it only via
+    /// [`SecretString::expose_secret`](crate::SecretString::expose_secret) at
+    /// the provider-construction boundary.
+    pub api_key: crate::SecretString,
     /// Resolved wire model id sent to the provider.
     pub model: String,
+    /// Provider-scoped live capability metadata. A trusted provider's remote
+    /// catalogue owns the fields it explicitly supplies; the static model
+    /// registry remains the fallback for omitted or offline data.
+    pub remote: Option<crate::RemoteModelMetadata>,
 }
 
 impl Channel {
@@ -134,7 +147,15 @@ impl Channel {
         if !self.transport.needs_api_key() {
             return true;
         }
-        !self.api_key.trim().is_empty()
+        !self.api_key.expose_secret().trim().is_empty()
+    }
+
+    /// Resolve effective capabilities for this delivery path. The provider's
+    /// remote snapshot overlays only its explicit fields onto the static model
+    /// baseline, preventing a global model id from overwriting account-specific
+    /// routes or capabilities.
+    pub fn capabilities(&self) -> crate::ModelCapabilities {
+        crate::ModelCapabilities::for_channel(&self.model, self.remote.as_ref())
     }
 }
 
@@ -177,7 +198,7 @@ impl ProviderEntry {
     /// default channel or the model is not in the registry.
     pub fn context_window(&self) -> usize {
         self.default_channel()
-            .map(|ch| crate::model::resolve(&ch.model).context_window)
+            .map(|ch| ch.capabilities().context_window)
             .unwrap_or(0)
     }
 
@@ -243,9 +264,11 @@ mod tests {
                     base_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
                     effort: None,
+                    copilot: false,
                 },
-                api_key: "k".to_string(),
+                api_key: "k".into(),
                 model: "deepseek-v4-flash".to_string(),
+                remote: None,
             }],
             default_channel: 0,
             builtin: true,
@@ -273,9 +296,11 @@ mod tests {
                 base_url: "https://api.openai.com/v1/chat/completions".to_string(),
                 user_agent: "agent".to_string(),
                 effort: None,
+                copilot: false,
             },
-            api_key: "   ".to_string(),
+            api_key: "   ".into(),
             model: "gpt-4o".to_string(),
+            remote: None,
         };
         assert!(!channel.key_ready());
     }
@@ -289,6 +314,7 @@ mod tests {
             user_agent: "agent".to_string(),
             effort: None,
             thinking: None,
+            copilot: false,
         }
         .needs_api_key();
         assert!(needs_key, "Anthropic transport must require an API key");
@@ -301,9 +327,11 @@ mod tests {
                 user_agent: "agent".to_string(),
                 effort: None,
                 thinking: None,
+                copilot: false,
             },
-            api_key: "  ".to_string(),
+            api_key: "  ".into(),
             model: "minimax-m3".to_string(),
+            remote: None,
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
     }
@@ -325,9 +353,11 @@ mod tests {
                         base_url: "https://opencode.ai/zen/go/v1/chat/completions".to_string(),
                         user_agent: "agent".to_string(),
                         effort: None,
+                        copilot: false,
                     },
-                    api_key: "k".to_string(),
+                    api_key: "k".into(),
                     model: "glm-5.2".to_string(),
+                    remote: None,
                 },
                 Channel {
                     id: "minimax-m3".to_string(),
@@ -337,9 +367,11 @@ mod tests {
                         user_agent: "agent".to_string(),
                         effort: None,
                         thinking: None,
+                        copilot: false,
                     },
-                    api_key: "k".to_string(),
+                    api_key: "k".into(),
                     model: "minimax-m3".to_string(),
+                    remote: None,
                 },
             ],
             default_channel: 0,
@@ -390,9 +422,11 @@ mod tests {
                     base_url: "https://api.z.ai/api/coding/paas/v4/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
                     effort: None,
+                    copilot: false,
                 },
-                api_key: "k".to_string(),
+                api_key: "k".into(),
                 model: "glm-5.2".to_string(),
+                remote: None,
             }],
             default_channel: 0,
             builtin: true,

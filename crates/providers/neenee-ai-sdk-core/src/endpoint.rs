@@ -19,6 +19,25 @@ use neenee_core::TokenUsage;
 /// Default user agent this project sends to providers.
 pub const NEENEE_USER_AGENT: &str = concat!("neenee/", env!("CARGO_PKG_VERSION"));
 
+/// Client-identity headers GitHub's Copilot backend (`api.githubcopilot.com`)
+/// uses to resolve the caller against the account's actual Copilot plan.
+/// `Copilot-Integration-Id` is the load-bearing one — without a recognized
+/// integration id the backend cannot tell which entitlement set applies and
+/// both the chat surface and `GET /models` fall back to (or reject outside)
+/// the always-available GPT-4o family, regardless of the account's real plan.
+/// The two `Editor-*` headers are sent alongside it by every real Copilot
+/// Chat request and are kept in sync with it here so all three travel
+/// together. Distinct from the per-turn headers in
+/// `openai::request::headers` / `responses::request::headers`
+/// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`), which describe
+/// the request rather than the client, and from the discovery-only
+/// `Copilot-Vision-Request` header, which depends on request content.
+pub const COPILOT_CLIENT_HEADERS: &[(&str, &str)] = &[
+    ("Copilot-Integration-Id", "vscode-chat"),
+    ("Editor-Version", "vscode/1.107.0"),
+    ("Editor-Plugin-Version", "copilot-chat/0.35.0"),
+];
+
 /// The five connection fields every provider shares.
 ///
 /// A provider-specific struct embeds this as `pub endpoint: Endpoint` and adds

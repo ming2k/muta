@@ -9,13 +9,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use neenee_core::SecretString;
+
 use crate::config::OAuthConfig;
 use crate::token::TokenResponse;
 
 /// Response from the `deviceauth/usercode` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatGptDeviceCode {
-    pub device_auth_id: String,
+    pub device_auth_id: SecretString,
     pub user_code: String,
     /// Seconds between polls, returned as a JSON *string* by OpenAI.
     #[serde(default)]
@@ -80,8 +82,8 @@ pub async fn request_device_code(
 /// The result of polling the device token endpoint.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatGptDeviceToken {
-    pub authorization_code: String,
-    pub code_verifier: String,
+    pub authorization_code: SecretString,
+    pub code_verifier: SecretString,
 }
 
 /// Poll the `deviceauth/token` endpoint until the user completes authorization
@@ -114,7 +116,7 @@ where
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&serde_json::json!({
-                "device_auth_id": device.device_auth_id,
+                "device_auth_id": device.device_auth_id.expose_secret(),
                 "user_code": device.user_code,
             }))
             .send()
@@ -146,10 +148,10 @@ pub async fn exchange_device_code(
 ) -> Result<TokenResponse, crate::AuthError> {
     let body = crate::token::percent_encode_form_pairs(&[
         ("grant_type", "authorization_code"),
-        ("code", token.authorization_code.as_str()),
+        ("code", token.authorization_code.expose_secret()),
         ("redirect_uri", cfg.device_redirect_uri),
         ("client_id", cfg.client_id),
-        ("code_verifier", token.code_verifier.as_str()),
+        ("code_verifier", token.code_verifier.expose_secret()),
     ]);
     crate::token::post_form(client, cfg.token_url, &body).await
 }

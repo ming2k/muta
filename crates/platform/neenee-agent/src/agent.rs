@@ -2522,6 +2522,25 @@ impl Agent {
                     }
                 }
             }
+            // Strict stream finalization (the same discipline praxion's
+            // accumulator enforces at `finish()`): the stream must not end
+            // mid-tool-call. A slot that accumulated id/argument bytes but
+            // never received a name is the residue of a truncated stream —
+            // dropping it silently would mistake a connection failure for
+            // the model's intent. Surface it as retryable so the idempotent
+            // request retry re-runs the turn instead of committing a partial
+            // response. Slots that stayed completely empty (a provider delta
+            // that carried only an index) are still dropped below.
+            for call in &calls {
+                if call.name.is_empty() && (!call.id.is_empty() || !call.arguments.is_empty()) {
+                    return Err(HarnessError::Retryable {
+                        message: "Provider stream ended mid-tool-call; the response \
+                                  was likely truncated."
+                            .to_string(),
+                        retry_after_ms: None,
+                    });
+                }
+            }
             if emitted_text {
                 on_event(AgentEvent::AssistantEnd(content.clone()));
             }
@@ -2531,6 +2550,24 @@ impl Agent {
 
             calls.retain(|call| !call.name.is_empty());
             for call in &mut calls {
+                // Arguments that streamed but do not parse as JSON mean the
+                // connection died mid-payload; fail retryable here instead of
+                // executing half a call and surfacing the parse error as if
+                // the model had emitted bad JSON. (`arguments == ""` is the
+                // legitimate shape of a zero-argument tool and must not trip
+                // this check.)
+                if !call.arguments.is_empty()
+                    && serde_json::from_str::<serde_json::Value>(&call.arguments).is_err()
+                {
+                    return Err(HarnessError::Retryable {
+                        message: format!(
+                            "Provider stream ended with truncated arguments for tool \
+                             call `{}`; the response was likely cut off.",
+                            call.name
+                        ),
+                        retry_after_ms: None,
+                    });
+                }
                 if call.id.is_empty() {
                     call.id = format!("call_{}", uuid::Uuid::new_v4());
                 }
@@ -3781,6 +3818,25 @@ impl Agent {
                     call.name
                 )
             });
+        }
+
+        // Schema pre-validation (ported from praxion): reject calls whose
+        // top-level argument shape violates the tool's declared `parameters`
+        // before any permission prompt or policy check, so a malformed call
+        // never reaches the Tool impl. Failure produces exactly the error
+        // shape a failing Tool impl returns below, keeping the UI and logs
+        // indistinguishable from a tool-internal error. Placed after the
+        // PreToolUse hook so hooks still observe (and may deny) every
+        // attempted call, even a malformed one.
+        if let Err(message) = neenee_core::tool_validation::validate_tool_arguments(
+            &tool.parameters(),
+            &call.arguments,
+        ) {
+            tracing::warn!(tool = %call.name, %message, "tool call rejected by argument pre-validation");
+            return ToolOutput::Error {
+                message: format!("Error executing {}: {}", call.name, message),
+                detail: None,
+            };
         }
 
         // Operation-scope gate (ADR-0028). The main agent's scope is

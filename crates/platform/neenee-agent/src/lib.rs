@@ -140,6 +140,7 @@ pub mod envoy_tool;
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;
+pub mod no_provider;
 pub mod orchestration;
 mod permission_store;
 mod pursuit_prompts;
@@ -157,6 +158,7 @@ pub use envoy_tool::{EnvoyRegistry, EnvoyTool};
 pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };
+pub use no_provider::{NO_PROVIDER_ID, NoProvider};
 pub use session_review::{LoopingReview, default_reviews};
 
 /// Model-emitted marker that satisfies the opt-in pursuit stop gate.

@@ -117,6 +117,12 @@ channels. A user entry whose `id` matches a built-in replaces it; otherwise it
 adds a new model. See [Add a provider](../how-to/add-a-provider.md) for the
 full schema and examples.
 
+Template-created providers may also carry `template_id` and `model_source`.
+`model_source = "Api"` refreshes the provider's model list and retains the last
+successful result if discovery fails. Trusted templates persist an optional
+channel `remote` table with provider-advertised capabilities and endpoint data.
+That table is discovery-managed; see [Model Metadata](model-metadata.md).
+
 ```toml
 [[providers]]
 id = "acme"

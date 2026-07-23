@@ -112,10 +112,12 @@ mission, or `PrincipalProfile`. The embedding supplies an `AgentIdentity` to
 `Agent::new` and binds a `PrincipalProfile` via `apply_principal_profile`.
 `/btw` side sessions reuse the primary agent's identity via `Agent::identity()`.
 
-**What's not done.** `SessionRegistry::create_session` / `close_session` are
-stubs (ADR-0037 Step 6, Pending). Today there is exactly one session per
-process, driven by `SessionDriver` constructed in the application's `main.rs`.
-The multi-session daemon is the remaining migration step.
+**What's not done.** Today there is exactly one session per process, driven by
+`SessionDriver` constructed in the application's `main.rs`. The multi-session
+daemon (ADR-0037 Step 6) remains a future migration step; its dormant
+`SessionRegistry` / `SharedState` scaffolding was removed because every method
+returned `Err("not yet populated")` — reintroduce it when the server move
+resumes.
 
 ### Application layer — `neenee-code` and the quant decision workspace
 
@@ -136,11 +138,12 @@ The binary. `neenee-code`:
 > `neenee-mcp`, and `neenee-providers`
 > *directly*, not only on `neenee-session`. This is because `SessionDriver`
 > assembly (provider/configured-toolset/agent construction) still lives in
-> `main.rs` rather than behind a session-layer factory. Once
-> `SessionRegistry::create_session` is populated (ADR-0037 Step 6), that
-> assembly moves into the session layer and `neenee-code` can depend on
-> `neenee-session` alone for orchestration. The direct deps are an interim
-> “reach-through,” not a design intent — see ADR-0037 §1 for the target DAG.
+> `main.rs` rather than behind a session-layer factory. If a session-layer
+> factory is reintroduced (ADR-0037 Step 6; the first dormant scaffolding was
+> removed), that assembly moves into the session layer and `neenee-code` can
+> depend on `neenee-session` alone for orchestration. The direct deps are an
+> interim “reach-through,” not a design intent — see ADR-0037 §1 for the
+> target DAG.
 
 The quant application uses a different composition. `neenee-quant` owns market
 data, backtesting, portfolio state, risk checks, paper brokerage, and live

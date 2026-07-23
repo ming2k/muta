@@ -185,21 +185,55 @@ pub struct InlineScan {
     pub link_ranges: Vec<LinkRange>,
 }
 
+/// Inline-prose payload shared by the prose block variants: the flattened
+/// text plus the byte ranges of its inline markup.
+///
+/// The ranges are produced by [`scan_inline`] at parse time, address bytes in
+/// `content`, and are clamped to `content.len()`. `content` keeps the original
+/// delimiters (backticks, `**`, link syntax) so copy/selection yields exact
+/// source while renderers may elide them visually.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inline {
+    pub content: String,
+    /// Byte ranges of inline-code runs within `content` (see [`CodeRange`]).
+    pub code_ranges: Vec<CodeRange>,
+    /// Byte ranges of strong/bold text runs within `content`.
+    pub bold_ranges: Vec<CodeRange>,
+    /// Byte ranges of inline math runs within `content`.
+    pub math_ranges: Vec<MathRange>,
+    /// Hyperlink ranges within `content`.
+    pub link_ranges: Vec<LinkRange>,
+}
+
+impl Inline {
+    /// Verbatim text with no inline markup.
+    pub fn plain(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Scan `content` for inline markup, trimming trailing whitespace and
+    /// clamping every range to the trimmed length.
+    fn scanned(content: &str) -> Self {
+        let scan = scan_inline(content);
+        let trimmed_len = content.trim_end().len();
+        Self {
+            content: content[..trimmed_len].to_string(),
+            code_ranges: clamp_ranges(&scan.code_ranges, trimmed_len),
+            bold_ranges: clamp_ranges(&scan.bold_ranges, trimmed_len),
+            math_ranges: clamp_ranges(&scan.math_ranges, trimmed_len),
+            link_ranges: clamp_link_ranges(&scan.link_ranges, trimmed_len),
+        }
+    }
+}
+
 /// A single semantic block within a message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     /// Plain text paragraph.
-    Text {
-        content: String,
-        /// Byte ranges of inline-code runs within `content` (see [`CodeRange`]).
-        code_ranges: Vec<CodeRange>,
-        /// Byte ranges of strong/bold text runs within `content`.
-        bold_ranges: Vec<CodeRange>,
-        /// Byte ranges of inline math runs within `content`.
-        math_ranges: Vec<MathRange>,
-        /// Hyperlink ranges within `content`.
-        link_ranges: Vec<LinkRange>,
-    },
+    Text(Inline),
     /// Display math block (`$$…$$` or `\[…\]`).
     Math { content: String },
     /// Inline or fenced code.
@@ -208,45 +242,16 @@ pub enum Block {
         content: String,
     },
     /// A heading.
-    Heading {
-        level: u8,
-        content: String,
-        /// Byte ranges of inline-code runs within `content`.
-        code_ranges: Vec<CodeRange>,
-        /// Byte ranges of strong/bold text runs within `content`.
-        bold_ranges: Vec<CodeRange>,
-        /// Byte ranges of inline math runs within `content`.
-        math_ranges: Vec<MathRange>,
-        /// Hyperlink ranges within `content`.
-        link_ranges: Vec<LinkRange>,
-    },
+    Heading { level: u8, inline: Inline },
     /// A list item, preserving its marker and nesting level.
     ListItem {
-        content: String,
-        /// Byte ranges of inline-code runs within `content`.
-        code_ranges: Vec<CodeRange>,
-        /// Byte ranges of strong/bold text runs within `content`.
-        bold_ranges: Vec<CodeRange>,
-        /// Byte ranges of inline math runs within `content`.
-        math_ranges: Vec<MathRange>,
-        /// Hyperlink ranges within `content`.
-        link_ranges: Vec<LinkRange>,
+        inline: Inline,
         ordered: Option<u64>,
         depth: usize,
         checked: Option<bool>,
     },
     /// A blockquote.
-    Quote {
-        content: String,
-        /// Byte ranges of inline-code runs within `content`.
-        code_ranges: Vec<CodeRange>,
-        /// Byte ranges of strong/bold text runs within `content`.
-        bold_ranges: Vec<CodeRange>,
-        /// Byte ranges of inline math runs within `content`.
-        math_ranges: Vec<MathRange>,
-        /// Hyperlink ranges within `content`.
-        link_ranges: Vec<LinkRange>,
-    },
+    Quote(Inline),
     /// A GFM-style table, kept as a semantic unit so columns stay aligned and
     /// copy yields the rendered grid rather than re-wrapped prose.
     Table {
@@ -263,15 +268,24 @@ pub enum Block {
 }
 
 impl Block {
+    /// The inline-prose payload of the prose variants (`Text`, `Heading`,
+    /// `ListItem`, `Quote`); `None` for the structural blocks.
+    pub fn inline(&self) -> Option<&Inline> {
+        match self {
+            Block::Text(inline) | Block::Quote(inline) => Some(inline),
+            Block::Heading { inline, .. } | Block::ListItem { inline, .. } => Some(inline),
+            _ => None,
+        }
+    }
+
     /// Returns the raw text content of this block (without formatting).
     pub fn raw_text(&self) -> &str {
         match self {
-            Block::Text { content, .. } => content,
+            Block::Text(inline) | Block::Quote(inline) => &inline.content,
             Block::Math { content } => content,
             Block::Code { content, .. } => content,
-            Block::Heading { content, .. } => content,
-            Block::ListItem { content, .. } => content,
-            Block::Quote { content, .. } => content,
+            Block::Heading { inline, .. } => &inline.content,
+            Block::ListItem { inline, .. } => &inline.content,
             Block::Table { rendered, .. } => rendered,
             Block::Rule => "",
             Block::Break => "\n",
@@ -1240,23 +1254,11 @@ impl TranscriptMessage {
                 .collect::<Vec<_>>()
                 .join("\n");
             self.raw = display_args.clone();
-            let mut blocks = vec![Block::Text {
-                content: display_args,
-                code_ranges: Vec::new(),
-                bold_ranges: Vec::new(),
-                math_ranges: Vec::new(),
-                link_ranges: Vec::new(),
-            }];
+            let mut blocks = vec![Block::Text(Inline::plain(display_args))];
             if let Some(out) = output {
                 self.raw.push_str("\n\n");
                 self.raw.push_str(out);
-                blocks.push(Block::Text {
-                    content: out.clone(),
-                    code_ranges: Vec::new(),
-                    bold_ranges: Vec::new(),
-                    math_ranges: Vec::new(),
-                    link_ranges: Vec::new(),
-                });
+                blocks.push(Block::Text(Inline::plain(out.clone())));
             }
             self.blocks = blocks;
         } else {
@@ -1374,13 +1376,7 @@ fn parse_blocks_plain(text: &str) -> Vec<Block> {
     if text.is_empty() {
         return Vec::new();
     }
-    vec![Block::Text {
-        content: text.to_string(),
-        code_ranges: Vec::new(),
-        bold_ranges: Vec::new(),
-        math_ranges: Vec::new(),
-        link_ranges: Vec::new(),
-    }]
+    vec![Block::Text(Inline::plain(text.to_string()))]
 }
 
 fn parse_blocks_markdown(text: &str) -> Vec<Block> {
@@ -1412,19 +1408,7 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                 }
                 content.push_str(line);
             }
-            let inline = scan_inline(&content);
-            let trimmed_len = content.trim_end().len();
-            let content = content[..trimmed_len].to_string();
-            push_block(
-                blocks,
-                Block::Text {
-                    content,
-                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
-                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
-                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
-                },
-            );
+            push_block(blocks, Block::Text(Inline::scanned(&content)));
             para.clear();
             para_hard.clear();
         };
@@ -1514,17 +1498,11 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
         // --- Heading ----------------------------------------------------------
         if let Some((level, content_line)) = parse_heading(trimmed) {
             flush_para(&mut para, &mut para_hard, &mut blocks);
-            let inline = scan_inline(content_line);
-            let trimmed_len = content_line.trim_end().len();
             push_block(
                 &mut blocks,
                 Block::Heading {
                     level,
-                    content: content_line[..trimmed_len].to_string(),
-                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
-                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
-                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
+                    inline: Inline::scanned(content_line),
                 },
             );
             i += 1;
@@ -1558,18 +1536,7 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
                 }
                 content.push_str(l);
             }
-            let inline = scan_inline(&content);
-            let trimmed_len = content.trim_end().len();
-            push_block(
-                &mut blocks,
-                Block::Quote {
-                    content: content[..trimmed_len].to_string(),
-                    code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
-                    bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
-                    math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
-                    link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
-                },
-            );
+            push_block(&mut blocks, Block::Quote(Inline::scanned(&content)));
             continue;
         }
 
@@ -1581,16 +1548,10 @@ fn parse_blocks_markdown(text: &str) -> Vec<Block> {
             while i < lines.len() {
                 let t = lines[i].trim_start();
                 if let Some((m, c, ch)) = parse_list_item(t) {
-                    let inline = scan_inline(c);
-                    let trimmed_len = c.trim_end().len();
                     push_block(
                         &mut blocks,
                         Block::ListItem {
-                            content: c[..trimmed_len].to_string(),
-                            code_ranges: clamp_ranges(&inline.code_ranges, trimmed_len),
-                            bold_ranges: clamp_ranges(&inline.bold_ranges, trimmed_len),
-                            math_ranges: clamp_ranges(&inline.math_ranges, trimmed_len),
-                            link_ranges: clamp_link_ranges(&inline.link_ranges, trimmed_len),
+                            inline: Inline::scanned(c),
                             ordered: m,
                             depth: 0,
                             checked: ch,
@@ -2176,7 +2137,7 @@ mod tests {
     fn test_parse_simple_text() {
         let blocks = parse_blocks("Hello world");
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], Block::Text { content, .. } if content == "Hello world"));
+        assert!(matches!(&blocks[0], Block::Text(inline) if inline.content == "Hello world"));
     }
 
     #[test]
@@ -2184,11 +2145,11 @@ mod tests {
         let text = "Some text\n\n```rust\nfn main() {}\n```\n\nMore text";
         let blocks = parse_blocks(text);
         assert_eq!(blocks.len(), 5);
-        assert!(matches!(&blocks[0], Block::Text { content, .. } if content == "Some text"));
+        assert!(matches!(&blocks[0], Block::Text(inline) if inline.content == "Some text"));
         assert!(
             matches!(&blocks[2], Block::Code { language, content } if language.as_deref() == Some("rust") && content == "fn main() {}")
         );
-        assert!(matches!(&blocks[4], Block::Text { content, .. } if content == "More text"));
+        assert!(matches!(&blocks[4], Block::Text(inline) if inline.content == "More text"));
     }
 
     #[test]
@@ -2200,35 +2161,35 @@ mod tests {
         let blocks = parse_blocks("Call the `read_text` tool.");
         assert!(matches!(
             &blocks[0],
-            Block::Text { content, .. } if content == "Call the `read_text` tool."
+            Block::Text(inline) if inline.content == "Call the `read_text` tool."
         ));
 
         // Heading.
         let blocks = parse_blocks("# Use `list_dir` for directories");
         assert!(matches!(
             &blocks[0],
-            Block::Heading { content, level: 1, .. } if content == "Use `list_dir` for directories"
+            Block::Heading { level: 1, inline } if inline.content == "Use `list_dir` for directories"
         ));
 
         // List item.
         let blocks = parse_blocks("- item with `code` inside");
         assert!(matches!(
             &blocks[0],
-            Block::ListItem { content, .. } if content == "item with `code` inside"
+            Block::ListItem { inline, .. } if inline.content == "item with `code` inside"
         ));
 
         // Blockquote.
         let blocks = parse_blocks("> quoted `code` span");
         assert!(matches!(
             &blocks[0],
-            Block::Quote { content, .. } if content == "quoted `code` span"
+            Block::Quote(inline) if inline.content == "quoted `code` span"
         ));
 
         // Multiple inline spans in one paragraph, mixed with emphasis.
         let blocks = parse_blocks("Mix `a` and `b` and plain.");
         assert!(matches!(
             &blocks[0],
-            Block::Text { content, .. } if content == "Mix `a` and `b` and plain."
+            Block::Text(inline) if inline.content == "Mix `a` and `b` and plain."
         ));
     }
 
@@ -2257,30 +2218,24 @@ mod tests {
     fn parses_inline_math_and_http_links_outside_code() {
         let text = "Use $x^2$ and [Rust](https://www.rust-lang.org), not `https://ignored.test`.";
         let blocks = parse_blocks(text);
-        let Block::Text {
-            math_ranges,
-            link_ranges,
-            code_ranges,
-            ..
-        } = &blocks[0]
-        else {
+        let Block::Text(inline) = &blocks[0] else {
             panic!("expected text block");
         };
-        assert_eq!(*math_ranges, vec![(4, 9)]);
-        assert_eq!(code_ranges.len(), 1);
-        assert_eq!(link_ranges.len(), 1);
-        assert_eq!(link_ranges[0].label_range, (15, 19));
-        assert_eq!(link_ranges[0].url, "https://www.rust-lang.org");
+        assert_eq!(inline.math_ranges, vec![(4, 9)]);
+        assert_eq!(inline.code_ranges.len(), 1);
+        assert_eq!(inline.link_ranges.len(), 1);
+        assert_eq!(inline.link_ranges[0].label_range, (15, 19));
+        assert_eq!(inline.link_ranges[0].url, "https://www.rust-lang.org");
     }
 
     #[test]
     fn parses_display_math_blocks() {
         let blocks = parse_blocks("Before\n\n$$\n\\int_0^\\infty e^{-x} dx = 1\n$$\n\nAfter");
-        assert!(matches!(&blocks[0], Block::Text { content, .. } if content == "Before"));
+        assert!(matches!(&blocks[0], Block::Text(inline) if inline.content == "Before"));
         assert!(
             matches!(&blocks[2], Block::Math { content } if content.contains("\\int_0^\\infty"))
         );
-        assert!(matches!(&blocks[4], Block::Text { content, .. } if content == "After"));
+        assert!(matches!(&blocks[4], Block::Text(inline) if inline.content == "After"));
     }
 
     #[test]
@@ -2289,70 +2244,50 @@ mod tests {
         let text = "Call the `read_text` tool.";
         let expected = code_ranges_of(text);
         let blocks = parse_blocks(text);
-        let Block::Text {
-            content,
-            code_ranges,
-            ..
-        } = &blocks[0]
-        else {
+        let Block::Text(inline) = &blocks[0] else {
             panic!("expected Text block, got {:?}", blocks[0]);
         };
-        assert_eq!(content, text);
-        assert_eq!(code_ranges, &expected);
+        assert_eq!(inline.content, text);
+        assert_eq!(inline.code_ranges, expected);
 
         // Heading.
         let text = "Use `list_dir` for directories";
         let expected = code_ranges_of(text);
         let blocks = parse_blocks(&format!("# {text}"));
-        let Block::Heading {
-            content,
-            code_ranges,
-            ..
-        } = &blocks[0]
-        else {
+        let Block::Heading { inline, .. } = &blocks[0] else {
             panic!("expected Heading block, got {:?}", blocks[0]);
         };
-        assert_eq!(content, text);
-        assert_eq!(code_ranges, &expected);
+        assert_eq!(inline.content, text);
+        assert_eq!(inline.code_ranges, expected);
 
         // List item.
         let text = "item with `code` inside";
         let expected = code_ranges_of(text);
         let blocks = parse_blocks(&format!("- {text}"));
-        let Block::ListItem {
-            content,
-            code_ranges,
-            ..
-        } = &blocks[0]
-        else {
+        let Block::ListItem { inline, .. } = &blocks[0] else {
             panic!("expected ListItem block, got {:?}", blocks[0]);
         };
-        assert_eq!(content, text);
-        assert_eq!(code_ranges, &expected);
+        assert_eq!(inline.content, text);
+        assert_eq!(inline.code_ranges, expected);
 
         // Blockquote.
         let text = "quoted `code` span";
         let expected = code_ranges_of(text);
         let blocks = parse_blocks(&format!("> {text}"));
-        let Block::Quote {
-            content,
-            code_ranges,
-            ..
-        } = &blocks[0]
-        else {
+        let Block::Quote(inline) = &blocks[0] else {
             panic!("expected Quote block, got {:?}", blocks[0]);
         };
-        assert_eq!(content, text);
-        assert_eq!(code_ranges, &expected);
+        assert_eq!(inline.content, text);
+        assert_eq!(inline.code_ranges, expected);
 
         // Multiple spans → multiple, non-overlapping, ordered ranges.
         let text = "Mix `a` and `b` and plain.";
         let expected = code_ranges_of(text);
         let blocks = parse_blocks(text);
-        let Block::Text { code_ranges, .. } = &blocks[0] else {
+        let Block::Text(inline) = &blocks[0] else {
             panic!("expected Text block");
         };
-        assert_eq!(code_ranges, &expected);
+        assert_eq!(inline.code_ranges, expected);
     }
 
     #[test]
@@ -2380,27 +2315,27 @@ mod tests {
 
         assert!(matches!(
             &blocks[0],
-            Block::Heading { level: 1, content, .. } if content == "Result"
+            Block::Heading { level: 1, inline } if inline.content == "Result"
         ));
         assert!(blocks.iter().any(|block| matches!(block, Block::Break)));
         assert!(blocks.iter().any(
-            |block| matches!(block, Block::Text { content, .. } if content == "First paragraph.")
+            |block| matches!(block, Block::Text(inline) if inline.content == "First paragraph.")
         ));
         assert!(blocks.iter().any(
-            |block| matches!(block, Block::Text { content, .. } if content == "Second paragraph.")
+            |block| matches!(block, Block::Text(inline) if inline.content == "Second paragraph.")
         ));
         assert!(blocks.iter().any(|block| matches!(
             block,
             Block::ListItem {
-                content,
+                inline,
                 ordered: Some(1),
                 ..
-            } if content == "one"
+            } if inline.content == "one"
         )));
         assert!(
             blocks
                 .iter()
-                .any(|block| matches!(block, Block::Quote { content, .. } if content == "quoted"))
+                .any(|block| matches!(block, Block::Quote(inline) if inline.content == "quoted"))
         );
     }
 
@@ -2408,12 +2343,12 @@ mod tests {
     fn headings_are_visually_separated_from_following_body_text() {
         let blocks = parse_blocks("# Result\nFirst paragraph.");
 
-        assert!(matches!(&blocks[0], Block::Heading { content, .. } if content == "Result"));
+        assert!(matches!(&blocks[0], Block::Heading { inline, .. } if inline.content == "Result"));
         assert!(
             matches!(&blocks[1], Block::Break),
             "heading-to-text boundaries should render with a blank row"
         );
-        assert!(matches!(&blocks[2], Block::Text { content, .. } if content == "First paragraph."));
+        assert!(matches!(&blocks[2], Block::Text(inline) if inline.content == "First paragraph."));
     }
 
     #[test]
@@ -2421,13 +2356,13 @@ mod tests {
         let soft = parse_blocks("alpha bravo\ncharlie delta");
         assert!(matches!(
             &soft[0],
-            Block::Text { content, .. } if content == "alpha bravo charlie delta"
+            Block::Text(inline) if inline.content == "alpha bravo charlie delta"
         ));
 
         let hard = parse_blocks("alpha bravo  \ncharlie delta");
         assert!(matches!(
             &hard[0],
-            Block::Text { content, .. } if content == "alpha bravo\ncharlie delta"
+            Block::Text(inline) if inline.content == "alpha bravo\ncharlie delta"
         ));
     }
 
@@ -2441,17 +2376,17 @@ mod tests {
             block,
             Block::ListItem {
                 checked: Some(true),
-                content,
+                inline,
                 ..
-            } if content == "done"
+            } if inline.content == "done"
         )));
         assert!(blocks.iter().any(|block| matches!(
             block,
             Block::ListItem {
                 checked: Some(false),
-                content,
+                inline,
                 ..
-            } if content == "next"
+            } if inline.content == "next"
         )));
         let table = blocks.iter().find_map(|block| match block {
             Block::Table { headers, rows, .. } => Some((headers, rows)),

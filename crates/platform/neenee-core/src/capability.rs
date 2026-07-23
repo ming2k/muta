@@ -154,6 +154,13 @@ pub trait Provider: Send + Sync {
         String::new()
     }
 
+    /// Effective model capabilities for this concrete provider channel. The
+    /// default resolves the static baseline by id; providers backed by a trusted
+    /// remote catalogue override it with their channel-scoped snapshot.
+    fn model_capabilities(&self) -> crate::ModelCapabilities {
+        crate::ModelCapabilities::for_channel(&self.model(), None)
+    }
+
     /// Provider/protocol-specific prompt hints for the agent's system prompt.
     ///
     /// This is not the agent's behavior contract. Providers should expose only

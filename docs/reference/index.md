@@ -7,6 +7,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
 - [Built-in tools](tools/) — tool catalog, access tiers, capability axes, and
   per-tool parameter schemas (one page per tool category)
 - [Providers](providers.md) — capability matrix, endpoint and env var catalog
+- [Model metadata](model-metadata.md) — static fallback, trusted remote metadata, and model discovery precedence
 
 ## Commands
 

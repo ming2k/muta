@@ -14,17 +14,16 @@ use crate::blobs::BlobStore;
 use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
-use neenee_core::{InjectionKind, InjectionOrigin, Message, Provider, Pursuit, Role, count_tokens};
+use neenee_core::{
+    InjectionKind, InjectionOrigin, Message, Provider, Pursuit, Role, count_tokens, estimate_bytes,
+    estimate_tokens,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-
-// Re-export the cheap context estimators so callers keep using
-// `session::estimate_bytes` / `session::estimate_tokens`.
-pub use neenee_core::{estimate_bytes, estimate_tokens};
 
 /// C2 (ADR-0022): added `title` and `title_manual`. C3 (ADR-0032): added
 /// `pursuit`. C4 (ADR-0034): added `Message::origin` (`Option<InjectionOrigin>`)

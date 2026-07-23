@@ -25,15 +25,6 @@ use neenee_ai_sdk_core::{decode_response_json, ensure_success, transport_error};
 pub mod request;
 pub mod response;
 
-/// Whether the resolved model for `model_id` is a reasoning model — i.e. the
-/// request should set `generationConfig.thinkingConfig.includeThoughts`. The
-/// Gemini API only returns reasoning *text* when asked, and rejects the flag
-/// with HTTP 400 on models that do not think, so this gates the flag on the
-/// model's registered `ThinkingSupport`.
-fn model_reasons(model_id: &str) -> bool {
-    neenee_core::model::resolve(model_id).thinking.reasons()
-}
-
 /// Official Gemini REST base, versioned. The provider appends the per-call
 /// model path (`/models/{id}:generateContent` / `:streamGenerateContent`), so a
 /// 中转站/relay overrides this with its own host carrying the `/v1beta` prefix.
@@ -53,6 +44,9 @@ pub struct GoogleProvider {
     pub last_thought_signatures: Arc<Mutex<Map<String, Value>>>,
     /// Stash for the latest streamed text-part thought signature.
     pub last_text_thought_signature: Arc<Mutex<Option<String>>>,
+    /// Channel-scoped capability view. A trusted remote catalogue overrides the
+    /// static baseline only for this provider/model route.
+    pub capabilities: neenee_core::ModelCapabilities,
 }
 
 impl GoogleProvider {
@@ -80,6 +74,7 @@ impl GoogleProvider {
         base_url: &str,
         user_agent: &str,
     ) -> Self {
+        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -91,6 +86,7 @@ impl GoogleProvider {
             turn: TurnState::new(),
             last_thought_signatures: Arc::new(Mutex::new(Map::new())),
             last_text_thought_signature: Arc::new(Mutex::new(None)),
+            capabilities,
         }
     }
 
@@ -98,6 +94,12 @@ impl GoogleProvider {
     /// attributed to the logical model.
     pub fn with_id(mut self, id: String) -> Self {
         self.endpoint.set_id(id);
+        self
+    }
+
+    /// Attach the effective provider-channel capability view.
+    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+        self.capabilities = capabilities;
         self
     }
 
@@ -113,6 +115,10 @@ impl Provider for GoogleProvider {
 
     fn model(&self) -> String {
         self.endpoint.model.clone()
+    }
+
+    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+        self.capabilities.clone()
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
@@ -170,7 +176,7 @@ impl Provider for GoogleProvider {
             &self.endpoint.api_key,
         );
 
-        let include_thoughts = model_reasons(&self.endpoint.model);
+        let include_thoughts = self.capabilities.reasoning();
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,
@@ -219,7 +225,7 @@ impl Provider for GoogleProvider {
             &self.endpoint.api_key,
         );
 
-        let include_thoughts = model_reasons(&self.endpoint.model);
+        let include_thoughts = self.capabilities.reasoning();
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,
@@ -260,7 +266,7 @@ impl Provider for GoogleProvider {
             &self.endpoint.api_key,
         );
 
-        let include_thoughts = model_reasons(&self.endpoint.model);
+        let include_thoughts = self.capabilities.reasoning();
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,

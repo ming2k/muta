@@ -6,13 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use neenee_core::SecretString;
+
 use crate::config::OAuthConfig;
 use crate::token::TokenResponse;
 
 /// Response from the device-authorization endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {
-    pub device_code: String,
+    pub device_code: SecretString,
     pub user_code: String,
     pub verification_uri: String,
     #[serde(default)]
@@ -133,7 +135,7 @@ where
             "grant_type={}&client_id={}&device_code={}",
             cfg.grant_type_device,
             cfg.client_id,
-            crate::token::percent_encode_form_value(&device.device_code)
+            crate::token::percent_encode_form_value(device.device_code.expose_secret())
         );
         let response = client
             .post(cfg.device_token_url)

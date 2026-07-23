@@ -341,9 +341,29 @@ pub fn draw_activity_bar(
             .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
             .sum();
         let row_w = rect.width as usize;
-        // Place the badge flush against the right edge with a 1-cell margin.
+        // Right-pin margin, shared by the plain badge and the widened
+        // badge+hint below.
         let right_margin = 1;
-        let gap = row_w.saturating_sub(left_w + persistent_width + right_margin);
+
+        // While idle the transient left segment is just " ready", leaving
+        // the row otherwise empty — the best moment to nudge users toward
+        // the `ctrl+t` shortcut, since there is nothing competing for their
+        // attention. Once a turn is active, space is contested by the
+        // status/elapsed/interrupt hint, so the shortcut hint is dropped
+        // rather than fight the transient content for room.
+        const HINT_KEY: &str = "ctrl+t";
+        let hint_width =
+            UnicodeWidthStr::width(" ").saturating_add(UnicodeWidthStr::width(HINT_KEY));
+        let widened_width = persistent_width + hint_width;
+        let shows_hint = !status_active && left_w + widened_width + right_margin <= row_w;
+        let badge_width = if shows_hint {
+            widened_width
+        } else {
+            persistent_width
+        };
+
+        // Place the badge flush against the right edge with a 1-cell margin.
+        let gap = row_w.saturating_sub(left_w + badge_width + right_margin);
         // The badge's absolute column = left_w + gap.
         let badge_col = rect.x + (left_w + gap) as u16;
         // Pad between the left segment and the badge. When idle the badge is
@@ -352,7 +372,19 @@ pub fn draw_activity_bar(
         spans.push(Span::raw(" ".repeat(gap)));
         if let Some((badge, badge_w)) = todos_badge {
             spans.push(Span::styled(badge, dim));
-            todos_rect = Some(Rect::new(badge_col, rect.y, badge_w as u16, 1));
+            let mut hit_width = badge_w;
+            if shows_hint {
+                // Deliberately the same muted, unbolded style as the badge
+                // itself: this is a low-priority discoverability hint, not
+                // primary content, so it should read as part of the badge
+                // rather than draw the eye — there for users who go looking,
+                // not something that competes for attention.
+                spans.push(Span::styled(format!(" {HINT_KEY}"), dim));
+                hit_width += hint_width;
+            }
+            // The click target covers the hint too, so clicking the guide
+            // text opens Todos just like clicking the badge itself.
+            todos_rect = Some(Rect::new(badge_col, rect.y, hit_width as u16, 1));
         }
     }
 
@@ -1117,6 +1149,79 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.trim().is_empty(), "row was {text:?}");
+    }
+
+    #[test]
+    fn idle_todos_badge_shows_ctrl_t_hint_when_there_is_room() {
+        let mut todos = neenee_core::TodoList::new();
+        todos.items.push(neenee_core::TodoItem {
+            id: neenee_core::TodoId(1),
+            content: "write the docs".to_string(),
+            status: neenee_core::TodoStatus::Pending,
+            created_at: 0,
+            updated_at: 0,
+        });
+        let mut terminal = neenee_tui::TestTerminal::new(80, 1);
+        let mut hit = None;
+        terminal.draw(|frame| {
+            hit = draw_activity_bar(
+                frame,
+                Rect::new(0, 0, 80, 1),
+                None,
+                Some(&todos),
+                "",
+                None,
+                "",
+                0,
+                &Theme::default(),
+            );
+        });
+        let text = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("todos 0/1 ctrl+t"), "row was {text:?}");
+        assert!(text.ends_with("todos 0/1 ctrl+t "), "row was {text:?}");
+        // The click target grows to cover the hint text too.
+        let hit = hit.expect("bar hit");
+        let todos_rect = hit.todos_rect.expect("todos rect");
+        assert_eq!(todos_rect.width as usize, "todos 0/1 ctrl+t".len());
+    }
+
+    #[test]
+    fn active_todos_badge_omits_ctrl_t_hint_to_favor_transient_status() {
+        let mut todos = neenee_core::TodoList::new();
+        todos.items.push(neenee_core::TodoItem {
+            id: neenee_core::TodoId(1),
+            content: "write the docs".to_string(),
+            status: neenee_core::TodoStatus::Pending,
+            created_at: 0,
+            updated_at: 0,
+        });
+        let mut terminal = neenee_tui::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_activity_bar(
+                frame,
+                Rect::new(0, 0, 80, 1),
+                None,
+                Some(&todos),
+                "",
+                None,
+                "Working",
+                0,
+                &Theme::default(),
+            );
+        });
+        let text = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text.contains("ctrl+t"), "row was {text:?}");
+        assert!(text.ends_with("todos 0/1 "), "row was {text:?}");
     }
 
     #[test]

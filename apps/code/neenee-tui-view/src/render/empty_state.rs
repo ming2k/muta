@@ -332,10 +332,10 @@ mod tests {
     #[test]
     fn content_lines_reflects_user_logo_size() {
         let user = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        // None guidance: 3 logo + 2 (gap+tagline) = 5.
+        // None guidance: 3 logo + 2 (blank gap) + 1 (tagline) = 6.
         assert_eq!(
             empty_state_content_lines(Some(&user), EmptyStateGuidance::None),
-            5
+            6
         );
         assert_eq!(
             empty_state_content_lines(None, EmptyStateGuidance::None),

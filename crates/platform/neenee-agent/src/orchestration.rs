@@ -34,14 +34,14 @@ use crate::{Agent, PURSUIT_COMPLETE_MARKER, RequestTokenEstimate};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface,
-    Provider, ProviderStreamEvent, Pursuit, Role, RoundEvent,
+    Provider, ProviderStreamEvent, Pursuit, Role, RoundEvent, estimate_bytes,
 };
 use neenee_store::{
     RepeatStore,
     config::Config,
     session::{
         ContextProjectionCheckpoint, ContextProjectionResult, PursuitCheckpoint, SessionStore,
-        UNCAPPED_ITERATIONS, estimate_bytes, run_compaction,
+        UNCAPPED_ITERATIONS, run_compaction,
     },
 };
 
@@ -122,6 +122,13 @@ impl Provider for ProxyProvider {
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .model()
+    }
+
+    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .model_capabilities()
     }
 
     fn prompt_hints(&self) -> neenee_core::ProviderPromptHints {

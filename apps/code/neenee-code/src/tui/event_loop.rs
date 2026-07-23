@@ -1664,6 +1664,7 @@ pub(super) async fn run_app_loop(
                             app.oauth_pending_error.as_deref(),
                             f,
                             &app.theme,
+                            &mut app.oauth_scroll,
                         ))
                     }
                     Modal::CustomProvider => {
@@ -2765,7 +2766,7 @@ pub(super) async fn run_app_loop(
                         let name = app.custom_name.trim().to_string();
                         let protocol = app.custom_protocol_wire.clone();
                         let base_url = app.custom_base_url.trim().to_string();
-                        let api_key = app.custom_token.trim().to_string();
+                        let api_key = neenee_core::SecretString::from(app.custom_token.trim());
                         if let Some(id) = app.custom_edit_id.clone() {
                             // Edit mode: update meta (models stay managed in
                             // stage 2). A name is still required. ADR-0046:
@@ -3062,7 +3063,11 @@ pub(super) async fn run_app_loop(
                         let _ = app.tx.send(AgentRequest::SwitchProvider {
                             provider_type: id,
                             model,
-                            api_key: if key.is_empty() { None } else { Some(key) },
+                            api_key: if key.is_empty() {
+                                None
+                            } else {
+                                Some(key.into())
+                            },
                             base_url: None,
                         });
                         // Close to chat: restore the original draft.
@@ -3650,6 +3655,8 @@ pub(super) async fn run_app_loop(
                         app.custom_scroll = app.custom_scroll.saturating_sub(1);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_sub(1);
+                    } else if app.active_modal == Modal::OauthPending {
+                        app.oauth_scroll = app.oauth_scroll.saturating_sub(1);
                     } else {
                         // While a permission sheet is open the transcript stays
                         // scrollable, so the wheel / page keys drive the
@@ -3683,6 +3690,8 @@ pub(super) async fn run_app_loop(
                         app.custom_scroll = app.custom_scroll.saturating_add(1);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_add(1);
+                    } else if app.active_modal == Modal::OauthPending {
+                        app.oauth_scroll = app.oauth_scroll.saturating_add(1);
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(4).min(app.max_scroll);
@@ -3711,6 +3720,8 @@ pub(super) async fn run_app_loop(
                         app.question_scroll = app.question_scroll.saturating_sub(step as usize);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_sub(step as usize);
+                    } else if app.active_modal == Modal::OauthPending {
+                        app.oauth_scroll = app.oauth_scroll.saturating_sub(step as usize);
                     } else {
                         app.follow_bottom = false;
                         app.pin_summary_line = None;
@@ -3737,6 +3748,8 @@ pub(super) async fn run_app_loop(
                         app.question_scroll = app.question_scroll.saturating_add(step as usize);
                     } else if app.active_modal == Modal::ProviderTemplate {
                         app.template_scroll = app.template_scroll.saturating_add(step as usize);
+                    } else if app.active_modal == Modal::OauthPending {
+                        app.oauth_scroll = app.oauth_scroll.saturating_add(step as usize);
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(step).min(app.max_scroll);

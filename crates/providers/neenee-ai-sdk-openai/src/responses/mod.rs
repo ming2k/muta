@@ -33,6 +33,9 @@ pub struct ResponsesProvider {
     /// The ChatGPT account id, sent as `ChatGPT-Account-Id`. `None` is valid
     /// for single-account users (the header is simply omitted).
     pub account_id: Option<String>,
+    /// Channel-scoped capability view. A trusted remote catalogue overrides the
+    /// static baseline only for this provider/model route.
+    pub capabilities: neenee_core::ModelCapabilities,
     /// When `true`, inject GitHub Copilot's required per-request headers
     /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
     /// `Copilot-Vision-Request` for vision turns) instead of the ChatGPT
@@ -47,6 +50,7 @@ impl ResponsesProvider {
         base_url: &str,
         account_id: Option<String>,
     ) -> Self {
+        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key: access_token,
@@ -58,6 +62,7 @@ impl ResponsesProvider {
             turn: TurnState::new(),
             reasoning_effort: None,
             account_id,
+            capabilities,
             copilot: false,
         }
     }
@@ -77,10 +82,26 @@ impl ResponsesProvider {
         self
     }
 
+    /// Attach the effective provider-channel capability view.
+    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Flip on Copilot-mode request headers (see [`Self::copilot`]).
     pub fn with_copilot(mut self, copilot: bool) -> Self {
         self.copilot = copilot;
         self
+    }
+
+    /// Human-readable backend label for error messages and logs. The Responses
+    /// provider serves two distinct backends behind one wire format — the
+    /// ChatGPT subscription backend and the GitHub Copilot backend — and
+    /// surfacing the right name in errors (e.g. "Copilot HTTP 400" vs
+    /// "ChatGPT HTTP 400") is essential for diagnosing which one rejected a
+    /// request.
+    fn label(&self) -> &'static str {
+        if self.copilot { "Copilot" } else { "ChatGPT" }
     }
 
     /// Apply the per-request auth + user-agent headers. In Copilot mode the
@@ -114,7 +135,7 @@ impl ResponsesProvider {
 
     fn build_body(&self, request: ModelRequest, stream: bool) -> serde_json::Value {
         let (messages, tool_specs) = request.into_parts();
-        request::body(
+        request::body_with_capabilities(
             messages,
             request::BodyInput {
                 model: &self.endpoint.model,
@@ -122,6 +143,7 @@ impl ResponsesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 reasoning_effort: self.reasoning_effort,
             },
+            &self.capabilities,
         )
     }
 }
@@ -134,6 +156,10 @@ impl Provider for ResponsesProvider {
 
     fn model(&self) -> String {
         self.endpoint.model.clone()
+    }
+
+    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+        self.capabilities.clone()
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
@@ -154,16 +180,17 @@ impl Provider for ResponsesProvider {
 
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let client = reqwest::Client::new();
+        let label = self.label();
         let body = self.build_body(request, false);
         let resp = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|e| transport_error("ChatGPT", e))?;
-        let resp = ensure_success(resp, "ChatGPT").await?;
-        let value: serde_json::Value = decode_response_json(resp, "ChatGPT").await?;
+            .map_err(|e| transport_error(label, e))?;
+        let resp = ensure_success(resp, label).await?;
+        let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
-            return Err(format!("ChatGPT Error: {}", err));
+            return Err(format!("{label} Error: {}", err));
         }
         if let Some(usage) = response::usage(&value["usage"]) {
             self.turn.stash_usage(usage);
@@ -176,15 +203,16 @@ impl Provider for ResponsesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = reqwest::Client::new();
+        let label = self.label();
         let body = self.build_body(request, true);
         let resp = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|e| transport_error("ChatGPT", e))?;
-        let resp = ensure_success(resp, "ChatGPT").await?;
+            .map_err(|e| transport_error(label, e))?;
+        let resp = ensure_success(resp, label).await?;
 
-        let stream = neenee_ai_sdk_core::sse::data_payloads(resp, "ChatGPT").map(|item| {
+        let stream = neenee_ai_sdk_core::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
             let value: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
             // Accumulate only output_text deltas on the text-only path.
@@ -202,13 +230,14 @@ impl Provider for ResponsesProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = reqwest::Client::new();
+        let label = self.label();
         let body = self.build_body(request, true);
         let resp = self
             .build_request(&client, &body)
             .send()
             .await
-            .map_err(|e| transport_error("ChatGPT", e))?;
-        let resp = ensure_success(resp, "ChatGPT").await?;
+            .map_err(|e| transport_error(label, e))?;
+        let resp = ensure_success(resp, label).await?;
 
         // One stateful parser threads the function-call item state across the
         // whole stream; each SSE payload becomes zero or more events. Terminal
@@ -216,7 +245,7 @@ impl Provider for ResponsesProvider {
         // directly (mirrors the chat-completions streaming path) — no stashing
         // into the turn is needed.
         let parser = Arc::new(Mutex::new(response::ResponsesStream::new()));
-        let stream = neenee_ai_sdk_core::sse::data_payloads(resp, "ChatGPT").map(move |item| {
+        let stream = neenee_ai_sdk_core::sse::data_payloads(resp, label).map(move |item| {
             let data = item?;
             let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
             Ok::<_, String>(p.parse(&data))

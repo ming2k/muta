@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use neenee_core::SecretString;
+
 use crate::config::OAuthConfig;
 use crate::pkce::PkceCodes;
 
@@ -19,11 +21,11 @@ pub const ACCESS_TOKEN_REFRESH_SKEW_MS: i64 = 120_000;
 /// A successful token response from any grant type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
-    pub access_token: String,
+    pub access_token: SecretString,
     #[serde(default)]
-    pub refresh_token: Option<String>,
+    pub refresh_token: Option<SecretString>,
     #[serde(default)]
-    pub id_token: Option<String>,
+    pub id_token: Option<SecretString>,
     #[serde(default)]
     pub token_type: Option<String>,
     /// Seconds until the access_token expires. Best-effort: providers don't
@@ -85,7 +87,7 @@ pub async fn exchange_code(
         ("code", code),
         ("redirect_uri", redirect_uri),
         ("client_id", cfg.client_id),
-        ("code_verifier", pkce.verifier.as_str()),
+        ("code_verifier", pkce.verifier.expose_secret()),
     ]);
     post_form(client, cfg.token_url, &body).await
 }
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn xai_authorize_url_carries_plan_generic_and_pkce() {
         let pkce = PkceCodes {
-            verifier: "v".to_string(),
+            verifier: "v".into(),
             challenge: "c".to_string(),
         };
         let url = build_authorize_url(&XAI, &pkce, "ST", "N", "http://127.0.0.1:56121/callback");
@@ -274,7 +276,7 @@ mod tests {
     #[test]
     fn chatgpt_authorize_url_carries_codex_flow_param() {
         let pkce = PkceCodes {
-            verifier: "v".to_string(),
+            verifier: "v".into(),
             challenge: "c".to_string(),
         };
         let url = build_authorize_url(

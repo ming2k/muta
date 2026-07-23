@@ -10,10 +10,10 @@
 
 use neenee_agent::orchestration::{
     ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput,
-    start_interactive_round,
+    send_harness_state, start_interactive_round, turn,
 };
-use neenee_agent::{Agent, AgentIdentity};
-use neenee_core::{AgentResponse, ParentStatus, Provider, Tool};
+use neenee_agent::{Agent, AgentIdentity, NoProvider};
+use neenee_core::{AgentResponse, ParentStatus, Provider, RoundEvent, Tool};
 use neenee_skills::SkillRegistry;
 use neenee_store::config::Config;
 use neenee_store::session::SessionStore;
@@ -180,6 +180,19 @@ pub async fn start_active_turn(
             )
         };
 
+    // Refuse up-front when no real provider is configured. The TUI bumps its
+    // activity-bar state optimistically (is_responding, activity_status, and
+    // running_sessions) before sending `AgentRequest::Chat`; failing here
+    // without emitting terminal events would leave that state stuck on
+    // "queued". Emit a session-scoped `RoundEvent::Error` (resets the global
+    // is_responding/activity cells) followed by an idle `HarnessState`
+    // (drives the `OutboxSignal` that removes the session from
+    // running_sessions) so the chrome collapses cleanly. Symmetric with
+    // `start_session_turn`'s refusal path.
+    if refuse_if_no_provider(tx, &agent, &session_id) {
+        return;
+    }
+
     start_resolved_turn(
         principal, tx, config, agent, session, token_slot, generation, session_id, input,
     )
@@ -245,6 +258,18 @@ pub async fn start_session_turn(
         return false;
     };
 
+    // Same refusal contract as `start_active_turn`: a queued outbox item
+    // cannot run without a real provider. Emitting the session-scoped error
+    // + idle HarnessState here lets the frontend roll back its optimistically-
+    // bumped state (running_sessions, the "queued" activity chip, the
+    // spinner) and leave the outbox item in a recoverable state. Returning
+    // `false` routes the caller through `RoundEvent::UserInputUnavailable`,
+    // which promotes the dispatch item back to `Waiting` so the user can
+    // recall or replay it once a real provider is configured.
+    if refuse_if_no_provider(tx, &agent, &session_id) {
+        return false;
+    }
+
     start_resolved_turn(
         principal, tx, config, agent, session, token_slot, generation, session_id, input,
     )
@@ -286,4 +311,38 @@ async fn start_resolved_turn(
         input,
     )
     .await;
+}
+
+/// No-provider gate shared by [`start_active_turn`] and [`start_session_turn`].
+///
+/// When the resolved agent is parked on the `NoProvider` sentinel, emit the
+/// session-scoped events the TUI needs to roll back the optimistic
+/// "queued" bump it performed before dispatching the chat/outbox item:
+///
+/// - [`RoundEvent::Error`] surfaces the user-facing "add a provider" notice
+///   and resets the global `is_responding` / `activity_status` cells in the
+///   TUI listener.
+/// - [`RoundEvent::HarnessState`] with `loop_status: "idle"` drives the
+///   `OutboxSignal::HarnessState { idle: true }` path, which removes the
+///   session from `running_sessions` so the composer treats the next send as
+///   immediate instead of busy-queueing it.
+///
+/// Returns `true` when the refusal fired (caller returns early without
+/// starting a round); `false` when the turn should proceed normally.
+fn refuse_if_no_provider(
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    agent: &Agent,
+    session_id: &str,
+) -> bool {
+    if !NoProvider::is(agent.provider.as_ref()) {
+        return false;
+    }
+    let _ = tx.send(turn(
+        session_id,
+        RoundEvent::Error(
+            "No provider configured. Add one with /provider before sending a message.".to_string(),
+        ),
+    ));
+    send_harness_state(tx, session_id, agent, "idle");
+    true
 }

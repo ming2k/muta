@@ -57,6 +57,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   brokerage and reports the configured live broker accurately. See
   [ADR-0062](docs/adr/0062-longport-openapi-quant-adapter.md).
 
+- **Provider-scoped remote model metadata for GitHub Copilot (ADR-0070).**
+  The Copilot provider now identifies itself with the public Copilot OAuth
+  client id (unlocking real subscription entitlements), sends the integration
+  headers the `/models` endpoint expects, and discovers per-model metadata —
+  endpoint family, context window, reasoning, vision, effort tiers — per
+  channel, persisted and overlaid onto the static baseline only for that
+  provider route. Each Copilot model is routed to its declared endpoint
+  (chat/responses/messages), and the picker hides entries whose model picker
+  flag is off. Login and the add-provider flow now run live discovery
+  automatically, with per-provider failures surfaced as a discovery warning
+  instead of being swallowed. The OAuth modal is larger and scrolls with both
+  keyboard and mouse. See
+  [ADR-0070](docs/adr/0070-provider-scoped-remote-model-metadata.md),
+  [How to avoid Copilot provider pitfalls](docs/how-to/copilot-provider-pitfalls.md),
+  and the [model metadata reference](docs/reference/model-metadata.md).
+
+- **Tool call arguments are schema-validated before dispatch.** A call whose
+  arguments fail the tool's declared JSON Schema — wrong top-level type,
+  missing required property, or a mistyped primitive — is rejected up front
+  with an explicit error in the same shape as a tool failure, so the
+  malformed call never reaches the tool implementation. Previously a type
+  error landed in the tool's own parser, where some tools silently coerced
+  it (for example a string `"3"` for an integer `offset`).
+
 ### Changed
 
 - **State bar relocated below the input and lowercased.** The persistent
@@ -158,6 +182,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DynamicToolSink`. The former MCP-specific shared lock and source-name
   inference are removed.
 
+- **Search results are now capped at the shared output budget.** The
+  DuckDuckGo, Tavily, and SearXNG backends previously returned an unbounded
+  formatted result list; `format_results` now passes through the same
+  16,000-character cap the other search backends already applied.
+
+### Removed
+
+- **Dormant ADR-0037 §6 server-move scaffolding.** `SessionRegistry`,
+  `SessionHandle`, and `SharedState` — every method returned
+  `Err("not yet populated")` — are gone from `neenee-session`; the crate docs
+  now describe the single-driver model that actually runs. Reintroduce the
+  factory when the multi-session server move resumes.
+
 ### Fixed
 
 - **The opencode-go seed no longer includes models the relay does not serve.**
@@ -180,6 +217,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from it, the scroll position oscillated and the frame flickered during the
   animation heartbeat. Every logical row is now counted through one
   `RenderCtx::paint` call, decoupling height from scroll position.
+
+- **No more silent fallback to a mock provider.** When no real provider
+  channel resolves (unknown id, or no usable channel), the catalog returns
+  `None` instead of a `MockProvider`: startup installs an explicit
+  `NoProvider` sentinel, a `/provider` or default-model switch that resolves
+  to nothing is refused with a notification, and chat, `/btw`, and
+  queued-outbox sends fail fast with "No provider configured. Add one with
+  /provider before sending a message." Previously a message could silently
+  reach a non-functional mock and die there.
+
+- **Streaming Anthropic turns no longer book zero prompt tokens.** The
+  stream parser discarded `message_start` — the only event carrying
+  `input_tokens` and the cache creation/read counts — and kept only the
+  final `message_delta`, so every streamed turn recorded `prompt_tokens = 0`
+  and lost all prompt-cache discounts. Streamed usage now merges
+  `message_start` with subsequent deltas (input side replaced as a snapshot,
+  output side cumulative), matching the non-streaming fold.
+
+- **Truncated provider streams are now detected and retried instead of
+  silently accepted.** A stream that ends mid-tool-call — a call slot with a
+  partial id or arguments but no name, or arguments that are not valid
+  JSON — now fails as a retryable "likely truncated" error instead of the
+  call being silently dropped or executed with half its arguments. The SSE
+  layer no longer swallows an incomplete trailing event at EOF, and invalid
+  UTF-8 in a completed frame surfaces as an explicit retryable error instead
+  of being masked by lossy replacement.
+
+### Security
+
+- **API keys and OAuth tokens are now redacted at the type level.** A new
+  `SecretString` (`neenee-core`) masks `Debug`/`Display` output with `***`
+  and keeps `expose_secret()` as the only plaintext path; it now backs
+  provider `api_key` fields, built-in provider keys, stored credentials,
+  OAuth token sets, PKCE verifiers, device codes, web-search keys, and the
+  provider-management wire requests. On-disk files stay plaintext by design
+  (mode 0600), so existing configs load unchanged. Transport errors
+  additionally mask credential query parameters (`?key=` / `api_key` /
+  `access_token`) in URLs, closing a path where a Gemini transport failure
+  could print its key. See
+  [ADR-0072](docs/adr/0072-type-level-secret-redaction.md).
 
 ## [0.20.3] - 2026-07-12
 

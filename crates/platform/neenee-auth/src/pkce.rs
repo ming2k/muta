@@ -7,6 +7,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use neenee_core::SecretString;
 use sha2::{Digest, Sha256};
 
 /// The PKCE code verifier + matching S256 code challenge.
@@ -14,7 +15,7 @@ use sha2::{Digest, Sha256};
 pub struct PkceCodes {
     /// The verifier sent to the token endpoint in the exchange step. Kept
     /// secret on the client; never sent in the authorize URL.
-    pub verifier: String,
+    pub verifier: SecretString,
     /// `BASE64URL(SHA256(verifier))`, sent as `code_challenge` with
     /// `code_challenge_method=S256` in the authorize URL.
     pub challenge: String,
@@ -23,8 +24,8 @@ pub struct PkceCodes {
 impl PkceCodes {
     /// Generate a fresh PKCE pair from OS randomness.
     pub fn generate() -> Self {
-        let verifier = random_string(64);
-        let challenge = s256_challenge(&verifier);
+        let verifier = SecretString::from(random_string(64));
+        let challenge = s256_challenge(verifier.expose_secret());
         Self {
             verifier,
             challenge,
@@ -97,16 +98,19 @@ mod tests {
     #[test]
     fn generated_pair_is_consistent() {
         let pkce = PkceCodes::generate();
-        assert_eq!(pkce.verifier.len(), 64);
+        assert_eq!(pkce.verifier.expose_secret().len(), 64);
         // Verifier chars are all legal.
-        for c in pkce.verifier.chars() {
+        for c in pkce.verifier.expose_secret().chars() {
             assert!(
                 c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' || c == '~',
                 "illegal verifier char: {c}"
             );
         }
         // The challenge regenerates from the verifier.
-        assert_eq!(pkce.challenge, s256_challenge(&pkce.verifier));
+        assert_eq!(
+            pkce.challenge,
+            s256_challenge(pkce.verifier.expose_secret())
+        );
     }
 
     #[test]

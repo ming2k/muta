@@ -49,6 +49,70 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     })
 }
 
+/// Running token counts for one SSE stream.
+///
+/// Anthropic splits a turn's usage across two event types: `message_start`
+/// carries the input side (`input_tokens` plus the `cache_creation_input_tokens`
+/// / `cache_read_input_tokens` prompt-cache counters) while `message_delta`
+/// carries only the cumulative `output_tokens`. Neither event is complete on
+/// its own, and the harness books the LAST `Usage` event it observes — so
+/// forwarding each event's partial usage verbatim would book a prompt of 0 and
+/// drop every cache counter on each cached streaming turn. This accumulator
+/// merges the two (same rule as praxion's stream decoder); [`stream_events`]
+/// emits the folded [`TokenUsage`].
+#[derive(Debug, Default)]
+pub struct StreamUsage {
+    uncached_input: Option<i64>,
+    cache_creation: Option<i64>,
+    cache_read: Option<i64>,
+    output: Option<i64>,
+}
+
+impl StreamUsage {
+    /// Merge one event's `usage` object. The input side is a complete snapshot
+    /// when present (`message_start`, or relays that repeat it in
+    /// `message_delta`): all three counters are replaced together, never added.
+    /// `output_tokens` is cumulative and is replaced whenever reported.
+    pub fn merge(&mut self, usage: &Value) {
+        let input = usage["input_tokens"].as_i64();
+        let creation = usage["cache_creation_input_tokens"].as_i64();
+        let read = usage["cache_read_input_tokens"].as_i64();
+        if input.is_some() || creation.is_some() || read.is_some() {
+            self.uncached_input = input;
+            self.cache_creation = creation;
+            self.cache_read = read;
+        }
+        if let Some(output) = usage["output_tokens"].as_i64() {
+            self.output = Some(output);
+        }
+    }
+
+    /// Fold the accumulated counts into a [`TokenUsage`] using [`usage`]'s
+    /// rule (`prompt_tokens` = uncached input + both cache counters). Returns
+    /// `None` when nothing numeric has been seen yet.
+    pub fn fold(&self) -> Option<TokenUsage> {
+        if self.uncached_input.is_none()
+            && self.cache_creation.is_none()
+            && self.cache_read.is_none()
+            && self.output.is_none()
+        {
+            return None;
+        }
+        let input = self.uncached_input.unwrap_or(0);
+        let creation = self.cache_creation.unwrap_or(0);
+        let read = self.cache_read.unwrap_or(0);
+        let prompt = input + creation + read;
+        let completion = self.output.unwrap_or(0);
+        Some(TokenUsage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+            cache_creation_input_tokens: creation,
+            cache_read_input_tokens: read,
+        })
+    }
+}
+
 /// Assemble the `content` block array of a non-streaming response into one
 /// assistant message's pieces.
 pub fn assemble_message(response: &Value) -> Result<AssembledMessage, String> {
@@ -148,9 +212,19 @@ pub fn into_message(
 /// each event in `{type, ...}`; the `type` discriminator selects the block/delta
 /// shape.
 ///
+/// `usage_state` accumulates token counts across the stream (see
+/// [`StreamUsage`]). Events carrying a `usage` object — `message_start`
+/// (`message.usage`) and `message_delta` (`usage`) — emit the merged
+/// [`TokenUsage`] as a [`ProviderStreamEvent::Usage`], so the harness's
+/// last-Usage-wins booking settles on the full input + cache + output counts
+/// instead of the delta's output-only fragment.
+///
 /// Returns `Err` only for an in-stream `error` event; other non-content events
 /// are no-ops that yield no events.
-pub fn stream_events(data: &str) -> Result<Vec<ProviderStreamEvent>, String> {
+pub fn stream_events(
+    data: &str,
+    usage_state: &mut StreamUsage,
+) -> Result<Vec<ProviderStreamEvent>, String> {
     let Ok(value) = serde_json::from_str::<Value>(data) else {
         return Ok(Vec::new());
     };
@@ -206,18 +280,29 @@ pub fn stream_events(data: &str) -> Result<Vec<ProviderStreamEvent>, String> {
                 _ => Ok(Vec::new()),
             }
         }
-        // message_delta carries the final cumulative `usage` right before
-        // message_stop. Forward it as a Usage event so the harness books
-        // authoritative counts instead of estimating.
-        "message_delta" => {
-            if let Some(usage) = usage(&value["usage"]) {
-                Ok(vec![ProviderStreamEvent::Usage(usage)])
-            } else {
-                Ok(Vec::new())
-            }
-        }
+        // Usage-bearing events: merge into the accumulator and emit the
+        // combined counts. `message_start` reports the input side (plus cache
+        // counters) up front; `message_delta` reports the final cumulative
+        // output right before message_stop.
+        "message_start" => Ok(merge_usage_event(usage_state, &value["message"]["usage"])),
+        "message_delta" => Ok(merge_usage_event(usage_state, &value["usage"])),
         _ => Ok(Vec::new()),
     }
+}
+
+/// Merge one payload's `usage` member into `state` and emit the folded
+/// [`TokenUsage`]. Payloads without a `usage` member yield nothing, so
+/// usage-less events never re-emit stale counts.
+fn merge_usage_event(state: &mut StreamUsage, usage: &Value) -> Vec<ProviderStreamEvent> {
+    if usage.is_null() {
+        return Vec::new();
+    }
+    state.merge(usage);
+    state
+        .fold()
+        .into_iter()
+        .map(ProviderStreamEvent::Usage)
+        .collect()
 }
 
 /// Extract the plain text delta from one stream payload (the simple
@@ -242,9 +327,11 @@ mod tests {
 
     #[test]
     fn stream_parser_extracts_text_and_tool_deltas() {
+        let mut state = StreamUsage::default();
         // A text delta event.
         let text_events = stream_events(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            &mut state,
         )
         .expect("text delta parses");
         assert_eq!(
@@ -255,6 +342,7 @@ mod tests {
         // A tool_use block opening: id and name arrive up front.
         let open_events = stream_events(
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash"}}"#,
+            &mut state,
         )
         .expect("content_block_start parses");
         assert_eq!(
@@ -271,6 +359,7 @@ mod tests {
         // concatenates them.
         let frag_events = stream_events(
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"comm"}}"#,
+            &mut state,
         )
         .expect("input_json_delta parses");
         assert_eq!(
@@ -288,6 +377,7 @@ mod tests {
     fn stream_parser_extracts_reasoning_deltas() {
         let events = stream_events(
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}"#,
+            &mut StreamUsage::default(),
         )
         .expect("thinking_delta parses");
         assert_eq!(
@@ -300,6 +390,7 @@ mod tests {
     fn stream_parser_surfaces_error_events_as_err() {
         let result = stream_events(
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+            &mut StreamUsage::default(),
         );
         assert!(result.is_err());
         assert!(
@@ -310,6 +401,7 @@ mod tests {
 
     #[test]
     fn stream_parser_ignores_non_content_events() {
+        let mut state = StreamUsage::default();
         for payload in [
             r#"{"type":"message_start","message":{"id":"msg_1"}}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
@@ -317,11 +409,115 @@ mod tests {
             r#"{"type":"content_block_stop","index":0}"#,
             r#"not-json-at-all"#,
         ] {
-            let events = stream_events(payload).expect("non-content event is ok");
+            let events = stream_events(payload, &mut state).expect("non-content event is ok");
             assert!(
                 events.is_empty(),
                 "non-content event must yield nothing: {payload}"
             );
         }
+    }
+
+    #[test]
+    fn stream_usage_merges_message_start_and_message_delta() {
+        // Anthropic splits usage across events: message_start carries the
+        // input side (incl. prompt-cache counters), message_delta only the
+        // cumulative output. The harness books the LAST Usage event, so the
+        // merged counts must be emitted or every cached streaming turn books
+        // prompt = 0 and drops the cache counters.
+        let mut state = StreamUsage::default();
+        let start_events = stream_events(
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_creation_input_tokens":100,"cache_read_input_tokens":400,"output_tokens":1}}}"#,
+            &mut state,
+        )
+        .expect("message_start parses");
+        assert_eq!(
+            start_events,
+            vec![ProviderStreamEvent::Usage(TokenUsage {
+                prompt_tokens: 525,
+                completion_tokens: 1,
+                total_tokens: 526,
+                cache_creation_input_tokens: 100,
+                cache_read_input_tokens: 400,
+            })]
+        );
+
+        // Content events between the two never re-emit usage.
+        let text_events = stream_events(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+            &mut state,
+        )
+        .expect("text delta parses");
+        assert_eq!(
+            text_events,
+            vec![ProviderStreamEvent::TextDelta("Hi".to_string())]
+        );
+
+        // The delta's output-only usage merges with the start's input side.
+        let delta_events = stream_events(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#,
+            &mut state,
+        )
+        .expect("message_delta parses");
+        assert_eq!(
+            delta_events,
+            vec![ProviderStreamEvent::Usage(TokenUsage {
+                prompt_tokens: 525,
+                completion_tokens: 12,
+                total_tokens: 537,
+                cache_creation_input_tokens: 100,
+                cache_read_input_tokens: 400,
+            })]
+        );
+    }
+
+    #[test]
+    fn stream_usage_replaces_input_side_when_delta_repeats_it() {
+        // Some Anthropic-compatible relays repeat the full usage (input side
+        // included) in message_delta. The input side is a snapshot, not a
+        // delta: it must REPLACE, not add, or the counts double.
+        let mut state = StreamUsage::default();
+        stream_events(
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":1}}}"#,
+            &mut state,
+        )
+        .expect("message_start parses");
+        let delta_events = stream_events(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":25,"cache_read_input_tokens":400,"output_tokens":12}}"#,
+            &mut state,
+        )
+        .expect("message_delta parses");
+        assert_eq!(
+            delta_events,
+            vec![ProviderStreamEvent::Usage(TokenUsage {
+                prompt_tokens: 425,
+                completion_tokens: 12,
+                total_tokens: 437,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 400,
+            })]
+        );
+    }
+
+    #[test]
+    fn stream_usage_tolerates_missing_message_start() {
+        // Degenerate stream whose message_start carried no usage: the delta's
+        // output-only usage still surfaces (prompt 0), matching the pre-merge
+        // behavior.
+        let mut state = StreamUsage::default();
+        let events = stream_events(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            &mut state,
+        )
+        .expect("message_delta parses");
+        assert_eq!(
+            events,
+            vec![ProviderStreamEvent::Usage(TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 7,
+                total_tokens: 7,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            })]
+        );
     }
 }

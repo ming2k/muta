@@ -716,6 +716,157 @@ async fn stalled_provider_stream_times_out_as_retryable() {
     );
 }
 
+/// A stream that ends after delivering only part of a tool call (id/argument
+/// bytes arrived but the name never did) leaves residue in the call slots.
+/// Dropping it silently would mistake a truncated connection for the model's
+/// intent, so stream finalization must surface it as a retryable error and
+/// refuse to commit the partial response.
+#[tokio::test]
+async fn stream_ending_mid_tool_call_is_retryable() {
+    struct TruncatedToolCallProvider;
+    #[async_trait]
+    impl Provider for TruncatedToolCallProvider {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+            unreachable!("streaming path should be used")
+        }
+        async fn stream_chat(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::empty()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("call_1".to_string()),
+                    name: None,
+                    arguments: "{\"value\":".to_string(),
+                },
+            )])))
+        }
+    }
+
+    let agent = Agent::new(
+        Arc::new(TruncatedToolCallProvider),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    );
+    let mut messages = vec![Message::new(Role::User, "hello")];
+
+    let result = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    match result {
+        Err(HarnessError::Retryable { message, .. }) => {
+            assert!(
+                message.contains("mid-tool-call"),
+                "message should name the mid-tool-call truncation: {message}"
+            );
+        }
+        other => panic!("mid-call truncation must be retryable, got: {other:?}"),
+    }
+    assert_eq!(
+        messages.len(),
+        1,
+        "the truncated response must not be committed to history"
+    );
+}
+
+/// The same truncation one delta later: the name arrived but the argument
+/// JSON was cut off mid-payload. The half-written call must not reach
+/// execution — where its parse error would be indistinguishable from the
+/// model emitting bad JSON — so finalization fails retryable instead.
+#[tokio::test]
+async fn stream_with_truncated_tool_arguments_is_retryable() {
+    struct TruncatedArgumentsProvider;
+    #[async_trait]
+    impl Provider for TruncatedArgumentsProvider {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+            unreachable!("streaming path should be used")
+        }
+        async fn stream_chat(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::empty()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("call_1".to_string()),
+                    name: Some("read".to_string()),
+                    arguments: "{\"value\":".to_string(),
+                },
+            )])))
+        }
+    }
+
+    let agent = Agent::new(
+        Arc::new(TruncatedArgumentsProvider),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    );
+    let mut messages = vec![Message::new(Role::User, "hello")];
+
+    let result = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    match result {
+        Err(HarnessError::Retryable { message, .. }) => {
+            assert!(
+                message.contains("truncated arguments") && message.contains("read"),
+                "message should name the call whose arguments were cut off: {message}"
+            );
+        }
+        other => panic!("truncated tool arguments must be retryable, got: {other:?}"),
+    }
+    assert_eq!(
+        messages.len(),
+        1,
+        "the truncated response must not be committed to history"
+    );
+}
+
+/// `arguments == ""` is the legitimate shape of a zero-argument tool call:
+/// the truncation guard must not reject it, and the call must dispatch
+/// normally. (Complete streams with valid JSON arguments are covered by the
+/// golden-transcript tests below.)
+#[tokio::test]
+async fn zero_argument_tool_call_survives_stream_finalization() {
+    let tool = RecordingTool::read("alpha", "A-out");
+    let calls = tool.calls_handle();
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            tool_round(&[("c1", "alpha", "")]),
+            text_round("done"),
+        ])),
+        vec![Arc::new(tool)],
+        crate::AgentIdentity::default(),
+    );
+    let mut messages = vec![Message::new(Role::User, "go")];
+
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+
+    assert_eq!(outcome.unwrap().message.content, "done");
+    assert_eq!(
+        calls.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+        &[String::new()],
+        "the zero-argument call must reach the tool with empty arguments"
+    );
+}
+
 #[tokio::test]
 async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     struct PendingProvider;
@@ -1107,6 +1258,104 @@ async fn headless_run_rejects_write_tools_without_hanging() {
             .iter()
             .any(|message| message.content.contains("Permission denied"))
     );
+}
+
+/// A call whose arguments violate the tool's declared `parameters` schema is
+/// rejected by dispatch-level pre-validation with the same error shape a
+/// failing tool returns — and the Tool impl never runs (the recording mock
+/// stays empty). A well-formed call still passes the gate and executes.
+#[tokio::test]
+async fn schema_violating_call_never_reaches_the_tool() {
+    use std::sync::Mutex;
+
+    struct StrictReadTool {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Tool for StrictReadTool {
+        fn name(&self) -> &str {
+            "strict_read"
+        }
+        fn description(&self) -> &str {
+            "recording tool with a typed schema"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "limit": { "type": "integer" }
+                },
+                "required": ["path"]
+            })
+        }
+        async fn call(&self, arguments: &str) -> Result<String, String> {
+            self.calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(arguments.to_string());
+            Ok("ran".to_string())
+        }
+    }
+
+    async fn run(agent: &Agent, arguments: &str) -> ToolOutput {
+        agent
+            .execute_tool_evented(
+                &ToolCall {
+                    id: "call".to_string(),
+                    name: "strict_read".to_string(),
+                    arguments: arguments.to_string(),
+                },
+                "call",
+                &CancellationToken::new(),
+                &mut |_| {},
+            )
+            .await
+            .expect("dispatch should not fail")
+    }
+
+    let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let agent = Agent::new(
+        Arc::new(TestProvider),
+        vec![Arc::new(StrictReadTool {
+            calls: calls.clone(),
+        })],
+        crate::AgentIdentity::default(),
+    );
+
+    // Wrong primitive type for a declared property.
+    let output = run(&agent, r#"{"path": "f.rs", "limit": "soon"}"#).await;
+    assert!(
+        matches!(output, ToolOutput::Error { .. }),
+        "schema violation must produce ToolOutput::Error, got {output:?}"
+    );
+    let text = output.to_text();
+    assert!(text.contains("Error executing strict_read"), "{text}");
+    assert!(text.contains("invalid argument `limit`"), "{text}");
+
+    // Missing a required field.
+    let output = run(&agent, r#"{"limit": 3}"#).await;
+    assert!(matches!(output, ToolOutput::Error { .. }));
+    assert!(
+        output
+            .to_text()
+            .contains("missing required field(s): `path`")
+    );
+
+    // Wrong top-level type.
+    let output = run(&agent, "[1, 2]").await;
+    assert!(matches!(output, ToolOutput::Error { .. }));
+
+    assert!(
+        calls.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+        "no schema-violating call may reach the tool"
+    );
+
+    // A well-formed call still runs, proving the gate only rejects violations.
+    let output = run(&agent, r#"{"path": "f.rs", "limit": 3}"#).await;
+    assert_eq!(output.to_text(), "ran");
+    assert_eq!(calls.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
 }
 
 // ---- Golden-transcript harness ----------------------------------------

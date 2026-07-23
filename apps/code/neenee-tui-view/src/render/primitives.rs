@@ -135,7 +135,7 @@ impl FixedModalSpec {
     pub const HISTORY: Self = Self::new(70, 72);
     pub const QUESTION: Self = Self::new(78, 70);
     pub const MODEL_EDITOR: Self = Self::new(60, 30);
-    pub const OAUTH_PENDING: Self = Self::new(64, 36);
+    pub const OAUTH_PENDING: Self = Self::new(72, 48);
     pub const CUSTOM_PROVIDER: Self = Self::new(66, 66);
     pub const HELP: Self = Self::new(58, 70);
     pub const SESSIONS: Self = Self::new(80, 64);

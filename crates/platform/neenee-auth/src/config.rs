@@ -137,10 +137,13 @@ pub const CHATGPT: OAuthConfig = OAuthConfig {
     device_redirect_uri: "https://auth.openai.com/deviceauth/callback",
 };
 
-/// GitHub Copilot subscription OAuth client. neenee reuses its own registered
-/// GitHub OAuth App (`Ov23liqD3VLLXQ7XZkMJ`, callback left as the project
-/// homepage since the device flow never invokes it). The flow is plain RFC 8628
-/// — `read:user` scope is all Copilot's token endpoint needs to mint a
+/// GitHub Copilot subscription OAuth client. neenee reuses the public
+/// Copilot OAuth App client id (`Ov23li8tweQw6odWQebz`) that opencode and
+/// several third-party Copilot integrations use. GitHub's Copilot backend
+/// maintains a per-client-ID model allowlist, so a mismatched or self-registered
+/// OAuth App often returns only the always-available GPT-4o family instead of
+/// the account's real subscription models. The flow is plain RFC 8628 —
+/// `read:user` scope is all Copilot's token endpoint needs to mint a
 /// subscription-scoped token; the returned access token is sent verbatim as a
 /// bearer to `api.githubcopilot.com` (the Responses backend URL is wired in the
 /// catalog layer, not here). The token does not expire on a schedule (GitHub
@@ -148,7 +151,7 @@ pub const CHATGPT: OAuthConfig = OAuthConfig {
 /// stays valid until the user revokes the app.
 pub const COPILOT: OAuthConfig = OAuthConfig {
     provider_id: "copilot",
-    client_id: "Ov23liqD3VLLXQ7XZkMJ",
+    client_id: "Ov23li8tweQw6odWQebz",
     authorize_url: "https://github.com/login/oauth/authorize",
     token_url: "https://github.com/login/oauth/access_token",
     device_authorization_url: "https://github.com/login/device/code",
@@ -229,5 +232,8 @@ mod tests {
         // The polled token endpoint equals the regular token endpoint for
         // RFC 8628 (unlike ChatGPT, which polls a separate deviceauth/token).
         assert_eq!(COPILOT.device_token_url, COPILOT.token_url);
+        // Use the public Copilot OAuth App client id so the backend allowlist
+        // matches opencode and other community integrations.
+        assert_eq!(COPILOT.client_id, "Ov23li8tweQw6odWQebz");
     }
 }
