@@ -104,7 +104,7 @@ impl Dirs {
 
     /// OAuth token sets, keyed by provider id (`auth.toml`, 0600). Sibling of
     /// `credentials.toml` for SuperGrok / future OAuth providers. See
-    /// `neenee_oauth::store`.
+    /// `neenee_providers::oauth::store`.
     pub fn auth_file(&self) -> PathBuf {
         self.config_dir.join("auth.toml")
     }
@@ -130,12 +130,6 @@ impl Dirs {
         self.projects_dir().join(project_bucket_name(project_root))
     }
 
-    /// Legacy SQLite pursuit database (pre-ADR-0032). Kept so the one-shot
-    /// migration in `main.rs` can read old rows; no new code writes here.
-    pub fn pursuits_db(&self) -> PathBuf {
-        self.data_dir.join("pursuits.db")
-    }
-
     /// SQLite database for `/repeat` cron jobs (durable recurring prompts).
     pub fn repeat_db(&self) -> PathBuf {
         self.data_dir.join("repeat.db")
@@ -152,15 +146,6 @@ impl Dirs {
     /// delete; repopulated on next `fetch_remote_repo`.
     pub fn remote_skills_cache(&self) -> PathBuf {
         self.cache_dir.join("skills").join("remote")
-    }
-
-    /// Cached models.dev catalog (`$XDG_CACHE_HOME/neenee/models-dev.json`).
-    /// A mirror of `https://models.dev/api.json` fetched at startup and every
-    /// 60 minutes; safe to delete — it is repopulated on next refresh. When
-    /// absent or stale the catalog falls back to the compiled-in model
-    /// registry, so a missing cache never blocks startup.
-    pub fn models_dev_cache(&self) -> PathBuf {
-        self.cache_dir.join("models-dev.json")
     }
 
     /// User-global slash commands (`$XDG_DATA_HOME/neenee/commands`). Project

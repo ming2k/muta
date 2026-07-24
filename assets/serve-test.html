@@ -81,6 +81,7 @@ connectBtn.onclick = () => {
   ws.onmessage = (ev) => {
     let wire;
     try { wire = JSON.parse(ev.data); } catch { return; }
+    // History frame: {"type":"History","session_id":"...","messages":[...]}
     if (wire.type === 'History') {
       addMsg(`— History replay (${wire.messages.length} messages) —`, 'event');
       for (const msg of wire.messages) {

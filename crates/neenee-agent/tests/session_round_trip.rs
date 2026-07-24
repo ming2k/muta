@@ -18,6 +18,8 @@
 
 use std::sync::Arc;
 
+use futures::stream::{BoxStream, StreamExt};
+use neenee_core::{Message, ModelRequest, Provider, Role, async_trait};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -25,14 +27,28 @@ use neenee_agent::Agent;
 use neenee_agent::orchestration::{
     ContextProjectionSettings, RoundContext, RoundInput, execute_round,
 };
-use neenee_core::Role;
 use neenee_persistence::session::SessionStore;
-use neenee_providers::MockProvider;
 
-/// Concatenation of the chunks emitted by `MockProvider::stream_chat`. Kept
-/// here rather than imported so a change to the mock's payload shows up as a
-/// test diff rather than a silent recompile.
+/// Concatenation of the chunks emitted by [`TestStreamProvider::stream_chat`].
 const MOCK_REPLY: &str = "This is a streaming mock response from neenee!";
+
+/// Minimal provider whose `stream_chat` emits `MOCK_REPLY` in chunks.
+struct TestStreamProvider;
+
+#[async_trait]
+impl Provider for TestStreamProvider {
+    async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
+        Ok(Message::new(Role::Assistant, MOCK_REPLY))
+    }
+
+    async fn stream_chat(
+        &self,
+        _request: ModelRequest,
+    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        let chunks = ["This ", "is ", "a ", "streaming ", "mock ", "response ", "from ", "neenee!"];
+        Ok(futures::stream::iter(chunks.into_iter().map(|c| Ok(c.to_string()))).boxed())
+    }
+}
 
 #[tokio::test]
 async fn execute_round_persists_a_session_that_resume_reopens() {
@@ -43,7 +59,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
     let session_path = directory.join("session.json");
     let session = Arc::new(SessionStore::for_path(session_path.clone()));
     let agent = Arc::new(Agent::new(
-        Arc::new(MockProvider),
+        Arc::new(TestStreamProvider),
         Vec::new(),
         neenee_agent::AgentIdentity::default(),
     ));

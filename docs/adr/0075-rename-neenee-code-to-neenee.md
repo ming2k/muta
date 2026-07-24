@@ -1,6 +1,8 @@
 # 0075. Rename `neenee-code` → `neenee` (single-product rename)
 
-- **Status:** Accepted
+- **Status:** Accepted (the single-binary premise was reversed by ADR-0080:
+  the package is `neenee-cli` again; the `[[bin]] name = "neenee"` choice
+  this ADR made still stands)
 - **Date:** 2026-07-23
 - **Reverses:** the application-layer rename sub-decision of ADR-0035 (crate
   `neenee-cli` → `neenee-code`, binary `neenee` → `neenee-code`)

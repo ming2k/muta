@@ -20,7 +20,7 @@ use neenee_persistence::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
-use neenee_tools::commands::CustomCommand;
+use crate::commands::CustomCommand;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

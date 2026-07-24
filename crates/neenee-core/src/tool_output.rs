@@ -647,7 +647,7 @@ fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool)
 /// character. Returns a `&str` slice of `text`.
 ///
 /// Shared by the structured-output formatter (in this crate) and the tool
-/// implementations (`neenee-tools`) that produce the outputs being formatted.
+/// implementations (`neenee-agent::tools`) that produce the outputs being formatted.
 pub fn truncate_utf8(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;

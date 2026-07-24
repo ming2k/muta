@@ -17,8 +17,9 @@ other.
   tool calls.
 - **Agent/tool integration** — construction of concrete tools bound to
   agent-owned state, custom-tool extension through `AgentBuilder`, and shell
-  input policy. Todo implementations and their context live in
-  `neenee-tools`; the agent binds them automatically.
+  input policy. The built-in tools, including the todo implementations and
+  their context, live in this crate's `tools` module; the agent binds them
+  automatically.
 - **Extension integration** — optional `neenee-skills` context injection and a
   connector-neutral dynamic-tool sink. MCP protocol/runtime lives outside the
   agent in `neenee-mcp`.
@@ -28,7 +29,7 @@ other.
 This crate owns behavior even when that behavior is implemented as pure code.
 Only contracts shared with independent layers stay in `neenee-core` (ADR-0057),
 including the atomic `ModelRequest` exchanged with providers (ADR-0061).
-The agent drives `neenee-persistence` and `neenee-providers` and consumes the
-concrete `neenee-tools` bundle and `neenee-skills` through normal downward
+The agent drives `neenee-persistence` and `neenee-providers` and consumes
+`neenee-skills` through normal downward
 dependencies. The turn loop still dispatches through core tool contracts.
 Frontends (`neenee`) sit above it via `neenee-transport`.

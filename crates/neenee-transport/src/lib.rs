@@ -1,6 +1,6 @@
 //! The session/transport layer between the orchestration crate
-//! (`neenee-agent`) and the frontends (`neenee` TUI today, a browser
-//! frontend tomorrow).
+//! (`neenee-agent`) and the frontends (the `neenee-cli` TUI and
+//! `neenee --attach` clients today, a browser frontend tomorrow).
 //!
 //! # Why this crate exists
 //!
@@ -18,21 +18,25 @@
 //! # Migration posture
 //!
 //! The frontend-neutral session driver and its handlers live in this crate.
-//! `neenee` still assembles one [`session_driver::SessionDriver`] during
-//! startup. The multi-session server scaffolding sketched in ADR-0037 §6
-//! (`SessionRegistry` / `SessionHandle` / `SharedState`) was removed as
-//! dormant — every method returned `Err("not yet populated")`. Reintroduce
-//! it when the server move resumes.
+//! The ADR-0037 Step 6 assembly factory has landed as
+//! [`bootstrap::assemble`]: both application binaries (`neenee-cli`,
+//! `neenee-server`) call it to build their
+//! [`session_driver::SessionDriver`]. The posture is still one session per
+//! process — `neenee-server` hosts one session and frontends attach over
+//! `serve`; the multi-session scaffolding sketched in ADR-0037 §6
+//! (`SessionRegistry` / `SessionHandle` / `SharedState`) remains deferred
+//! (ADR-0081).
 //!
 //! # Dependency posture
 //!
-//! `neenee-transport` depends on `neenee-agent` (orchestration), `neenee-persistence`
-//! (persistence), `neenee-providers`, `neenee-tools` (shell, project, and
-//! command services), `neenee-skills`, `neenee-mcp`, and `neenee-core`
-//! (vocabulary). It owns each live MCP runtime while the protocol remains in
+//! `neenee-transport` depends on `neenee-agent` (orchestration and the
+//! built-in tools), `neenee-persistence` (persistence), `neenee-providers`,
+//! `neenee-skills`, `neenee-mcp`, and `neenee-core` (vocabulary). Slash-command
+//! discovery and project scaffolding live here as the `commands` and `project`
+//! modules. It owns each live MCP runtime while the protocol remains in
 //! its dedicated crate. Agent-owned stateful tools are assembled inside
-//! `neenee-agent`. This crate does **not** depend on `neenee` — frontends
-//! depend on this crate, never the reverse.
+//! `neenee-agent`. This crate does **not** depend on `neenee-cli` or
+//! `neenee-server` — frontends depend on this crate, never the reverse.
 //!
 //! # Identity posture
 //!
@@ -40,13 +44,15 @@
 //! principal profile. The embedding binary supplies an
 //! [`neenee_agent::AgentIdentity`] to `Agent::new` / `from_toolset` and binds
 //! a [`neenee_agent::PrincipalProfile`] via `apply_principal_profile`.
-//! `neenee` keeps the coding identity; a future sibling binary would bring
-//! brings its own. The `/btw` side-session reuses the primary agent's
+//! `neenee-cli` keeps the coding identity; the sibling `neenee-server`
+//! binary brings its own. The `/btw` side-session reuses the primary agent's
 //! identity (`Agent::identity()`) rather than naming a product here.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent_setup;
+pub mod bootstrap;
+pub mod commands;
 pub mod export;
 pub mod handlers_chat;
 pub mod handlers_permission;
@@ -54,9 +60,11 @@ pub mod handlers_provider;
 pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
+pub mod project;
 pub mod pursuits;
 pub mod review;
 pub mod serve;
+pub mod serve_discovery;
 pub mod session_driver;
 pub mod session_view;
 pub mod shell;
@@ -70,6 +78,6 @@ pub use ui_bridge::{CopyOutcome, UiBridge};
 
 // NOTE: identity (`NEENEE_NAME`/`NEENEE_MISSION`/`neenee_identity`/
 // `principal_code`) used to live here. It has moved to the application layer
-// (`neenee`'s `identity` module) so this crate stays application-neutral.
+// (each binary's own `identity` module) so this crate stays application-neutral.
 // The `/btw` side session reuses the primary agent's identity via
 // `Agent::identity()` rather than naming a product here.

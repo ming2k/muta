@@ -9,7 +9,6 @@ license.workspace = true
 neenee-core = { path = "../neenee-core" }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 futures = { workspace = true }
-async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

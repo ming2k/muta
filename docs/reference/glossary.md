@@ -45,7 +45,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **pursuit** | A durable, per-session objective: an objective string plus a single `is_complete` boolean. No status machine, no token budget, no checklist. Persisted in SQLite keyed by session id. [Pursuits](../explanation/agent-design/pursuits.md) |
+| **pursuit** | A durable, per-session objective: an objective string plus a single `is_complete` boolean, with an optional budget (turns / tokens / wall-clock, ADR-0069). No status machine, no checklist. Persisted on the session store (`SessionData.pursuit`, ADR-0032). [Pursuits](../explanation/agent-design/pursuits.md) |
 | **objective** | The durable condition to pursue — the end-state statement carried by a pursuit. [Pursuits](../explanation/agent-design/pursuits.md) |
 | **stop-gate** | What `/pursue <condition>` arms: at the turn-loop exit it re-injects the condition and forces another round instead of returning. [Pursuits](../explanation/agent-design/pursuits.md) |
 | **`[NEENEE_PURSUIT_COMPLETE]`** | The plain-text control signal the model emits to signal pursuit completion; always stripped from visible output. The gate gates, the model signals. [Pursuits](../explanation/agent-design/pursuits.md) |
@@ -168,14 +168,14 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **`neenee-persistence`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
 | **`neenee-transport`** | The transport layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` hot-attach WebSocket bridge, `/btw` side sessions, MCP runtime ownership, pursuits, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
 | **`neenee-llm-client`** | The multi-protocol HTTP client: pooled transport (`Client`, `Endpoint`, SSE, retry/error) plus one module per wire protocol (OpenAI chat-completions + Responses, Anthropic Messages, Google native). [Crate layering](../explanation/crate-layering.md) |
-| **`neenee-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery and the mock provider; selects which backend, with `neenee-llm-client` knowing how. [Crate layering](../explanation/crate-layering.md) |
-| **`neenee-oauth`** | OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store. API-key auth is not here — it is config resolution in `neenee-persistence`. [ADR-0052](../adr/0052-xai-supergrok-provider.md), [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
-| **`neenee-tools`** | Built-in domain tools; filesystem/web/todo tools implement core contracts, while project/search facilities also consume store-owned services. It never depends on agent orchestration. [Crate layering](../explanation/crate-layering.md) |
+| **`neenee-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery, the mock provider, and the `oauth` module (OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store); selects which backend, with `neenee-llm-client` knowing how. API-key auth is not here — it is config resolution in `neenee-persistence`. [Crate layering](../explanation/crate-layering.md), [ADR-0052](../adr/0052-xai-supergrok-provider.md) |
 | **`neenee-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`neenee-mcp`** | MCP transport, server processes, tool adapters, live runtime, and refresh catalog. Session owns runtime instances; Agent sees only dynamically published tools. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
 | **`SessionDriver`** | The server-side owner of one live session's request receiver, runtime state, and dispatch loop; external clients interact through a `SessionHandle`. [Crate layering](../explanation/crate-layering.md) |
 | **`neenee-agent`** | The orchestration layer; primary export is the `Agent` struct. Owns turn behavior and agent-specific policy, consumes built-in tools and optional skills through downward dependencies, and accepts connector tools through `DynamicToolSink`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
-| **`neenee`** | The crate producing the `neenee` binary; assembles concrete tool/provider instances and contains the TUI. The *coding* application. [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
+| **`neenee-cli`** | The package producing the `neenee` command; contains the TUI and drives an in-process standalone session by default, or attaches to a running server with `--attach`. The *coding* application's interactive frontend. [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
+| **`neenee-server`** | The headless session-host binary: hosts one session and serves it over WebSocket for attached clients. [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) |
+| **attach mode** | `neenee --attach [session-id]`: the TUI running as a WebSocket client of a running `neenee-server`, co-driving the hosted session; spawns the server on demand when none runs. [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) |
 | **`Agent`** | The central type in `neenee-agent`; owns the turn/round loop, gates, pursuit state, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **strict layering** | An acyclic dependency rule: shared contracts point toward core, concrete implementations point only downward, orchestration may consume implementations, and session/application layers never acquire reverse edges. [Crate layering](../explanation/crate-layering.md) |
 | **MCP server** | A local stdio MCP server exposing dynamically discovered tools; surfaces as `mcp__<server>__<tool>`. [MCP servers](../explanation/agent-design/mcp.md) |
@@ -188,13 +188,15 @@ documentation and ADRs.
 | Term | Superseded by | Reference |
 |------|---------------|-----------|
 | `neenee-app` | `neenee-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| `neenee-cli` | `neenee` | [ADR-0035](../adr/0035-application-layer-split.md), [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
-| `neenee-code` | `neenee` | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md) |
-| `neenee-server` | `neenee-transport` | [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| `neenee-cli` (pre-ADR-0035 cli crate) | `neenee-code`, then `neenee`; the name is current again since ADR-0080 | [ADR-0035](../adr/0035-application-layer-split.md), [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
+| `neenee-code` | `neenee`, then `neenee-cli` | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
+| `neenee-server` (ADR-0037 server library) | `neenee-session`, then `neenee-transport`; the name now denotes the ADR-0081 headless binary | [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md), [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) |
 | `neenee-session` | `neenee-transport` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
 | `neenee-store` | `neenee-persistence` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| `neenee-auth` | `neenee-oauth` | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
+| `neenee-auth` | `neenee-oauth`, then merged into `neenee-providers` (`oauth` module) | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
+| `neenee-oauth` | `neenee-providers` (`oauth` module) | [Crate layering](../explanation/crate-layering.md) |
 | `neenee-harness` | `neenee-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| `neenee-tui-view` | merged into `neenee-cli` (`crate::tui` modules) | [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md) |
 | `/goal` + `/loop` | `/pursue` + `/repeat` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
 | `[NEENEE_GOAL_COMPLETE]` | `[NEENEE_PURSUIT_COMPLETE]` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
 | Plan mode | plan-as-an-envoy | [ADR-0027](../adr/0027-plan-as-subagent.md) |

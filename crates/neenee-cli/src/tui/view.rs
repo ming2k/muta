@@ -1,0 +1,3371 @@
+//! Transcript-area renderer: draws the transcript (and footer chrome) into the
+//! neenee-tui-engine grid while recording semantic-to-screen layout
+//! information. This is the entry point the app drives each frame
+//! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
+//! surface (chrome, composer, overlays, theme, …) the shell consumes.
+
+pub use crate::tui::chrome::{HintBarView, draw_completion_menu, draw_hint_bar};
+pub use crate::tui::chrome::{draw_activity_bar, draw_state_bar};
+pub use crate::tui::composer::{
+    INPUT_MSG_IDX, cursor_screen_pos, draw_composer, draw_composer_highlighted,
+};
+// Design tokens are re-exported crate-visibility so the drawing leaves that
+// used to reach them via the old `paint` parent's namespace still resolve.
+pub(crate) use crate::tui::design::{
+    BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
+    COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
+    COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS,
+    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATE_BAR_ROWS,
+    STATUS_BAR_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
+};
+use crate::tui::disclosure::{StickyStep, draw_sticky_summary_if_needed};
+/// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
+/// Re-exported so the app shell selects the variant and the renderer paints it.
+pub use crate::tui::empty_state::EmptyStateGuidance;
+/// Parse a raw logo file into clamped display lines for the empty-state hero.
+/// Re-exported so the startup loader and the renderer share one clamp rule.
+pub use crate::tui::empty_state::parse_logo;
+/// Transcript arrangement strategies (`default` / `legacy`).
+pub(crate) use crate::tui::layout;
+#[cfg(test)]
+use crate::tui::markdown_table::{build_table_render, shrink_column_widths};
+pub use crate::tui::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
+pub use crate::tui::overlays::{
+    ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, HelpBinding,
+    draw_activity_modal, draw_armed_toast, draw_config_layout_modal, draw_config_modal,
+    draw_config_theme_custom_modal, draw_config_theme_modal, draw_copy_toast,
+    draw_custom_provider_editor, draw_help_modal, draw_history_modal, draw_input_injection,
+    draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
+    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
+    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_turn_count,
+};
+use crate::tui::page_header::{PageHeader, draw_page_header};
+pub use crate::tui::primitives::recess_backdrop;
+use crate::tui::primitives::viewport_rect;
+#[cfg(test)]
+use crate::tui::text_layout::WrappedLine;
+#[cfg(test)]
+use crate::tui::text_layout::{
+    block_selection_range, line_selection, prohibited_line_end, prohibited_line_start,
+};
+pub use crate::tui::theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, Theme};
+// Re-export the drawing sub-trees so consumers that used to reach them through
+// the old `paint` parent can drill in via this module (overlays/tools/…).
+pub(crate) use crate::tui::{overlays, tools};
+// Modules referenced by their bare name within this file (formerly declared
+// here as submodules; now siblings at the crate root).
+use crate::tui::{composer, empty_state};
+// Re-exported so layout-strategy code reaches them via the crate-root facade.
+pub(crate) use crate::tui::message_body::draw_message_body;
+pub(crate) use crate::tui::notice::draw_notice;
+
+use neenee_tui_engine::{
+    Alignment, Block as RtBlock, Constraint, Direction, Frame, Layout, Line, Paragraph, Rect, Span,
+    Style,
+};
+
+use crate::tui::model::document::TranscriptMessage;
+use crate::tui::model::layout::{InteractiveTarget, LayoutMap};
+use crate::tui::model::selection::{CellDragInfo, SelectionState};
+#[cfg(test)]
+use neenee_core::{PermissionRequest, UserQuestionRequest};
+#[cfg(test)]
+use std::collections::HashMap;
+
+/// Inner rect of a transcript-area region after reserving the uniform
+/// [`TRANSCRIPT_H_INSET`] left+right `app_bg` gutters. This is the **single
+/// point** where the horizontal inset is applied — once for the content stream
+/// (the `band` every downstream component receives), and, on non-Main pages,
+/// once for the contextual page-header rect so it aligns with the content
+/// band. Individual components no longer clip or hand-pad their own gutter;
+/// they trust the rect they receive.
+pub(crate) fn transcript_band_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.x + TRANSCRIPT_H_INSET,
+        area.y,
+        area.width.saturating_sub(2 * TRANSCRIPT_H_INSET).max(1),
+        area.height,
+    )
+}
+
+/// Draw the "terminal too small" notice centered in `area`. Replaces the whole
+/// UI when the terminal is resized below [`MIN_TERMINAL_COLS`] ×
+/// [`MIN_TERMINAL_ROWS`]. Renders nothing but the notice so the user knows
+/// exactly what to fix instead of seeing a broken/blank screen.
+///
+/// The message degrades gracefully on very narrow terminals: each line is
+/// truncated to the available width so the notice never overflows or wraps
+/// into the dimensions it is complaining about.
+fn draw_too_small_notice(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let title = Span::styled("Terminal too small", Style::default().fg(theme.warn()));
+    let detail = Span::styled(
+        format!(
+            "Please resize to at least {} × {}.",
+            MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS
+        ),
+        Style::default().fg(theme.muted()),
+    );
+
+    // Truncate each visible line to the available width so the notice never
+    // overflows the very geometry it is complaining about. A degenerate 0-width
+    // terminal shows nothing; a 1–2 width terminal shows a sliver.
+    let avail = (area.width as usize).max(1);
+    let truncate = |span: Span<'_>| -> Span<'_> {
+        let total: String = span.content.into_owned();
+        if total.chars().count() <= avail {
+            return Span::styled(total, span.style);
+        }
+        let kept: String = total.chars().take(avail).collect();
+        Span::styled(kept, span.style)
+    };
+    let lines: Vec<Line> = vec![
+        Line::from(vec![truncate(title)]),
+        Line::raw(""),
+        Line::from(vec![truncate(detail)]),
+    ];
+
+    // Vertically center the block in whatever height is available.
+    let slack = area.height.saturating_sub(lines.len() as u16) / 2;
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(
+        para,
+        Rect::new(area.x, area.y + slack, area.width, area.height - slack),
+    );
+}
+
+pub struct TranscriptView<'a> {
+    pub messages: &'a [TranscriptMessage],
+    pub scroll: u16,
+    pub selection: &'a SelectionState,
+    pub cell_selection: Option<&'a CellDragInfo>,
+    /// Transient running status shown in a thin bar above the input box.
+    /// Empty / "idle" means the status bar is hidden; every other value
+    /// (including "responding") keeps the bar up for the full turn lifecycle.
+    pub activity: &'a str,
+    /// Animation phase for the breathing dot and status-text shimmer.
+    pub spinner_phase: usize,
+    /// The current input-box text (masked while the API-key modal is open). The
+    /// transcript layout reads this so the input box can grow to fit its wrapped text.
+    pub input: &'a str,
+    /// Byte offset of the caret inside `input` (mirrors `App::byte_cursor`).
+    /// The box grows one extra row when the caret rests past the last wrapped
+    /// line (e.g. just after an inserted newline), so its height matches what
+    /// [`composer::draw_composer`] actually renders.
+    pub byte_cursor: usize,
+    /// When true, the hint bar and input box are hidden (overlay modal open).
+    pub chrome_hidden: bool,
+    /// When set, the view is zoomed into an envoy task: a contextual page
+    /// header is rendered and `messages` is the focused task's child stream.
+    pub envoy_bar: Option<EnvoyBarInfo>,
+    /// When set, the view is inside a `/btw` side conversation (ADR-0017): a
+    /// contextual page header is rendered with the coarse primary-session
+    /// status and the return action.
+    pub side_banner: Option<neenee_core::ParentStatus>,
+    /// Active pursuit, if any. Surfaced on the activity bar as a `⟴ <objective>`
+    /// badge so the user can tell at a glance the turn is part of a larger goal.
+    pub pursuit: Option<&'a neenee_core::Pursuit>,
+    /// Live unified task list, if any. Surfaced on the activity bar as
+    /// `plan d/t`. The full per-item breakdown lives in the Activity modal.
+    pub todos: Option<&'a neenee_core::TodoList>,
+    /// Session-review alert (ADR-0016), or empty when inactive. While
+    /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
+    /// segment.
+    pub review_alert: String,
+    /// Wall-clock instant the current turn started, or `None` between turns.
+    /// Drives the muted `<elapsed>` segment in the activity bar.
+    pub turn_started_at: Option<std::time::Instant>,
+    /// Session-state flag rendered as `unattended` on the state bar directly
+    /// below the input box (the row appears only while on).
+    pub unattended: bool,
+    /// Message index of the step (tool step or reasoning trace) whose header
+    /// currently rests under the mouse pointer (inline or sticky pinned), so
+    /// the next draw lights it up to the intermediate hover tone as a click
+    /// affordance. `None` whenever the pointer is elsewhere or an overlay
+    /// modal is open.
+    pub hovered_step: Option<usize>,
+    /// Keyboard-focused activatable target. When `Some`, the matching step's
+    /// summary line is painted with the focus-ring cue (a reversed fg/bg bar)
+    /// so keyboard navigation via `Ctrl+↑`/`Ctrl+↓` has a clear, unambiguous
+    /// visual indicator that does not compete with the hover/expand luminance
+    /// channel. `None` means no step is focused.
+    pub focused_target: Option<InteractiveTarget>,
+    /// User-supplied ASCII logo lines (from `$XDG_CONFIG_HOME/neenee/logo.txt`)
+    /// that replace the built-in wordmark on the empty-state hero. `None` when
+    /// no user logo is configured; the hero falls back to the built-in art.
+    /// Ignored entirely when the transcript is non-empty.
+    pub logo: Option<&'a [String]>,
+    /// Which guidance variant the empty-state hero renders beneath the logo
+    /// (ADR-0057). The app shell computes this from its onboarding + provider
+    /// state; the view layer only paints what it is handed. Ignored entirely
+    /// when the transcript is non-empty.
+    pub guidance: EmptyStateGuidance,
+    pub theme: &'a Theme,
+    /// Which layout strategy to arrange messages with. Selectable via
+    /// `[tui] transcript_layout`; defaults to [`layout::Strategy::Default`].
+    pub layout: layout::Strategy,
+    /// Per-message laid-out height cache (Stage 2). Lets the transcript pass
+    /// skip the expensive text-wrapping of messages that are entirely outside
+    /// the viewport, turning per-frame layout from O(transcript) into
+    /// O(visible). The caller clears it whenever the transcript mutates, so an
+    /// entry is only ever read while its message's content is unchanged.
+    /// `None` outside the app loop (tests / showcase), where every lookup is a
+    /// miss — correct, just unoptimized.
+    pub height_cache: Option<&'a mut HeightCache>,
+}
+
+/// Caches each transcript message's fully-laid-out height (in rows), keyed by
+/// the message's stable [`TranscriptMessage::id`](crate::tui::model::document::TranscriptMessage::id).
+///
+/// Correctness rests on one invariant, enforced by the caller: the cache is
+/// invalidated for every changed message (or cleared for a structural change)
+/// and whenever the wrap width changes ([`Self::prepare`]). So a cached height
+/// is only ever consulted while the message's content **and** the
+/// layout width are identical to when it was measured — making the cached row
+/// count exactly reproduce a fresh layout.
+#[derive(Default)]
+pub struct HeightCache {
+    width: u16,
+    heights: std::collections::HashMap<u64, u16>,
+    virtual_index: Option<layout::VirtualLayoutIndex>,
+    /// Width-independent, render-only rows derived from completed edit
+    /// patches. Unlike height entries, these survive structural transcript
+    /// invalidation and resize; their own source identity controls reuse.
+    pub(crate) diff_cache: tools::DiffCache,
+}
+
+impl HeightCache {
+    /// Reset the cache if the wrap width changed since the last frame; heights
+    /// are width-dependent, so a resize invalidates every entry. Call once at
+    /// the start of a transcript pass before any [`Self::get`]/[`Self::set`].
+    pub fn prepare(&mut self, width: u16) {
+        if self.width != width {
+            self.heights.clear();
+            self.virtual_index = None;
+            self.width = width;
+        }
+    }
+
+    /// The cached height for message `id`, or `None` if it must be measured.
+    pub fn get(&self, id: u64) -> Option<u16> {
+        self.heights.get(&id).copied()
+    }
+
+    /// Record the freshly-measured height for message `id`.
+    pub fn set(&mut self, id: u64, height: u16) {
+        if self.heights.insert(id, height) != Some(height) {
+            self.virtual_index = None;
+        }
+    }
+
+    /// Drop every entry. Called when the transcript mutates (the version moved).
+    pub fn clear(&mut self) {
+        self.heights.clear();
+        self.virtual_index = None;
+    }
+
+    /// Drop only the messages whose wrapped height changed. Streaming modifies
+    /// the live tail one message at a time; retaining the frozen history is
+    /// what lets a long transcript keep taking the off-screen fast path while
+    /// that tail grows.
+    pub fn invalidate_messages(&mut self, ids: impl IntoIterator<Item = u64>) {
+        let mut changed = false;
+        for id in ids {
+            changed |= self.heights.remove(&id).is_some();
+        }
+        if changed {
+            self.virtual_index = None;
+        }
+    }
+
+    /// Return the exact message chunks that intersect the viewport when every
+    /// settled message height is known. The index is built once after a stable
+    /// transcript is measured; later frames use binary search and only draw
+    /// the selected chunks.
+    pub fn virtual_window(
+        &mut self,
+        messages: &[TranscriptMessage],
+        strategy: layout::Strategy,
+        scroll: usize,
+        view_height: u16,
+    ) -> Option<layout::VirtualWindow> {
+        if self
+            .virtual_index
+            .as_ref()
+            .is_none_or(|index| !index.matches(messages, strategy))
+        {
+            self.virtual_index = layout::build_virtual_index(messages, self, strategy);
+        }
+        self.virtual_index
+            .as_ref()
+            .and_then(|index| index.window(scroll, view_height))
+    }
+}
+
+/// Page-header context for an Envoy view (shown when zoomed into a task).
+pub struct EnvoyBarInfo {
+    /// Label for the focused envoy (its task description).
+    pub label: String,
+    /// 1-based index of the focused envoy among its siblings.
+    pub index: usize,
+    /// Total number of sibling envoy tasks.
+    pub total: usize,
+}
+
+/// Layout information returned by [`draw_transcript`].
+pub struct TranscriptRender {
+    /// The input box area.
+    pub input_rect: Rect,
+    /// The hint-bar area pinned below the input box (zero-sized when hidden).
+    pub hint_rect: Rect,
+    /// Screen rect of the activity bar for the current frame, so clicks inside
+    /// it open the Activity modal. `None` when no activity bar is shown (idle,
+    /// streaming, envoy view, or chrome hidden).
+    pub activity_rect: Option<Rect>,
+    /// Screen rect of the `todos d/t` segment on the activity bar, so a click
+    /// on it opens the Activity modal directly on the Todos section. `None`
+    /// when no todos are shown (empty task list or bar hidden).
+    pub todos_rect: Option<Rect>,
+    /// Total height (in lines) of the rendered message stream, ignoring the
+    /// viewport clip. Used by the app loop to pin the view to the bottom.
+    pub content_lines: usize,
+    /// Height of the transcript viewport.
+    pub view_height: u16,
+    /// The expanded step whose body is currently scrolled into view, so the app
+    /// can render/click a sticky header pinned under the HUD bar. `None` when no
+    /// expanded step body covers the top of the viewport.
+    pub sticky: Option<StickyInfo>,
+}
+
+/// A sticky pinned step summary (returned to the app for click handling).
+pub struct StickyInfo {
+    pub message_idx: usize,
+    pub rect: Rect,
+    /// The content-line index of the real summary inside the stream. The app
+    /// uses this to re-anchor the scroll offset when the user collapses the
+    /// pinned step, so the real summary takes the sticky's place at the top of
+    /// the viewport instead of jumping to unrelated content.
+    pub summary_line: usize,
+}
+
+/// Draw the main transcript area, recording layout info.
+pub fn draw_transcript(
+    frame: &mut Frame,
+    layout_map: &mut LayoutMap,
+    view: TranscriptView<'_>,
+) -> TranscriptRender {
+    let TranscriptView {
+        messages,
+        scroll,
+        selection,
+        cell_selection,
+        activity,
+        spinner_phase,
+        input,
+        byte_cursor,
+        chrome_hidden,
+        envoy_bar,
+        side_banner,
+        pursuit,
+        todos,
+        review_alert,
+        turn_started_at,
+        unattended,
+        hovered_step,
+        focused_target,
+        logo,
+        guidance,
+        theme,
+        layout,
+        height_cache,
+    } = view;
+    // Outside the app loop (tests/showcase) no persistent cache is supplied;
+    // fall back to a throwaway so every lookup simply misses and the renderer
+    // behaves exactly as before the cache existed.
+    let mut fallback_height_cache = HeightCache::default();
+    let height_cache = height_cache.unwrap_or(&mut fallback_height_cache);
+    let full = frame.area();
+
+    // Paint the entire frame with the app background so the TUI owns every
+    // pixel rather than leaving gaps at the terminal emulator's default color.
+    frame.render_widget(
+        RtBlock::default().style(Style::default().bg(theme.surface())),
+        full,
+    );
+
+    // ── Too-small terminal guard ──────────────────────────────────────────
+    // When the terminal is resized below the usable minimum, the layout math
+    // (footer split, composer height, gutter columns) would underflow or
+    // produce an unusable UI — and a degenerate 0×0 / 1×1 geometry risks an
+    // integer-underflow panic deep in a subtraction chain. Instead of drawing
+    // garbage, hide the entire UI and show a single centered notice telling
+    // the user how large the terminal must be. The footer chrome is suppressed
+    // by returning zero-sized rects, so the app loop renders nothing else.
+    if full.width < MIN_TERMINAL_COLS || full.height < MIN_TERMINAL_ROWS {
+        draw_too_small_notice(frame, full, theme);
+        return TranscriptRender {
+            input_rect: Rect::default(),
+            hint_rect: Rect::default(),
+            activity_rect: None,
+            todos_rect: None,
+            content_lines: 0,
+            view_height: 0,
+            sticky: None,
+        };
+    }
+
+    // Components render inside the vertical viewport margins (1 cell top and
+    // bottom); only the background fill uses the full terminal rect.
+    let viewport = viewport_rect(frame);
+
+    let size = viewport;
+
+    // Resolve all non-Main transcript modes to one page-header model. Envoy
+    // and `/btw` are mutually exclusive in the app; preferring Envoy here is a
+    // defensive fallback that keeps rendering deterministic if a malformed
+    // caller supplies both.
+    let page_header = envoy_bar
+        .as_ref()
+        .map(PageHeader::Envoy)
+        .or_else(|| side_banner.map(PageHeader::Btw));
+
+    // When zoomed into an envoy task, the footer (status bar, plan panel,
+    // input box, hint bar) is hidden: the task detail page is a read-only view
+    // whose only chrome is its page header.
+    let in_envoy = envoy_bar.is_some();
+
+    // The status bar (animated spinner + activity text) sits on its own line
+    // above the input box, after a permanent one-row transcript gap. It is
+    // shown for every active phase —
+    // including streaming ("responding"), which is the longest phase and the
+    // one where the breathing dot's liveness signal matters most — and hidden
+    // only when the harness is idle, so the row returns to the transcript.
+    let status_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
+    // The persistent todos badge (right-pinned) keeps the activity row alive
+    // even when the harness is idle, so an active task list is always visible
+    // — not only while a turn is running.
+    let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
+    let activity_row_needed = status_active || (has_visible_todos && !chrome_hidden && !in_envoy);
+    let status_height: u16 = if activity_row_needed {
+        STATUS_BAR_ROWS
+    } else {
+        0
+    };
+    // The state bar owns persistent session-state indicators (unattended
+    // today). It gets its own row — never shared with transient activity —
+    // and appears exactly when at least one indicator is active, so an
+    // ordinary session pays zero vertical space for it.
+    let state_row_needed = unattended && !chrome_hidden && !in_envoy;
+    let state_height: u16 = if state_row_needed { STATE_BAR_ROWS } else { 0 };
+
+    // The input box grows with its content: the typed text wraps onto new
+    // lines and the box expands to fit, up to roughly half the terminal so the
+    // transcript history always stays visible. The inner text width reserves the
+    // footer insets, the `> ` prompt prefix, and the matching right pad so the
+    // height calculation wraps at the same width the composer renders.
+    let input_text_width = (size.width as usize)
+        .saturating_sub(
+            (2 * FOOTER_H_INSET) as usize + COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS,
+        )
+        .max(1);
+    let input_wrapped_lines = composer::input_row_count(input, input_text_width, byte_cursor);
+    let desired_input_height = input_wrapped_lines as u16 + COMPOSER_VERTICAL_CHROME_ROWS;
+    let max_input_height = (size.height / COMPOSER_MAX_HEIGHT_DIVISOR).max(COMPOSER_MIN_HEIGHT);
+    let input_box_height = if in_envoy {
+        0
+    } else {
+        desired_input_height.min(max_input_height)
+    };
+    // The hint bar is a single-line status strip pinned directly below the
+    // input box. It carries the next Enter action plus ambient model/context
+    // info. Hidden alongside the rest of the chrome while an overlay is open.
+    let hint_height: u16 = if chrome_hidden || in_envoy {
+        0
+    } else {
+        HINT_BAR_ROWS
+    };
+    let footer_height: u16 = if chrome_hidden || in_envoy {
+        0
+    } else {
+        // Order, top → bottom: gap, activity bar, input box, state bar, hint
+        // bar. The activity bar leads (transient liveness + todos); the input
+        // box follows; the persistent state bar (`unattended`) sits directly
+        // under the input so it reads as an attribute of the composer area;
+        // the hint bar caps the footer.
+        FOOTER_TOP_GAP_ROWS + status_height + input_box_height + state_height + hint_height
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),                // Transcript page
+            Constraint::Length(footer_height), // Status? + input box + hint bar
+        ])
+        .split(size);
+
+    // 1. Transcript History
+    // Every non-Main page gets the same one-line header at the TOP of the
+    // viewport. The current context is therefore visible before its content,
+    // and `/btw`, Envoy, and future focused pages share one stable chrome slot.
+    let (transcript_area, page_header_rect) = if page_header.is_some() {
+        let sub = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(PAGE_HEADER_ROWS), Constraint::Min(0)])
+            .split(chunks[0]);
+        (
+            sub[1],
+            // The header spans the inset band so it aligns with the transcript
+            // content rather than edge-to-edge.
+            Some(transcript_band_rect(sub[0])),
+        )
+    } else {
+        (chunks[0], None)
+    };
+    if let (Some(header), Some(rect)) = (page_header.as_ref(), page_header_rect) {
+        draw_page_header(frame, rect, header, theme);
+    }
+    // Apply the uniform horizontal inset (`TRANSCRIPT_H_INSET` on each side)
+    // exactly once, here at the transcript-stream entry point. Every
+    // downstream component receives `band` — an already-inset rect — so none
+    // of them re-clips or hand-pads a leading gutter. The empty-state hero is
+    // the sole exception: it centers across the full viewport, so it keeps
+    // `transcript_area` (un-inset). The page header is rendered from its own
+    // layout-split rect before this point, so it is unaffected.
+    let band = transcript_band_rect(transcript_area);
+    let mut current_y = band.y;
+    // Account for scroll. Owned by the layout `Stream` once the loop runs; not
+    // mutated locally here unless a virtual index selects a later chunk.
+    let mut skip_rows = scroll as usize;
+    // Total stream height, counted independently of the viewport clip so the
+    // app loop can follow the bottom.
+    let mut content_lines: usize = 0;
+    let mut message_start = 0usize;
+    let mut message_end = messages.len();
+    let mut virtual_total_lines = None;
+    // Expanded steps collected during the pass, for the sticky pinned header.
+    let mut sticky_steps: Vec<StickyStep> = Vec::new();
+
+    // Empty-state replacement (ADR-0033): when the session has no messages and
+    // no envoy/side view is open, the transcript is replaced by a centered
+    // logo hero rather than rendering an empty stream. This is a component
+    // substitution, not transcript content — the hero never participates in
+    // scroll, selection, or attribution, so the whole message-rendering
+    // pipeline (loop, badges, sticky pinning) is skipped. The footer below
+    // renders exactly as in a live session.
+    let show_empty_state = messages.is_empty() && envoy_bar.is_none() && side_banner.is_none();
+
+    if show_empty_state {
+        empty_state::draw_empty_state(frame, transcript_area, logo, guidance, theme);
+        // Account for the hero so the app loop does not treat the session as a
+        // zero-height stream (which would mis-pin the scroll position).
+        content_lines = empty_state::empty_state_content_lines(logo, guidance);
+    } else {
+        // Stage 2: heights are wrap-width-dependent, so drop the cache on a
+        // resize. Within a stable width + unchanged transcript every entry
+        // reproduces a fresh layout exactly, so off-screen messages can be
+        // advanced from their cached height instead of being re-wrapped.
+        height_cache.prepare(band.width);
+
+        if let Some(window) =
+            height_cache.virtual_window(messages, layout, scroll as usize, band.height)
+        {
+            message_start = window.message_start;
+            message_end = window.message_end;
+            content_lines = window.prefix_lines;
+            skip_rows = window.skip_rows;
+            virtual_total_lines = Some(window.total_lines);
+        }
+
+        // Delegate message arrangement to the selected layout strategy. The
+        // `Stream` carries every piece of shared render state (scroll/Y
+        // accounting, layout map, height cache, theme, hover/focus) and
+        // exposes `badge` / `dispatch` / `gap` as the sanctioned mutations, so
+        // every layout agrees on scroll semantics. The layout leaves
+        // `content_lines`, `sticky_steps`, and `current_y` populated for the
+        // post-processing below.
+        let mut stream = layout::Stream {
+            frame,
+            band,
+            messages,
+            theme,
+            layout_map,
+            height_cache,
+            selection,
+            cell_selection,
+            hovered_step,
+            focused_target,
+            message_start,
+            message_end,
+            virtual_total_lines,
+            current_y,
+            skip_rows,
+            content_lines,
+            sticky_steps,
+        };
+        layout.build().run(&mut stream);
+        // Recover the loop state the post-processing below needs.
+        // (`skip_rows` is loop-internal and is not read after the layout
+        // returns, so it is not recovered.)
+        current_y = stream.current_y;
+        content_lines = stream.content_lines;
+        sticky_steps = stream.sticky_steps;
+    } // end else (non-empty transcript branch)
+
+    // Record the visible transcript content rect so clicks on gap rows
+    // (which carry no registered region) still switch keyboard focus to
+    // Browse. The rect spans the horizontal band inside the gutters —
+    // matching the user's mental model that the outer gutters are not
+    // transcript clicks — and the rows where content was actually drawn,
+    // clamped to the viewport so empty space below the last message stays
+    // inert. `current_y` already stops advancing once it reaches the
+    // viewport bottom, so this is a faithful bound on visible content.
+    // Skipped for the empty-state hero, which owns its own rect and is not
+    // part of the interactive transcript surface.
+    if !show_empty_state {
+        let content_bottom = current_y.min(band.y + band.height);
+        if content_bottom > band.y {
+            layout_map.set_transcript_content_rect(Rect::new(
+                band.x,
+                band.y,
+                band.width,
+                content_bottom - band.y,
+            ));
+        }
+    }
+
+    // The footer stacks, from top to bottom: a permanent blank separator, the
+    // transient activity bar (when active), the input box, the persistent
+    // state bar (when any session-state indicator is on), and the hint bar.
+    // The separator keeps the latest response visually distinct from the
+    // controls even when the activity row appears or disappears. The activity
+    // bar doubles as the click target that opens the Activity modal (the
+    // pursuit and plan summaries that used to live here now scroll inside that
+    // modal and as inline notices in the transcript). The state bar sits
+    // directly under the input box so `unattended` reads as an attribute of
+    // the composer area rather than a transient status above it.
+    let footer_x = chunks[1].x + FOOTER_H_INSET;
+    let footer_w = chunks[1].width.saturating_sub(2 * FOOTER_H_INSET);
+
+    let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
+
+    // The transient activity bar sits directly above the input box. It stays
+    // up for the entire active turn lifecycle (queued → responding → tool
+    // work → finalizing), including the streaming phase, and hides only when
+    // idle. Keeping it up during "responding" avoids a layout shift at the
+    // stream boundary and sustains the breathing-dot liveness anchor
+    // (ADR-0008) through the longest phase.
+    // Returns its rect so the event loop can hit-test clicks → Activity modal.
+    // `draw_activity_bar` returns an `ActivityBarHit` carrying both the full
+    // bar rect (→ `activity_rect`) and the `todos d/t` segment rect
+    // (→ `todos_rect`, so a click there opens the Todos section directly).
+    let (activity_rect, todos_rect) = if activity_row_needed {
+        draw_activity_bar(
+            frame,
+            Rect::new(footer_x, status_y, footer_w, STATUS_BAR_ROWS),
+            pursuit,
+            todos,
+            &review_alert,
+            turn_started_at,
+            activity,
+            spinner_phase,
+            theme,
+        )
+        .map(|hit| (Some(hit.bar_rect), hit.todos_rect))
+        .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+
+    // The input box sits directly below the activity bar (when active), or at
+    // the top of the footer otherwise.
+    let input_rect = Rect::new(
+        footer_x,
+        status_y + status_height,
+        footer_w,
+        input_box_height,
+    );
+
+    // The persistent state bar sits directly below the input box. It hosts
+    // session-state flags (`unattended` today; workspace and other ambient
+    // state later) that the activity bar and hint bar no longer have to
+    // carry, and renders only while at least one flag is active.
+    if state_row_needed {
+        draw_state_bar(
+            frame,
+            Rect::new(
+                footer_x,
+                status_y + status_height + input_box_height,
+                footer_w,
+                STATE_BAR_ROWS,
+            ),
+            unattended,
+            theme,
+        );
+    }
+
+    // The hint bar caps the footer, carrying the input action plus
+    // model/context info. Its rect is computed even though its draw call is
+    // delegated to the app loop (which owns the masked input state).
+    let hint_rect = if hint_height > 0 {
+        Rect::new(
+            footer_x,
+            status_y + status_height + input_box_height + state_height,
+            footer_w,
+            hint_height,
+        )
+    } else {
+        Rect::new(0, 0, 0, 0)
+    };
+
+    // Sticky pinned summary: if an expanded step's body covers the top of the
+    // viewport (its summary is scrolled out of view), pin its summary to the
+    // line directly under the HUD bar so the user can always collapse it.
+    let sticky_info = draw_sticky_summary_if_needed(frame, band, &sticky_steps, scroll, theme);
+
+    TranscriptRender {
+        input_rect,
+        hint_rect,
+        activity_rect,
+        todos_rect,
+        content_lines,
+        view_height: transcript_area.height,
+        sticky: sticky_info,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::text_layout::wrap_text;
+    use unicode_width::UnicodeWidthStr;
+
+    /// Smoke-render every redesigned component into a buffer to catch panics
+    /// (border math, rect underflows, empty content) without a live terminal.
+    #[test]
+    fn redesigned_components_render_without_panicking() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 30);
+
+        terminal
+            .draw(|f| {
+                let mut layout_map = LayoutMap::new();
+                let mut thinking = TranscriptMessage::thinking("Reasoning about the task step by step.");
+                thinking.set_thinking_expanded(true);
+                let mut tool = TranscriptMessage::tool_step("call_1", "list_dir", r#"{"path":"."}"#);
+                tool.set_tool_step_expanded(true);
+                tool.finish_tool_step("call_1", "file_a\nfile_b", neenee_core::ToolOutput::text("file_a\nfile_b"), 12);
+                let messages = vec![
+                    TranscriptMessage::new(neenee_core::Role::User, "hi"),
+                    TranscriptMessage::new(
+                        neenee_core::Role::Assistant,
+                        "Here is a table:\n\n| Tool | Count |\n| --- | ---: |\n| read | 1 |\n| webfetch | 250 |",
+                    ),
+                    thinking,
+                    tool,
+                ];
+                let _ = draw_transcript(
+                    f,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll: 0,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity: "waiting for model",
+                        spinner_phase: 0,
+                        input: "hello",
+                        byte_cursor: 5,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::tui::layout::Strategy::default(),
+                        height_cache: None,
+                    },
+                );
+                draw_composer(
+                    f,
+                    Rect::new(0, 21, 80, 3),
+                    "hello",
+                    5,
+                    true,
+                    true,
+                    &theme,
+                    &mut LayoutMap::new(),
+                    true,
+                    &mut 0,
+                    &SelectionState::None,
+                );
+                draw_completion_menu(
+                    f,
+                    &mut layout_map,
+                    &[
+                        crate::tui::completion::Completion {
+                            label: "/pursue".to_string(),
+                            description: "Pursue a pursuit".to_string(),
+                            replace_start: 0,
+                            replace_end: 0,
+                            kind: crate::tui::completion::CompletionItemKind::Slash,
+                        },
+                        crate::tui::completion::Completion {
+                            label: "/clear".to_string(),
+                            description: "Clear".to_string(),
+                            replace_start: 0,
+                            replace_end: 0,
+                            kind: crate::tui::completion::CompletionItemKind::Slash,
+                        },
+                    ],
+                    Some(0),
+                    Rect::new(0, 20, 80, 3),
+                    2,
+                    &theme,
+                );
+                draw_copy_toast(f, "copied to clipboard", false, &theme);
+                draw_armed_toast(f, "press Ctrl+C again to exit", &theme);
+            });
+
+        // Modals + permission sheet on a fresh frame.
+        terminal.draw(|f| {
+            draw_models_modal(
+                f,
+                &mut LayoutMap::new(),
+                &[],
+                &[],
+                None,
+                None,
+                false,
+                "mock",
+                "mock-model",
+                0,
+                &HashMap::new(),
+                "",
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                &theme,
+            );
+            let history_roster: Vec<String> = vec!["a".to_string()];
+            let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> =
+                crate::tui::fuzzy::rank(&history_roster, "");
+            draw_history_modal(
+                f,
+                &mut LayoutMap::new(),
+                &history_roster,
+                "",
+                0,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                true,
+                false,
+                &theme,
+            );
+            draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
+            // Provider-template chooser.
+            let mut template_scroll = 0;
+            draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
+            // Provider editor on the Model filter field.
+            use crate::tui::providers::CustomField;
+            let mut scroll = 0;
+            draw_custom_provider_editor(
+                CustomEditorView {
+                    fields: &[
+                        CustomField::Name,
+                        CustomField::BaseUrl,
+                        CustomField::Token,
+                        CustomField::Model,
+                    ],
+                    field: 3,
+                    editing: false,
+                    title: "Custom OpenAI",
+                    name_buf: "My Relay",
+                    base_url_buf: "https://relay/v1/chat/completions",
+                    token_buf: "tok",
+                    model_display: "GPT-4o",
+                    url_hint: "https://relay.example.com/v1/chat/completions",
+                    suggestions: &["GPT-4o".to_string(), "GPT-4o mini".to_string()],
+                    suggest_index: 0,
+                    input: "gpt",
+                    cursor_position: 3,
+                },
+                f,
+                &theme,
+                &mut scroll,
+            );
+            {
+                let mut scroll = 0;
+                let bindings: &[HelpBinding] = &[];
+                draw_help_modal(f, &mut scroll, bindings, &theme);
+            }
+            draw_sessions_modal(
+                f,
+                &[
+                    neenee_core::SessionOverview {
+                        id: "abc123".to_string(),
+                        overview: "Refactor the renderer".to_string(),
+                        created_at: 0,
+                        updated_at: 0,
+                        message_count: 12,
+                        active: true,
+                    },
+                    neenee_core::SessionOverview {
+                        id: "def456".to_string(),
+                        overview: "Fix the tool_call_id bug".to_string(),
+                        created_at: 0,
+                        updated_at: 0,
+                        message_count: 4,
+                        active: false,
+                    },
+                ],
+                0,
+                false,
+                &theme,
+            );
+            let question_request = UserQuestionRequest {
+                id: "q1".to_string(),
+                questions: vec![neenee_core::UserQuestion {
+                    header: Some("Style".to_string()),
+                    question: "Which error handling crate?".to_string(),
+                    options: vec![
+                        neenee_core::UserQuestionOption {
+                            label: "anyhow (Recommended)".to_string(),
+                            description: Some("Simple".to_string()),
+                        },
+                        neenee_core::UserQuestionOption {
+                            label: "thiserror".to_string(),
+                            description: Some("Structured".to_string()),
+                        },
+                    ],
+                    multi_select: false,
+                }],
+            };
+            let mut hit_map = crate::tui::model::layout::ModalHitMap::new();
+            draw_question_modal(
+                f,
+                &mut hit_map,
+                &question_request,
+                0,
+                &[vec![1]],
+                &[String::new()],
+                1,
+                &mut 0,
+                true,
+                &theme,
+            );
+        });
+
+        terminal.draw(|f| {
+            let request = PermissionRequest {
+                id: "p1".to_string(),
+                tool: "bash".to_string(),
+                label: "bash".to_string(),
+                description: "run a command".to_string(),
+                arguments: r#"{"command":"ls"}"#.to_string(),
+                scope: "*".to_string(),
+            };
+            let rect = neenee_tui_engine::Rect::new(0, 0, 60, 3);
+            let mut hit_map = crate::tui::model::layout::ModalHitMap::new();
+            let _ =
+                draw_permission_sheet(f, &mut hit_map, &request, 0, false, false, 0, rect, &theme);
+        });
+    }
+
+    #[test]
+    fn config_appearance_pages_render_at_minimum_terminal_size() {
+        let theme = Theme::default();
+        let custom = neenee_core::ColorSchemeConfig::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+
+        terminal.draw(|frame| {
+            draw_config_modal(
+                frame,
+                0,
+                &mut 0,
+                ConfigOverview {
+                    color_scheme: "zen",
+                    layout: crate::tui::layout::Strategy::Default,
+                },
+                false,
+                &theme,
+            );
+        });
+        terminal.draw(|frame| {
+            draw_config_theme_modal(frame, "nord", &custom, 2, &mut 0, false, &theme);
+        });
+        terminal.draw(|frame| {
+            draw_config_theme_custom_modal(frame, &custom, 4, "#8ea191", 7, &mut 0, &theme);
+        });
+    }
+
+    /// Render both the compact Envoy step (root view) and the zoomed-in
+    /// Envoy view with its page header, ensuring no layout panics.
+    #[test]
+    fn envoy_step_and_view_render_without_panicking() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 30);
+
+        // Root view: a completed envoy task renders as a compact step.
+        let mut task = TranscriptMessage::tool_step(
+            "task_1",
+            "envoy",
+            r#"{"description":"explore the codebase","prompt":"..."}"#,
+        );
+        task.push_envoy_event(&neenee_core::EnvoyEvent::ToolCall {
+            id: "inner".into(),
+            name: "grep".into(),
+            arguments: r#"{"pattern":"foo"}"#.into(),
+        });
+        task.finish_tool_step(
+            "task_1",
+            "found 3 matches",
+            neenee_core::ToolOutput::text("found 3 matches"),
+            1200,
+        );
+        let root_messages = vec![
+            TranscriptMessage::new(neenee_core::Role::User, "explore please"),
+            task,
+        ];
+
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &root_messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "running envoy",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+
+        // Zoomed-in Envoy view: the task's children are the message stream
+        // and the contextual header is shown on the first row.
+        let children = root_messages[1].envoy_children().unwrap().to_vec();
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &children,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: Some(EnvoyBarInfo {
+                        label: "explore the codebase".to_string(),
+                        index: 1,
+                        total: 1,
+                    }),
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+
+        let width = terminal.buffer().area().width as usize;
+        let first_viewport_row: String = terminal.buffer().content[width..2 * width]
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            first_viewport_row
+                .trim_start()
+                .starts_with("Envoy explore the codebase · 1 of 1"),
+            "Envoy context should occupy the first viewport row: {first_viewport_row:?}"
+        );
+    }
+
+    #[test]
+    fn height_cache_skip_path_matches_full_layout() {
+        // Stage 2 invariant: a warm height cache (which lets the transcript
+        // pass *skip* re-wrapping off-screen messages) must produce byte-for-
+        // byte the same frame — and the same total `content_lines` — as a cold
+        // render that lays every message out in full. If the skip arithmetic
+        // (`skip_rows` / `current_y` / `content_lines`) drifted, this fails.
+        use crate::tui::model::layout::LayoutMap;
+        let theme = Theme::default();
+
+        // A tall transcript: enough wrapped plain-text messages to overflow an
+        // 80x24 viewport several times, so both skip branches are exercised —
+        // messages scrolled above the viewport (fully_above) and messages below
+        // its bottom (fully_below).
+        let messages: Vec<TranscriptMessage> = (0..40)
+            .map(|i| {
+                TranscriptMessage::new(
+                    neenee_core::Role::Assistant,
+                    format!(
+                        "Message number {i} with enough words to wrap across a \
+                         couple of lines in an eighty column terminal so the \
+                         per-message heights are non-trivial and varied."
+                    ),
+                )
+            })
+            .collect();
+        let (width, height, scroll) = (80u16, 24u16, 30u16);
+
+        let dump = |cache: &mut HeightCache| -> (String, usize) {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(width, height);
+            let mut layout_map = LayoutMap::new();
+            let mut content_lines = 0usize;
+            terminal.draw(|f| {
+                let r = draw_transcript(
+                    f,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity: "",
+                        spinner_phase: 0,
+                        input: "",
+                        byte_cursor: 0,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::tui::layout::Strategy::default(),
+                        height_cache: Some(cache),
+                    },
+                );
+                content_lines = r.content_lines;
+            });
+            let buf = terminal.buffer();
+            let bw = buf.area().width as usize;
+            let mut s = String::new();
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    s.push_str(buf.content[y * bw + x].symbol());
+                }
+                s.push('\n');
+            }
+            (s, content_lines)
+        };
+
+        let mut cache = HeightCache::default();
+        // Cold: cache empty, every message laid out in full (and measured).
+        let (cold_grid, cold_lines) = dump(&mut cache);
+        // Warm: off-screen messages now take the skip path.
+        let (warm_grid, warm_lines) = dump(&mut cache);
+
+        assert_eq!(
+            cold_lines, warm_lines,
+            "content_lines must match between full and skip layout"
+        );
+        assert_eq!(
+            cold_grid, warm_grid,
+            "rendered frame must be identical between full and skip layout"
+        );
+        // The skip path must actually have been reachable (cache populated).
+        assert!(cache.get(messages[0].id).is_some());
+    }
+
+    #[test]
+    fn expanded_edit_diff_height_is_scroll_independent() {
+        // Regression: the expanded edit-diff renderer must account every
+        // logical row in `content_lines` even when the viewport clips the
+        // body mid-hunk. An early return once the viewport filled made the
+        // measured height depend on the scroll offset; the app loop derives
+        // `max_scroll` from it, so the scroll position oscillated and the
+        // frame flickered during the animation heartbeat.
+        let theme = Theme::default();
+
+        // A completed edit whose diff body is several times taller than the
+        // viewport, so mid-range scroll offsets clip inside the hunk rows.
+        let old: String = (1..=60).map(|i| format!("let v{i} = {i};\n")).collect();
+        let new: String = (1..=60)
+            .map(|i| format!("let v{i} = {};\n", i * 10))
+            .collect();
+        let mut m = TranscriptMessage::tool_step(
+            "call_test",
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"…","new_string":"…"}"#,
+        );
+        let structured = neenee_core::ToolOutput::Patch {
+            path: "a.rs".into(),
+            op: neenee_core::PatchOp::Edit,
+            old,
+            new,
+            start_line: 0,
+        };
+        m.finish_tool_step("call_test", structured.to_text(), structured, 0);
+        if let crate::tui::model::document::MessageKind::ToolStep { expanded, .. } = &mut m.kind {
+            *expanded = true;
+        }
+        let messages = vec![m];
+
+        let (width, height) = (80u16, 24u16);
+        let measure = |scroll: u16, cache: &mut HeightCache| -> usize {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(width, height);
+            let mut layout_map = LayoutMap::new();
+            let mut lines = 0usize;
+            terminal.draw(|f| {
+                let r = draw_transcript(
+                    f,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity: "",
+                        spinner_phase: 0,
+                        input: "",
+                        byte_cursor: 0,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::tui::layout::Strategy::default(),
+                        height_cache: Some(cache),
+                    },
+                );
+                lines = r.content_lines;
+            });
+            lines
+        };
+
+        let mut cache = HeightCache::default();
+        let at_top = measure(0, &mut cache);
+        assert!(
+            at_top > height as usize,
+            "the diff must overflow the viewport for this test to mean anything"
+        );
+        // Every offset that clips into the diff body must report the same
+        // total height, through both cold and warm height-cache paths.
+        for scroll in [1u16, 7, 20, 40, 60] {
+            assert_eq!(
+                measure(scroll, &mut cache),
+                at_top,
+                "content_lines must not depend on the scroll offset (scroll = {scroll})"
+            );
+        }
+        let mut fresh_cache = HeightCache::default();
+        assert_eq!(
+            measure(20, &mut fresh_cache),
+            at_top,
+            "a cold height cache must measure the same height as a warm one"
+        );
+    }
+
+    #[test]
+    fn completed_diff_cache_survives_height_invalidation_and_resize() {
+        let mut cache = HeightCache::default();
+        let first = cache.diff_cache.patch(42, "old", "new", 10);
+
+        cache.clear();
+        cache.prepare(120);
+
+        let second = cache.diff_cache.patch(42, "old", "new", 10);
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "width-dependent height invalidation must retain semantic diff rows"
+        );
+    }
+
+    #[test]
+    fn virtual_index_selects_only_chunks_intersecting_the_viewport() {
+        let messages = (0..4)
+            .map(|i| TranscriptMessage::new(neenee_core::Role::Assistant, format!("m{i}")))
+            .collect::<Vec<_>>();
+        let mut cache = HeightCache::default();
+        cache.prepare(80);
+        // Four-line bodies plus one boundary row owned by each following
+        // message: chunks begin at 0, 4, 9, and 14.
+        for message in &messages {
+            cache.set(message.id, 4);
+        }
+
+        let window = cache
+            .virtual_window(&messages, crate::tui::layout::Strategy::Default, 6, 3)
+            .expect("all message heights are cached");
+        assert_eq!(window.message_start, 1);
+        assert_eq!(window.message_end, 2);
+        assert_eq!(window.prefix_lines, 4);
+        assert_eq!(window.skip_rows, 2);
+        assert_eq!(window.total_lines, 19);
+    }
+
+    #[test]
+    fn virtual_index_uses_segmented_same_round_geometry() {
+        let mut thinking = TranscriptMessage::thinking("reasoning").with_turn(3);
+        thinking.set_thinking_duration(1);
+        let first = TranscriptMessage::tool_step("a", "read_text", r#"{"path":"a"}"#).with_turn(3);
+        let second = TranscriptMessage::tool_step("b", "read_text", r#"{"path":"b"}"#).with_turn(3);
+        let messages = vec![thinking, first, second];
+        let mut cache = HeightCache::default();
+        cache.prepare(80);
+        for message in &messages {
+            cache.set(message.id, 2);
+        }
+
+        let window = cache
+            .virtual_window(&messages, crate::tui::layout::Strategy::Default, 0, 20)
+            .expect("all message heights are cached");
+        assert_eq!(window.message_start, 0);
+        assert_eq!(window.message_end, 3);
+        assert_eq!(
+            window.total_lines, 9,
+            "header + header gap + thinking + segment gap + flush tool batch"
+        );
+    }
+
+    #[test]
+    fn line_selection_intersects_wrapped_lines() {
+        use crate::tui::model::layout::SemanticCursor;
+        let sel = SelectionState::Range {
+            anchor: SemanticCursor::new(0, 0, 2),
+            head: SemanticCursor::new(0, 0, 8),
+        };
+        let range = block_selection_range(&sel, 0, 0);
+
+        // Line covering bytes 0..5 ("hello"): selected from 2 to end.
+        let first = WrappedLine {
+            text: "hello".to_string(),
+            start_byte: 0,
+            end_byte: 5,
+        };
+        assert_eq!(line_selection(range, &first), Some((2, 5)));
+
+        // Line covering bytes 5..10 ("world"): selected up to head char (8 → rel 3, inclusive → 4).
+        let second = WrappedLine {
+            text: "world".to_string(),
+            start_byte: 5,
+            end_byte: 10,
+        };
+        assert_eq!(line_selection(range, &second), Some((0, 4)));
+
+        // A line after the selection has no overlap.
+        let third = WrappedLine {
+            text: "after".to_string(),
+            start_byte: 10,
+            end_byte: 15,
+        };
+        assert_eq!(line_selection(range, &third), None);
+    }
+
+    #[test]
+    fn block_selection_covers_middle_blocks_fully() {
+        use crate::tui::model::layout::SemanticCursor;
+        let sel = SelectionState::Range {
+            anchor: SemanticCursor::new(0, 0, 3),
+            head: SemanticCursor::new(0, 2, 1),
+        };
+        assert_eq!(block_selection_range(&sel, 0, 0), Some((3, None)));
+        assert_eq!(block_selection_range(&sel, 0, 1), Some((0, None)));
+        assert_eq!(block_selection_range(&sel, 0, 2), Some((0, Some(1))));
+        assert_eq!(block_selection_range(&sel, 0, 3), None);
+        assert_eq!(block_selection_range(&sel, 1, 0), None);
+    }
+
+    #[test]
+    fn test_wrap_text() {
+        let lines = wrap_text("hello world", 5);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "hello");
+        assert_eq!(lines[1].text, " worl");
+        assert_eq!(lines[2].text, "d");
+    }
+
+    #[test]
+    fn test_wrap_with_newlines() {
+        let lines = wrap_text("hi\nthere", 10);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "hi");
+        assert_eq!(lines[1].text, "there");
+    }
+
+    #[test]
+    fn wrap_avoids_cjk_punctuation_at_line_start() {
+        let lines = wrap_text("人生需要坚持，才能前进。", 12);
+        assert!(lines.len() > 1);
+        assert!(lines.iter().skip(1).all(|line| {
+            line.text
+                .chars()
+                .next()
+                .is_none_or(|ch| !prohibited_line_start(ch))
+        }));
+        assert!(lines.iter().all(|line| {
+            line.text
+                .chars()
+                .last()
+                .is_none_or(|ch| !prohibited_line_end(ch))
+        }));
+    }
+
+    /// The input box must reserve only a single content row for a short input
+    /// but grow to fit wrapped text when the input is long.
+    #[test]
+    fn input_box_grows_with_wrapped_content() {
+        let theme = Theme::default();
+        let messages: Vec<TranscriptMessage> = Vec::new();
+
+        fn render_with(theme: &Theme, messages: &[TranscriptMessage], input: &str) -> Rect {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(40, 24);
+            let mut rect = Rect::default();
+            terminal.draw(|f| {
+                let mut layout_map = LayoutMap::new();
+                let r = draw_transcript(
+                    f,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages,
+                        scroll: 0,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity: "",
+                        spinner_phase: 0,
+                        input,
+                        byte_cursor: input.len(),
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme,
+                        layout: crate::tui::layout::Strategy::default(),
+                        height_cache: None,
+                    },
+                );
+                rect = r.input_rect;
+            });
+            rect
+        }
+
+        // Short input: one content line + two padding rows = 3.
+        let short = render_with(&theme, &messages, "hi");
+        assert_eq!(short.height, 3);
+
+        // Long input wraps across many lines on a 40-wide terminal; the box
+        // must grow beyond the single-line baseline.
+        let long_input = "word ".repeat(40);
+        let tall = render_with(&theme, &messages, &long_input);
+        assert!(
+            tall.height > 3,
+            "wrapped input should grow the box, got height {}",
+            tall.height
+        );
+        // ...but never more than half the terminal.
+        assert!(tall.height <= 12);
+    }
+
+    #[test]
+    fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
+        fn assert_gap(activity: &str) {
+            let theme = Theme::default();
+            let messages = vec![TranscriptMessage::new(
+                neenee_core::Role::Assistant,
+                "A finished response above the footer.",
+            )];
+            let mut terminal = neenee_tui_engine::TestTerminal::new(60, 20);
+            let mut footer_anchor_y = 0;
+            let mut transcript_height = 0;
+
+            terminal.draw(|frame| {
+                let mut layout_map = LayoutMap::new();
+                let rendered = draw_transcript(
+                    frame,
+                    &mut layout_map,
+                    TranscriptView {
+                        messages: &messages,
+                        scroll: 0,
+                        selection: &SelectionState::None,
+                        cell_selection: None,
+                        activity,
+                        spinner_phase: 0,
+                        input: "",
+                        byte_cursor: 0,
+                        chrome_hidden: false,
+                        envoy_bar: None,
+                        side_banner: None,
+                        pursuit: None,
+                        todos: None,
+                        review_alert: String::new(),
+                        turn_started_at: None,
+                        unattended: false,
+                        hovered_step: None,
+                        focused_target: None,
+                        logo: None,
+                        guidance: EmptyStateGuidance::None,
+                        theme: &theme,
+                        layout: crate::tui::layout::Strategy::default(),
+                        height_cache: None,
+                    },
+                );
+                footer_anchor_y = rendered
+                    .activity_rect
+                    .map(|rect| rect.y)
+                    .unwrap_or(rendered.input_rect.y);
+                transcript_height = rendered.view_height;
+            });
+
+            assert_eq!(footer_anchor_y, 1 + transcript_height + FOOTER_TOP_GAP_ROWS);
+            let separator_y = footer_anchor_y - FOOTER_TOP_GAP_ROWS;
+            let width = terminal.buffer().area().width as usize;
+            let row_start = separator_y as usize * width;
+            let separator = &terminal.buffer().content[row_start..row_start + width];
+            assert!(
+                separator.iter().all(|cell| cell.symbol() == " "),
+                "separator row must stay blank while activity={activity:?}"
+            );
+        }
+
+        assert_gap("responding");
+        assert_gap("idle");
+    }
+
+    /// When the terminal is resized below the usable minimum,
+    /// `draw_transcript` must not render the normal UI (which would underflow
+    /// the footer layout math). Instead it hides everything, shows a centered
+    /// "terminal too small" notice, and returns a zeroed `TranscriptRender` so
+    /// the app loop draws no chrome over it.
+    #[test]
+    fn too_small_terminal_shows_notice_and_zeroed_render() {
+        let theme = Theme::default();
+        let messages = vec![TranscriptMessage::new(neenee_core::Role::User, "hello")];
+
+        let mut terminal = neenee_tui_engine::TestTerminal::new(20, 8);
+        let mut render_opt: Option<TranscriptRender> = None;
+        terminal.draw(|f| {
+            render_opt = Some(draw_transcript(
+                f,
+                &mut LayoutMap::new(),
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            ));
+        });
+
+        let render = render_opt.expect("draw_transcript must return a render");
+        // The guard suppresses all chrome geometry.
+        assert_eq!(render.input_rect, Rect::default());
+        assert_eq!(render.hint_rect, Rect::default());
+        assert_eq!(render.view_height, 0);
+        assert_eq!(render.content_lines, 0);
+
+        // The notice text must be present somewhere in the rendered buffer.
+        let buffer = terminal.buffer();
+        let rendered: String = (0..buffer.area().height)
+            .flat_map(|y| {
+                (0..buffer.area().width).map(move |x| buffer[(x, y)].symbol().to_string())
+            })
+            .collect::<String>();
+        assert!(
+            rendered.contains("Terminal too small"),
+            "expected the too-small notice in the rendered buffer"
+        );
+    }
+
+    /// An empty composer must still record a layout-map region for its single
+    /// text row. Without it a click inside the empty box can't resolve to a
+    /// cursor, so the click handler can't clear a focused step to hand typing
+    /// back to the prompt. See `draw_composer` / `composer_wrapped`.
+    #[test]
+    fn draw_composer_records_region_for_empty_input() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(30, 5);
+        let mut layout_map = LayoutMap::new();
+        let input_rect = Rect::new(0, 0, 30, 3);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                input_rect,
+                "",
+                0,
+                true,
+                true,
+                &theme,
+                &mut layout_map,
+                true,
+                &mut 0,
+                &SelectionState::None,
+            );
+        });
+
+        // The empty text row sits one line below the box's top edge.
+        let cursor = layout_map
+            .cursor_at(
+                input_rect.x + COMPOSER_PROMPT_PREFIX_COLS as u16,
+                input_rect.y + 1,
+            )
+            .expect("click inside empty input box must resolve to a cursor");
+        assert_eq!(cursor.message_idx, INPUT_MSG_IDX);
+        assert_eq!(cursor.byte_offset, 0);
+    }
+
+    /// `draw_composer` must not panic for tricky inputs and should place the caret
+    /// on the second wrapped line when the cursor sits past the first wrap.
+    #[test]
+    fn draw_composer_wraps_and_positions_caret() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(20, 12);
+        // "aaaa bbbb cccc" wraps within the ~17-wide inner area; cursor at the
+        // very end should be on a later line, not off the box.
+        let input = "aaaa bbbb cccc dddd eeee";
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 20, 8),
+                input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                true,
+                &mut 0,
+                &SelectionState::None,
+            );
+        });
+    }
+
+    /// The caret must land flush against the final glyph at the end of the
+    /// input, measured in display columns — i.e. exactly where the grid painted
+    /// the text. This is the CJK regression: a buggy grapheme-floor returned the
+    /// last grapheme *start*, leaving the caret two columns short of a wide
+    /// glyph (one for ASCII). The caret column must equal the rendered width of
+    /// the text, for both wide and narrow glyphs.
+    #[test]
+    fn draw_composer_caret_flush_against_final_grapheme() {
+        let theme = Theme::default();
+
+        for (label, input, expected_cols) in [
+            ("cjk", "中文", 4usize),
+            ("ascii", "ab", 2),
+            ("mixed", "a中", 3),
+        ] {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(20, 5);
+            terminal.draw(|f| {
+                draw_composer(
+                    f,
+                    Rect::new(0, 0, 20, 4),
+                    input,
+                    input.len(),
+                    true,
+                    true,
+                    &theme,
+                    &mut LayoutMap::new(),
+                    false,
+                    &mut 0,
+                    &SelectionState::None,
+                );
+            });
+            let cursor = match terminal.cursor() {
+                neenee_tui_engine::CursorState::Visible(x, y) => (x, y),
+                other => panic!("{label}: caret should be visible, got {other:?}"),
+            };
+            // The text row sits one line below the box's top `▄` edge, and the
+            // caret follows the `› ` prefix plus the full rendered width.
+            assert_eq!(
+                cursor,
+                (
+                    (COMPOSER_PROMPT_PREFIX_COLS + expected_cols) as u16,
+                    crate::tui::design::COMPOSER_TEXT_ROW_OFFSET,
+                ),
+                "{label}: caret not flush with end of {input:?}"
+            );
+        }
+    }
+
+    /// A resolved `/command` token renders in bold + the theme accent color,
+    /// and the accent stops at the token boundary — the argument tail keeps
+    /// the normal text color so the two read as command + payload.
+    #[test]
+    fn draw_composer_highlighted_accents_only_the_command_token() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(30, 4);
+        let input = "/pursue keep going";
+        terminal.draw(|f| {
+            draw_composer_highlighted(
+                f,
+                Rect::new(0, 0, 30, 3),
+                input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                "/pursue".len(),
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        // Every glyph of `/pursue` is bold + brand-colored on the panel bg.
+        for (i, ch) in "/pursue".chars().enumerate() {
+            let cell = buf.get(text_x + i as u16, text_y).expect("command cell");
+            assert_eq!(cell.symbol(), ch.to_string());
+            assert_eq!(cell.fg, theme.brand(), "command glyph {ch} lost the accent");
+            assert!(
+                cell.style.add.contains(neenee_tui_engine::Modifier::BOLD),
+                "command glyph {ch} lost bold"
+            );
+        }
+        // The argument tail (`keep going`) keeps the default text color.
+        let arg_start = text_x + "/pursue ".len() as u16;
+        let cell = buf.get(arg_start, text_y).expect("argument cell");
+        assert_eq!(cell.symbol(), "k");
+        assert_eq!(cell.fg, theme.fg(), "argument text must not be accented");
+    }
+
+    /// The accent must not bleed past the first wrapped row: when the command
+    /// token itself fits but the highlight length would cover the wrap
+    /// boundary, the continuation row renders in the normal text color.
+    #[test]
+    fn draw_composer_highlight_clamps_at_wrap_boundary() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(12, 6);
+        // 8-column text area (12 - 2 prefix - 2 right pad): `/session` fills
+        // row 0 exactly; ` new` wraps to row 1.
+        let input = "/session new";
+        terminal.draw(|f| {
+            draw_composer_highlighted(
+                f,
+                Rect::new(0, 0, 12, 5),
+                input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                "/session".len(),
+            );
+        });
+        let buf = terminal.buffer();
+        let row1_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET + 1;
+        // The continuation row keeps the two-column prompt indent before the
+        // wrapped text (`/session` + the trailing space fill row 0 exactly).
+        let cell = buf
+            .get(COMPOSER_PROMPT_PREFIX_COLS as u16 + 1, row1_y)
+            .expect("continuation cell");
+        assert_eq!(cell.symbol(), "n", "continuation row should start with 'n'");
+        assert_eq!(
+            cell.fg,
+            theme.fg(),
+            "accent must not bleed onto the wrapped argument row"
+        );
+    }
+
+    /// Regression for the IME cursor-lag fix: the input-driven immediate flush
+    /// places the terminal cursor via [`composer::cursor_screen_pos`], and the
+    /// draw path places it via [`draw_composer`]'s `set_cursor_position`. The
+    /// two **must agree** for every (input, caret offset) pair — if they ever
+    /// diverge, the IME composition window (which samples the cursor on its own
+    /// schedule) anchors to a different coordinate than the rendered caret, the
+    /// exact "IME 捕获位置错乱" symptom. This test locks the invariant by
+    /// rendering each case and asserting the rendered cursor equals the pure
+    /// function's output.
+    #[test]
+    fn cursor_screen_pos_matches_drawn_caret() {
+        use super::composer::cursor_screen_pos;
+
+        let theme = Theme::default();
+        // Composer rect must fit inside the test terminal (24×8): a 4-row box
+        // at y=0..4, x=0..20.
+        let rect = Rect::new(0, 0, 20, 4);
+
+        // (label, input, byte cursor) spanning ASCII, CJK (wide), mid-string,
+        // empty, and a cursor that rests past the last wrapped line.
+        let cases: &[(&str, &str, usize)] = &[
+            ("ascii end", "hello", 5),
+            ("ascii mid", "hello", 2),
+            ("empty", "", 0),
+            ("cjk end", "中文测试", 12),
+            ("cjk mid", "中文测试", 6),
+            ("mixed", "a中b文", 5),
+            ("past wrap", "aaaa bbbb cccc dd", 16),
+        ];
+
+        for (label, input, byte_cursor) in cases {
+            let byte_cursor = *byte_cursor;
+            // What the draw path places.
+            let mut terminal = neenee_tui_engine::TestTerminal::new(24, 8);
+            terminal.draw(|f| {
+                draw_composer(
+                    f,
+                    rect,
+                    input,
+                    byte_cursor,
+                    true,
+                    true,
+                    &theme,
+                    &mut LayoutMap::new(),
+                    false,
+                    &mut 0,
+                    &SelectionState::None,
+                );
+            });
+            let drawn = match terminal.cursor() {
+                neenee_tui_engine::CursorState::Visible(x, y) => (x, y),
+                other => panic!("{label}: caret should be visible, got {other:?}"),
+            };
+
+            // What the immediate-flush pure function places.
+            let mut scroll = 0usize;
+            let flushed = cursor_screen_pos(rect, input, byte_cursor, &mut scroll)
+                .unwrap_or_else(|| panic!("{label}: cursor_screen_pos returned None"));
+
+            assert_eq!(
+                drawn, flushed,
+                "{label} (input={input:?}, byte={byte_cursor}): \
+                 draw path and immediate-flush path disagree — \
+                 this is what re-introduces the IME anchor drift"
+            );
+        }
+    }
+
+    /// The immediate flush must update `input_scroll` to keep the caret in view
+    /// exactly as the draw path does — otherwise a caret moved below the
+    /// visible window would render at the right place but be anchored
+    /// off-screen by the flush, desyncing scroll state across frames.
+    #[test]
+    fn cursor_screen_pos_clamps_scroll_like_draw() {
+        use super::composer::cursor_screen_pos;
+
+        // A 20-wide box (text width ~16) with a long input; the box shows only
+        // a couple of rows, so a caret near the end forces a scroll.
+        let rect = Rect::new(0, 0, 20, 4);
+        let input = "word ".repeat(20); // ~100 chars, wraps many times
+        let byte_cursor = input.len();
+
+        let mut scroll = 0usize;
+        let flushed = cursor_screen_pos(rect, &input, byte_cursor, &mut scroll)
+            .expect("caret position resolves");
+
+        // The flushed caret must sit on a visible row (within the box's text
+        // rows), proving scroll advanced to track it.
+        let visible_rows = (rect.height as usize)
+            .saturating_sub(crate::tui::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
+            .max(1);
+        let caret_row = (flushed.1 - rect.y - crate::tui::design::COMPOSER_TEXT_ROW_OFFSET) as usize;
+        assert!(
+            caret_row < visible_rows,
+            "flushed caret row {caret_row} outside the {visible_rows} visible rows"
+        );
+        assert!(scroll > 0, "scroll should have advanced to track the caret");
+    }
+
+    /// (head + continuation), cover exactly the selected glyphs, and leave the
+    /// trailing pad on the panel background — no extra glyph, no half-highlighted
+    /// wide char. Exercises the full-3-CJK selection the live bug report used.
+    #[test]
+    fn composer_cjk_selection_covers_full_width_glyphs() {
+        use crate::tui::model::layout::SemanticCursor;
+        let theme = Theme::default();
+        let panel_bg = theme.input_surface();
+        let sel_bg = theme.selected();
+        let input = "中文测"; // 3 wide glyphs = 6 cols (cols 2..8)
+        // Select all three. Head points AT 测 (byte 6); the inclusive-head model
+        // includes the glyph under the head, so the range is [0, 9) = "中文测".
+        let sel = SelectionState::Range {
+            anchor: SemanticCursor::new(INPUT_MSG_IDX, 0, 0),
+            head: SemanticCursor::new(INPUT_MSG_IDX, 0, 6),
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(20, 5);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 20, 4),
+                input,
+                input.len(),
+                true,
+                false,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &sel,
+            );
+        });
+        let g = terminal.buffer();
+        let y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        // Cols: 0='›', 1=gap, 2-7='中文测'(sel), 8+=panel tail.
+        for (col, label, expect_sel) in [
+            (2usize, "中 head", true),
+            (3, "中 cont", true),
+            (4, "文 head", true),
+            (5, "文 cont", true),
+            (6, "测 head", true),
+            (7, "测 cont", true),
+            (8, "tail 0", false),
+            (9, "tail 1", false),
+        ] {
+            let cell = g.get(col as u16, y).unwrap();
+            let want = if expect_sel { sel_bg } else { panel_bg };
+            assert_eq!(
+                cell.bg, want,
+                "{label} at col {col}: bg {:?} expected {:?}",
+                cell.bg, want
+            );
+        }
+        // While a selection is active the caller passes `show_caret = false`
+        // (see the event loop), so no terminal caret is placed on top of the
+        // highlighted glyphs — the "appended flickering character" symptom.
+        assert!(
+            matches!(terminal.cursor(), neenee_tui_engine::CursorState::Hidden),
+            "caret must be hidden while a selection is active"
+        );
+    }
+
+    #[test]
+    fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
+        use crate::tui::model::layout::SemanticCursor;
+
+        let theme = Theme::default();
+        let panel_bg = theme.input_surface();
+        let sel_bg = theme.selected();
+        let input = "你好";
+        let sel = SelectionState::Range {
+            anchor: SemanticCursor::new(INPUT_MSG_IDX, 0, 0),
+            head: SemanticCursor::new(INPUT_MSG_IDX, 0, input.len()),
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(16, 5);
+
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 16, 4),
+                input,
+                input.len(),
+                true,
+                false,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &sel,
+            );
+        });
+
+        let y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let buffer = terminal.buffer();
+
+        assert_eq!(buffer.get(2, y).unwrap().symbol(), "你");
+        assert_eq!(buffer.get(2, y).unwrap().width, 2);
+        assert_eq!(buffer.get(3, y).unwrap().symbol(), " ");
+        assert_eq!(buffer.get(3, y).unwrap().width, 0);
+        assert_eq!(buffer.get(4, y).unwrap().symbol(), "好");
+        assert_eq!(buffer.get(4, y).unwrap().width, 2);
+        assert_eq!(buffer.get(5, y).unwrap().symbol(), " ");
+        assert_eq!(buffer.get(5, y).unwrap().width, 0);
+        assert_eq!(
+            buffer.get(6, y).unwrap().symbol(),
+            " ",
+            "tail cell must not contain a duplicate glyph"
+        );
+
+        for col in 2..=5 {
+            assert_eq!(
+                buffer.get(col, y).unwrap().bg,
+                sel_bg,
+                "col {col} should be selected"
+            );
+        }
+        assert_eq!(
+            buffer.get(6, y).unwrap().bg,
+            panel_bg,
+            "tail cell must remain on input panel background"
+        );
+        assert!(
+            matches!(terminal.cursor(), neenee_tui_engine::CursorState::Hidden),
+            "caret must be hidden while a selection is active"
+        );
+    }
+
+    /// Regression for the input-select bug: a click that starts a selection
+    /// (anchor == head, a collapsed range) must highlight NOTHING, and a drag
+    /// through the real click pipeline (layout_map → cursor_at) must highlight
+    /// exactly the dragged glyphs with the correct background. The prior
+    /// `inclusive_grapheme_end`-on-a-point logic lit up one glyph on every
+    /// click and flickered as the drag moved — "an extra changing character
+    /// appears and the selection background misbehaves".
+    #[test]
+    fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
+        let theme = Theme::default();
+        let panel_bg = theme.input_surface();
+        let sel_bg = theme.selected();
+        let input = "中文测";
+        let rect = Rect::new(0, 0, 20, 4);
+        let text_row = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+
+        // Record input regions so cursor_at can resolve real drag positions.
+        let mut layout_map = LayoutMap::new();
+        let mut rec = neenee_tui_engine::TestTerminal::new(20, 5);
+        rec.draw(|f| {
+            draw_composer(
+                f,
+                rect,
+                input,
+                input.len(),
+                true,
+                false,
+                &theme,
+                &mut layout_map,
+                true,
+                &mut 0,
+                &SelectionState::None,
+            );
+        });
+        let anchor = layout_map.cursor_at(rect.x + 2, rect.y + text_row).unwrap();
+        assert_eq!(anchor.byte_offset, 0);
+
+        fn row_bgs(
+            input: &str,
+            rect: Rect,
+            text_row: u16,
+            theme: &Theme,
+            sel: &SelectionState,
+        ) -> Vec<neenee_tui_engine::Color> {
+            let mut t = neenee_tui_engine::TestTerminal::new(20, 5);
+            t.draw(|f| {
+                draw_composer(
+                    f,
+                    rect,
+                    input,
+                    input.len(),
+                    true,
+                    false,
+                    theme,
+                    &mut LayoutMap::new(),
+                    false,
+                    &mut 0,
+                    sel,
+                );
+            });
+            (0..10u16)
+                .map(|c| t.buffer().get(c, text_row).unwrap().bg)
+                .collect()
+        }
+
+        // 1) Collapsed click (anchor == head): no glyph may carry the selection bg.
+        let collapsed = SelectionState::Range {
+            anchor,
+            head: anchor,
+        };
+        for (col, bg) in row_bgs(input, rect, text_row, &theme, &collapsed)
+            .into_iter()
+            .enumerate()
+        {
+            assert_ne!(bg, sel_bg, "collapsed click lit up col {col}");
+            let _ = panel_bg;
+        }
+
+        // 2) Drag onto 测's first column (byte 6): inclusive head selects all
+        //    three glyphs; the trailing pad stays on the panel bg.
+        let head = layout_map.cursor_at(rect.x + 6, rect.y + text_row).unwrap();
+        assert_eq!(head.byte_offset, 6);
+        let drag = SelectionState::Range { anchor, head };
+        let bgs = row_bgs(input, rect, text_row, &theme, &drag);
+        // cols 0,1 = prefix; 2..8 = "中文测" (selected); 8,9 = tail (panel).
+        for (col, &bg) in bgs[2..8].iter().enumerate() {
+            assert_eq!(bg, sel_bg, "col {} should be selected", col + 2);
+        }
+        for (col, &bg) in bgs[8..10].iter().enumerate() {
+            assert_eq!(bg, panel_bg, "col {} should be panel tail", col + 8);
+        }
+
+        // 3) Drag to the second visual column of 中. The hit-test cursor maps
+        // both columns of a wide glyph to that glyph's byte start; with an
+        // inclusive head this selects 中 only, not the next glyph.
+        let head = layout_map.cursor_at(rect.x + 3, rect.y + text_row).unwrap();
+        assert_eq!(head.byte_offset, 1);
+        let drag = SelectionState::Range { anchor, head };
+        let bgs = row_bgs(input, rect, text_row, &theme, &drag);
+        for (col, &bg) in bgs[2..4].iter().enumerate() {
+            assert_eq!(bg, sel_bg, "col {} should select 中", col + 2);
+        }
+        for (col, &bg) in bgs[4..8].iter().enumerate() {
+            assert_eq!(bg, panel_bg, "col {} should remain unselected", col + 4);
+        }
+    }
+
+    #[test]
+    fn user_message_and_composer_keep_symmetric_panel_padding() {
+        let theme = Theme::default();
+        let user_bg = theme.user_surface();
+        let input_bg = theme.input_surface();
+        let app_bg = theme.surface();
+        let width = 60u16;
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 24);
+
+        // A long user message fills the first wrapped line edge to edge, so the
+        // right-side padding is only present if the wrap width reserves it.
+        let messages = vec![TranscriptMessage::new(
+            neenee_core::Role::User,
+            "x".repeat(200),
+        )];
+        let long_input = "y".repeat(200);
+
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            // draw_transcript only computes the input box geometry; the composer
+            // itself is drawn separately (as the live app does), using the
+            // returned input_rect.
+            let render = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: &long_input,
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+            let mut input_scroll = 0;
+            draw_composer(
+                f,
+                render.input_rect,
+                &long_input,
+                0,
+                true,
+                true,
+                &theme,
+                &mut layout_map,
+                false,
+                &mut input_scroll,
+                &SelectionState::None,
+            );
+        });
+
+        let buffer = terminal.buffer();
+
+        // Find the first user-message text row. Layout (60-col terminal):
+        //   cols 0,1  = global app_bg (viewport margin)
+        //   cols 2,3  = user_panel_bg inner pad (USER_MESSAGE_TEXT_GAP_COLS)
+        //   col  4+   = text
+        let user_row = (0..buffer.area().height)
+            .find(|&y| {
+                let c4 = &buffer[(4, y)];
+                c4.symbol() == "x" && c4.bg == user_bg
+            })
+            .expect("user message row exists");
+
+        // Left: 2-col app_bg outer gutter (viewport margin + entry inset),
+        // then 2-col user_panel_bg inner pad.
+        assert_eq!(buffer[(0, user_row)].bg, app_bg, "left outer gutter");
+        assert_eq!(buffer[(1, user_row)].bg, app_bg, "left outer gutter");
+        assert_eq!(
+            buffer[(2, user_row)].bg,
+            user_bg,
+            "left inner padding must be user_panel_bg"
+        );
+        assert_eq!(
+            buffer[(3, user_row)].bg,
+            user_bg,
+            "left inner padding is 2 cols, not 1"
+        );
+        assert_eq!(buffer[(4, user_row)].symbol(), "x", "text starts at col 4");
+
+        // Right: 2-col user_panel_bg inner pad, then 2-col app_bg outer gutter.
+        // user_text_width = (band_w) - (TEXT_GAP + RIGHT_PAD) = (60-4) - 4 = 52
+        // -> text fills cols 4..56.
+        assert_eq!(
+            buffer[(56, user_row)].symbol(),
+            " ",
+            "right inner padding must stay clear of wrapped text"
+        );
+        assert_eq!(buffer[(56, user_row)].bg, user_bg, "right inner padding");
+        assert_eq!(buffer[(57, user_row)].bg, user_bg, "right inner padding");
+        assert_eq!(buffer[(58, user_row)].bg, app_bg, "right outer gutter");
+        assert_eq!(buffer[(59, user_row)].bg, app_bg, "right outer gutter");
+
+        // Composer: the input panel starts at x = FOOTER_H_INSET (2). `›` at
+        // x=2, text from x=4, and a 2-col right pad in input_bg before the
+        // app_bg gutter at the far right.
+        let composer_row = (0..buffer.area().height)
+            .find(|&y| {
+                let c4 = &buffer[(4, y)];
+                c4.symbol() == "y" && c4.bg == input_bg
+            })
+            .expect("composer row exists");
+        assert_eq!(buffer[(2, composer_row)].symbol(), "›", "composer prompt");
+        assert_eq!(
+            buffer[(4, composer_row)].symbol(),
+            "y",
+            "composer text starts at col 4"
+        );
+        // full_w (composer panel) = 60 - 2*FOOTER_H_INSET = 56, panel spans
+        // x=2..58. Right pad at x=56,57 (input_bg), gutter x=58,59 (app_bg).
+        assert_eq!(
+            buffer[(56, composer_row)].bg,
+            input_bg,
+            "composer right inner padding"
+        );
+        assert_eq!(
+            buffer[(57, composer_row)].bg,
+            input_bg,
+            "composer right inner padding"
+        );
+        assert_eq!(
+            buffer[(58, composer_row)].bg,
+            app_bg,
+            "composer right outer gutter"
+        );
+        assert_eq!(
+            buffer[(59, composer_row)].bg,
+            app_bg,
+            "composer right outer gutter"
+        );
+    }
+
+    /// A queued user message (one staged in the send queue waiting for the
+    /// in-flight turn to finish) must render with the dimmer
+    /// `user_panel_bg_queued` band and a visible "⏸ Queued" badge so the user
+    /// can tell their message is pending, not delivered.
+    #[test]
+    fn queued_user_message_renders_badge_and_dimmer_bg() {
+        let theme = Theme::default();
+        let _queued_bg = theme.user_surface_queued();
+        let delivered_bg = theme.user_surface();
+        let width = 40u16;
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 20);
+
+        let messages = vec![
+            TranscriptMessage::new(neenee_core::Role::User, "first queued").queued(),
+            TranscriptMessage::new(neenee_core::Role::User, "second queued").queued(),
+        ];
+
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+
+        let buffer = terminal.buffer();
+
+        // Both queued panels must carry the queued bg, never the delivered bg.
+        // Scan the inner-pad columns (2,3) of every row for any cell painted
+        // with the delivered bg — that would mean a queued message leaked the
+        // wrong surface.
+        for y in 0..buffer.area().height {
+            for x in 2..4 {
+                let bg = buffer[(x, y)].bg;
+                assert_ne!(
+                    bg, delivered_bg,
+                    "queued panels must never carry the delivered bg, found at ({},{})",
+                    x, y
+                );
+            }
+        }
+
+        // Each queued user message renders one "⏸ Queued" badge row OUTSIDE
+        // the panel (on plain `surface`, above the panel's top transition).
+        // The badge is the paused glyph at the text column, on a surface row.
+        let badge_count = (0..buffer.area().height)
+            .filter(|&y| buffer[(4, y)].symbol() == "⏸")
+            .count();
+        assert_eq!(
+            badge_count, 2,
+            "each queued user message must render one badge row, got {}",
+            badge_count
+        );
+    }
+
+    /// The transcript content rect must be recorded after rendering so that
+    /// clicks on gap rows (which carry no region) still switch keyboard focus
+    /// to Browse. It must span the horizontal band inside the outer gutters
+    /// (clicks in the gutters are not transcript clicks) and the vertical
+    /// extent of drawn content, including the inter-message gap row.
+    #[test]
+    fn transcript_content_rect_spans_band_and_gap_rows() {
+        let theme = Theme::default();
+        let width = 40u16;
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 24);
+        // Two assistant text messages so a `MESSAGE_GAP_ROWS` blank row is
+        // emitted between them — that row is rendered but never registered.
+        let messages = vec![
+            TranscriptMessage::new(neenee_core::Role::Assistant, "first".to_string()),
+            TranscriptMessage::new(neenee_core::Role::Assistant, "second".to_string()),
+        ];
+        let mut layout_map = LayoutMap::new();
+        terminal.draw(|f| {
+            draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+
+        let rect = layout_map
+            .transcript_content_rect()
+            .expect("content rect must be recorded when messages are drawn");
+        // Horizontal band excludes the outer `TRANSCRIPT_H_INSET` gutters.
+        assert_eq!(rect.x, TRANSCRIPT_H_INSET);
+        assert_eq!(rect.width, width - 2 * TRANSCRIPT_H_INSET);
+
+        // The whole point of the rect: a gap row between the two messages is
+        // rendered but carries no region (clicking it does not resolve to a
+        // cursor). It must still fall inside the content rect so the click
+        // handler can switch focus to Browse.
+        let gap_y = (rect.y..rect.y + rect.height)
+            .find(|&y| layout_map.region_at(rect.x, y).is_none())
+            .expect("there must be at least one unregistered gap row between the two messages");
+        assert!(rect.y <= gap_y && gap_y < rect.y + rect.height);
+    }
+
+    /// Wide tables (including CJK content) must keep borders intact and never
+    /// overflow the viewport: columns shrink to fit, cell text wraps, and
+    /// every rendered line stays within the available width.
+    #[test]
+    fn wide_table_shrinks_columns_and_keeps_borders_intact() {
+        use crate::tui::model::document::TableAlignment;
+
+        let headers = vec![
+            "Tool".to_string(),
+            "Type".to_string(),
+            "Implementation".to_string(),
+            "Key Feature".to_string(),
+        ];
+        let rows = vec![
+            vec![
+                "bash".to_string(),
+                "Write".to_string(),
+                "std::process::Command (sh -c / cmd /C)".to_string(),
+                "execute shell command, supports timeout, truncates output".to_string(),
+            ],
+            vec![
+                "read_text".to_string(),
+                "Read".to_string(),
+                "std::fs::read_to_string".to_string(),
+                "supports offset/limit".to_string(),
+            ],
+        ];
+        let aligns = vec![
+            TableAlignment::None,
+            TableAlignment::None,
+            TableAlignment::None,
+            TableAlignment::None,
+        ];
+
+        // ── Narrow terminal (34 cols): table is far wider, must shrink ──
+        let lines = build_table_render(&headers, &rows, &aligns, 34).lines;
+        assert!(!lines.is_empty(), "table must produce output");
+
+        for (i, line) in lines.iter().enumerate() {
+            assert!(
+                line.width() <= 34,
+                "line {i} overflows: {} cols: {}",
+                line.width(),
+                line
+            );
+        }
+        assert!(lines.first().unwrap().starts_with('┌'));
+        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(
+            lines.iter().any(|l| l.starts_with('├')),
+            "missing header/body separator"
+        );
+        // Two body rows → one separator between them (plus one after header).
+        let sep_count = lines.iter().filter(|l| l.starts_with('├')).count();
+        assert_eq!(
+            sep_count, 2,
+            "expected 2 separators (header→body + row→row), got {sep_count}"
+        );
+        let pipe_counts: Vec<usize> = lines
+            .iter()
+            .filter(|l| l.starts_with('│'))
+            .map(|l| l.matches('│').count())
+            .collect();
+        assert!(!pipe_counts.is_empty(), "must have data lines");
+        assert!(
+            pipe_counts.iter().all(|&c| c == pipe_counts[0]),
+            "all data lines must have the same number of column separators"
+        );
+
+        // ── Wide terminal (80 cols): table fits without shrinking ──
+        let wide_lines = build_table_render(&headers, &rows, &aligns, 76).lines;
+        for (i, line) in wide_lines.iter().enumerate() {
+            assert!(
+                line.width() <= 76,
+                "wide line {i} overflows: {} cols",
+                line.width()
+            );
+        }
+        // When it fits, the table should be shorter (no wrapping needed).
+        assert!(
+            wide_lines.len() <= lines.len(),
+            "wide table should have fewer lines than shrunk table"
+        );
+    }
+
+    /// Ragged body rows (fewer cells than the header, and more) must not panic
+    /// the adaptive renderer and must still produce a rectangular grid: every
+    /// data line carries the same number of `│` column separators. Regression
+    /// test for the `index out of bounds: the len is 1 but the index is 1`
+    /// panic at `markdown_table.rs` (`cell_styles[i]`) caused by a body row
+    /// with a single cell in a two-column table.
+    #[test]
+    fn table_render_handles_ragged_rows_without_panicking() {
+        use crate::tui::model::document::TableAlignment;
+
+        let headers = vec!["A".to_string(), "B".to_string()];
+        // 0, 1, 2, and 3 cells — exercises both the under- and over-wide paths.
+        let rows = vec![
+            vec![],
+            vec!["only".to_string()],
+            vec!["x".to_string(), "y".to_string()],
+            vec!["p".to_string(), "q".to_string(), "r".to_string()],
+        ];
+        let aligns = vec![TableAlignment::None, TableAlignment::None];
+
+        let table = build_table_render(&headers, &rows, &aligns, 40);
+        assert!(!table.lines.is_empty(), "ragged table must still render");
+
+        // Every data line must have the same number of column separators, i.e.
+        // the grid stays rectangular regardless of input raggedness.
+        let pipe_counts: Vec<usize> = table
+            .lines
+            .iter()
+            .filter(|l| l.starts_with('│'))
+            .map(|l| l.matches('│').count())
+            .collect();
+        assert!(!pipe_counts.is_empty(), "must have data lines");
+        assert!(
+            pipe_counts.iter().all(|&c| c == pipe_counts[0]),
+            "ragged rows produced uneven column counts: {pipe_counts:?}"
+        );
+
+        // Every data line carries per-cell geometry for exactly `ncols` cells,
+        // so hit-testing / selection never indexes out of bounds.
+        for info in table.line_info.iter().flatten() {
+            assert_eq!(
+                info.col_spans.len(),
+                2,
+                "each data line must describe exactly 2 cells"
+            );
+        }
+    }
+
+    /// Inline-code / bold markup delimiters (`` ` ``, `**`) are rendered at zero
+    /// width, so a column holding markup must be sized and wrapped by its
+    /// *visible* width — otherwise the column is inflated, the wrapped text can
+    /// split a `` `…` ``/`**…**` pair across lines, and data-row `│` separators
+    /// drift out of line with the border grid. A plain table and a markup table
+    /// carrying the same visible content must therefore share identical borders
+    /// and the same line count (no spurious wrap).
+    #[test]
+    fn table_markup_columns_size_to_visible_width() {
+        use crate::tui::model::document::TableAlignment;
+
+        let plain = build_table_render(
+            &["a".to_string(), "b".to_string()],
+            &[vec!["bold".to_string(), "code".to_string()]],
+            &[TableAlignment::None, TableAlignment::None],
+            80,
+        );
+        let markup = build_table_render(
+            &["a".to_string(), "b".to_string()],
+            &[vec!["**bold**".to_string(), "`code`".to_string()]],
+            &[TableAlignment::None, TableAlignment::None],
+            80,
+        );
+
+        // Borders are markup-free, so plain and markup grids must match exactly
+        // once columns are sized to visible width.
+        let plain_borders: Vec<&String> =
+            plain.lines.iter().filter(|l| !l.starts_with('│')).collect();
+        let markup_borders: Vec<&String> = markup
+            .lines
+            .iter()
+            .filter(|l| !l.starts_with('│'))
+            .collect();
+        assert_eq!(
+            plain_borders, markup_borders,
+            "markup must not inflate column width"
+        );
+
+        // The markup cell fits its column on a single line (no delimiter split):
+        // same number of data lines as the plain version.
+        let plain_data = plain.lines.iter().filter(|l| l.starts_with('│')).count();
+        let markup_data = markup.lines.iter().filter(|l| l.starts_with('│')).count();
+        assert_eq!(
+            plain_data, markup_data,
+            "markup must not introduce extra wrapped lines"
+        );
+    }
+
+    #[test]
+    fn shrink_columns_preserves_minimum_and_proportions() {
+        // Intrinsic [10, 5, 20], target 24, min 3.
+        // total_min = 9, shrinkable = 26, available = 15.
+        // col0: 3 + 7*15/26 = 3 + 4 = 7
+        // col1: 3 + 2*15/26 = 3 + 1 = 4
+        // col2: 3 + 17*15/26 = 3 + 9 = 12
+        let result = shrink_column_widths(&[10, 5, 20], 24, 3);
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().all(|&w| w >= 3), "must respect minimum");
+        assert!(
+            result.iter().sum::<usize>() <= 24,
+            "must fit within target, got {}",
+            result.iter().sum::<usize>()
+        );
+        // Largest intrinsic column stays largest after shrinking.
+        let max_val = *result.iter().max().unwrap();
+        let max_idx = result.iter().position(|&v| v == max_val).unwrap();
+        assert_eq!(max_idx, 2);
+    }
+
+    #[test]
+    fn shrink_columns_with_tiny_target_returns_all_minimum() {
+        let result = shrink_column_widths(&[10, 20, 30], 5, 3);
+        assert_eq!(result, vec![3, 3, 3]);
+    }
+
+    /// Drive `draw_history_modal` against a real buffer across every input
+    /// state the Ctrl+R picker can land in. The assertions are deliberately
+    /// structural ("does not panic, produces a non-empty frame") because the
+    /// fuzzy highlight math is already covered by `fuzzy::tests`; here we
+    /// only need to prove the renderer consumes each state without exploding.
+    #[test]
+    fn history_modal_renders_every_query_state() {
+        let theme = Theme::default();
+        let history = vec![
+            "git status".to_string(),
+            "git commit -am 'ship it'".to_string(),
+            "cargo test".to_string(),
+            "review the diff before sending".to_string(),
+        ];
+
+        let cases: &[(&str, usize)] = &[
+            ("", history.len()), // empty query → everything surfaces
+            ("git", 2),          // partial match → subset with highlights
+            ("zzz", 0),          // no subsequence → empty placeholder
+        ];
+
+        for (query, expected_matches) in cases {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+            let mut ranked = crate::tui::fuzzy::rank(&history, query);
+            crate::tui::fuzzy::sort_by_score(&mut ranked);
+            assert_eq!(
+                ranked.len(),
+                *expected_matches,
+                "query {:?} should surface {} entries",
+                query,
+                expected_matches
+            );
+            terminal.draw(|f| {
+                draw_history_modal(
+                    f,
+                    &mut LayoutMap::new(),
+                    &history,
+                    query,
+                    query.chars().count(),
+                    &ranked,
+                    0,
+                    &mut 0,
+                    true,
+                    false,
+                    true,
+                    false,
+                    &theme,
+                );
+            });
+        }
+
+        // Empty history must render the "(no history yet)" placeholder rather
+        // than indexing into an empty slice.
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let empty: Vec<String> = Vec::new();
+        let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> = crate::tui::fuzzy::rank(&empty, "");
+        terminal.draw(|f| {
+            draw_history_modal(
+                f,
+                &mut LayoutMap::new(),
+                &empty,
+                "",
+                0,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                true,
+                false,
+                &theme,
+            );
+        });
+    }
+
+    /// Browse mode (`search = false`) renders the plain list with the
+    /// `/ to search` hint and no query field — the default state when the
+    /// Ctrl+R modal first opens.
+    #[test]
+    fn history_modal_browse_mode_shows_search_hint() {
+        let theme = Theme::default();
+        let history = vec!["git status".to_string(), "cargo test".to_string()];
+        // Browse rows are newest-first with empty (unhighlighted) matches.
+        let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> = (0..history.len())
+            .rev()
+            .map(|i| {
+                (
+                    i,
+                    crate::tui::fuzzy::FuzzyMatch {
+                        score: 0,
+                        positions: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        terminal.draw(|f| {
+            draw_history_modal(
+                f,
+                &mut LayoutMap::new(),
+                &history,
+                "",
+                0,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false, // browse mode
+                false,
+                &theme,
+            );
+        });
+        let buf = terminal.buffer();
+        let screen: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(
+            screen.contains("/ to search"),
+            "browse header should advertise the search shortcut"
+        );
+    }
+
+    /// A multi-line history entry collapses to its first line in the fuzzy
+    /// list (so a long prompt never breaks the single-row grid), and the
+    /// preview mode renders the full text verbatim. Both modes must consume a
+    /// real buffer without panicking.
+    #[test]
+    fn history_modal_folds_multiline_and_previews_full_text() {
+        let theme = Theme::default();
+        let history = vec![
+            "first line\nsecond line\nthird line".to_string(),
+            "single line".to_string(),
+        ];
+
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let ranked = crate::tui::fuzzy::rank(&history, "");
+
+        // List mode: the multi-line entry must render as one row.
+        terminal.draw(|f| {
+            draw_history_modal(
+                f,
+                &mut LayoutMap::new(),
+                &history,
+                "",
+                0,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                true,
+                false,
+                &theme,
+            );
+        });
+        let buf = terminal.buffer();
+        // The continuation marker `↵` should appear somewhere — proving the
+        // folded entry advertises its hidden content.
+        let has_marker = buf.content.iter().any(|c| c.symbol() == "↵");
+        assert!(has_marker, "multi-line entry should show the ↵ fold marker");
+
+        // Preview mode: the full multi-line text renders without panic.
+        terminal.draw(|f| {
+            draw_history_modal(
+                f,
+                &mut LayoutMap::new(),
+                &history,
+                "",
+                0,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                true,
+                true,
+                false,
+                &theme,
+            );
+        });
+    }
+
+    /// With no messages, `draw_transcript` renders the empty-state hero in
+    /// place of the stream: `content_lines` is non-zero (so the app loop does
+    /// not treat it as a zero-height stream) and the call does not panic.
+    #[test]
+    fn empty_session_renders_empty_state_with_nonzero_height() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let messages: Vec<TranscriptMessage> = Vec::new();
+
+        let mut render_opt: Option<TranscriptRender> = None;
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            render_opt = Some(draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "idle",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            ));
+        });
+        let render = render_opt.expect("draw_transcript must return a render");
+
+        // The empty-state hero replaces the transcript; it occupies the logo
+        // rows plus a gap, never zero, so scroll-follow logic stays honest.
+        assert!(
+            render.content_lines > 0,
+            "empty state should report non-zero content_lines"
+        );
+        assert!(render.sticky.is_none(), "no sticky header on empty state");
+        assert!(
+            render.view_height > 0,
+            "view_height should reflect the viewport, not be zero"
+        );
+    }
+
+    /// A non-empty session skips the empty-state branch entirely — the hero
+    /// never competes with real content.
+    #[test]
+    fn nonempty_session_does_not_render_empty_state() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let messages = vec![TranscriptMessage::new(neenee_core::Role::User, "hello")];
+
+        let mut render_opt: Option<TranscriptRender> = None;
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            render_opt = Some(draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "idle",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            ));
+        });
+        let render = render_opt.expect("draw_transcript must return a render");
+
+        // With a real message the stream is rendered normally — content_lines
+        // reflects at least one rendered message rather than the fixed
+        // empty-state height.
+        assert!(
+            render.content_lines > 0,
+            "non-empty session should render its messages"
+        );
+    }
+
+    /// A user-supplied logo (from `logo.txt`) replaces the built-in wordmark
+    /// on the empty state, and `content_lines` tracks its (clamped) height so
+    /// scroll accounting stays honest. A four-line user logo yields six
+    /// reported lines (4 + blank gap + tagline), distinct from the built-in
+    /// wordmark's height.
+    #[test]
+    fn empty_session_uses_user_logo_and_reports_its_height() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let messages: Vec<TranscriptMessage> = Vec::new();
+        // Four lines → reported content is 4 + 2 (gap + tagline) = 6.
+        let logo: Vec<String> = vec![
+            "  N N  ".to_string(),
+            " N N N ".to_string(),
+            "  N N  ".to_string(),
+            "       ".to_string(),
+        ]
+        .into_iter()
+        .chain(std::iter::repeat_n("xxxxx".to_string(), 0))
+        .collect();
+
+        let mut render_opt: Option<TranscriptRender> = None;
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            render_opt = Some(draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "idle",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: Some(&logo),
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            ));
+        });
+        let render = render_opt.expect("draw_transcript must return a render");
+
+        // 4 logo lines + 2 blank gap + 1 tagline = 7 content lines.
+        assert_eq!(
+            render.content_lines, 7,
+            "user-logo content_lines must be logo rows + gap + tagline"
+        );
+    }
+
+    /// An H1 heading renders with an UNDERLINED modifier. The underline must
+    /// cover only the prefix + text cells and must not bleed into the trailing
+    /// whitespace of the heading row. Inspects the rendered grid cells
+    /// directly to pin the clamp in `draw_message_body`.
+    #[test]
+    fn h1_underline_clamps_to_text_extent() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(60, 12);
+        let messages = vec![TranscriptMessage::new(
+            neenee_core::Role::Assistant,
+            "# QQ_H1_TEST\n\nbody text here\n",
+        )];
+        terminal.draw(|f| {
+            let _ = draw_transcript(
+                f,
+                &mut LayoutMap::new(),
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+        let buffer = terminal.buffer();
+        let width = buffer.area().width;
+        let underline = neenee_tui_engine::Modifier::UNDERLINE;
+
+        let mut head = None;
+        'outer: for y in 0..buffer.area().height {
+            for x in 0..width {
+                if buffer[(x, y)].symbol() == "Q" {
+                    head = Some((x, y));
+                    break 'outer;
+                }
+            }
+        }
+        let (hx, hy) = head.expect("heading 'Q' cell exists");
+
+        // "QQ_H1_TEST" is 10 cells; prefix is 3 cells. All 13 are underlined.
+        for x in hx..hx + 10 {
+            assert!(
+                buffer[(x, hy)].style.add.contains(underline),
+                "heading text cell at x={x} must be UNDERLINED"
+            );
+        }
+        let trailing = hx + 10;
+        assert!(trailing < width, "trailing cell within grid");
+        assert!(
+            !buffer[(trailing, hy)].style.add.contains(underline),
+            "underline must not bleed into trailing whitespace at x={trailing}"
+        );
+        assert!(
+            !buffer[(width - 1, hy)].style.add.contains(underline),
+            "underline must not reach the right edge"
+        );
+    }
+
+    /// Same clamp check with a multi-codepoint emoji grapheme (ZWJ family) in
+    /// the heading: `wrap_text` measures per-char (overcounting the sequence)
+    /// while the grid renders per-grapheme, so this guards the underline width
+    /// against the char-vs-grapheme measurement split.
+    #[test]
+    fn h1_underline_clamps_with_emoji_grapheme() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(60, 12);
+        let messages = vec![TranscriptMessage::new(
+            neenee_core::Role::Assistant,
+            "# 👨‍👩‍👧 OKX\n\nbody\n",
+        )];
+        terminal.draw(|f| {
+            let _ = draw_transcript(
+                f,
+                &mut LayoutMap::new(),
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+        let buffer = terminal.buffer();
+        let width = buffer.area().width;
+        let underline = neenee_tui_engine::Modifier::UNDERLINE;
+
+        let mut x_pos = None;
+        'outer: for y in 0..buffer.area().height {
+            for x in 0..width {
+                if buffer[(x, y)].symbol() == "X" {
+                    x_pos = Some((x, y));
+                    break 'outer;
+                }
+            }
+        }
+        let (xx, xy) = x_pos.expect("heading 'X' cell exists");
+
+        assert!(
+            buffer[(xx, xy)].style.add.contains(underline),
+            "heading 'X' text cell must be UNDERLINED"
+        );
+        let trailing = xx + 1;
+        assert!(trailing < width, "trailing cell within grid");
+        assert!(
+            !buffer[(trailing, xy)].style.add.contains(underline),
+            "underline must not bleed past emoji heading at x={trailing}"
+        );
+    }
+
+    /// A wide (emoji) glyph in an H1 heading occupies a head cell plus a
+    /// wide-continuation cell. The grid stores the continuation without the
+    /// `add` modifiers (it is a non-emitted placeholder), but the diff skips
+    /// continuations and emits the head's run style — so the backend prints
+    /// the wide glyph while the UNDERLINED SGR is active, underlining both
+    /// columns. This pins that emitted behavior at the `Draw`-command layer.
+    #[test]
+    fn h1_underline_emits_wide_glyph_in_underlined_run() {
+        let theme = Theme::default();
+        let width = 60u16;
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 12);
+        let messages = vec![TranscriptMessage::new(
+            neenee_core::Role::Assistant,
+            "# Hello😀\n\nbody\n",
+        )];
+        terminal.draw(|f| {
+            let _ = draw_transcript(
+                f,
+                &mut LayoutMap::new(),
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+        let back = terminal.buffer();
+        let front = neenee_tui_engine::Grid::new(width, 12);
+        let cmd = neenee_tui_engine::diff::diff(back, &front);
+        let underline = neenee_tui_engine::Modifier::UNDERLINE;
+
+        let wide_run_style = cmd.draws.iter().find_map(|d| match d {
+            neenee_tui_engine::Draw::Cells { style, cells, .. } => cells
+                .iter()
+                .any(|(sym, w)| sym == "😀" && *w == 2)
+                .then_some(*style),
+            _ => None,
+        });
+        let style =
+            wide_run_style.expect("a Draw::Cells run containing wide glyph '😀' must be emitted");
+        assert!(
+            style.add.contains(underline),
+            "wide glyph '😀' must be emitted in an UNDERLINED run so the terminal \
+             underlines both columns, got add={:?}",
+            style.add,
+        );
+    }
+
+    /// Regression: a long H1 heading that wraps to multiple lines. The heading
+    /// *prefix* (the leading indent on row 0 and the continuation indent
+    /// on rows 1+) is decoration, not heading text, so it must NOT carry the
+    /// UNDERLINED modifier. Previously the prefix shared the UNDERLINED style,
+    /// which underlined the leading whitespace of every wrapped row — the
+    /// underline appeared to "cross the line head" and cover the blank indent.
+    ///
+    /// We render a heading that wraps to ≥2 rows and assert that, on every
+    /// row, the underline begins exactly at the text column (prefix width) and
+    /// that the indent columns themselves are never underlined. The trailing
+    /// blank columns must also stay un-underlined (the existing clamp).
+    #[test]
+    fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
+        let theme = Theme::default();
+        // Use a terminal at/above the render minimum so `draw_transcript` does
+        // not trip its too-small guard. A 76-column transcript band still
+        // wraps this ~95-char heading to ≥2 rows.
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+        let messages = vec![TranscriptMessage::new(
+            neenee_core::Role::Assistant,
+            "# This is a very long heading that intentionally wraps to multiple rows for the underline-prefix test\n\nbody\n",
+        )];
+        terminal.draw(|f| {
+            let _ = draw_transcript(
+                f,
+                &mut LayoutMap::new(),
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    envoy_bar: None,
+                    side_banner: None,
+                    pursuit: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    turn_started_at: None,
+                    unattended: false,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+        let buffer = terminal.buffer();
+        let width = buffer.area().width;
+        let underline = neenee_tui_engine::Modifier::UNDERLINE;
+
+        // The heading prefix is "   " (3 columns); locate the heading's rows
+        // as the contiguous non-blank rows at the top (before the blank gap +
+        // body). The heading "This is a very long heading that wraps to
+        // multiple lines" wraps to several rows here.
+        let mut heading_rows: Vec<u16> = Vec::new();
+        let mut found_body = false;
+        for y in 0..buffer.area().height {
+            let row_has_text = (0..width).any(|x| buffer[(x, y)].symbol() != " ");
+            if !row_has_text {
+                if !heading_rows.is_empty() {
+                    found_body = true;
+                }
+                continue;
+            }
+            if found_body {
+                break;
+            }
+            heading_rows.push(y);
+        }
+        assert!(
+            heading_rows.len() >= 2,
+            "heading must wrap to at least 2 rows, got {}",
+            heading_rows.len()
+        );
+
+        for &y in &heading_rows {
+            // Indent columns [0, text_start) must never be underlined.
+            // The heading prefix is `TRANSCRIPT_BODY_LEADING_INDENT` cols
+            // (matching body prose — see the `Block::Heading` arm), applied
+            // inside the already-inset band: entry inset (TRANSCRIPT_H_INSET)
+            // + heading prefix (TRANSCRIPT_BODY_LEADING_INDENT). Text starts
+            // at col `TRANSCRIPT_H_INSET + TRANSCRIPT_BODY_LEADING_INDENT`.
+            let text_start = super::TRANSCRIPT_H_INSET + super::TRANSCRIPT_BODY_LEADING_INDENT;
+            for x in 0..text_start {
+                let cell = &buffer[(x, y)];
+                assert!(
+                    !cell.style.add.contains(underline),
+                    "indent cell at (x={x}, y={y}) must NOT be underlined \
+                     (it is heading decoration, not text), symbol={:?}",
+                    cell.symbol(),
+                );
+            }
+            // The trailing blank tail (rightmost column) must not be underlined.
+            let last = width - 1;
+            assert!(
+                !buffer[(last, y)].style.add.contains(underline),
+                "trailing cell at (x={last}, y={y}) must NOT be underlined"
+            );
+            // And at least the first text column must be underlined (the
+            // heading text itself is still underlined).
+            let first_text_cell = &buffer[(text_start, y)];
+            assert!(
+                first_text_cell.style.add.contains(underline),
+                "first heading-text cell at (x={text_start}, y={y}) must be UNDERLINED, \
+                 symbol={:?}",
+                first_text_cell.symbol(),
+            );
+        }
+    }
+}

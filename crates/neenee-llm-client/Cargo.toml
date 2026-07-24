@@ -18,6 +18,9 @@ uuid = { workspace = true }
 [dev-dependencies]
 mockito = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+# Test-only model baseline registration (mirrors vendor metadata that lives in
+# neenee-providers, which this crate cannot depend on).
+inventory = { workspace = true }
 
 [lints]
 workspace = true

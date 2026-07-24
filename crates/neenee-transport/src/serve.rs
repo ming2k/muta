@@ -41,9 +41,12 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 /// Inbound (browser → server) is always [`Wire::Request`]; outbound
 /// (server → browser) is [`Wire::Response`] or [`Wire::History`] (sent once
 /// at connect, before any live responses).
+///
+/// `pub` so co-process clients (the `neenee --attach` TUI) can speak the same
+/// protocol instead of re-deriving the frame shapes from the JSON.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
-enum Wire {
+pub enum Wire {
     Request {
         #[serde(flatten)]
         request: AgentRequest,
@@ -53,8 +56,13 @@ enum Wire {
         response: AgentResponse,
     },
     /// Full transcript replay, sent once on connect so the browser catches up
-    /// on everything that happened before it joined.
-    History { messages: Vec<Message> },
+    /// on everything that happened before it joined. Carries the hosted
+    /// session's id so the client learns which session it attached to without
+    /// a second round-trip.
+    History {
+        session_id: String,
+        messages: Vec<Message>,
+    },
 }
 
 /// Which interfaces the serve listener binds.
@@ -249,10 +257,17 @@ async fn handle_connection(
     };
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
-    // 1. Replay transcript history so the browser sees prior context.
+    // 1. Replay transcript history so the browser sees prior context, tagged
+    //    with the session id so an attaching client learns which session it
+    //    joined (the id it asked for may not exist — the server may have
+    //    started a fresh one).
     let messages = session.full_transcript().await;
-    let history = serde_json::to_string(&Wire::History { messages })
-        .map_err(|e| format!("serialize history: {e}"))?;
+    let session_id = session.id().await;
+    let history = serde_json::to_string(&Wire::History {
+        session_id,
+        messages,
+    })
+    .map_err(|e| format!("serialize history: {e}"))?;
     ws_sink
         .send(WsMessage::Text(history.into()))
         .await

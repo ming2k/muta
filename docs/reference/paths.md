@@ -37,7 +37,6 @@ Persistent, program-generated, must survive restart. Back it up.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `blobs/<2-char-prefix>/<hash>` | Content-addressed blob store for large payloads | Yes |
-| `pursuits.db` | **Legacy** SQLite pursuit database (pre-ADR-0032); read once on startup to migrate into `SessionStore`, no new code writes here | Yes |
 | `repeat.db` | SQLite `/repeat` cron-job database (durable recurring prompts) | Yes |
 | `projects/<16-hex-bucket>/` | Per-project bucket: sessions, current pointer, metadata | Yes |
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |

@@ -109,7 +109,7 @@ the concrete provider type and the model family:
   `cache_control: {"type":"ephemeral"}` breakpoints (last tool → last system
   block → two newest messages). This was already correct before ADR-0067 and is
   untouched.
-- **`SessionKey`** — `OpenAiProvider` carries an optional
+- **`SessionKey`** — `OpenAiChatCompletionsProvider` carries an optional
   `prompt_cache_key`; the construction layer sets it to the **session id** when
   the family resolves to `SessionKey`. The session id is read from
   `Agent::thread_id()` inside the model-switch path, so no new parameter

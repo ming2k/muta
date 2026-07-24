@@ -154,34 +154,37 @@ therefore repaints once instead of once per character.
 
 ## Three layers, one-way seam
 
-`neenee-tui-engine` is the *bottom* of a three-layer stack. Each layer is its own
-crate, and dependencies point strictly downward — the compiler enforces
-that no higher layer's types leak into a lower one:
+`neenee-tui-engine` is the *bottom* of a three-layer stack. Dependencies point
+strictly downward — no higher layer's types leak into a lower one. The engine
+is its own crate; the view and shell layers are module trees under
+`crate::tui` in the `neenee-cli` binary (the view was the `neenee-tui-view`
+crate until ADR-0079 re-merged it, so the seam is held by convention again
+rather than by the compiler):
 
 ```text
 neenee-tui-engine          engine: retained cell grid, back/front diff, crossterm
                     (ADR-0038). Knows nothing about neenee.
       ▲  widgets render into the grid
-neenee-tui-view     view: the widget tree + the semantic document model
-                    (ADR-0045). Renders neenee-core domain types, so it
-                    depends on neenee-core — but never on the shell.
+tui view modules           view: the widget tree + the semantic document model
+                    (ADR-0045, re-merged by ADR-0079). Renders neenee-core
+                    domain types — but never the shell.
       ▲  the shell hands it borrowed data each frame
-neenee::tui    app shell: App state, the event loop, input→action
+tui shell modules          app shell: App state, the event loop, input→action
                     mapping, terminal lifecycle. Owns the data.
 ```
 
 The split exists so the rendering engine, the widgets, and the application
 wiring can be reasoned about (and tested) in isolation — and so the widget
 layer can never reach back into application state. The middle layer,
-**`neenee-tui-view`**, owns everything that is a *pure function of borrowed
+**the view modules**, owns everything that is a *pure function of borrowed
 data*: the transcript and tool-step widgets, the modal sheets, the document
 model, the layout/hit-testing map, and the text-selection state.
 
 The shell and the view never share a mutable `App`. They communicate
-through one borrowed struct, `render::TranscriptView<'a>`, that the event
+through one borrowed struct, `view::TranscriptView<'a>`, that the event
 loop fills in each frame from its snapshot — `&[TranscriptMessage]`,
 `&SelectionState`, `&Theme`, plus activity/pursuit/todo snapshots — and
-hands to `render::draw_transcript`. It carries **no reference to `App`**,
+hands to `view::draw_transcript`. It carries **no reference to `App`**,
 which is what keeps the view layer a pure rendering function: there is no
 back-channel into application state, so a widget can only draw what the
 shell chose to hand it. The per-modal overlays (`draw_models_modal`,

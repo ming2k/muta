@@ -1,6 +1,6 @@
 # 0045. Extract `neenee-tui-view` (widgets + document model) from the app shell
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0079
 - **Date:** 2026-07-10
 - **Builds on:** ADR-0038 (in-house grid engine `neenee-tui`), ADR-0035
   (the application-layer split that named the `neenee-code` shell)

@@ -9,7 +9,7 @@ use neenee_agent::orchestration::{send_harness_state, turn};
 use neenee_agent::{RoundBegin, RoundLifecycle};
 use neenee_core::{AgentResponse, LoopStatus, Message, RoundEvent, Tool, ToolOutput, ToolStream};
 use neenee_persistence::session::SessionStore;
-use neenee_tools::BashTool;
+use neenee_agent::tools::BashTool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

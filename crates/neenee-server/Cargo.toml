@@ -1,0 +1,25 @@
+[package]
+name = "neenee-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "neenee-server"
+path = "src/main.rs"
+
+[dependencies]
+neenee-agent = { path = "../neenee-agent" }
+neenee-core = { path = "../neenee-core" }
+neenee-transport = { path = "../neenee-transport" }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

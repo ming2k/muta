@@ -4,8 +4,10 @@ info:
   version: 0.20.0
   description: |
     Machine-readable contract for `neenee-transport`'s current hot-attach transport.
-    The server is started from a running TUI with `/serve [port] [--public]`; it
-    is not yet the multi-session daemon described as a future phase in ADR-0037.
+    The server is started from a running TUI with `/serve [port] [--public]`, or
+    by the standalone `neenee-server` binary (ADR-0081), which hosts one session
+    and serves the same protocol; `neenee --attach` connects as a client of it.
+    It is not yet the multi-session daemon described as a future phase in ADR-0037.
 
     Every WebSocket text frame contains exactly one JSON value. The first
     server frame is always `History`; subsequent server frames are `Response`.
@@ -116,6 +118,7 @@ components:
         - name: emptyHistory
           payload:
             type: History
+            session_id: session-123
             messages: []
     Response:
       name: Response
@@ -159,10 +162,13 @@ components:
       unevaluatedProperties: false
     HistoryEnvelope:
       type: object
-      required: [type, messages]
+      required: [type, session_id, messages]
       properties:
         type:
           const: History
+        session_id:
+          type: string
+          description: Id of the hosted session this transcript snapshot belongs to.
         messages:
           type: array
           items:

@@ -1,9 +1,10 @@
 //! `EnvoyTool` — spawns a read-only exploration envoy for research subtasks.
 //!
-//! Lives in `neenee-agent` (not `neenee-tools`) because it constructs an
+//! Lives in `neenee-agent` proper (not the [`crate::tools`] module) because it
+//! constructs an
 //! [`crate::Agent`] internally: spawning an envoy is an orchestration
 //! concern, not a domain-tool concern. The other tools (Bash/Read/Web/…)
-//! stay in `neenee-tools` and remain pure trait implementations.
+//! stay in [`crate::tools`] and remain pure trait implementations.
 //!
 //! Admission of tools to the envoy is driven by [`neenee_core::EXPLORE`]
 //! — the single source of truth for the read-only / non-interactive /
@@ -793,7 +794,7 @@ mod tests {
 
         let toolset = neenee_core::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(neenee_tools::AskUserTool),
+            std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(envoy_tool),
         ]);
@@ -818,8 +819,8 @@ mod tests {
 
         let toolset = neenee_core::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(neenee_tools::BashTool),
-            std::sync::Arc::new(neenee_tools::AskUserTool),
+            std::sync::Arc::new(crate::tools::BashTool),
+            std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(envoy_tool),
         ]);

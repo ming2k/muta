@@ -708,7 +708,7 @@ pub async fn authorize(
 ) {
     let Some(cfg) = auth
         .oauth_provider_id()
-        .and_then(neenee_oauth::config_by_provider_id)
+        .and_then(neenee_providers::oauth::config_by_provider_id)
         .copied()
     else {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -751,7 +751,7 @@ pub async fn connect(
         .unwrap_or_default();
     let Some(cfg) = auth_mode
         .oauth_provider_id()
-        .and_then(neenee_oauth::config_by_provider_id)
+        .and_then(neenee_providers::oauth::config_by_provider_id)
         .copied()
     else {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -815,18 +815,18 @@ async fn run_oauth(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     label: &str,
     method: neenee_core::LoginMethod,
-    cfg: neenee_oauth::OAuthConfig,
+    cfg: neenee_providers::oauth::OAuthConfig,
 ) -> bool {
-    use neenee_oauth::{AuthStore, OAuth};
+    use neenee_providers::oauth::{AuthStore, OAuth};
 
     let oauth = OAuth::new(cfg);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let result = match method {
         neenee_core::LoginMethod::Device => match cfg.device_flow {
-            neenee_oauth::config::DeviceFlow::ChatGpt => {
+            neenee_providers::oauth::config::DeviceFlow::ChatGpt => {
                 let device =
-                    match neenee_oauth::request_chatgpt_device_code(oauth.client(), &cfg).await {
+                    match neenee_providers::oauth::request_chatgpt_device_code(oauth.client(), &cfg).await {
                         Ok(d) => d,
                         Err(e) => {
                             let msg = e.to_string();
@@ -849,18 +849,18 @@ async fn run_oauth(
                     },
                 ));
                 let polled =
-                    neenee_oauth::poll_chatgpt_device_code(oauth.client(), &cfg, &device).await;
+                    neenee_providers::oauth::poll_chatgpt_device_code(oauth.client(), &cfg, &device).await;
                 match polled {
                     Ok(token) => {
-                        neenee_oauth::exchange_chatgpt_device_code(oauth.client(), &cfg, &token)
+                        neenee_providers::oauth::exchange_chatgpt_device_code(oauth.client(), &cfg, &token)
                             .await
                             .map_err(|e| e.to_string())
                     }
                     Err(e) => Err(e.to_string()),
                 }
             }
-            neenee_oauth::config::DeviceFlow::Rfc8628 => {
-                let device = match neenee_oauth::request_device_code(oauth.client(), &cfg).await {
+            neenee_providers::oauth::config::DeviceFlow::Rfc8628 => {
+                let device = match neenee_providers::oauth::request_device_code(oauth.client(), &cfg).await {
                     Ok(d) => d,
                     Err(e) => {
                         let msg = e.to_string();
@@ -882,7 +882,7 @@ async fn run_oauth(
                             .to_string(),
                     },
                 ));
-                neenee_oauth::poll_device_code(oauth.client(), &cfg, &device)
+                neenee_providers::oauth::poll_device_code(oauth.client(), &cfg, &device)
                     .await
                     .map_err(|e| e.to_string())
             }
@@ -938,9 +938,9 @@ async fn run_oauth(
         .as_ref()
         .map(SecretString::expose_secret)
         .or(Some(tokens.access_token.expose_secret()))
-        .and_then(neenee_oauth::chatgpt_account_id);
+        .and_then(neenee_providers::oauth::chatgpt_account_id);
 
-    let set = neenee_oauth::TokenSet {
+    let set = neenee_providers::oauth::TokenSet {
         access: tokens.access_token,
         refresh: tokens.refresh_token.unwrap_or_default(),
         expires_ms: now_ms + (tokens.expires_in.unwrap_or(3600) as i64) * 1000,
@@ -961,7 +961,7 @@ async fn run_oauth(
 }
 
 async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
-    use neenee_oauth::{AuthStore, OAuth};
+    use neenee_providers::oauth::{AuthStore, OAuth};
 
     // Resolve the channel's OAuth config (xAI or ChatGPT) from its auth mode.
     let auth = config
@@ -972,7 +972,7 @@ async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
         .map(|ch| ch.auth);
     let Some(cfg) = auth
         .and_then(|a| a.oauth_provider_id())
-        .and_then(neenee_oauth::config_by_provider_id)
+        .and_then(neenee_providers::oauth::config_by_provider_id)
         .copied()
     else {
         return;

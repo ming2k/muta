@@ -66,7 +66,8 @@ async fn skill_sources(config: &SkillsConfig) -> Vec<SkillSource> {
     // 1. Remote skill repositories (lowest priority).
     //    When a fetch fails (network down, server error), fall back to the
     //    last successful download's cache so a transient outage never silently
-    //    removes skills — the same cache-as-fallback pattern models.dev uses.
+    //    removes skills — the cache-as-fallback pattern every remote catalog
+    //    in neenee uses.
     for url in &config.urls {
         match fetch_remote_repo(url).await {
             Ok(roots) if !roots.is_empty() => {

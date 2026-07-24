@@ -5,8 +5,9 @@ round. MCP server tools are appended at runtime. This is the lookup
 surface — one page per tool category. For how tools are gated (access tiers,
 capability axes, the permission broker), see [Tool access](access.md).
 
-Most built-in tools live in `neenee-tools`; skill adapters live in
-`neenee-skills`, MCP adapters in `neenee-mcp`, and `envoy` in `neenee-agent`.
+Most built-in tools live in `neenee-agent`'s `tools` module; skill adapters live in
+`neenee-skills`, MCP adapters in `neenee-mcp`, and `envoy` in `neenee-agent`
+proper.
 The `Tool` trait is defined in
 `crates/neenee-core/src/capability.rs`.
 

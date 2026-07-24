@@ -662,6 +662,14 @@ impl AgentBuilder {
     }
 }
 
+/// Outcome returned by the agent after running one turn.
+#[derive(Debug, Clone)]
+pub struct RoundOutcome {
+    pub message: crate::Message,
+    pub token_usage: TokenUsage,
+    pub duration_ms: u64,
+}
+
 impl Agent {
     /// Start configuring an agent from a flat tool list.
     pub fn builder(

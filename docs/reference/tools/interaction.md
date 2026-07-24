@@ -2,7 +2,7 @@
 
 Tools for the agent to manage its own state and to query the user mid-task.
 All are `Read` and bypass the permission broker. `ask_user` lives in
-`neenee-tools`; `todo` and `todo_update` are implemented there as well. Every
+`neenee-agent`'s `tools` module; `todo` and `todo_update` are implemented there as well. Every
 agent installs them automatically with its own task-list context.
 
 ## `ask_user`

@@ -1,7 +1,7 @@
 # Web tools
 
 Fetch URLs and search the web. Both are `Read`. Source:
-`crates/neenee-tools/src/lib.rs`. Provider configuration lives in
+`crates/neenee-agent/src/tools/web.rs`. Provider configuration lives in
 `config.toml` under `[websearch]`.
 
 ## `webfetch`

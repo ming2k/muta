@@ -10,10 +10,8 @@ neenee-core = { path = "../neenee-core" }
 neenee-llm-client = { path = "../neenee-llm-client" }
 neenee-persistence = { path = "../neenee-persistence" }
 neenee-providers = { path = "../neenee-providers" }
-neenee-tools = { path = "../neenee-tools" }
 neenee-skills = { path = "../neenee-skills" }
-neenee-oauth = { path = "../neenee-oauth" }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
@@ -25,6 +23,12 @@ reqwest = { workspace = true }
 uuid = { workspace = true }
 regex = "1"
 fastrand = { workspace = true }
+glob = { workspace = true }
+walkdir = { workspace = true }
+inventory = { workspace = true }
+base64 = { workspace = true }
+image = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

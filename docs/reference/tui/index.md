@@ -5,10 +5,11 @@ The neenee terminal UI is split into three layers — see
 [neenee-tui-engine](../../../crates/neenee-tui-engine/src/lib.rs) engine (ADR-0038) is a
 retained cell grid with write-marks-dirty tracking, a back/front diff, and a
 crossterm backend; the **view layer**
-([neenee-tui-view](../../../crates/neenee-tui-view/src/lib.rs)) holds the widget
+(modules under `crate::tui` in the binary — formerly the `neenee-tui-view`
+crate, re-merged by ADR-0079) holds the widget
 tree (entry point `view.rs`) and the semantic document model, rendering
 *into* the engine's grid via `Frame::render_widget`; and the **app shell**
-(`crates/neenee/src/tui`) owns `App` state, the event loop, and input
+(`crates/neenee-cli/src/tui`) owns `App` state, the event loop, and input
 mapping, driving the view layer through the borrowed `TranscriptView` seam.
 
 ## Frame layout
@@ -75,15 +76,16 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 ## Source files
 
 See [architecture.md](architecture.md) for how these three groups depend on each
-other. Paths below are relative to each crate's `src/`.
+other. View and shell files both live under `crates/neenee-cli/src/tui/` since
+ADR-0079; paths below are relative to that directory.
 
-### View layer — `crates/neenee-tui-view/src/`
+### View layer — `crates/neenee-cli/src/tui/` (view modules)
 
 | File | Responsibility |
 |------|---------------|
 | `view.rs` | Draw orchestration: `draw_transcript`, `TranscriptView`, `TranscriptRender`, `transcript_band_rect`, `TRANSCRIPT_H_INSET` |
-| `render/design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
-| `render/theme.rs` | `Theme` (all color tokens) |
+| `design.rs` | Non-color design tokens: spacing, gutters, fixed row counts, text measurement limits |
+| `theme.rs` | `Theme` (all color tokens) |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop`, `modal_area`, color helpers |
 | `components/` | Reusable composed render components: modal pages, selectable lists, scroll bodies, footer hints, toasts, transcript notices, question option rows, and one-line metadata strips (`MetaStrip`) |
 | `text_layout.rs` | `wrap_text`, `WrappedLine`, `line_spans`, `code_gutter_line` |
@@ -91,27 +93,27 @@ other. Paths below are relative to each crate's `src/`.
 | `disclosure/mod.rs` | Disclosure module: draw orchestration, shared header rendering, sticky-pin tracking |
 | `disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
 | `disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
-| `render/layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
+| `layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
 | `tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
-| `render/composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
-| `render/chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
+| `chrome.rs` | `draw_activity_bar` / `ActivityBarHit` (breathing dot + round/phase + pursuit + todos), `draw_state_bar` (session-state flags), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
-| `render/empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
+| `empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
 | `notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `components/notice.rs` |
 | `markdown_table.rs` | `build_table_render`, `shrink_column_widths` |
-| `document.rs` | Document model: `TranscriptMessage`, `Block` enum, `MessageKind`, markdown parsing, `parse_arguments_kv` |
-| `layout.rs` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing |
-| `selection.rs` | `SelectionState`, `get_selected_text`, character-boundary snapping |
+| `model/document.rs` | Document model: `TranscriptMessage`, `Block` enum, `MessageKind`, markdown parsing, `parse_arguments_kv` |
+| `model/layout.rs` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing |
+| `model/selection.rs` | `SelectionState`, `get_selected_text`, character-boundary snapping |
 | `fuzzy.rs` | Fuzzy matcher for history / provider search |
 | `providers.rs` | Provider/model picker ranking + display helpers (`model_display_name`, `RankedProvider`, …) |
 | `modal.rs` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` |
 | `completion.rs` | Completion-menu data types: `Completion`, `CompletionKind` (matching logic stays in the shell) |
 
-### App shell — `crates/neenee/src/tui/`
+### App shell — `crates/neenee-cli/src/tui/` (shell modules)
 
 | File | Responsibility |
 |------|---------------|
-| `mod.rs` | Entry point `run_tui`; re-exports the view modules at their `crate::tui::*` paths |
+| `mod.rs` | Entry point `run_tui`; declares the merged view and shell modules |
 | `app.rs` | Application state: `App`, `CaretOwner`, scroll/zoom snapshots |
 | `event_loop.rs` | App loop: state sync, draw orchestration, action handling, `extract_selection_text` |
 | `input/` | Event-to-action mapping (dir): `mod.rs` keyboard/mouse dispatch, `InputAction` enum, `tests.rs` |

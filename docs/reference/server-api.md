@@ -36,6 +36,11 @@ This contract describes `crates/neenee-transport/src/serve.rs` as it exists now:
 - A slow client may lose broadcast events; the server logs the lag and
   continues. Reconnect to obtain a fresh transcript snapshot.
 
+The standalone `neenee-server` binary serves the same protocol for the one
+session it hosts — same code path, same envelopes — and `neenee --attach`
+runs the TUI as a client of it. See
+[ADR-0081](../adr/0081-neenee-server-and-attach-model.md).
+
 ### Security model
 
 | Mode | Bind | Auth | Use |
@@ -117,8 +122,9 @@ comment referring to newline-delimited JSON.
 The connection has a simple ordering contract:
 
 1. The server accepts the WebSocket handshake.
-2. The server sends exactly one `History` frame containing the full persisted
-   transcript at that moment.
+2. The server sends exactly one `History` frame carrying the hosted session's
+   id (`session_id`) and the full persisted transcript at that moment
+   (`messages`).
 3. The connection carries zero or more live `Response` frames.
 4. The frontend may send `Request` frames at any time after the socket opens.
 
@@ -133,6 +139,17 @@ There are two discriminator levels:
 
 - `type` identifies the transport envelope: `Request`, `History`, or `Response`.
 - Rust enums use serde's default externally tagged representation.
+
+The initial `History` frame carries the hosted session's id alongside the
+transcript:
+
+```json
+{
+  "type": "History",
+  "session_id": "session-123",
+  "messages": []
+}
+```
 
 A request carrying fields therefore looks like:
 

@@ -14,8 +14,8 @@ Without a pursuit, an agent round is stateless: the model decides when a task is
 done by emitting a final message. Long, multi-step work needs more than that:
 
 1. **Durable intent.** An objective stated up front must still be active after
-   a restart. The pursuit persists in SQLite keyed by session id, so it survives
-   `/resume` and process restarts.
+   a restart. The pursuit persists on the session store (`SessionData.pursuit`,
+   ADR-0032), so it survives `/resume` and process restarts.
 2. **A driver that does not give up early.** A single round ends the moment the
    model stops calling tools, which often happens long before a real objective
    is achieved. The stop-gate refuses to let the round end until the condition
@@ -24,13 +24,15 @@ done by emitting a final message. Long, multi-step work needs more than that:
    objective is genuinely done" signal it can trust, distinct from a routine
    end-of-round.
 
-The pursuit carries **no status machine, no token/time budget, and no
-checklist**. Earlier revisions had all three; they were removed because the
-statuses were user-only, the budget flip was a footgun, and the checklist
-added a second completion gate that rarely changed outcomes. See
-[ADR-0010](../../adr/0010-slim-goal-primitive.md) and
-[ADR-0015](../../adr/0015-pursue-stop-gate-and-repeat-cron.md) for that
-history.
+The pursuit carries **no status machine and no checklist**. Earlier revisions
+had both, plus a token/time budget; the statuses were user-only and the
+checklist added a second completion gate that rarely changed outcomes, so they
+were removed. Budgets later returned in opt-in form: the user may set hard
+turn / token / wall-clock caps with `/pursue budget …`, and reaching one stops
+the loop with a terminal reason. See
+[ADR-0010](../../adr/0010-slim-goal-primitive.md),
+[ADR-0015](../../adr/0015-pursue-stop-gate-and-repeat-cron.md), and
+[ADR-0069](../../adr/0069-pursuit-budgets-and-stats.md) for that history.
 
 ## The slim primitive
 
@@ -121,7 +123,7 @@ deliberately distinct:
 | Driver | a condition (stop-gate) | a clock (cron) |
 | Work unit | continuation within one round | a fresh round per tick |
 | Stops when | the condition is met / cap / interrupt | cancelled or auto-expired |
-| Persistence | pursuit in `pursuits.db` | jobs in `repeat.db` |
+| Persistence | pursuit on the session store | jobs in `repeat.db` |
 
 `/repeat` parses a five-field cron expression (`minute hour day month weekday`,
 e.g. `*/5 * * * *` for every five minutes, `0 9 * * 1-5` for 09:00 on
@@ -138,11 +140,10 @@ restores the same pursuit — there is no separate "pursuit resume" step and no
 separate database; pursuit, todos, title, and checkpoints all share one
 session file (`<id>.json` snapshot + `<id>.jsonl` event log).
 
-On startup, a one-time best-effort migration reads the legacy `pursuits.db`
-(pre-ADR-0032) and the pre-ADR-0010 config-file `harness_goal*` keys and folds
-either into `SessionData.pursuit` if the session does not already have one.
-The old `pursuits.db` is left on disk but never read again after the first
-successful migration.
+Older installations may still have a `pursuits.db` file (the pre-ADR-0032
+store) or `harness_goal*` config keys (pre-ADR-0010) on disk. Both migration
+paths have been removed (ADR-0082): the file and keys are never read, and a
+pursuit is re-set with `/pursue` after upgrading across the window.
 
 A `PursuitCheckpoint` is written while a pursuit runs (status
 running/completed/interrupted/error) so `/session status` can report it, but a
@@ -165,3 +166,5 @@ multi-round loop.
   model-facing pursuit tools
 - [ADR-0032](../../adr/0032-fold-pursuit-into-session-store.md) — folding
   pursuit persistence into `SessionStore`
+- [ADR-0082](../../adr/0082-contain-pursuit-behind-the-stop-gate.md) —
+  containing pursuit behind the stop-gate; removing the legacy migrations

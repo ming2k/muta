@@ -10,8 +10,8 @@
 //! - Reads never panic (missing/corrupt → `None`; the caller falls back).
 //! - The last good copy survives a failed refresh (overwrite only on success).
 //!
-//! This is the concrete utility that [`modelsdev`](../../neenee_agent/modelsdev)
-//! and remote skill repos use to persist their downloads.
+//! This is the concrete utility that remote skill repos use to persist their
+//! downloads.
 
 use std::path::PathBuf;
 

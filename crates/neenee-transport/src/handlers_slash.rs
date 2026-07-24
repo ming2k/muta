@@ -35,8 +35,8 @@ use neenee_persistence::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
-use neenee_tools::commands::{CustomCommand, expand_command};
-use neenee_tools::project::init_neenee_config;
+use crate::commands::{CustomCommand, expand_command};
+use crate::project::init_neenee_config;
 
 use std::collections::HashMap;
 use std::sync::{

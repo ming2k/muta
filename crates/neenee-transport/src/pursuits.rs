@@ -1,34 +1,10 @@
 //! Pursuit-related display and parsing helpers.
 //!
-//! `load_legacy_pursuit_from_config` reads the pre-ADR-0010 single-pursuit config
-//! shape so an upgrade never silently drops a user's pinned pursuit.
 //! `format_pursuit_status` is the textual form surfaced in the TUI for `/pursuit`.
 //! `parse_pursuit_budget` / `format_pursuit_budget` back the `/pursue budget`
 //! subcommand (ADR-0069).
 
 use neenee_core::{Pursuit, PursuitBudget};
-use neenee_persistence::config::Config;
-
-/// Read the pre-ADR-0010 `harness_goal*` keys from the config file, if any.
-/// Used once at startup to migrate a pinned pursuit into the new pursuit store.
-pub fn load_legacy_pursuit_from_config() -> Option<Pursuit> {
-    #[derive(serde::Deserialize)]
-    struct LegacyGoal {
-        harness_goal: Option<String>,
-        #[serde(default)]
-        harness_goal_completed: bool,
-    }
-
-    let path = Config::config_file_path();
-    let content = std::fs::read_to_string(path).ok()?;
-    let legacy: LegacyGoal = toml::from_str(&content).ok()?;
-    let objective = legacy.harness_goal?;
-    Some(Pursuit {
-        objective,
-        is_complete: legacy.harness_goal_completed,
-        ..Default::default()
-    })
-}
 
 /// Single textual rendering of a [`Pursuit`] for `/pursuit` and exports: state
 /// label and objective.

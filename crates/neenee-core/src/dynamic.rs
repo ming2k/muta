@@ -1,7 +1,7 @@
 //! Dynamic catalog abstraction — the unified pattern for lists that change.
 //!
-//! neenee has several lists that evolve over time: provider/model catalogs
-//! (from models.dev), skills (local + remote repos), MCP server tools (runtime
+//! neenee has several lists that evolve over time: skills (local + remote
+//! repos), MCP server tools (runtime
 //! discovery), and permission rules. Hardcoding any of them means code changes
 //! every time the world changes. Instead, each follows the same philosophy:
 //!
@@ -44,8 +44,6 @@ pub trait DynamicToolSink: Send + Sync {
 /// A dynamically-discoverable list that refreshes from a source of truth.
 ///
 /// Implementations:
-/// - `neenee_agent::modelsdev::ModelsDevCatalog` — providers/models from
-///   models.dev (remote JSON → file cache → KNOWN_MODELS fallback).
 /// - `neenee_skills::SkillCatalog` — skills from local and remote sources.
 /// - `neenee_mcp::McpCatalog` — tools from connected MCP servers.
 ///

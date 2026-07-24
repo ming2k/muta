@@ -22,7 +22,8 @@ use neenee_persistence::config::{
 use neenee_persistence::provider_usage::ProviderUsage;
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, provider_template_spec,
+    NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, ProviderTemplateSpec,
+    provider_template_spec,
 };
 use std::collections::HashSet;
 
@@ -61,7 +62,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
     // Activate/switch refreshes the token first (handlers_provider).
     let (api_key, account_id) = match uc.auth {
         neenee_core::ChannelAuth::ChatGptOAuth => {
-            let store = neenee_oauth::AuthStore::load();
+            let store = neenee_providers::oauth::AuthStore::load();
             let tokens = store.get("chatgpt");
             (
                 tokens.map(|t| t.access.clone()).unwrap_or_default(),
@@ -71,7 +72,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
         neenee_core::ChannelAuth::CopilotOAuth => {
             // Copilot's bearer is the GitHub OAuth access token; there is no
             // account id (unlike ChatGPT's chatgpt_account_id claim).
-            let store = neenee_oauth::AuthStore::load();
+            let store = neenee_providers::oauth::AuthStore::load();
             (
                 store
                     .get("copilot")
@@ -81,7 +82,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
             )
         }
         neenee_core::ChannelAuth::XaiOAuth => {
-            let store = neenee_oauth::AuthStore::load();
+            let store = neenee_providers::oauth::AuthStore::load();
             (
                 store
                     .get("xai")
@@ -542,7 +543,7 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
                     .into_iter()
                     .map(str::to_string)
                     .collect::<Vec<_>>();
-                let mut known_models: Vec<&str> = supported_models_for_protocol(spec.protocol);
+                let mut known_models: Vec<&str> = supported_models_for_template(spec);
                 known_models.extend(fitted_ids.iter().map(String::as_str));
                 let supported = supported_model_intersection(&known_models, &current_models);
                 // A malformed/obsolete instance with no supported channels
@@ -659,21 +660,21 @@ pub async fn discover_provider_models(config: &mut Config) -> DiscoveryOutcome {
         let api_key: &SecretString = match channel.auth {
             neenee_core::ChannelAuth::ApiKey => channel.api_key.as_ref().unwrap_or(&no_key),
             neenee_core::ChannelAuth::CopilotOAuth => {
-                resolved_bearer = neenee_oauth::AuthStore::load()
+                resolved_bearer = neenee_providers::oauth::AuthStore::load()
                     .get("copilot")
                     .map(|tokens| tokens.access.clone())
                     .unwrap_or_default();
                 &resolved_bearer
             }
             neenee_core::ChannelAuth::ChatGptOAuth => {
-                resolved_bearer = neenee_oauth::AuthStore::load()
+                resolved_bearer = neenee_providers::oauth::AuthStore::load()
                     .get("chatgpt")
                     .map(|tokens| tokens.access.clone())
                     .unwrap_or_default();
                 &resolved_bearer
             }
             neenee_core::ChannelAuth::XaiOAuth => {
-                resolved_bearer = neenee_oauth::AuthStore::load()
+                resolved_bearer = neenee_providers::oauth::AuthStore::load()
                     .get("xai")
                     .map(|tokens| tokens.access.clone())
                     .unwrap_or_default();
@@ -739,7 +740,7 @@ pub async fn discover_provider_models(config: &mut Config) -> DiscoveryOutcome {
                     // registry order so provider response ordering cannot
                     // churn the picker.
                     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
-                    let known_models = supported_models_for_protocol(spec.protocol);
+                    let known_models = supported_models_for_template(spec);
                     supported_model_intersection(&known_models, &ids)
                 };
                 if supported.is_empty() {
@@ -803,13 +804,16 @@ pub struct DiscoveryOutcome {
     pub failures: Vec<(String, String)>,
 }
 
-/// Model ids known to the client and compatible with a provider protocol.
-fn supported_models_for_protocol(protocol: &str) -> Vec<&'static str> {
-    neenee_core::KNOWN_MODELS
+/// Model ids known to the client and compatible with a provider template.
+///
+/// Drawn from the template's own local baseline table (filtered to the
+/// template's wire protocol), preserving the table's order.
+fn supported_models_for_template(spec: &ProviderTemplateSpec) -> Vec<&'static str> {
+    spec.baselines
         .iter()
         .filter(|model| {
             matches!(
-                (protocol, model.format),
+                (spec.protocol, model.format),
                 ("openai", WireFormat::OpenAi)
                     | ("anthropic", WireFormat::AnthropicCompat)
                     | ("gemini", WireFormat::Google)
@@ -822,8 +826,8 @@ fn supported_models_for_protocol(protocol: &str) -> Vec<&'static str> {
 /// Return `supported ∩ available` in the client-registry order.
 ///
 /// The provider response is only an availability signal; it is not trusted as
-/// a model registry. Restricting it to `KNOWN_MODELS` for the provider's wire
-/// protocol guarantees every picker channel has client-side metadata and
+/// a model registry. Restricting it to the template's local baseline table
+/// guarantees every picker channel has client-side metadata and
 /// request behavior.
 fn supported_model_intersection<'a>(supported: &[&'a str], available: &[String]) -> Vec<&'a str> {
     let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
@@ -1048,11 +1052,15 @@ fn migrate_legacy_instance(
 
 /// Seed one channel per model the opencode-go relay actually serves
 /// ([`OPENCODE_GO_SERVED_MODELS`], mirroring models.dev), taking the wire
-/// format and metadata from the client registry. A model registered for
-/// another provider (e.g. Kimi `k3`, `glm-4.7`) must not leak in here — an
-/// unserved channel only ever answers "model not found".
+/// format and metadata from the template's local baseline table. A model
+/// registered for another provider (e.g. Kimi `k3`, `glm-4.7`) must not leak
+/// in here — an unserved channel only ever answers "model not found".
 fn opencode_go_seed_channels(api_key: SecretString) -> Vec<UserChannelConfig> {
-    let mut models: Vec<_> = neenee_core::KNOWN_MODELS
+    let Some(spec) = provider_template_spec("opencode-go") else {
+        return Vec::new();
+    };
+    let mut models: Vec<_> = spec
+        .baselines
         .iter()
         .filter(|m| OPENCODE_GO_SERVED_MODELS.contains(&m.id))
         .collect();
@@ -1482,13 +1490,14 @@ mod tests {
     }
 
     #[test]
-    fn protocol_supported_models_come_from_the_client_registry() {
-        let openai = supported_models_for_protocol("openai");
+    fn template_supported_models_come_from_the_local_table() {
+        let openai = supported_models_for_template(provider_template_spec("openai").unwrap());
         assert!(openai.contains(&"gpt-4o"));
         assert!(openai.contains(&"gpt-5.6"));
         assert!(!openai.contains(&"claude-opus-4-8"));
 
-        let anthropic = supported_models_for_protocol("anthropic");
+        let anthropic =
+            supported_models_for_template(provider_template_spec("anthropic").unwrap());
         assert!(anthropic.contains(&"claude-opus-4-8"));
         assert!(!anthropic.contains(&"gpt-4o"));
     }
@@ -1596,7 +1605,7 @@ mod tests {
 
     #[test]
     fn reconcile_api_instance_keeps_last_discovered_supported_subset() {
-        let known = supported_models_for_protocol("openai");
+        let known = supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
         let subset = [known[1], known[3]];
         let mut instance = template_instance("openai-sub2api", &subset);
         instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -1612,7 +1621,7 @@ mod tests {
 
     #[test]
     fn reconcile_api_instance_drops_unsupported_without_expanding_subset() {
-        let known = supported_models_for_protocol("openai");
+        let known = supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
         let kept = known[2];
         let mut instance = template_instance("openai-sub2api", &[kept, "removed-or-unknown-model"]);
         instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -2632,7 +2641,7 @@ mod tests {
             kept_a.to_string(),
         ];
         let expected = supported_model_intersection(
-            &supported_models_for_protocol(spec.protocol),
+            &supported_models_for_template(spec),
             &advertised,
         )
         .into_iter()

@@ -3,7 +3,7 @@
 The agent talks to LLM providers through the `Provider` trait
 (`crates/neenee-core/src/capability.rs`). Every provider implementation lives
 in `crates/neenee-providers/src/`. Provider selection happens at startup and
-on `/provider` (the picker) in `crates/neenee/src/main.rs`.
+on `/provider` (the picker) in `crates/neenee-cli/src/main.rs`.
 
 ## Capability matrix
 
@@ -21,23 +21,22 @@ Three capability surfaces matter for tool-using agents:
 
 | Provider | Native tools | Reasoning | Structured streaming | Source |
 |----------|--------------|-----------|----------------------|--------|
-| `OpenAiProvider` | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
-| OpenAI-compatible registry presets | yes | yes | yes | `OpenAiProviderSpec` (delegates to `OpenAiProvider`) |
-| `ResponsesProvider` (`OpenAiResponses`) | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
+| `OpenAiChatCompletionsProvider` | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
+| OpenAI-compatible registry presets | yes | yes | yes | `OpenAiProviderSpec` (delegates to `OpenAiChatCompletionsProvider`) |
+| `OpenAiResponsesProvider` (`OpenAiResponses`) | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
 | `AnthropicMessagesProvider` (`Anthropic`) | yes | yes | yes | `neenee-llm-client` (protocol::anthropic) |
 | `GoogleProvider` (`Google`) | yes | no | yes | `neenee-llm-client` (protocol::google) |
-| `MockProvider` | no | no | no | `neenee-providers/src/mock.rs` |
 
 The two OpenAI-compatible presets in `OPENAI_PROVIDER_SPECS` (`kimi-code`,
 `zai-code`) are built by `OpenAiProviderSpec::build`, which returns an
-`OpenAiProvider` with its `id` field set to the preset identifier. They
-therefore inherit every capability of `OpenAiProvider`. Multi-model
+`OpenAiChatCompletionsProvider` with its `id` field set to the preset identifier. They
+therefore inherit every capability of `OpenAiChatCompletionsProvider`. Multi-model
 catalog entries (`deepseek`, `openai`) are materialized the same way from the
 catalog layer, not the preset table. `GoogleProvider` is a standalone
 Google-native adapter: it converts the same internal tool schemas into Google
 `functionDeclarations`, parses `functionCall` parts, and replays tool results
 as `functionResponse` parts. `AnthropicMessagesProvider` speaks the
-Anthropic `/messages` wire format; `ResponsesProvider` speaks the OpenAI
+Anthropic `/messages` wire format; `OpenAiResponsesProvider` speaks the OpenAI
 Responses API used by the ChatGPT subscription backend.
 
 ## Provider catalog
@@ -53,7 +52,7 @@ uses a separate `<NAME>_MODEL` env var.
 ### OpenAI-compatible presets
 
 Each row corresponds to one entry in the `OPENAI_PROVIDER_SPECS` table in
-`crates/neenee-providers/src/registry.rs`. The endpoint, default model, and
+`crates/neenee-providers/src/registry/mod.rs`. The endpoint, default model, and
 env vars are data in that table, not hard-coded per struct.
 
 | `default_provider` | Endpoint | API key env | Model env | Default / popular models |
@@ -65,10 +64,10 @@ env vars are data in that table, not hard-coded per struct.
 
 | `default_provider` | Struct | Endpoint | API key env | Model env | Default / popular models |
 |--------------------|--------|----------|-------------|-----------|--------------------------|
-| `openai` | `OpenAiProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
+| `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
 | `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | `claude-opus-4-8` (default), `claude-fable-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
-| `gemini` | `GoogleProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
-| `deepseek` | `OpenAiProvider` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_FLASH_MODEL` / `DEEPSEEK_PRO_MODEL` | `deepseek-v4-flash`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
+| `gemini` | `GoogleProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
+| `deepseek` | `OpenAiChatCompletionsProvider` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_FLASH_MODEL` / `DEEPSEEK_PRO_MODEL` | `deepseek-v4-flash`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
 
 Notes:
 
@@ -94,8 +93,9 @@ Notes:
   always-available GPT-4o family because GitHub filters models by client id.
   See [Copilot Provider Pitfalls](../how-to/copilot-provider-pitfalls.md).
 - `opencode-go` is a runtime-derived entry whose model list is built from
-  `KNOWN_MODELS` at startup, spanning OpenAI- and Anthropic-compatible
-  models (e.g. MiniMax, Qwen) behind opencode-go's endpoints.
+  its local baseline table at startup, spanning OpenAI- and
+  Anthropic-compatible models (e.g. MiniMax, Qwen) behind opencode-go's
+  endpoints.
 
 ## Dispatch sites
 
@@ -106,16 +106,16 @@ provider id — registry preset, built-in multi-model entry, or user-defined
 credentials, model id, and transport, so startup and runtime switching share
 one source of truth for the env-var-then-config resolution rules. The
 concrete `Provider` is then built by `build_provider_for_channel` in
-`crates/neenee-providers/src/registry.rs`, which matches on `Transport`.
+`crates/neenee-providers/src/registry/`, which matches on `Transport`.
 
 1. The registry presets are built from `OPENAI_PROVIDER_SPECS` via
-   `OpenAiProviderSpec::build`, yielding an `OpenAiProvider` with its
+   `OpenAiProviderSpec::build`, yielding an `OpenAiChatCompletionsProvider` with its
    `id` field set to the preset identifier.
 2. Multi-model built-ins (`openai`, `google`, `deepseek`, `anthropic`,
    `kimi-code`, `zai-code`) are seeded by the legacy-instance migration in
    `migrate_legacy_provider_instances`; `opencode-go` is derived at runtime
-   from `KNOWN_MODELS`. An unknown id resolves to an internal `MockProvider`
-   fallback (not user-visible).
+   from its baseline table. An unknown id resolves to a `NoProvider`
+   sentinel (not user-visible; chat dispatch refuses up-front).
 
 | Site | Function | Purpose |
 |------|----------|---------|

@@ -8,11 +8,19 @@ license.workspace = true
 [dependencies]
 neenee-core = { path = "../neenee-core" }
 neenee-llm-client = { path = "../neenee-llm-client" }
-async-trait = { workspace = true }
+neenee-persistence = { path = "../neenee-persistence" }
 futures = { workspace = true }
 # Live model-list discovery (`GET /v1/models` &c.) and its JSON parsing.
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+inventory = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # `wire` integration test exercises the full HTTP → SSE → parse path against a

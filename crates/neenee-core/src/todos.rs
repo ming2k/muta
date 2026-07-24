@@ -5,7 +5,7 @@
 //!
 //! Domain types live here. The agent owns the live task-list cells, while the
 //! concrete `todo` / `todo_update` implementations and their injected context
-//! live in `neenee-tools`. The harness mirrors their state back into the
+//! live in `neenee-agent::tools`. The harness mirrors their state back into the
 //! session each turn and replays it on resume.
 //!
 //! ## Identity vs. display

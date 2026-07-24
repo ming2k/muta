@@ -18,8 +18,8 @@ pub enum ChannelAuth {
     ApiKey,
     /// xAI SuperGrok subscription: resolve the live OAuth access token from
     /// `auth.toml` (key `"xai"`), refreshed at activate/switch time (see
-    /// `neenee_oauth`). Any user provider channel may set this; the catalog
-    /// always reads the shared xAI token set.
+    /// `neenee_providers::oauth`). Any user provider channel may set this; the
+    /// catalog always reads the shared xAI token set.
     XaiOAuth,
     /// ChatGPT/Codex subscription: resolve the live OAuth access token from
     /// `auth.toml` (key `"chatgpt"`) and the `chatgpt_account_id`, then route

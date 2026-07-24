@@ -16,7 +16,7 @@
 use futures::StreamExt;
 use mockito::{Matcher, Server};
 use neenee_core::{Message, Provider, ProviderStreamEvent, Role, SecretString};
-use neenee_providers::{AnthropicMessagesProvider, OpenAiProvider};
+use neenee_providers::{AnthropicMessagesProvider, OpenAiChatCompletionsProvider};
 use serde_json::{Value, json};
 
 /// Join SSE `data:` events into a single response body. Each event becomes one
@@ -45,7 +45,7 @@ async fn collect_events(
 // ═════════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn openai_chat_parses_content_reasoning_tool_calls_and_headers() {
+async fn openai_chat_completions_parses_content_reasoning_tool_calls_and_headers() {
     let mut server = Server::new_async().await;
     let url = format!("{}/v1/chat/completions", server.url());
     let _mock = server
@@ -61,7 +61,7 @@ async fn openai_chat_parses_content_reasoning_tool_calls_and_headers() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url_and_user_agent(
+    let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
         "test-key".to_string(),
         "gpt-test".to_string(),
         &url,
@@ -89,7 +89,7 @@ async fn openai_chat_parses_content_reasoning_tool_calls_and_headers() {
 }
 
 #[tokio::test]
-async fn openai_chat_strips_tool_call_echo_when_native_calls_present() {
+async fn openai_chat_completions_strips_tool_call_echo_when_native_calls_present() {
     // GLM/Qwen leak: the same tool call arrives both as `content` text and as a
     // native `tool_calls` entry. The native call wins and the textual mirror is
     // suppressed so raw JSON never reaches the UI.
@@ -105,7 +105,7 @@ async fn openai_chat_strips_tool_call_echo_when_native_calls_present() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -123,7 +123,7 @@ async fn openai_chat_strips_tool_call_echo_when_native_calls_present() {
 }
 
 #[tokio::test]
-async fn openai_chat_classifies_server_error_as_retryable() {
+async fn openai_chat_completions_classifies_server_error_as_retryable() {
     let mut server = Server::new_async().await;
     let url = format!("{}/v1/chat/completions", server.url());
     let _mock = server
@@ -133,7 +133,7 @@ async fn openai_chat_classifies_server_error_as_retryable() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -148,7 +148,7 @@ async fn openai_chat_classifies_server_error_as_retryable() {
 }
 
 #[tokio::test]
-async fn openai_chat_omits_auth_header_when_api_key_is_empty() {
+async fn openai_chat_completions_omits_auth_header_when_api_key_is_empty() {
     // Keyless servers (a local `llama-server` started without `--api-key`) must
     // not receive an empty `Authorization: Bearer ` header, which some servers
     // reject even when they would otherwise ignore the key.
@@ -164,7 +164,7 @@ async fn openai_chat_omits_auth_header_when_api_key_is_empty() {
         .await;
 
     let provider =
-        OpenAiProvider::with_base_url_and_user_agent(String::new(), "m".to_string(), &url, "ua");
+        OpenAiChatCompletionsProvider::with_base_url_and_user_agent(String::new(), "m".to_string(), &url, "ua");
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -173,7 +173,7 @@ async fn openai_chat_omits_auth_header_when_api_key_is_empty() {
 }
 
 #[tokio::test]
-async fn openai_chat_decode_failure_embeds_raw_body() {
+async fn openai_chat_completions_decode_failure_embeds_raw_body() {
     // A gateway/CDN interstitial returns 200 with an HTML body instead of JSON.
     // reqwest's own `.json()` would surface only "error decoding response body"
     // with no hint of the cause; the decode helper must embed the raw text.
@@ -187,7 +187,7 @@ async fn openai_chat_decode_failure_embeds_raw_body() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -224,7 +224,7 @@ async fn openai_stream_parses_text_reasoning_and_tool_call_deltas() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
         .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -274,7 +274,7 @@ async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
         .create_async()
         .await;
 
-    let provider = OpenAiProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
         .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await

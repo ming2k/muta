@@ -8,7 +8,7 @@
 //! filesystem, no network. Persistence-backed types that once lived here
 //! (`RepeatStore`, the SQLite migrations) moved to `neenee-persistence`; this
 //! crate keeps contracts shared by independent layers: domain values
-//! (`Pursuit`, `ThreadPursuit`, `RepeatJob`, `TodoList`, …), wire DTOs, and
+//! (`Pursuit`, `TokenUsage`, `RepeatJob`, `TodoList`, …), wire DTOs, and
 //! capability traits (`Provider`, `Tool`, `Hook`, `SessionReview`). Pure logic
 //! owned only by the agent belongs in `neenee-agent` (ADR-0057). Pursuit
 //! persistence moved onto `SessionStore` (`SessionData.pursuit`) in ADR-0032.
@@ -23,10 +23,12 @@ pub mod colorschemeconfig;
 pub use colorschemeconfig::ColorSchemeConfig;
 pub mod cache;
 pub use cache::CachePolicy;
-pub mod pursuits;
+pub mod pursuit;
 pub mod repeat;
-pub use pursuits::{Pursuit, PursuitBudget, RoundOutcome, RoundTimer, ThreadPursuit, TokenUsage};
+pub use pursuit::{Pursuit, PursuitBudget};
 pub use repeat::{DEFAULT_MAX_AGE_DAYS, RepeatJob};
+pub mod usage;
+pub use usage::TokenUsage;
 
 pub mod error;
 pub use error::{
@@ -98,8 +100,8 @@ pub use hooks::{
 pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    FittedModel, KNOWN_MODELS, Model, ModelCapabilities, RemoteModelEndpoint, RemoteModelMetadata,
-    WireFormat, model_by_id, register_fitted_models, resolve as resolve_model,
+    BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint, RemoteModelMetadata,
+    WireFormat, baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

@@ -1,8 +1,12 @@
 # TUI architecture
 
-The neenee terminal UI is split into **three layers**, each its own
-compilation unit, with dependencies pointing strictly downward. The split
-exists so the rendering engine, the widgets, and the application wiring can be
+The neenee terminal UI is split into **three layers** with dependencies
+pointing strictly downward. The engine is its own crate; the view and shell
+layers are module trees under `crate::tui` in the `neenee-cli` binary (the
+view was a separate crate, `neenee-tui-view`, until ADR-0079 re-merged it —
+the one-way seam is now a documented convention rather than
+compiler-enforced). The split exists so the rendering engine, the widgets,
+and the application wiring can be
 reasoned about (and tested) in isolation, and so the widget layer can never
 secretly reach into application state.
 
@@ -16,19 +20,19 @@ secretly reach into application state.
                           ▲  widgets render *into* the grid
                           │  (Frame::render_widget)
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-tui-view  ·  VIEW (widgets + document model)                  │
+│  crate::tui view modules  ·  VIEW (widgets + document model)          │
 │  render/ widget tree · document model · layout/hit-testing ·          │
 │  selection · fuzzy · provider ranking · shared modal discriminants.   │
 │  Renders neenee_core domain types → depends on neenee-core.           │
-│  NEVER depends on the app shell.                                      │
+│  NEVER depends on the shell modules.                                  │
 └──────────────────────────────────────────────────────────────────────┘
                           ▲  the shell fills in a borrowed
                           │  TranscriptView<'a> each frame
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee::tui  ·  APP SHELL                                       │
+│  crate::tui shell modules  ·  APP SHELL (neenee-cli binary)           │
 │  App state · event loop · input→action mapping · terminal lifecycle · │
 │  completion logic · clipboard · session wiring.                       │
-│  Owns the data; drives the view layer; depends on neenee-tui-view.    │
+│  Owns the data; drives the view modules in the same crate.            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -42,16 +46,18 @@ It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
 and friends. It has **no neenee dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `crates/neenee-tui-view`
+### View — `crates/neenee-cli/src/tui` (view modules)
 
 The widget layer and the semantic document model. Everything here is a pure
 function of borrowed data: it reads `neenee_core` domain types and a `Theme`
-and writes cells into the engine's grid. It depends on `neenee-tui-engine` (to draw),
-`neenee-core` (the domain types it renders), and `neenee-providers` (the model
-catalog the picker ranks). It **does not** depend on `neenee` — the
-compiler enforces the one-way boundary.
+and writes cells into the engine's grid. The view modules depend on
+`neenee-tui-engine` (to draw),
+`neenee-core` (the domain types they render), and `neenee-providers` (the model
+catalog the picker ranks). They **do not** depend on the shell modules — since
+ADR-0079 re-merged the view crate into the binary, the one-way boundary is a
+documented convention rather than compiler-enforced.
 
-The drawing tree lives flat at the crate root, grouped by concern:
+The view modules live flat under `crates/neenee-cli/src/tui/`, grouped by concern:
 
 | Module | Responsibility |
 |--------|----------------|
@@ -66,13 +72,13 @@ The drawing tree lives flat at the crate root, grouped by concern:
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
 | `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
 
-### App shell — `crates/neenee/src/tui`
+### App shell — `crates/neenee-cli/src/tui`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the
-mutable state and drives the view layer once per frame. It depends on
-`neenee-tui-view` and re-exports the view modules at their historical
-`crate::tui::*` paths so shell code reads unchanged.
+mutable state and drives the view layer once per frame. Shell and view share
+the `crate::tui` module tree since ADR-0079; the shell addresses the view as
+`crate::tui::{view, components, …}`.
 
 | Module | Responsibility |
 |--------|----------------|
@@ -114,15 +120,15 @@ without owning state:
 - `ActivityTab` — which section the Activity modal shows.
 
 Because both layers share them and dependencies point downward, they live in
-the lower layer (`neenee-tui-view::modal`) and the shell re-exports them. Same
+the lower layer (`tui::modal`) and the shell re-exports them. Same
 reasoning for `completion::{Completion, CompletionKind}`: the render code draws
 them, so the *types* live in the view layer while the *matching logic* stays in
 the shell as an `impl App`.
 
 ## Component reuse inside the view layer
 
-Within `render/`, components stack into reuse tiers — lower tiers know nothing
-about higher ones:
+Within the view modules, components stack into reuse tiers — lower tiers know
+nothing about higher ones:
 
 ```text
   leaves    tools/*  ·  overlays/{help,session,provider,…}
@@ -147,7 +153,7 @@ about higher ones:
   handling and action logic stay in the app shell.
 - **`disclosure/`** — the collapsible-step state machine (`Disclosure`,
   `Interaction`) and shared header rendering, reused by every `tools/*` renderer.
-- **`render/layout/`** — transcript arrangement strategies (`default`,
+- **`layout/`** — transcript arrangement strategies (`default`,
   `legacy`) selected by `[tui] transcript_layout`.
 
 The leaves (`tools/*`, the per-modal overlays) are intentionally thin: they

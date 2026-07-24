@@ -1,10 +1,11 @@
 //! Shared configuration schema for the web tools.
 //!
-//! Lives in `neenee-core` (not `neenee-tools`) because both the app-layer
+//! Lives in `neenee-core` (not with the tool implementations) because both the
+//! app-layer
 //! `Config` (which owns the `[websearch]` table) and the tool implementations
 //! need the type, and we do not want `neenee-persistence` to depend on
-//! `neenee-tools`. It is plain serialisable data; the tool implementations
-//! live in `neenee-tools::web` and read this struct as input.
+//! `neenee-agent`. It is plain serialisable data; the tool implementations
+//! live in `neenee-agent::tools::web` and read this struct as input.
 
 use serde::{Deserialize, Serialize};
 

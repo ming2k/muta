@@ -328,7 +328,7 @@ pub struct UserChannelConfig {
     /// existing behavior: the bearer comes from `api_key_env` / `api_key`.
     /// `XaiOAuth` instead resolves a live SuperGrok access token from
     /// `auth.toml` (refreshing it on demand) — the `api_key`/`api_key_env`
-    /// fields are ignored. See `neenee_oauth` and ADR-0052.
+    /// fields are ignored. See `neenee_providers::oauth` and ADR-0052.
     #[serde(default)]
     pub auth: ChannelAuth,
     /// Reasoning `effort` for an OpenAI or Anthropic channel — one of
@@ -556,9 +556,7 @@ impl UserProviderConfig {
 
 /// The built-in provider ids whose API keys can live in [`Credentials`]. Each
 /// maps 1:1 to one `*_api_key` field on [`Config`] via
-/// [`Config::builtin_api_key`] / [`Config::set_builtin_api_key`]. Kept in sync
-/// with the `config_key_for` mapping in `neenee_agent::catalog` so a provider
-/// id resolves to the same field in every layer.
+/// [`Config::builtin_api_key`] / [`Config::set_builtin_api_key`].
 const CREDENTIALED_BUILTINS: &[&str] = &[
     "openai",
     "google",

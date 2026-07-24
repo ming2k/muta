@@ -1448,7 +1448,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
-name = "neenee"
+name = "neenee-agent"
+version = "0.20.3"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "fastrand",
+ "futures",
+ "glob",
+ "image",
+ "inventory",
+ "mockito",
+ "neenee-core",
+ "neenee-llm-client",
+ "neenee-persistence",
+ "neenee-providers",
+ "neenee-skills",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
+name = "neenee-cli"
 version = "0.20.3"
 dependencies = [
  "arboard",
@@ -1460,55 +1491,23 @@ dependencies = [
  "insta",
  "neenee-agent",
  "neenee-core",
- "neenee-mcp",
  "neenee-persistence",
  "neenee-providers",
  "neenee-skills",
- "neenee-tools",
  "neenee-transport",
  "neenee-tui-engine",
- "neenee-tui-view",
- "serde",
  "serde_json",
  "similar",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "toml",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width",
  "uuid",
  "webbrowser",
-]
-
-[[package]]
-name = "neenee-agent"
-version = "0.20.3"
-dependencies = [
- "async-trait",
- "chrono",
- "fastrand",
- "futures",
- "mockito",
- "neenee-core",
- "neenee-llm-client",
- "neenee-oauth",
- "neenee-persistence",
- "neenee-providers",
- "neenee-skills",
- "neenee-tools",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1518,14 +1517,11 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "glob",
  "inventory",
  "serde",
  "serde_json",
  "toml",
- "tracing",
  "uuid",
- "yaml_serde",
 ]
 
 [[package]]
@@ -1535,6 +1531,7 @@ dependencies = [
  "async-trait",
  "futures",
  "httpdate",
+ "inventory",
  "mockito",
  "neenee-core",
  "reqwest",
@@ -1557,27 +1554,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-oauth"
-version = "0.20.3"
-dependencies = [
- "base64",
- "neenee-core",
- "neenee-persistence",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "toml",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "neenee-persistence"
 version = "0.20.3"
 dependencies = [
- "async-trait",
  "chrono",
  "crc32c",
  "directories",
@@ -1601,14 +1580,35 @@ dependencies = [
 name = "neenee-providers"
 version = "0.20.3"
 dependencies = [
- "async-trait",
+ "base64",
  "futures",
+ "inventory",
  "mockito",
  "neenee-core",
  "neenee-llm-client",
+ "neenee-persistence",
  "reqwest",
+ "serde",
  "serde_json",
+ "sha2",
  "tokio",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "neenee-server"
+version = "0.20.3"
+dependencies = [
+ "async-trait",
+ "neenee-agent",
+ "neenee-core",
+ "neenee-transport",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1631,31 +1631,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-tools"
-version = "0.20.3"
-dependencies = [
- "async-trait",
- "base64",
- "chrono",
- "dirs",
- "glob",
- "image",
- "inventory",
- "neenee-core",
- "neenee-persistence",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-util",
- "toml",
- "uuid",
- "walkdir",
- "yaml_serde",
-]
-
-[[package]]
 name = "neenee-transport"
 version = "0.20.3"
 dependencies = [
@@ -1665,11 +1640,9 @@ dependencies = [
  "neenee-agent",
  "neenee-core",
  "neenee-mcp",
- "neenee-oauth",
  "neenee-persistence",
  "neenee-providers",
  "neenee-skills",
- "neenee-tools",
  "serde",
  "serde_json",
  "tempfile",
@@ -1681,6 +1654,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1689,21 +1663,6 @@ version = "0.20.3"
 dependencies = [
  "bitflags",
  "crossterm",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "neenee-tui-view"
-version = "0.20.3"
-dependencies = [
- "chrono",
- "insta",
- "neenee-core",
- "neenee-providers",
- "neenee-tui-engine",
- "serde_json",
- "similar",
  "unicode-segmentation",
  "unicode-width",
 ]

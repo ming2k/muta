@@ -108,8 +108,8 @@ the same step are deduplicated into one focus target.
 ## Source
 
 Shared header rendering: `draw_expandable_step_header` and `tool_header_line`
-in `crates/neenee-tui-view/src/disclosure/renderers.rs`. Sticky-pin tracking:
+in `crates/neenee-cli/src/tui/disclosure/renderers.rs`. Sticky-pin tracking:
 `StickyStep` in the same module. `BlockRegion` is defined in
-`crates/neenee-tui-view/src/layout.rs`. The structured output the tool-step body
+`crates/neenee-cli/src/tui/model/layout.rs`. The structured output the tool-step body
 renders from is documented in
 [ADR-0001](../../adr/0001-tool-rendering-redesign.md).

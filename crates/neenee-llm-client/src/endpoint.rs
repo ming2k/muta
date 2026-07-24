@@ -2,7 +2,7 @@
 //!
 //! Every concrete provider carries the same five connection fields —
 //! `api_key`, `model`, `base_url`, `user_agent`, `id` — duplicated verbatim
-//! across [`crate::protocol::openai::OpenAiProvider`],
+//! across [`crate::protocol::openai::OpenAiChatCompletionsProvider`],
 //! [`crate::protocol::anthropic::AnthropicMessagesProvider`], and
 //! [`crate::protocol::google::GoogleProvider`]. [`Endpoint`] factors that out so each
 //! provider struct keeps only the fields *unique* to its wire format.

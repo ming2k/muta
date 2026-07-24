@@ -11,7 +11,7 @@
 //! returns a clear error if it ever is.
 
 use async_trait::async_trait;
-use futures::stream::{BoxStream, StreamExt, empty};
+use futures::stream::BoxStream;
 use neenee_core::{Message, ModelRequest, Provider};
 
 /// The provider id reported by [`NoProvider`]. Callers that need to gate on
@@ -64,15 +64,6 @@ impl Provider for NoProvider {
 
 fn no_provider_message() -> String {
     "No provider configured. Add one with /provider before sending a message.".to_string()
-}
-
-/// The stream returned by [`NoProvider::stream_chat`] when callers bypass the
-/// dispatch gate and need an *empty* stream instead of an `Err`. Not used by
-/// the trait impl (which errors immediately) but available to test fixtures
-/// that want the sentinel shape without the error.
-#[allow(dead_code)]
-fn empty_no_provider_stream() -> BoxStream<'static, Result<String, String>> {
-    empty().boxed()
 }
 
 #[cfg(test)]

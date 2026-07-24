@@ -1,7 +1,7 @@
 //! OpenAI **Responses** API provider — the wire format spoken by the ChatGPT
 //! subscription backend (`chatgpt.com/backend-api/codex/responses`).
 //!
-//! Unlike the chat-completions [`OpenAiProvider`](crate::OpenAiProvider),
+//! Unlike the chat-completions [`OpenAiChatCompletionsProvider`](crate::OpenAiChatCompletionsProvider),
 //! this provider:
 //! - sends the OAuth access token as the bearer (not an API key),
 //! - attaches the optional `ChatGPT-Account-Id` header,
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use crate::{Client, Endpoint, TurnState};
 
 /// OpenAI Responses-API provider (ChatGPT subscription backend).
-pub struct ResponsesProvider {
+pub struct OpenAiResponsesProvider {
     pub endpoint: Endpoint,
     pub turn: TurnState,
     pub reasoning_effort: Option<Effort>,
@@ -44,7 +44,7 @@ pub struct ResponsesProvider {
     pub client: Client,
 }
 
-impl ResponsesProvider {
+impl OpenAiResponsesProvider {
     pub fn new(
         access_token: String,
         model: String,
@@ -149,7 +149,7 @@ impl ResponsesProvider {
 }
 
 #[async_trait]
-impl Provider for ResponsesProvider {
+impl Provider for OpenAiResponsesProvider {
     fn provider_id(&self) -> String {
         self.endpoint.id.clone()
     }

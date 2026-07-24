@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Standalone `neenee-server` binary and `neenee --attach` co-driving
+  (ADR-0081).** A new headless session host (`neenee-server --project <path>
+  [--session <id>] [--port <n>] [--public]`) hosts one session and serves it
+  over the same WebSocket protocol `/serve` uses, writing a per-project
+  discovery record (`$XDG_RUNTIME_DIR/neenee/serve/<project-bucket>.json`,
+  mode 0600, removed on clean shutdown) so clients can find it.
+  `neenee --attach [session-id]` runs the TUI as a WebSocket client of that
+  live session — spawning the server on demand when none runs — so two
+  frontends co-drive one session. The `History` frame gained a `session_id`
+  field (the only protocol change). See
+  [ADR-0081](docs/adr/0081-neenee-server-and-attach-model.md).
+
+- **Session-harness assembly factory (ADR-0081).** The session assembly that
+  lived in the CLI's `main.rs` moved behind
+  `neenee_transport::bootstrap::assemble`, which both binaries now call with
+  an injected identity, principal profile, and `UiBridge`. The transport
+  layer stays application-neutral, and the CLI's direct dependencies on
+  `neenee-tools` and `neenee-mcp` are gone. See
+  [ADR-0081](docs/adr/0081-neenee-server-and-attach-model.md).
+
 - **Modular prompt-cache control (ADR-0067).** A pure-domain `CachePolicy`
   classifier now resolves each model family's caching strategy
   (`Breakpoints`/`SessionKey`/`Automatic`). As a result the token-source report
@@ -82,6 +102,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it (for example a string `"3"` for an integer `offset`).
 
 ### Changed
+
+- **Pursuit contained behind the stop-gate; pursuit module slimmed to its
+  domain values (ADR-0082).** Pursuit now has a written containment
+  invariant: it may interact with the round loop only through the
+  `stop_gate` composition point (the gate chain shared with `Stop` hooks),
+  and any new touchpoint outside that chain needs its own ADR. The
+  `neenee_core::pursuits` junk drawer was emptied — `TokenUsage` moved to
+  `neenee_core::usage` (the `neenee_core::TokenUsage` re-export is
+  unchanged), `RoundOutcome` moved into `neenee-agent` — leaving only
+  `Pursuit` and `PursuitBudget`. No user-visible behavior change. See
+  [ADR-0082](docs/adr/0082-contain-pursuit-behind-the-stop-gate.md).
+
+- **Package renamed `neenee` → `neenee-cli`; the command stays `neenee`
+  (ADR-0080).** With a second application binary (`neenee-server`), the
+  single-binary premise of ADR-0075 no longer held. Only the Cargo package
+  and directory changed: `[[bin]] name` is still `neenee`, so every
+  invocation, alias, installer, and release artifact is untouched;
+  `cargo -p neenee-cli` selects the package. See
+  [ADR-0080](docs/adr/0080-rename-neenee-to-neenee-cli.md).
+
+- **`neenee-tui-view` merged back into the binary (ADR-0079).** The view
+  crate had a single consumer and changed in near-lockstep with the shell
+  (92% of its commits also touched the binary), so the widgets, document
+  model, and overlays moved back into `crates/neenee-cli/src/tui/` as
+  ordinary modules and the crate was deleted. The engine/view/shell
+  layering stays as a documented convention and the `TranscriptView` seam
+  is unchanged. See
+  [ADR-0079](docs/adr/0079-remerge-tui-view-into-binary.md).
 
 - **Round lifecycle consolidated into `RoundLifecycle`; `loop_status` is now
   typed (ADR-0078).** The cancellation-token + generation protocol that
@@ -257,7 +305,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formatted result list; `format_results` now passes through the same
   16,000-character cap the other search backends already applied.
 
+- **`neenee-tools` crate merged away.** The built-in tools (`bash`,
+  `read_text`, `grep`, `glob`, `webfetch`, todo, …) moved into `neenee-agent`'s
+  new `tools` module, and slash-command discovery plus project scaffolding
+  moved into `neenee-transport` as its `commands` and `project` modules. The
+  standalone `neenee-tools` crate is deleted; tool behavior is unchanged.
+
+- **OpenAI provider types renamed for clarity.** `OpenAiProvider` is now
+  `OpenAiChatCompletionsProvider` (the Chat Completions implementation) and
+  `ResponsesProvider` is now `OpenAiResponsesProvider` (the Responses API
+  implementation), both in `neenee-llm-client`. Behavior is unchanged; the
+  `OpenAiProviderSpec` registry concept keeps its name.
+
+- **`neenee-oauth` crate merged into `neenee-providers`.** OAuth2 credential
+  acquisition (PKCE browser loopback, the RFC 8628 and ChatGPT JSON device
+  flows, single-flight refresh, the `auth.toml` token store) now lives in
+  `neenee_providers::oauth`, alongside the registry whose `xai-oauth` /
+  `chatgpt-oauth` / `copilot-oauth` templates it serves. The standalone
+  `neenee-oauth` crate is deleted; login and refresh behavior is unchanged.
+
 ### Removed
+
+- **Dead pursuit types and the expired legacy pursuit migrations
+  (ADR-0082).** The unused `RoundTimer` and `ThreadPursuit` types are
+  deleted, and the one-shot migrations that folded a pre-ADR-0032
+  `pursuits.db` or pre-ADR-0010 `harness_goal*` config keys into
+  `SessionData.pursuit` are gone — the migration window (~1 month, 10
+  releases) has closed. The old file and config keys are left on disk but
+  never read; upgrading across the window means re-setting the objective
+  with `/pursue`. See
+  [ADR-0082](docs/adr/0082-contain-pursuit-behind-the-stop-gate.md).
 
 - **Editor and quant products.** `neenee-editor`, `neenee-quant`,
   `neenee-quant-gui`, and `neenee-intelligence` are deleted; the repository

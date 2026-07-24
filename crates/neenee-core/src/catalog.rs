@@ -411,26 +411,28 @@ mod tests {
 
     #[test]
     fn context_window_resolves_from_model_registry() {
+        // Uses the `fixture-alpha` baseline registered in `model::tests` (core's
+        // own test binary links no provider crate, so real vendor ids fall back).
         let entry = ProviderEntry {
-            id: "zai-code".to_string(),
-            name: "ZAI Code".to_string(),
+            id: "fixture-provider".to_string(),
+            name: "Fixture".to_string(),
             description: String::new(),
             channels: vec![Channel {
                 id: "default".to_string(),
-                label: "ZAI Code".to_string(),
+                label: "Fixture".to_string(),
                 transport: Transport::OpenAi {
-                    base_url: "https://api.z.ai/api/coding/paas/v4/chat/completions".to_string(),
+                    base_url: "https://example.com/v1/chat/completions".to_string(),
                     user_agent: "agent".to_string(),
                     effort: None,
                     copilot: false,
                 },
                 api_key: "k".into(),
-                model: "glm-5.2".to_string(),
+                model: "fixture-alpha".to_string(),
                 remote: None,
             }],
             default_channel: 0,
             builtin: true,
         };
-        assert_eq!(entry.context_window(), 1_000_000);
+        assert_eq!(entry.context_window(), 111_000);
     }
 }

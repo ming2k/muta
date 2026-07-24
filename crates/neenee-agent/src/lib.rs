@@ -27,11 +27,12 @@
 //! (domain vocabulary), `neenee-persistence` (durable state: `SessionStore`,
 //! `Config`, `EmbeddingStore`), and `neenee-providers` (the
 //! `build_provider_for_channel` factory plus the user-agent / spec
-//! constants the catalog uses when constructing concrete impls). It
-//! consumes the concrete coding-tool implementations from `neenee-tools` and
-//! skill capability from `neenee-skills`, then dispatches tools through the
+//! constants the catalog uses when constructing concrete impls). The
+//! concrete coding-tool implementations live in this crate's [`tools`]
+//! module; skill capability comes from `neenee-skills`, and tools are
+//! dispatched through the
 //! core [`Tool`] and [`ToolSet`] contracts. These dependencies point downward
-//! (`agent -> tools`, `agent -> skills`); orchestration-native tools that
+//! (`agent -> skills`); orchestration-native tools that
 //! construct or control agents remain in this crate.
 //!
 //! ## Why catalog and EnvoyTool live here (not in store / tools)
@@ -45,7 +46,8 @@
 //!   of providers. The catalog is fundamentally a factory consumed by
 //!   orchestration, so it lives where orchestration lives.
 //! - **`EnvoyTool`** spawns envoys via `Agent::new`. It used to live
-//!   in `neenee-tools`, which forced tools to depend on this crate —
+//!   in the former `neenee-tools` crate, which forced tools to depend on
+//!   this crate —
 //!   another inversion, since tools are below the agent layer. The
 //!   envoy tool is fundamentally an orchestration primitive that
 //!   happens to satisfy the `Tool` trait, so it lives here too.
@@ -72,12 +74,12 @@ pub use neenee_core::{
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
     McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
     PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
-    ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, RoundOutcome, RoundTimer,
-    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, ThreadPursuit, TokenUsage,
-    Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion,
-    UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes,
-    estimate_tokens, is_context_overflow, parse_retryable_error, prune_tool_results,
-    public_error_message, retryable_error, truncate_utf8,
+    ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, SessionOverview,
+    ShellTermination, SkillsConfig, StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput,
+    ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption,
+    UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens,
+    is_context_overflow, parse_retryable_error, prune_tool_results, public_error_message,
+    retryable_error, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -124,7 +126,7 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub mod agent;
-pub use agent::{Agent, AgentBuilder, RequestTokenEstimate};
+pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
 mod bash_policy;
 pub mod catalog;
@@ -134,7 +136,6 @@ pub mod doom_guard;
 pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
-pub mod modelsdev;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 pub mod envoy_tool;
 mod hook_runner;
@@ -154,6 +155,7 @@ mod shell_input;
 use neenee_skills as skills;
 mod tool_call;
 mod tool_integration;
+pub mod tools;
 
 pub use context_projection::ContextProjectionGate;
 pub use envoy_tool::{EnvoyRegistry, EnvoyTool};

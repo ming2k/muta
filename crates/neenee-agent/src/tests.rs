@@ -2005,7 +2005,7 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
             tool_round(&[("c1", "ask_user", &ask_args.to_string())]),
             text_round("done"),
         ])),
-        vec![Arc::new(neenee_tools::AskUserTool)],
+        vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     );
 
@@ -2052,7 +2052,7 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
             tool_round(&[("c1", "ask_user", &ask_args.to_string())]),
             text_round("decided on my own"),
         ])),
-        vec![Arc::new(neenee_tools::AskUserTool)],
+        vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     );
     agent.set_unattended(true);
@@ -2087,7 +2087,7 @@ async fn unattended_hides_ask_user_from_the_advertised_toolset() {
     // asserting it is absent from that set is the model-facing truth.
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_round("ok")])),
-        vec![Arc::new(neenee_tools::AskUserTool)],
+        vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     );
     let visible_before = agent.visible_tools();

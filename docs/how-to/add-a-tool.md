@@ -5,14 +5,16 @@ assumes familiarity with the `Tool` trait. For the existing tool catalog,
 see [Built-in tools](../reference/tools/index.md). For the protocol the model uses
 to call tools, see [Tool rounds](../explanation/agent-design/rounds-and-turns.md).
 
-Most built-in tools live in the `neenee-tools` crate. Pick the module that
+Most built-in tools live in `neenee-agent`'s `tools` module. Pick the module that
 matches the tool's domain: filesystem and web tools go in
-`crates/neenee-tools/src/lib.rs`, project scaffolding tools go in
-`crates/neenee-tools/src/project.rs`, MCP adapters live in `crates/neenee-mcp`,
-and skill tools live in `crates/neenee-skills`. `envoy` is the exception: it
+`crates/neenee-agent/src/tools/`, slash-command discovery and project
+scaffolding live in `crates/neenee-transport/src/` (`commands` and `project`),
+MCP adapters live in `crates/neenee-mcp`,
+and skill tools live in `crates/neenee-skills`. `envoy` likewise
 lives in `crates/neenee-agent/src/` because it constructs agents.
-Todo tools still live in `neenee-tools`: the agent's private integration module
-injects their agent-owned state through `TodoToolContext`.
+The todo tools in `crates/neenee-agent/src/tools/todo.rs` receive their
+agent-owned state through `TodoToolContext`, injected by the agent's private
+integration module.
 
 ## Implement the `Tool` trait
 
@@ -132,7 +134,7 @@ fn permission_scope(&self, arguments: &str) -> String {
 }
 ```
 
-`json_string` (`crates/neenee-tools/src/lib.rs`) extracts a JSON field
+`json_string` (`crates/neenee-agent/src/tools/helpers.rs`) extracts a JSON field
 from the arguments string and falls back to `"*"`. Existing scopes: file
 tools use the `path` argument, `bash` uses the full `command` text. Pick a scope that distinguishes
 meaningfully different invocations but is stable across retries of the same
@@ -192,10 +194,11 @@ neenee_core::register_tool!(CountLinesFactory => CountLinesTool);
 
 If a tool needs runtime services, use the context-aware macro form and return
 `None` when the service is unavailable. A tool that needs state created inside
-the agent still belongs in `neenee-tools` when it only consumes that state;
+the agent still belongs in `neenee-agent`'s `tools` module when it only
+consumes that state;
 construct it in `neenee-agent::tool_integration` so every agent lifecycle gets
 the same binding. Tools that create or control agents remain in
-`neenee-agent`.
+`neenee-agent` proper.
 
 An embedding can add a runtime-selected or product-specific tool while
 constructing an agent:
@@ -224,7 +227,7 @@ Run the test suite before relying on the new tool:
 
 ```bash
 cargo test -p neenee-core
-cargo test -p neenee
+cargo test -p neenee-cli
 ```
 
 Then exercise the tool manually:
@@ -237,9 +240,9 @@ Then exercise the tool manually:
 4. Switch to `GoogleProvider` (`Google`) and repeat to confirm a second
    native tool-call wire format works.
 5. Switch to a provider that does not serialize `ModelRequest.tool_specs`
-   (e.g. a `MockProvider` test adapter), and repeat. The model should emit the
-   universal fallback JSON and the tool should still execute through
-   `parse_tool_call`.
+   (e.g. a test adapter that returns a canned reply), and repeat. The model
+   should emit the universal fallback JSON and the tool should still execute
+   through `parse_tool_call`.
 
 If the tool is `Write`, also confirm the permission modal appears on first
 use and that an `Always` decision is cached against the scope returned by

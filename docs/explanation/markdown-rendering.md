@@ -283,12 +283,12 @@ transparent and maintainable.
 
 | Concern | File |
 |---------|------|
-| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `crates/neenee-tui-view/src/document.rs` |
-| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `crates/neenee-tui-view/src/document.rs` |
-| Message body renderer (`draw_message_body`) | `crates/neenee-tui-view/src/message_body.rs` |
-| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `crates/neenee-tui-view/src/markdown_table.rs` |
-| Text wrapping, CJK, code gutter, selection helpers | `crates/neenee-tui-view/src/text_layout.rs` |
-| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `crates/neenee-tui-view/src/layout.rs` |
-| Selection extraction (`get_selected_text`) | `crates/neenee-tui-view/src/selection.rs` |
+| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `crates/neenee-cli/src/tui/model/document.rs` |
+| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `crates/neenee-cli/src/tui/model/document.rs` |
+| Message body renderer (`draw_message_body`) | `crates/neenee-cli/src/tui/message_body.rs` |
+| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `crates/neenee-cli/src/tui/markdown_table.rs` |
+| Text wrapping, CJK, code gutter, selection helpers | `crates/neenee-cli/src/tui/text_layout.rs` |
+| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `crates/neenee-cli/src/tui/model/layout.rs` |
+| Selection extraction (`get_selected_text`) | `crates/neenee-cli/src/tui/model/selection.rs` |
 | Grid engine (`Grid`, `diff`, `Backend`) | `crates/neenee-tui-engine/src/` |
 | Export-to-markdown (clipboard handoff) | `crates/neenee-transport/src/export.rs` |

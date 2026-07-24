@@ -33,7 +33,6 @@ pub mod db;
 pub mod embedding;
 pub mod events;
 pub mod fsutil;
-pub mod legacy_pursuit;
 pub mod lock;
 pub mod paths;
 pub mod provider_usage;

@@ -9,19 +9,17 @@ and the `cargo -p <name>` selector stay obvious.
 
 ```text
 crates/
-  neenee/          # the application binary (default workspace member)
+  neenee-cli/          # the interactive application binary (default workspace member)
+  neenee-server/       # headless session host: one session served over WebSocket
   neenee-tui-engine/           # in-house grid + diff rendering engine
-  neenee-tui-view/      # semantic view layer (widgets, document model)
   neenee-transport/       # session harness, handlers, serve transport
-  neenee-agent/         # orchestration: the turn/round loop
-  neenee-tools/         # built-in tools (bash, read, grep, glob, webfetch, …)
+  neenee-agent/         # orchestration: the turn/round loop, plus built-in tools (bash, read, grep, glob, webfetch, …)
   neenee-skills/        # skill discovery, registry, and tool adapters
   neenee-mcp/           # MCP stdio transport and tool publication
   neenee-persistence/         # durable state: session store, config, paths
-  neenee-oauth/         # OAuth credential acquisition (PKCE, device flow, token store)
   neenee-core/          # shared domain and wire contracts (no deps)
   neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)
-  neenee-providers/     # channel registry, factory, discovery + provider facade
+  neenee-providers/     # channel registry, factory, discovery + provider facade + OAuth flows
 ```
 
 ## Ownership rules
@@ -30,12 +28,12 @@ crates/
   intermediate grouping directory; a package is selected by name, not by
   location.
 - Put shared contracts in `neenee-core`, orchestration in `neenee-agent`, and
-  the application binary in `neenee`. See
+  the application binaries in `neenee-cli` / `neenee-server`. See
   [Crate layering](../explanation/crate-layering.md) for the dependency DAG.
 - Do not infer a dependency from directory containment. Cargo manifests remain
   the authoritative dependency graph.
 - The product focus is the coding agent. Application-specific support packages
-  (`neenee-tui-engine`, `neenee-tui-view`) stay alongside the platform and provider
+  (`neenee-tui-engine`) stay alongside the platform and provider
   crates because they are consumed by the single application.
 
 ## Cargo commands
@@ -48,7 +46,7 @@ cargo check -p neenee-persistence
 cargo test -p neenee-agent
 ```
 
-Running Cargo without `--workspace` or `-p` selects `neenee`, the
+Running Cargo without `--workspace` or `-p` selects `neenee-cli`, the
 configured default workspace member. Workspace-wide checks continue to use the
 shared `Cargo.lock`, profiles, dependency versions, and lint policy.
 

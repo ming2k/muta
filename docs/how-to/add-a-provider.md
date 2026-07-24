@@ -9,7 +9,8 @@ neenee resolves every provider through one catalog
 (`build_catalog` in `crates/neenee-agent/src/catalog.rs`): it materializes
 registry presets, bespoke built-ins, and user-defined entries into channels
 with fully resolved credentials, then constructs the concrete `Provider` via
-`build_provider_for_channel` in `crates/neenee-providers/src/registry.rs`.
+`build_provider_for_channel` in
+`crates/neenee-providers/src/registry/mod.rs`.
 Startup and `/provider switch` share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
 
@@ -18,7 +19,7 @@ dispatch `match` to edit for presets or user entries.
 | Provider speaks... | Path | Effort |
 |--------------------|------|--------|
 | OpenAI Chat Completions, or any endpoint reachable with a URL + key | User-defined entry in `config.toml` | None (no code) |
-| OpenAI Chat Completions, and you want it shipped as a built-in | Registry entry in `OPENAI_PROVIDER_SPECS` | Small |
+| OpenAI Chat Completions, and you want it shipped as a built-in | Per-provider file in `registry/` | Small |
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
@@ -91,49 +92,73 @@ appended. One entry may carry several `channels` (e.g. a model reachable
 through several relays), with `default_channel` selecting the active one. See
 [ADR-0002](../adr/0002-model-channel-abstraction.md) for the channel model.
 
-## Path 2: Registry entry (built-in OpenAI-compatible preset)
+## Path 2: Built-in provider (per-provider file)
 
-Add one row to the `OPENAI_PROVIDER_SPECS` const table in
-`crates/neenee-providers/src/registry.rs`:
+Create a new file `crates/neenee-providers/src/registry/<name>.rs`. Each
+provider file owns three things: a model-id list, a baseline metadata table,
+and a template spec. Use `deepseek.rs` as a minimal reference.
 
 ```rust
-OpenAiProviderSpec {
+use neenee_core::thinking::ThinkingSupport;
+use neenee_core::{Model, WireFormat};
+
+use super::ProviderTemplateSpec;
+
+/// The model ids this provider serves (display order).
+pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
+
+/// Baseline capability metadata — context window, thinking support, effort
+/// levels, wire format. Submitted to `neenee_core`'s registry at link time.
+pub const MODELS: &[Model] = &[
+    Model {
+        id: "acme-1",
+        name: "Acme One",
+        family: "acme",
+        context_window: 128_000,
+        thinking: ThinkingSupport::None,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+];
+
+inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+
+pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "acme",
-    base_url: "https://api.acme.example/v1/chat/completions",
-    default_model: "acme-1",
-    env_api_key: "ACME_API_KEY",
-    env_model: "ACME_MODEL",
-    fixed_model: None,
-    default_user_agent: None,
-},
+    baselines: MODELS,
+    protocol: "openai",
+    models: ACME_BUILTIN_MODELS,
+    discovery: true,
+    fitting: false,
+};
 ```
 
-| Field | Purpose |
-|-------|---------|
-| `id` | Stable identifier used in `config.toml` (`default_provider`), `/provider switch`, and the TUI |
-| `base_url` | Full chat-completions endpoint URL |
-| `default_model` | Model used when neither config nor environment specifies one |
-| `env_api_key` | Environment variable consulted for the API key |
-| `env_model` | Environment variable consulted for a model override |
-| `fixed_model` | When set, pins the model and ignores any override |
-| `default_user_agent` | When set, requires this user agent unless overridden |
+Then wire the file into the aggregate tables in
+`crates/neenee-providers/src/registry/mod.rs`:
 
-That single entry is the whole change for a pure-env-var preset. The catalog
-loops over `OPENAI_PROVIDER_SPECS` automatically, so no `match` arm is needed.
-`OpenAiProviderSpec::build` constructs the concrete `OpenAiProvider`,
-stamping the preset `id` so assistant messages are attributed correctly. The
-preset inherits native tool serialization, `stream_chat_events`, and the full
-`chat` / `stream_chat` implementations.
+1. Add `pub mod acme;` (alphabetical order).
+2. Add `pub use acme::ACME_BUILTIN_MODELS;` to the re-export block.
+3. Add `acme::TEMPLATE_SPEC` to the `PROVIDER_TEMPLATE_SPECS` array.
 
-### Optional: persist the key in config
+The catalog loops over `PROVIDER_TEMPLATE_SPECS` automatically, so no `match`
+arm is needed. `build_provider_for_channel` constructs the concrete
+`OpenAiChatCompletionsProvider`, stamping the template `id` so assistant
+messages are attributed correctly. The `MODELS` table feeds the model
+registry via `inventory` at link time — `resolve("acme-1")` returns the
+context window and capabilities you declared, with no manual registration
+call.
 
-By default a registry preset reads its API key and model from the environment
-variables above. To also let users persist them in `config.toml`, add the
-field pair to `Config` in `crates/neenee-persistence/src/config.rs` and an arm to
-`config_key_for` / `config_model_for` in
-`crates/neenee-agent/src/catalog.rs`, keyed by the same `id`. This is a
-convenience layer over env vars, not a requirement — a preset with no config
-arms still works through its env vars.
+### Optional: persist the API key in config
+
+By default a built-in reads its API key from an environment variable. To also
+let users persist it in `credentials.toml`, add the provider id to
+`CREDENTIALED_BUILTINS` and a corresponding `*_api_key` field on `Config` in
+`crates/neenee-persistence/src/config.rs`. The catalog's credential
+resolution then checks config after env vars, so a preset with a config field
+works through either path.
 
 ## Path 3: Standalone adapter (incompatible contract)
 
@@ -156,17 +181,17 @@ Decide explicitly whether to implement the optional structured-stream method:
 For native function calling, translate `ModelRequest.tool_specs` into the
 provider's tool-declaration shape and translate native tool calls back into
 `Message.tool_calls` or `ToolCallDelta`. An adapter without native function
-calling may ignore `tool_specs`; it should return `tool_calls: None`, matching
-`MockProvider`. The agent's compatibility path then parses text-emitted tool
-calls instead of native `tool_calls`; provider implementations do not call the
-fallback parser directly.
+calling may ignore `tool_specs`; it should return `tool_calls: None`. The
+agent's compatibility path then parses text-emitted tool calls instead of
+native `tool_calls`; provider implementations do not call the fallback
+parser directly.
 
 Then wire the adapter into the two construction sites:
 
 1. Add a `Transport` variant in `crates/neenee-core/src/catalog.rs` and an arm
    in `build_provider_for_channel`
-   (`crates/neenee-providers/src/registry.rs`) that constructs the adapter from
-   the channel.
+   (`crates/neenee-providers/src/registry/mod.rs`) that constructs the adapter
+   from the channel.
 2. Materialize the entry in `build_catalog`
    (`crates/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
 

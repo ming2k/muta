@@ -9,16 +9,24 @@ provider channel. For provider availability and endpoints, see
 
 | Source | Scope | Used when | Authority |
 |--------|-------|-----------|-----------|
-| Static registry | Model id | Every provider has no trusted value for a field | Baseline and offline fallback |
-| Fitted overlay | Unknown model id | A trusted provider discovered an id not in the static registry | Bare-id fallback outside a channel |
+| Per-provider baseline table | Model id | Every provider has no trusted value for a field | Baseline and offline fallback |
+| Fitted overlay | Unknown model id | A trusted provider discovered an id not in any baseline table | Bare-id fallback outside a channel |
 | Remote channel metadata | Provider instance and model | A trusted provider's live list explicitly supplies a field | Effective behavior for that channel |
+
+Each provider's baseline table lives beside its other registry data (e.g.
+`crates/neenee-providers/src/registry/openai.rs`) and is submitted to
+`neenee_core`'s lookup machinery at link time via
+`inventory::submit!(BaselineModels(...))`. `neenee_core` owns only the
+`resolve()` / `baseline_models()` mechanism — the data itself is distributed
+per provider. See [`neenee_core::model`](../../crates/neenee-core/src/model.rs)
+for the lookup precedence rules.
 
 Remote metadata never changes another provider's channel. A model id can have
 different routes or limits at different providers and accounts.
 
 ## Merge rules
 
-The effective model capability view starts from the static registry or its
+The effective model capability view starts from the baseline table or its
 conservative unknown-model fallback. Each non-empty remote field then replaces
 the corresponding value.
 

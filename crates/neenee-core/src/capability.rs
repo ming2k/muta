@@ -2,7 +2,7 @@
 //! ([`Provider`]) and to tools ([`Tool`]), the stream events a provider emits
 //! ([`ProviderStreamEvent`]).
 
-use crate::pursuits::TokenUsage;
+use crate::usage::TokenUsage;
 use crate::tool_output::StdinPolicy;
 use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
 use async_trait::async_trait;

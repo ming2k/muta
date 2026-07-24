@@ -1,7 +1,7 @@
 //! Wiring for the dynamic-catalog pattern — the background refresh loop that
 //! drives every [`DynamicCatalog`] implementation.
 //!
-//! Each catalog (models.dev, remote skills, MCP tools, …) implements
+//! Each catalog (remote skills, MCP tools, …) implements
 //! [`DynamicCatalog`]; this module provides the single [`spawn_refresh`] that
 //! runs one on a schedule. The wiring layer (the CLI binary) calls it once per
 //! catalog at startup, after the initial eager refresh.

@@ -91,6 +91,12 @@ pub enum StartupMode {
     Resume(Option<String>),
     Picker,
     Doctor,
+    /// Attach the TUI to an already-running session server for this project
+    /// (`neenee --attach [id]`). The id is the session to attach to; `None`
+    /// attaches to whatever the server hosts. Purely client-side: the caller
+    /// must intercept this variant BEFORE invoking `bootstrap::assemble` — no
+    /// local harness is assembled in attach mode.
+    Attach(Option<String>),
     /// Render a single UI component in isolation for interactive development
     /// (`neenee showcase <component>`). No agent, no session, no network —
     /// just the component's model + renderer wired to a real terminal so you
@@ -104,12 +110,25 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
     let mut project: Option<PathBuf> = None;
     let mut unattended = false;
     let mut single_instance = false;
+    // `Some(inner)` once `--attach` is seen; `inner` is the optional session id.
+    let mut attach: Option<Option<String>> = None;
     let mut rest = Vec::new();
     while let Some(arg) = iter.next() {
         if arg == "--project" {
             project = iter.next().map(PathBuf::from);
         } else if let Some(value) = arg.strip_prefix("--project=") {
             project = Some(PathBuf::from(value));
+        } else if arg == "--attach" {
+            // `--attach <id>`: the next token is the session id only when it
+            // is not another flag — a following `--flag` (or end of args)
+            // means "attach to whatever the server hosts".
+            let id = match iter.peek() {
+                Some(next) if !next.starts_with("--") => iter.next(),
+                _ => None,
+            };
+            attach = Some(id);
+        } else if let Some(value) = arg.strip_prefix("--attach=") {
+            attach = Some(Some(value.to_string()));
         } else if arg == "--unattended" {
             unattended = true;
         } else if arg == "--single-instance" {
@@ -117,6 +136,20 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
         } else {
             rest.push(arg);
         }
+    }
+
+    if let Some(id) = attach {
+        if rest.is_empty() {
+            return (StartupMode::Attach(id), project, unattended, single_instance);
+        }
+        // `--attach` with a positional subcommand is ambiguous (the client
+        // drives a remote session; local modes like resume/doctor do not
+        // compose with it).
+        eprintln!(
+            "--attach cannot be combined with '{}'. Usage:\n  neenee --attach [id]    attach to a session server (spawning one if none is running)\n\nOptions:\n  --project <path>        operate on the project at <path>",
+            rest[0]
+        );
+        std::process::exit(2);
     }
 
     let mode = match rest.as_slice() {
@@ -135,7 +168,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --unattended            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee --attach [id]    attach to a session server (spawning one if none is running)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --unattended            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
                 cmd
             );
             std::process::exit(2);
@@ -203,4 +236,68 @@ pub fn init_tracing() -> Option<WorkerGuard> {
         .init();
     tracing::info!(log_dir = %dir.display(), level = %level, "neenee tracing initialised");
     Some(guard)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn no_args_is_fresh() {
+        let (mode, project, unattended, single) = parse_args(Vec::new());
+        assert!(matches!(mode, StartupMode::Fresh));
+        assert!(project.is_none());
+        assert!(!unattended);
+        assert!(!single);
+    }
+
+    #[test]
+    fn resume_forms_are_unchanged() {
+        let (mode, ..) = parse_args(args(&["resume"]));
+        assert!(matches!(mode, StartupMode::Picker));
+        let (mode, ..) = parse_args(args(&["resume", "abc"]));
+        assert!(matches!(mode, StartupMode::Resume(Some(id)) if id == "abc"));
+    }
+
+    #[test]
+    fn attach_bare_means_any_session() {
+        let (mode, ..) = parse_args(args(&["--attach"]));
+        assert!(matches!(mode, StartupMode::Attach(None)));
+    }
+
+    #[test]
+    fn attach_with_id_both_styles() {
+        let (mode, ..) = parse_args(args(&["--attach", "sess-1"]));
+        assert!(matches!(mode, StartupMode::Attach(Some(id)) if id == "sess-1"));
+        let (mode, ..) = parse_args(args(&["--attach=sess-2"]));
+        assert!(matches!(mode, StartupMode::Attach(Some(id)) if id == "sess-2"));
+    }
+
+    #[test]
+    fn attach_does_not_swallow_a_following_flag() {
+        // `--attach --project /p` must parse as Attach(None) + project, not
+        // as an attach id of "--project".
+        let (mode, project, ..) = parse_args(args(&["--attach", "--project", "/p"]));
+        assert!(matches!(mode, StartupMode::Attach(None)));
+        assert_eq!(project, Some(PathBuf::from("/p")));
+    }
+
+    #[test]
+    fn attach_combines_with_project_flag() {
+        let (mode, project, ..) = parse_args(args(&["--project", "/p", "--attach", "s"]));
+        assert!(matches!(mode, StartupMode::Attach(Some(id)) if id == "s"));
+        assert_eq!(project, Some(PathBuf::from("/p")));
+    }
+
+    #[test]
+    fn project_flag_still_works_without_attach() {
+        let (mode, project, ..) = parse_args(args(&["--project=/q"]));
+        assert!(matches!(mode, StartupMode::Fresh));
+        assert_eq!(project, Some(PathBuf::from("/q")));
+    }
 }
