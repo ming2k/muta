@@ -28,7 +28,7 @@ use crate::tui::model::layout::{InteractiveTarget, LayoutMap, ModalHitMap};
 use crate::tui::model::selection::{SelectionDrag, SelectionState};
 use crate::tui::providers::{
     CustomField, ProviderTemplate, RankedModel, RankedProvider, edit_fields,
-    provider_models_filtered_from, providers_filtered_from,
+    models_flat_filtered_from, providers_filtered_from,
 };
 use crate::tui::view::Theme;
 use crate::tui::{ActivityTab, Modal};
@@ -507,8 +507,15 @@ pub struct App {
     /// focused field).
     pub editor_key: String,
     /// Wire model id the key editor will activate once a key is entered (carried
-    /// from the stage-2 selection or the provider's default; not user-editable).
+    /// from the Models-picker selection or the provider's current model; not
+    /// user-editable).
     pub editor_model: String,
+    /// The picker modal to return to when the editor is cancelled or submits a
+    /// settings-only edit: [`Modal::Models`] when the editor was opened from the
+    /// flat model picker (an `e` settings edit or a no-key activation there),
+    /// [`Modal::Connections`] when opened from the Connections list. Set at
+    /// every `Modal::ModelEditor` open site so Esc never strands the user.
+    pub editor_return_to: Modal,
     /// When true, [`Modal::ModelEditor`] edits the selected provider model's
     /// channel settings only (for example OpenAI effort or Anthropic
     /// effort/thinking), not the provider API key or active provider.
@@ -578,7 +585,7 @@ pub struct App {
     pub custom_scroll: usize,
     /// When `Some(id)`, the provider editor is **editing** the existing user
     /// provider `id` (meta only: Name/Base URL/Token; models stay managed in the
-    /// stage-2 list). `None` is create mode.
+    /// Models picker). `None` is create mode.
     pub custom_edit_id: Option<String>,
     /// Provider-editor buffers holding the unfocused text fields (the focused one
     /// lives in the borrowed composer line). Name / Base URL / Token / Model /
@@ -594,20 +601,13 @@ pub struct App {
     /// sets the upper bound automatically (via `render_body`), and `↑/↓` move
     /// the selection so the chosen template stays on-screen.
     pub template_scroll: usize,
-    /// Whether the model picker's **search sub-layer** is active. The picker
-    /// ([`Modal::Provider`]) opens in browse mode (`false`): a plain ranked list
-    /// with no query field. Pressing `/` enters search (`true`), which borrows
-    /// the composer line as a live fuzzy query; the first Esc returns to browse
-    /// and the second closes the modal. Mirrors [`Self::history_search`]. See
-    /// [`Self::provider_models_filtered`].
+    /// Whether the model picker's **search sub-layer** is active. Both pickers
+    /// ([`Modal::Models`] and [`Modal::Connections`]) open in browse mode
+    /// (`false`): a plain ranked list with no query field. Pressing `/` enters
+    /// search (`true`), which borrows the composer line as a live fuzzy query;
+    /// the first Esc returns to browse and the second closes the modal. Mirrors
+    /// [`Self::history_search`]. See [`Self::models_flat_filtered`].
     pub model_search: bool,
-    /// The two-stage provider picker's current stage. `None` is **stage 1**, the
-    /// provider list; `Some(row_idx)` is **stage 2**, the model sub-list for the
-    /// snapshot row at `row_idx` (reached by activating a multi-model provider).
-    /// Esc in stage 2 returns to stage 1; Esc in stage 1 closes the modal. Reset
-    /// to `None` whenever the picker opens or closes. See
-    /// [`Self::providers_filtered`] and [`Self::provider_models_filtered`].
-    pub picker_provider: Option<usize>,
     /// Body scroll offset of the model picker. Reset to 0 each time the modal
     /// opens (and when toggling browse/search); clamped and auto-followed to the
     /// selection by the renderer each frame. Mirrors [`Self::history_scroll`].
@@ -616,7 +616,7 @@ pub struct App {
     /// cursor. Cleared on manual scroll (free browse), re-set on navigation.
     pub model_modal_follow: bool,
     /// Pending provider-delete confirmation overlay. `Some(id)` means the
-    /// confirm dialog is open over the stage-1 provider list: the provider
+    /// confirm dialog is open over the Connections list: the provider
     /// `id` is staged for deletion and waits on the user's choice. Set when
     /// `Shift+D` lands on a deletable custom provider; cleared on Cancel, Esc,
     /// outside-click, and after a confirmed Delete dispatches the request.
@@ -628,8 +628,8 @@ pub struct App {
     /// Lowercase provider name → whether a usable API key is configured.
     pub key_status: HashMap<String, bool>,
     /// Live model-picker snapshot (default id + per-model favorite / key-ready
-    /// / last-used). Drives the `/provider` picker's rendering and sort order
-    /// Refreshed from the response listener each frame.
+    /// / last-used). Drives the `/models` and `/connections` pickers' rendering
+    /// and sort order. Refreshed from the response listener each frame.
     pub provider_picker: ProviderPickerSnapshot,
     /// Theme.
     pub theme: Theme,
@@ -1266,22 +1266,21 @@ impl App {
         self.suggestion_index = None;
         self.modal_index = 0;
         self.model_search = false;
-        self.picker_provider = None;
         self.model_scroll = 0;
         self.model_modal_follow = true;
         self.modal_keymap_open = false;
     }
 
-    /// Open the provider-template chooser — the "＋ Add provider" entry point.
-    /// The chat draft is already parked in `stashed_input` (the picker stashed it
-    /// on open); the chooser is a pure list, so the composer line stays clear.
+    /// Open the provider-template chooser — the "＋ Add connection" entry point.
+    /// The chat draft is already parked in `stashed_input` (the Connections list
+    /// stashed it on open); the chooser is a pure list, so the composer line
+    /// stays clear.
     pub fn open_provider_template_chooser(&mut self) {
         self.active_modal = Modal::ProviderTemplate;
         self.template_choice = 0;
         self.template_scroll = 0;
         self.input.clear();
         self.set_cursor(0);
-        self.picker_provider = None;
     }
 
     /// Move the template-chooser selection, wrapping at the ends.
@@ -1326,7 +1325,6 @@ impl App {
         self.active_modal = Modal::CustomProvider;
         self.input.clear();
         self.set_cursor(0);
-        self.picker_provider = None;
     }
 
     /// Open the OAuth waiting sheet and seed create buffers from `template`.
@@ -1349,7 +1347,6 @@ impl App {
         self.active_modal = Modal::OauthPending;
         self.input.clear();
         self.set_cursor(0);
-        self.picker_provider = None;
     }
 
     /// After OAuth succeeds: name-only editor (default name derived from the
@@ -1373,7 +1370,6 @@ impl App {
         self.custom_name = default_name.to_string();
         self.input = default_name.to_string();
         self.set_cursor_end();
-        self.picker_provider = None;
     }
 
     /// Auth mode of a provider picker row (for OAuth re-connect routing).
@@ -1391,7 +1387,7 @@ impl App {
     /// type: an API-key channel shows Name / Base URL / Token, while an OAuth
     /// channel (ChatGPT/Codex, xAI) shows Name only — its endpoint and token are
     /// owned by the auth flow and must not be hand-edited. The Model field is
-    /// always hidden (models are managed in the stage-2 list).
+    /// always hidden (models are managed in the Models picker).
     pub fn open_edit_provider_editor(
         &mut self,
         id: String,
@@ -1420,7 +1416,6 @@ impl App {
         self.custom_model.clear();
         self.input = name;
         self.set_cursor_end();
-        self.picker_provider = None;
     }
 
     /// Whether the provider editor is editing an existing provider.
@@ -1593,63 +1588,64 @@ impl App {
         }
     }
 
-    /// Compute the **stage-1** provider rows. Delegates to
+    /// Compute the **Connections** provider rows. Delegates to
     /// [`providers_filtered_from`] so the input handler and the renderer share
     /// one filter+sort implementation.
     pub fn providers_filtered(&self) -> Vec<RankedProvider> {
         providers_filtered_from(&self.provider_picker, self.picker_query())
     }
 
-    /// Compute the **stage-2** model rows for the drilled-into provider
-    /// ([`Self::picker_provider`]). Empty in stage 1 (no provider selected).
-    pub fn provider_models_filtered(&self) -> Vec<RankedModel> {
-        match self.picker_provider {
-            Some(idx) => {
-                provider_models_filtered_from(&self.provider_picker, idx, self.picker_query())
-            }
-            None => Vec::new(),
-        }
+    /// Compute the **flat Models** rows — every (provider, model) pair in the
+    /// snapshot, filtered by the current picker query. Delegates to
+    /// [`models_flat_filtered_from`] so the input handler and the renderer
+    /// share one filter+sort implementation.
+    pub fn models_flat_filtered(&self) -> Vec<RankedModel> {
+        models_flat_filtered_from(&self.provider_picker, self.picker_query())
     }
 
-    /// Whether the drilled-into provider (stage 2) is user-defined, so the model
-    /// list offers remove. `false` in stage 1 or for built-in providers.
-    pub fn picker_provider_is_custom(&self) -> bool {
-        self.picker_provider
-            .and_then(|idx| self.provider_picker.rows.get(idx))
+    /// Whether the provider with this snapshot id is user-defined (not a
+    /// built-in preset). Drives the Connections `e`/`Shift+D` routing and the
+    /// Models `d` (remove-model) gate.
+    pub fn provider_is_custom(&self, id: &str) -> bool {
+        self.provider_picker
+            .rows
+            .iter()
+            .find(|row| row.id == id)
             .map(|row| !row.builtin)
             .unwrap_or(false)
     }
 
-    /// Number of selectable rows in the picker's current stage — stage-2 model
-    /// rows when drilled into a provider, else stage-1 provider rows. Used to
-    /// clamp the ↑/↓ selection cursor.
+    /// Number of selectable rows in the active picker — Connections counts the
+    /// provider rows plus the trailing synthetic "＋ Add connection" row; Models
+    /// counts the flat (provider, model) rows. Used to clamp the ↑/↓ selection
+    /// cursor. Returns 0 when no picker is open.
     pub fn picker_row_count(&self) -> usize {
-        if self.picker_provider.is_some() {
-            self.provider_models_filtered().len()
-        } else {
-            // Stage 1 has a trailing synthetic "＋ Add provider" row after the
-            // provider rows, so it is always selectable even with no matches.
-            self.providers_filtered().len() + 1
+        match self.active_modal {
+            // The trailing synthetic "＋ Add connection" row is always
+            // selectable, even with no matches.
+            Modal::Connections => self.providers_filtered().len() + 1,
+            Modal::Models => self.models_flat_filtered().len(),
+            _ => 0,
         }
     }
 
-    /// Whether `modal_index` is on the stage-1 "＋ Add provider" row (the
-    /// synthetic trailing row, index == provider count). Only meaningful in
-    /// stage 1.
-    pub fn picker_on_add_row(&self) -> bool {
-        self.picker_provider.is_none() && self.modal_index == self.providers_filtered().len()
+    /// Whether `modal_index` is on the Connections "＋ Add connection" row (the
+    /// synthetic trailing row, index == provider count). Only meaningful while
+    /// [`Modal::Connections`] is open.
+    pub fn connections_on_add_row(&self) -> bool {
+        self.active_modal == Modal::Connections
+            && self.modal_index == self.providers_filtered().len()
     }
 
     /// Stage the highlighted custom provider for deletion: open the confirm
-    /// overlay ([`App::pending_provider_delete`]) over the stage-1 picker
+    /// overlay ([`App::pending_provider_delete`]) over the Connections list
     /// without destroying anything yet. No-op for built-in providers, the
-    /// synthetic "＋ Add provider" row, or when an overlay is already open
+    /// synthetic "＋ Add connection" row, or when an overlay is already open
     /// (prevents re-staging). Driven by the `Shift+D` → `DeleteProvider` arm.
     pub fn stage_provider_delete(&mut self) {
-        if self.active_modal != Modal::Provider
+        if self.active_modal != Modal::Connections
             || self.pending_provider_delete.is_some()
-            || self.picker_on_add_row()
-            || self.picker_provider.is_some()
+            || self.connections_on_add_row()
         {
             return;
         }
@@ -1665,19 +1661,18 @@ impl App {
     /// Confirm the staged deletion: dispatch `AgentRequest::DeleteProvider` for
     /// the staged id and tear the overlay down. Returns `Some(request)` when a
     /// deletion was staged (the harness applies it), `None` when the overlay
-    /// was not open. Driven by the overlay's Enter-on-Delete. Closing the
-    /// stage-2 view + decrementing `modal_index` mirrors the picker's other
-    /// removal paths so the cursor lands on a valid row once this row vanishes.
+    /// was not open. Driven by the overlay's Enter-on-Delete. Decrementing
+    /// `modal_index` mirrors the picker's other removal paths so the cursor
+    /// lands on a valid row once this row vanishes.
     pub fn confirm_provider_delete(&mut self) -> Option<AgentRequest> {
         let id = self.pending_provider_delete.take()?;
-        self.picker_provider = None;
         self.modal_index = self.modal_index.saturating_sub(1);
         self.provider_delete_focus = ProviderDeleteChoice::default();
         Some(AgentRequest::DeleteProvider { id })
     }
 
     /// Cancel the staged deletion: drop the staged id and return keyboard
-    /// focus to the stage-1 provider list. The picker modal itself stays open.
+    /// focus to the Connections list. The modal itself stays open.
     /// Driven by the overlay's Esc / Ctrl+C / Enter-on-Cancel.
     pub fn cancel_provider_delete(&mut self) {
         self.pending_provider_delete = None;

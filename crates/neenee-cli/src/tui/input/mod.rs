@@ -45,17 +45,11 @@ pub struct InputContext {
     /// composer line as the live fuzzy query. Mirrors `App::history_search`.
     pub history_searching: bool,
     /// Whether the model picker's search sub-layer is active. Only meaningful
-    /// while [`Self::active_modal`] is [`super::Modal::Provider`]: `false` is
-    /// browse mode (typing is inert, `/` enters search, `*`/`e` act on the row),
-    /// `true` borrows the composer line as the live fuzzy query. Mirrors
-    /// `App::model_search`.
+    /// while [`Self::active_modal`] is [`super::Modal::Models`] or
+    /// [`super::Modal::Connections`]: `false` is browse mode (typing is inert,
+    /// `/` enters search, `*`/`e`/`d`/`D` act on the row), `true` borrows the
+    /// composer line as the live fuzzy query. Mirrors `App::model_search`.
     pub model_searching: bool,
-    /// Whether the provider picker is in its **stage-2** model sub-list (drilled
-    /// into a multi-model provider). Only meaningful while [`Self::active_modal`]
-    /// is [`super::Modal::Provider`]: it routes Esc to "back to the provider
-    /// list" instead of "close the modal", and gates the stage-1-only `*`/`e`
-    /// shortcuts. Mirrors `App::picker_provider.is_some()`.
-    pub picker_in_models_stage: bool,
     /// Whether the active modal is showing its in-modal keybindings page
     /// (`App::modal_keymap_open`). When true, `?` / Esc toggle or dismiss the
     /// page instead of acting on the underlying list, and Enter is inert.
@@ -107,7 +101,7 @@ fn edits_input_field(
         | super::Modal::ModelEditor
         | super::Modal::InputInjection
         | super::Modal::ConfigThemeCustom => true,
-        super::Modal::Provider => model_searching,
+        super::Modal::Models | super::Modal::Connections => model_searching,
         super::Modal::HistorySearch => history_searching,
         // The provider editor edits the composer line on every visible field
         // (Name / Base URL / Token / Model all borrow it).
@@ -135,7 +129,8 @@ fn question_other_field(context: &InputContext) -> bool {
 fn supports_keymap_page(modal: super::Modal) -> bool {
     matches!(
         modal,
-        super::Modal::Provider
+        super::Modal::Models
+            | super::Modal::Connections
             | super::Modal::Sessions
             | super::Modal::HistorySearch
             | super::Modal::Tools
@@ -175,16 +170,16 @@ pub enum InputAction {
     /// stripped and the remaining text is executed through the `bash` tool
     /// without an LLM roundtrip.
     SendShell(String),
-    /// Activate a model from the `/provider` picker: the default model when the
-    /// filter is empty (fast path), otherwise the highlighted filtered row.
-    /// Falls through to the API-key setup modal when the target has no key.
+    /// Activate the highlighted row of the Models or Connections picker: a
+    /// flat (provider, model) pair in Models, the highlighted provider's
+    /// current model in Connections. Falls through to the API-key setup modal
+    /// when the target has no key.
     ProviderPickerActivate,
-    /// Step back from the picker's stage-2 model sub-list to the stage-1 provider
-    /// list (Esc while drilled into a multi-model provider).
-    ProviderPickerBack,
-    /// Toggle the favorite flag on the highlighted picker row.
+    /// Toggle the favorite flag on the highlighted Connections row.
     ProviderPickerToggleFavorite,
-    /// Open the unified provider editor (`e`) for the highlighted picker row.
+    /// Open the unified provider editor (`e`): the per-model settings editor
+    /// for the highlighted Models row, or the provider editor (key / meta) for
+    /// the highlighted Connections row.
     OpenModelEditor,
     /// Submit the unified provider editor: persist the entered key / model-id and
     /// activate the target model.
@@ -201,7 +196,7 @@ pub enum InputAction {
     ModelEditorThinkingToggle,
     /// Submit the custom-provider editor → `AgentRequest::AddProvider`.
     SubmitCustomProvider,
-    /// Cancel the custom-provider editor and return to the provider picker.
+    /// Cancel the custom-provider editor and return to the Connections list.
     CancelCustomProvider,
     /// Move focus to the next / previous field of the custom-provider editor
     /// (`Tab` / `BackTab`), wrapping at the ends.
@@ -218,7 +213,7 @@ pub enum InputAction {
     },
     /// Open the provider editor seeded from the highlighted template (`Enter`).
     SelectProviderTemplate,
-    /// Cancel the provider-template chooser and return to the provider picker.
+    /// Cancel the provider-template chooser and return to the Connections list.
     CancelProviderTemplate,
     /// Cancel the OAuth pending sheet (back to the template chooser).
     CancelOauthPending,
@@ -230,9 +225,10 @@ pub enum InputAction {
     CopyOauthContent {
         target: OauthCopyTarget,
     },
-    /// Remove the highlighted model from a custom provider's stage-2 list (`d`).
+    /// Remove the highlighted model from its user-defined provider (`d` in the
+    /// Models picker). Built-in providers are ignored by the handler.
     ProviderPickerRemoveModel,
-    /// Delete the entire highlighted custom provider from the stage-1 list
+    /// Delete the entire highlighted custom provider from the Connections list
     /// (`Shift+D`). Built-in providers are ignored by the handler. Opens the
     /// provider-delete confirm overlay rather than deleting immediately.
     DeleteProvider,
@@ -241,13 +237,17 @@ pub enum InputAction {
     /// produced by the confirm overlay's Enter when focus is on Delete.
     DeleteProviderConfirm,
     /// Cancel the provider-delete confirm overlay: drop the staged provider id
-    /// and return focus to the stage-1 provider list. Produced by Esc / Ctrl+C
+    /// and return focus to the Connections list. Produced by Esc / Ctrl+C
     /// / Enter-on-Cancel inside the confirm overlay.
     DeleteProviderCancel,
     /// Interrupt current operation.
     Interrupt,
-    /// Open models modal.
-    OpenProvider,
+    /// Open the flat Models picker (`/models`, Ctrl+M) — the daily-driver
+    /// model-switch surface.
+    OpenModels,
+    /// Open the Connections list (`/connections`) — the provider-instance
+    /// management surface.
+    OpenConnections,
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
@@ -524,7 +524,7 @@ pub enum InputAction {
 
 impl InputAction {
     /// Whether this action is a modal-opening command reached by typing a
-    /// slash command into the composer (e.g. `/provider`) — as opposed to a
+    /// slash command into the composer (e.g. `/models`) — as opposed to a
     /// keybinding such as Ctrl+R (history) or F1 (help).
     ///
     /// These commands consume the composer text (the typed `/cmd`) the same
@@ -536,7 +536,8 @@ impl InputAction {
     pub fn is_text_modal_command(&self) -> bool {
         matches!(
             self,
-            InputAction::OpenProvider
+            InputAction::OpenModels
+                | InputAction::OpenConnections
                 | InputAction::OpenPermissions
                 | InputAction::OpenTools
                 | InputAction::OpenMcp
@@ -1027,19 +1028,15 @@ pub fn process_event(
                         // Two-stage Esc: leave the search sub-layer back to the
                         // browse list first; the next Esc (browse mode) closes.
                         InputAction::HistoryExitSearch
-                    } else if context.active_modal == super::Modal::Provider
-                        && context.model_searching
+                    } else if matches!(
+                        context.active_modal,
+                        super::Modal::Models | super::Modal::Connections
+                    ) && context.model_searching
                     {
                         // Same two-stage Esc as the history modal: the first Esc
-                        // drops the model picker's search sub-layer back to the
+                        // drops the picker's search sub-layer back to the
                         // browse list; the next Esc (browse mode) closes.
                         InputAction::ModelExitSearch
-                    } else if context.active_modal == super::Modal::Provider
-                        && context.picker_in_models_stage
-                    {
-                        // In the stage-2 model sub-list (browse mode): Esc steps
-                        // back to the stage-1 provider list rather than closing.
-                        InputAction::ProviderPickerBack
                     } else if context.active_modal == super::Modal::ConfigTheme
                         || context.active_modal == super::Modal::ConfigThemeCustom
                     {
@@ -1107,7 +1104,7 @@ pub fn process_event(
                     }
                 }
                 // Ctrl+M is a declared global binding (registry →
-                // OpenProvider). In a raw terminal Ctrl+M is byte-identical
+                // OpenModels). In a raw terminal Ctrl+M is byte-identical
                 // to Enter, so the registry arm only fires under the Kitty
                 // protocol; without it Ctrl+M arrives as Enter and leaves
                 // input behavior untouched — no regression. It only reaches
@@ -1129,7 +1126,9 @@ pub fn process_event(
                         return InputAction::ToggleModalKeymap;
                     }
                     match context.active_modal {
-                        super::Modal::Provider => InputAction::ProviderPickerActivate,
+                        super::Modal::Models | super::Modal::Connections => {
+                            InputAction::ProviderPickerActivate
+                        }
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                         super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
                         super::Modal::OauthPending => InputAction::None,
@@ -1184,10 +1183,11 @@ pub fn process_event(
                             if text.starts_with('/') {
                                 // Match on the trimmed text so a slash command
                                 // typed with a trailing space (e.g. the user
-                                // typed `/provider ` themselves) still hits the
+                                // typed `/models ` themselves) still hits the
                                 // exact-match arm instead of silently no-op'ing.
                                 match text.trim() {
-                                    "/provider" => InputAction::OpenProvider,
+                                    "/models" => InputAction::OpenModels,
+                                    "/connections" => InputAction::OpenConnections,
                                     "/permissions" => InputAction::OpenPermissions,
                                     "/tools" => InputAction::OpenTools,
                                     "/mcp" => InputAction::OpenMcp,
@@ -1595,47 +1595,48 @@ pub fn process_event(
                     // through to the input box below (the focus highlight stays
                     // until Esc / Enter). `Enter` activates the focused step;
                     // `Space` just inserts a space.
-                    if context.active_modal == super::Modal::Provider
-                        && !context.model_searching
+                    if matches!(
+                        context.active_modal,
+                        super::Modal::Models | super::Modal::Connections
+                    ) && !context.model_searching
                         && c == '/'
                     {
                         // Browse mode: `/` opens the search sub-layer rather than
                         // inserting a literal slash — mirrors the history modal.
                         InputAction::ModelEnterSearch
-                    } else if context.active_modal == super::Modal::Provider
+                    } else if context.active_modal == super::Modal::Connections
                         && !context.model_searching
-                        && !context.picker_in_models_stage
                         && c == '*'
                     {
-                        // Stage-1 browse mode only: star the highlighted provider
-                        // as a favorite. In the search sub-layer `*` is a query
-                        // char; favoriting is a provider-level action so it is not
-                        // offered in the stage-2 model sub-list.
+                        // Connections browse mode only: star the highlighted
+                        // provider as a favorite. In the search sub-layer `*` is
+                        // a query char; favoriting is a provider-level action so
+                        // it is not offered in the flat Models picker.
                         InputAction::ProviderPickerToggleFavorite
-                    } else if context.active_modal == super::Modal::Provider
-                        && !context.model_searching
+                    } else if matches!(
+                        context.active_modal,
+                        super::Modal::Models | super::Modal::Connections
+                    ) && !context.model_searching
                         && c == 'e'
                     {
-                        // Stage 1: edit the highlighted provider. Stage 2:
-                        // edit the highlighted model/channel settings.
+                        // Connections: edit the highlighted provider. Models:
+                        // edit the highlighted model's per-model settings.
                         InputAction::OpenModelEditor
-                    } else if context.active_modal == super::Modal::Provider
+                    } else if context.active_modal == super::Modal::Models
                         && !context.model_searching
-                        && context.picker_in_models_stage
                         && c == 'd'
                     {
-                        // Stage-2 browse mode: `d` removes the highlighted model
-                        // from a custom provider (ignored for built-ins / the
-                        // "＋ Add model" row by the handler).
+                        // Models browse mode: `d` removes the highlighted model
+                        // from its provider (ignored for built-ins by the
+                        // handler).
                         InputAction::ProviderPickerRemoveModel
-                    } else if context.active_modal == super::Modal::Provider
+                    } else if context.active_modal == super::Modal::Connections
                         && !context.model_searching
-                        && !context.picker_in_models_stage
                         && c == 'D'
                     {
-                        // Stage-1 browse mode: `Shift+D` deletes the entire
+                        // Connections browse mode: `Shift+D` deletes the entire
                         // highlighted custom provider (ignored for built-ins and
-                        // the "＋ Add provider" row by the handler).
+                        // the "＋ Add connection" row by the handler).
                         InputAction::DeleteProvider
                     } else if context.active_modal == super::Modal::Sessions && c == 'd' {
                         InputAction::DeleteSelectedSession
@@ -1859,7 +1860,7 @@ pub fn process_event(
                         return InputAction::ScrollUp;
                     }
                     match context.active_modal {
-                        super::Modal::Provider => InputAction::ModalUp,
+                        super::Modal::Models | super::Modal::Connections => InputAction::ModalUp,
                         super::Modal::HistorySearch => InputAction::ModalUp,
                         super::Modal::Sessions => InputAction::ModalUp,
                         super::Modal::Question => InputAction::QuestionUp,
@@ -1929,7 +1930,7 @@ pub fn process_event(
                         return InputAction::ScrollDown;
                     }
                     match context.active_modal {
-                        super::Modal::Provider => InputAction::ModalDown,
+                        super::Modal::Models | super::Modal::Connections => InputAction::ModalDown,
                         super::Modal::HistorySearch => InputAction::ModalDown,
                         super::Modal::Sessions => InputAction::ModalDown,
                         super::Modal::Question => InputAction::QuestionDown,
@@ -2120,7 +2121,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2168,7 +2168,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2198,7 +2197,7 @@ mod tests {
 
     #[test]
     fn enter_accepts_a_highlighted_slash_suggestion() {
-        // User typed `/m`, menu shows `/mcp` / `/model` / `/provider`, user
+        // User typed `/m`, menu shows `/mcp` / `/model` / `/models`, user
         // pressed ↓ to highlight `/mcp` (index 1). Enter must accept the
         // highlighted item rather than sending `/m` as a (rejected) command.
         let mut input = "/m".to_string();
@@ -2235,7 +2234,7 @@ mod tests {
     #[test]
     fn enter_highlight_wins_over_exact_slash_match() {
         // User typed `/mcp` (exact match) but then pressed ↓ to highlight
-        // `/provider`. The explicit highlight is a stronger signal than the
+        // `/models`. The explicit highlight is a stronger signal than the
         // exact-match fast path, so Enter accepts the highlight.
         let mut input = "/mcp".to_string();
         assert_eq!(
@@ -2293,7 +2292,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2336,7 +2334,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2378,7 +2375,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2417,7 +2413,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2456,7 +2451,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2499,7 +2493,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2542,7 +2535,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2580,7 +2572,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2659,7 +2650,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2698,7 +2688,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2733,7 +2722,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2745,7 +2733,7 @@ mod tests {
     }
 
     #[test]
-    fn star_in_models_modal_toggles_favorite() {
+    fn star_in_connections_modal_toggles_favorite() {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
@@ -2754,7 +2742,7 @@ mod tests {
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::tui::Modal::Provider,
+                active_modal: crate::tui::Modal::Connections,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2768,7 +2756,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2780,9 +2767,9 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_stage2_steps_back_to_provider_list() {
-        // In the stage-2 model sub-list (browse mode), Esc returns to the
-        // provider list rather than closing the modal.
+    fn esc_in_models_browse_closes_the_modal() {
+        // The flat Models picker has no back stage: Esc in browse mode closes
+        // it (the search sub-layer's first-Esc is `ModelExitSearch`).
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
@@ -2791,7 +2778,7 @@ mod tests {
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::tui::Modal::Provider,
+                active_modal: crate::tui::Modal::Models,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2805,43 +2792,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: true,
-                modal_keymap_open: false,
-                editor_field: None,
-                custom_provider_field: None,
-                question_other_highlighted: false,
-            },
-            &mut drag,
-        );
-        assert_eq!(action, InputAction::ProviderPickerBack);
-    }
-
-    #[test]
-    fn esc_in_stage1_closes_the_modal() {
-        // In the stage-1 provider list (browse mode), Esc closes the picker.
-        let mut input = String::new();
-        let mut cursor = 0;
-        let mut drag = SelectionDrag::default();
-        let action = process_event(
-            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-            &mut input,
-            &mut cursor,
-            InputContext {
-                active_modal: crate::tui::Modal::Provider,
-                is_responding: false,
-                completion_kind: crate::tui::CompletionKind::None,
-                suggestion_count: 0,
-                has_exact_suggestion: false,
-                suggestion_index: None,
-                permission_confirm_always: false,
-                permission_show_details: false,
-                in_envoy_view: false,
-                in_side_view: false,
-                has_focused_target: false,
-                has_queued: false,
-                history_searching: false,
-                model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2853,19 +2803,17 @@ mod tests {
     }
 
     #[test]
-    fn star_in_stage2_is_inert_favorite_is_provider_level() {
-        // `*` favorites a provider — a stage-1-only action. In the stage-2 model
-        // sub-list it must not map to ToggleFavorite (it falls through to the
-        // ordinary char path, which is inert in browse mode).
+    fn esc_in_connections_browse_closes_the_modal() {
+        // In the Connections list (browse mode), Esc closes the picker.
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
         let action = process_event(
-            Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::tui::Modal::Provider,
+                active_modal: crate::tui::Modal::Connections,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2879,7 +2827,43 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: true,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::CloseModal);
+    }
+
+    #[test]
+    fn star_in_models_picker_is_inert_favorite_is_provider_level() {
+        // `*` favorites a provider — a Connections-only action. In the flat
+        // Models picker it must not map to ToggleFavorite (it falls through to
+        // the ordinary char path, which is inert in browse mode).
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Models,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2903,7 +2887,7 @@ mod tests {
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::tui::Modal::Provider,
+                active_modal: crate::tui::Modal::Models,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2917,7 +2901,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: true,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -2937,7 +2920,7 @@ mod tests {
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
         let ctx = || InputContext {
-            active_modal: crate::tui::Modal::Provider,
+            active_modal: crate::tui::Modal::Models,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2951,7 +2934,6 @@ mod tests {
             has_queued: false,
             history_searching: false,
             model_searching: false,
-            picker_in_models_stage: false,
             modal_keymap_open: false,
             editor_field: None,
             custom_provider_field: None,
@@ -3007,7 +2989,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3038,7 +3019,6 @@ mod tests {
             has_queued: false,
             history_searching: false,
             model_searching: false,
-            picker_in_models_stage: false,
             modal_keymap_open: false,
             editor_field: None,
             custom_provider_field: None,
@@ -3054,7 +3034,7 @@ mod tests {
             context,
             &mut drag,
         );
-        assert_eq!(action, InputAction::OpenProvider);
+        assert_eq!(action, InputAction::OpenModels);
 
         // While a modal is already open, Ctrl+M is ignored so it cannot yank
         // the user out of another modal mid-interaction.
@@ -3080,7 +3060,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3113,7 +3092,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3146,7 +3124,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3205,7 +3182,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3401,8 +3377,10 @@ mod tests {
                 // happens inside their search sub-layer, so treat those cases
                 // here as search mode (browse mode never reaches editing keys).
                 history_searching: modal == crate::tui::Modal::HistorySearch,
-                model_searching: modal == crate::tui::Modal::Provider,
-                picker_in_models_stage: false,
+                model_searching: matches!(
+                    modal,
+                    crate::tui::Modal::Models | crate::tui::Modal::Connections
+                ),
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -3562,7 +3540,6 @@ mod tests {
                     has_queued: false,
                     history_searching: false,
                     model_searching: false,
-                    picker_in_models_stage: false,
                     modal_keymap_open: false,
                     editor_field: None,
                     custom_provider_field: None,
@@ -4228,7 +4205,6 @@ mod tests {
                 has_queued: false,
                 history_searching: true,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4314,7 +4290,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4436,7 +4411,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4470,7 +4444,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4508,7 +4481,6 @@ mod tests {
                 has_queued,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4565,7 +4537,6 @@ mod tests {
                 has_queued: true,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4606,8 +4577,10 @@ mod tests {
                 // The history and model-picker modals only take text in their
                 // search sub-layer; treat those cases as search mode here.
                 history_searching: modal == crate::tui::Modal::HistorySearch,
-                model_searching: modal == crate::tui::Modal::Provider,
-                picker_in_models_stage: false,
+                model_searching: matches!(
+                    modal,
+                    crate::tui::Modal::Models | crate::tui::Modal::Connections
+                ),
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -4626,7 +4599,8 @@ mod tests {
         let free_text_modals = [
             crate::tui::Modal::None,
             crate::tui::Modal::ModelEditor,
-            crate::tui::Modal::Provider,
+            crate::tui::Modal::Models,
+            crate::tui::Modal::Connections,
             crate::tui::Modal::HistorySearch,
         ];
         for modal in free_text_modals {
@@ -4681,7 +4655,8 @@ mod tests {
         for modal in [
             crate::tui::Modal::None,
             crate::tui::Modal::ModelEditor,
-            crate::tui::Modal::Provider,
+            crate::tui::Modal::Models,
+            crate::tui::Modal::Connections,
             crate::tui::Modal::HistorySearch,
         ] {
             let mut input = String::new();
@@ -4736,7 +4711,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,
@@ -5017,7 +4991,6 @@ mod tests {
                 has_queued: false,
                 history_searching: false,
                 model_searching: false,
-                picker_in_models_stage: false,
                 modal_keymap_open: false,
                 editor_field: None,
                 custom_provider_field: None,

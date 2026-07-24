@@ -317,7 +317,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
 
     // C6: overlay the session's provider/model pin onto the effective config
     // before building the initial provider. A session that previously ran
-    // `/provider` reopens on its own provider instead of the global default,
+    // `/models` reopens on its own provider instead of the global default,
     // so one session's choice never bleeds into another. Done after the session
     // is loaded (and, for resume, after `resume` swapped in its data).
     if let Some(selection) = session.provider_selection().await {

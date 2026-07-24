@@ -1,16 +1,20 @@
 //! Snapshot-driven provider/model picker filter & sort logic.
 //!
-//! The picker renders directly from [`neenee_core::ProviderPickerSnapshot`] — one
+//! The pickers render directly from [`neenee_core::ProviderPickerSnapshot`] — one
 //! [`neenee_core::ProviderPickerRow`] per provider the harness knows how to
 //! drive, carrying the display name, the served model ids, the active model, and
 //! the live per-user signals (favorite, key-ready, last-used). Built-in and
 //! user-defined providers share this single path, so a custom provider added via
 //! the editor shows up like any built-in (there is no separate static table).
 //!
-//! The picker is **two-stage**: [`providers_filtered_from`] builds the stage-1
-//! provider list; activating a multi-model provider drills into its models via
-//! [`provider_models_filtered_from`] (stage 2). Single-model providers activate
-//! directly.
+//! Two surfaces read the same snapshot:
+//!
+//! - **Connections** (`/connections`): [`providers_filtered_from`] builds the
+//!   provider-instance list — the management surface (favorite, edit, delete,
+//!   add). Activating a provider activates its current model.
+//! - **Models** (`/models`, `Ctrl+M`): [`models_flat_filtered_from`] builds a
+//!   **flat** list of every (provider, model) pair — the daily-driver switch
+//!   surface. There is no drilling: one row per pair, Enter activates.
 
 use neenee_core::{
     ChannelAuth, ProviderModelInfo, ProviderPickerSnapshot, WireFormat, baseline_models,
@@ -26,7 +30,8 @@ use crate::tui::fuzzy;
 /// those curated values.
 ///
 /// Reasoning (effort/thinking) is intentionally NOT a provider-editor field —
-/// ADR-0046 moved it to the per-model stage-2 `e` editor, so a provider is
+/// ADR-0046 moved it to the per-model `e` editor in the Models picker, so a
+/// provider is
 /// created/authed here and its models are reasoned with (or not) individually.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CustomField {
@@ -114,7 +119,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         // Official endpoint: the base URL is fixed and pre-filled from
         // `default_url`, so the editor hides the Base URL field. The model
         // collection (`OPENAI_BUILTIN_MODELS`) is seeded as channels — the
-        // user only supplies a name and token, and the stage-2 picker lists
+        // user only supplies a name and token, and the Models picker lists
         // the served models.
         needs_url: false,
         url_hint: "https://api.openai.com/v1/chat/completions",
@@ -281,7 +286,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     // reaches it unchanged. The base URL is editable and pre-filled with a
     // documentation-safe example; users can replace it with their relay host.
     // The three effort-tiered / non-preview ids are seeded as channels — they
-    // resolve in the model registry, so the stage-2 list and add-model overlay
+    // resolve in the model registry, so the Models picker and add-model overlay
     // see real metadata.
     //
     // Model order is deliberate: `AddProvider` activates the FIRST seeded
@@ -289,7 +294,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     // by some relays for every request shape (HTTP 400 INVALID_ARGUMENT — a
     // relay-side defect, not a config issue; `-low` and `flash` often work).
     // So the generally compatible models lead and `-high` sits last, still
-    // selectable from stage 2 the moment the relay accepts it.
+    // selectable from the Models picker the moment the relay accepts it.
     ProviderTemplate {
         id: "antigravity-sub2api",
         label: "Antigravity (sub2api)",
@@ -313,13 +318,13 @@ pub fn provider_template_label_for(protocol: &str) -> String {
         .iter()
         .find(|t| t.protocol == protocol)
         .map(|t| t.label.to_string())
-        .unwrap_or_else(|| "＋ Add provider".to_string())
+        .unwrap_or_else(|| "＋ Add connection".to_string())
 }
 
 /// The ordered editor fields shown when **editing** an existing user provider.
 /// For an API-key channel the form offers Name, Base URL, and Token (the Model
 /// field is omitted — models, and their per-model reasoning, ADR-0046, are
-/// managed in the stage-2 list). For an OAuth channel (ChatGPT/Codex or xAI)
+/// managed in the Models picker). For an OAuth channel (ChatGPT/Codex or xAI)
 /// only Name is editable: the Base URL and Token are fixed by the auth flow
 /// (e.g. `https://api.x.ai/...`, `https://chatgpt.com/backend-api/codex/...`)
 /// and must not be hand-edited, so a rename is the only safe operation.
@@ -388,41 +393,40 @@ pub fn model_context_window(model: &str) -> usize {
     resolve_model(model).context_window
 }
 
-/// One selectable row in the **stage-2 model sub-list**: a single
-/// (provider, model) pair within one drilled-into provider. Built by
-/// [`provider_models_filtered_from`]; the picker browses, searches, and
-/// activates these once a multi-model provider is opened.
+/// One selectable row in the **flat model picker** ([`Modal::Models`]
+/// equivalent): a single (provider, model) pair drawn from anywhere in the
+/// snapshot. Built by [`models_flat_filtered_from`]; the picker browses,
+/// searches, and activates these directly — there is no drill-in stage.
 pub struct RankedModel {
     /// Canonical id of the provider serving this model (its snapshot row id).
     pub provider_id: String,
     /// Wire model id to activate.
     pub model: String,
-    /// The rendered label — the model's display name (stage 2 is already scoped
-    /// to one provider, so no provider suffix). The fuzzy match indexes directly
-    /// onto these characters.
+    /// The rendered label — the model's display name. The fuzzy match indexes
+    /// directly onto these characters (the provider suffix is rendered but
+    /// never matched).
     pub label: String,
-    /// Channel protocol and model-specific controls surfaced by the picker
-    /// snapshot. OpenAI rows can expose effort; Anthropic rows can expose
-    /// effort plus thinking.
-    pub protocol: String,
+    /// The provider's display name, rendered as the dim `· <provider>` suffix
+    /// so identical model ids served by different instances stay
+    /// distinguishable in the flat list.
+    pub provider_label: String,
+    /// Model-specific controls surfaced by the picker snapshot. OpenAI rows
+    /// can expose effort; Anthropic rows can expose effort plus thinking.
     pub effort: Option<String>,
     pub thinking: Option<bool>,
     /// Unix epoch milliseconds of this model's last activation (`None` = never,
-    /// sorts as oldest). Drives the stage-2 recency sort.
+    /// sorts as oldest). Drives the flat list's recency sort.
     pub last_used_ms: Option<u64>,
-    /// The fuzzy match against `label`, or `None` in browse mode (empty query),
-    /// where every row is shown unhighlighted.
+    /// The fuzzy match against `label`, or `None` in browse mode (empty query)
+    /// — and also when the row was included because its PROVIDER name matched
+    /// the query but the model label did not (shown unhighlighted).
     pub m: Option<fuzzy::FuzzyMatch>,
 }
 
-/// One selectable row in the **stage-1 provider list**. Carries everything the
-/// renderer and input handler need (copied out of the snapshot row), so neither
-/// re-indexes the snapshot. The two-stage picker shows providers first (this),
-/// then drills into a single provider's models ([`RankedModel`]) on activation.
+/// One selectable row in the **Connections** provider list. Carries everything
+/// the renderer and input handler need (copied out of the snapshot row), so
+/// neither re-indexes the snapshot.
 pub struct RankedProvider {
-    /// Index into [`ProviderPickerSnapshot::rows`] of this provider (stable
-    /// across re-filtering, so it identifies the drilled-into provider).
-    pub row_idx: usize,
     /// Canonical provider id.
     pub id: String,
     /// Display name (the fuzzy target; mirrors `label`).
@@ -443,8 +447,10 @@ pub struct RankedProvider {
 }
 
 impl RankedProvider {
-    /// Whether the provider hosts more than one model (its activation opens the
-    /// stage-2 model picker). Single-model providers activate directly.
+    /// Whether the provider hosts more than one model. Informational for the
+    /// Connections list (the flat Models picker lists each pair individually,
+    /// so no drill-in remains).
+    #[allow(dead_code)]
     pub fn is_multi_model(&self) -> bool {
         self.models.len() > 1
     }
@@ -463,8 +469,8 @@ fn model_order(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
     }
 }
 
-/// The favorite → last-used-desc → name ordering shared by both picker stages.
-/// Pulls each provider's live signals from its snapshot row.
+/// The favorite → last-used-desc → name ordering of the Connections provider
+/// list. Pulls each provider's live signals from its snapshot row.
 fn provider_order(
     picker: &ProviderPickerSnapshot,
     a_id: &str,
@@ -488,15 +494,16 @@ fn provider_order(
         .then_with(|| a_name.cmp(b_name))
 }
 
-/// Build the **stage-1** provider rows: one per snapshot row, fuzzy-filtered by
-/// `query` against the provider name and sorted favorite → last-used → name. An
-/// empty `query` (browse mode) keeps every provider with no match positions.
+/// Build the **Connections** provider rows: one per snapshot row,
+/// fuzzy-filtered by `query` against the provider name and sorted favorite →
+/// last-used → name. An empty `query` (browse mode) keeps every provider with
+/// no match positions.
 pub fn providers_filtered_from(
     picker: &ProviderPickerSnapshot,
     query: &str,
 ) -> Vec<RankedProvider> {
     let mut rows: Vec<RankedProvider> = Vec::new();
-    for (row_idx, prow) in picker.rows.iter().enumerate() {
+    for prow in picker.rows.iter() {
         let label = prow.name.clone();
         let m = if query.is_empty() {
             None
@@ -507,7 +514,6 @@ pub fn providers_filtered_from(
             }
         };
         rows.push(RankedProvider {
-            row_idx,
             id: prow.id.clone(),
             name: prow.name.clone(),
             model: prow.model.clone(),
@@ -522,57 +528,79 @@ pub fn providers_filtered_from(
     rows
 }
 
-/// Build the **stage-2** model rows for a single provider: one [`RankedModel`]
-/// per model the provider serves, fuzzy-filtered by `query` against the model
-/// display name, sorted most-recently-used first (catalog order as the stable
-/// fallback). `row_idx` indexes into `picker.rows`; an out-of-range index
-/// yields no rows.
-pub fn provider_models_filtered_from(
+/// Build the **flat Models** rows: one [`RankedModel`] per (provider, model)
+/// pair across the entire snapshot — the daily-driver switch surface, with no
+/// drill-in. Sorted provider-favorite first → model last-used desc (never-used
+/// oldest) → provider name → model label, so the pairs of a favorited provider
+/// cluster at the top and recently used models lead within it.
+///
+/// Fuzzy filtering matches `query` against the model label; when the label
+/// does not match but the PROVIDER name fuzzy-matches, that provider's models
+/// are included unhighlighted (`m = None`) so "show me everything Anthropic
+/// serves" works from the same search box. Match positions always index onto
+/// the model label's characters only.
+pub fn models_flat_filtered_from(
     picker: &ProviderPickerSnapshot,
-    row_idx: usize,
     query: &str,
 ) -> Vec<RankedModel> {
-    let Some(prow) = picker.rows.get(row_idx) else {
-        return Vec::new();
-    };
     let mut rows: Vec<RankedModel> = Vec::new();
-    for model in &prow.models {
-        let info = prow
-            .model_info
-            .iter()
-            .find(|info| info.model == *model)
-            .cloned()
-            .unwrap_or_else(|| ProviderModelInfo {
+    for prow in &picker.rows {
+        // The provider-name fallback match is computed once per provider: when
+        // it hits, every model of that provider is included (unhighlighted)
+        // even if its own label does not match the query.
+        let provider_matches =
+            !query.is_empty() && fuzzy::fuzzy_match(&prow.name, query).is_some();
+        for model in &prow.models {
+            let info = prow
+                .model_info
+                .iter()
+                .find(|info| info.model == *model)
+                .cloned()
+                .unwrap_or_else(|| ProviderModelInfo {
+                    model: model.clone(),
+                    ..ProviderModelInfo::default()
+                });
+            let label = model_display_name(model);
+            let m = if query.is_empty() {
+                None
+            } else {
+                match fuzzy::fuzzy_match(&label, query) {
+                    Some(m) => Some(m),
+                    // Label missed: keep the row only via the provider-name
+                    // fallback, and then without highlight positions.
+                    None if provider_matches => None,
+                    None => continue,
+                }
+            };
+            rows.push(RankedModel {
+                provider_id: prow.id.clone(),
                 model: model.clone(),
-                ..ProviderModelInfo::default()
+                label,
+                provider_label: prow.name.clone(),
+                effort: info.effort,
+                thinking: info.thinking,
+                last_used_ms: info.last_used_ms,
+                m,
             });
-        // Stage 2 is already scoped to one provider, so the label is just the
-        // model name — no provider suffix to disambiguate.
-        let label = model_display_name(model);
-        let m = if query.is_empty() {
-            None
-        } else {
-            match fuzzy::fuzzy_match(&label, query) {
-                Some(m) => Some(m),
-                None => continue,
-            }
-        };
-        rows.push(RankedModel {
-            provider_id: prow.id.clone(),
-            model: model.clone(),
-            label,
-            protocol: info.protocol,
-            effort: info.effort,
-            thinking: info.thinking,
-            last_used_ms: info.last_used_ms,
-            m,
-        });
+        }
     }
-    // Most-recently-used first; `None` (never activated) sorts as oldest, and
-    // catalog order (the iteration order above) is the stable tiebreaker so a
-    // never-used provider keeps its curated model sequence.
+    // Provider-favorite first (read from the snapshot row like `provider_order`
+    // does), then per-model recency, then provider name and model label as
+    // stable, deterministic tiebreakers.
+    let favorite = |id: &str| {
+        picker
+            .rows
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.favorite)
+            .unwrap_or(false)
+    };
     rows.sort_by(|a, b| {
-        model_order(a.last_used_ms, b.last_used_ms).then_with(|| a.label.cmp(&b.label))
+        favorite(&b.provider_id)
+            .cmp(&favorite(&a.provider_id))
+            .then_with(|| model_order(a.last_used_ms, b.last_used_ms))
+            .then_with(|| a.provider_label.cmp(&b.provider_label))
+            .then_with(|| a.label.cmp(&b.label))
     });
     rows
 }
@@ -689,7 +717,7 @@ mod tests {
     #[test]
     fn antigravity_template_is_offered_with_prefilled_url_and_seeded_models() {
         // The Antigravity (sub2api) relay ships as a curated template so a user
-        // adds it from "＋ Add provider" without editing config.toml. Its host
+        // adds it from "＋ Add connection" without editing config.toml. Its host
         // is fixed, so the base URL is pre-filled (`default_url`); the three
         // effort-tiered / non-preview ids are seeded; and it speaks the gemini
         // protocol (no free-text Model field — the closed family is the seed).
@@ -792,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn stage1_lists_one_row_per_provider_including_custom() {
+    fn connections_lists_one_row_per_provider_including_custom() {
         let snapshot = sample();
         let rows = providers_filtered_from(&snapshot, "");
         assert_eq!(rows.len(), snapshot.rows.len());
@@ -801,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn stage1_fuzzy_filters_by_provider_name() {
+    fn connections_fuzzy_filters_by_provider_name() {
         let snapshot = sample();
         let rows = providers_filtered_from(&snapshot, "anthro");
         assert!(rows.iter().all(|r| r.id == "anthropic"));
@@ -809,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn stage1_sorts_favorites_first_within_group() {
+    fn connections_sorts_favorites_first_within_group() {
         let mut snapshot = sample();
         // Favorite a built-in: it sorts to the top of the built-in group (which
         // itself precedes the custom group).
@@ -825,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn stage1_no_longer_groups_builtins_before_custom() {
+    fn connections_no_longer_groups_builtins_before_custom() {
         let snapshot = sample();
         let rows = providers_filtered_from(&snapshot, "");
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
@@ -843,68 +871,124 @@ mod tests {
     }
 
     #[test]
-    fn stage2_lists_a_single_providers_models() {
+    fn flat_lists_every_provider_model_pair() {
+        // The flat Models picker has one row per (provider, model) pair across
+        // ALL snapshot rows — no drilling, no per-provider scoping.
         let snapshot = sample();
-        let idx = snapshot.rows.iter().position(|r| r.id == "openai").unwrap();
-        let rows = provider_models_filtered_from(&snapshot, idx, "");
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| r.provider_id == "openai"));
-        assert!(rows.iter().any(|r| r.model == "gpt-4o"));
-    }
-
-    #[test]
-    fn stage2_single_model_provider_yields_one_row() {
-        let snapshot = sample();
-        let idx = snapshot
-            .rows
+        let rows = models_flat_filtered_from(&snapshot, "");
+        let pair_count: usize = snapshot.rows.iter().map(|r| r.models.len()).sum();
+        assert_eq!(rows.len(), pair_count);
+        // Pairs from different providers coexist, each carrying its provider
+        // id AND the provider display name for the `· <provider>` row suffix.
+        let openai = rows
             .iter()
-            .position(|r| r.id == "kimi-code")
-            .unwrap();
-        let rows = provider_models_filtered_from(&snapshot, idx, "");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].model, "kimi-k2.7-code");
+            .find(|r| r.provider_id == "openai" && r.model == "gpt-4o-mini")
+            .expect("openai pair present");
+        assert_eq!(openai.provider_label, "OpenAI");
+        assert!(rows.iter().any(|r| r.provider_id == "my-relay"));
+        assert!(rows
+            .iter()
+            .any(|r| r.provider_id == "anthropic" && r.model == "claude-opus-4-8"));
     }
 
     #[test]
-    fn stage2_sorts_most_recently_used_model_first() {
-        // Build an OpenAI row whose two models carry per-model last-used
-        // timestamps: gpt-4o-mini was used more recently than gpt-4o, so it
-        // must sort above gpt-4o even though gpt-4o is listed first (catalog
-        // order).
+    fn flat_sorts_favorite_provider_first_then_recency() {
+        // Favorite anthropic and give two of its models recency timestamps:
+        // all anthropic pairs lead (favorite provider first), the recently used
+        // one before the unused one, and every non-favorite provider's pairs
+        // follow, ordered provider name → model label.
         let mut snapshot = sample();
-        let openai = snapshot.rows.iter_mut().find(|r| r.id == "openai").unwrap();
-        openai.model_info = vec![
+        for r in &mut snapshot.rows {
+            r.favorite = r.id == "anthropic";
+        }
+        let anthropic = snapshot
+            .rows
+            .iter_mut()
+            .find(|r| r.id == "anthropic")
+            .unwrap();
+        anthropic.model_info = vec![
             ProviderModelInfo {
-                model: "gpt-4o".to_string(),
-                protocol: "openai".to_string(),
+                model: "claude-sonnet-5".to_string(),
+                protocol: "anthropic".to_string(),
+                effort: None,
+                thinking: None,
+                last_used_ms: Some(9_000),
+            },
+            ProviderModelInfo {
+                model: "claude-fable-5".to_string(),
+                protocol: "anthropic".to_string(),
                 effort: None,
                 thinking: None,
                 last_used_ms: Some(100),
             },
-            ProviderModelInfo {
-                model: "gpt-4o-mini".to_string(),
-                protocol: "openai".to_string(),
-                effort: None,
-                thinking: None,
-                last_used_ms: Some(5_000),
-            },
         ];
-        let idx = snapshot.rows.iter().position(|r| r.id == "openai").unwrap();
-        let rows = provider_models_filtered_from(&snapshot, idx, "");
-        assert_eq!(rows[0].model, "gpt-4o-mini", "most-recently-used first");
-        assert_eq!(rows[1].model, "gpt-4o");
+        let rows = models_flat_filtered_from(&snapshot, "");
+        let anthropic_rows: Vec<&RankedModel> = rows
+            .iter()
+            .filter(|r| r.provider_id == "anthropic")
+            .collect();
+        assert_eq!(anthropic_rows.len(), 4);
+        // The favorite provider's pairs all precede every other provider's.
+        let last_anthropic = rows
+            .iter()
+            .rposition(|r| r.provider_id == "anthropic")
+            .unwrap();
+        assert!(rows[..=last_anthropic]
+            .iter()
+            .all(|r| r.provider_id == "anthropic"));
+        // Within it: most-recently-used first, never-used oldest.
+        assert_eq!(anthropic_rows[0].model, "claude-sonnet-5");
+        assert_eq!(anthropic_rows[1].model, "claude-fable-5");
+        // Non-favorite providers order by provider name, then model label.
+        let rest: Vec<(&str, &str)> = rows[last_anthropic + 1..]
+            .iter()
+            .map(|r| (r.provider_label.as_str(), r.label.as_str()))
+            .collect();
+        let mut sorted = rest.clone();
+        sorted.sort();
+        assert_eq!(rest, sorted, "provider name → model label tiebreak");
     }
 
     #[test]
-    fn stage2_never_used_models_keep_catalog_order() {
-        // When no model has a recency timestamp, the stage-2 list falls back
-        // to the curated catalog order (here gpt-4o before gpt-4o-mini) plus a
-        // stable label tiebreaker.
+    fn flat_fuzzy_filters_by_model_label() {
+        // A query matching a model display name keeps that pair with highlight
+        // positions indexing onto the label's characters.
         let snapshot = sample();
-        let idx = snapshot.rows.iter().position(|r| r.id == "openai").unwrap();
-        let rows = provider_models_filtered_from(&snapshot, idx, "");
-        let ids: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
-        assert_eq!(ids, vec!["gpt-4o", "gpt-4o-mini"]);
+        let rows = models_flat_filtered_from(&snapshot, "opus");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "claude-opus-4-8");
+        assert!(rows[0].m.is_some(), "label match carries highlight");
+    }
+
+    #[test]
+    fn flat_fuzzy_by_provider_name_includes_its_models_unhighlighted() {
+        // "relay" matches no model label but DOES match the "My Relay"
+        // provider name: that provider's models are included with `m = None`
+        // (rendered without highlight), while other providers drop out.
+        let snapshot = sample();
+        let rows = models_flat_filtered_from(&snapshot, "relay");
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.provider_id == "my-relay"));
+        assert!(
+            rows.iter().all(|r| r.m.is_none()),
+            "provider-name fallback rows are unhighlighted"
+        );
+    }
+
+    #[test]
+    fn flat_never_used_models_fall_back_to_label_order_within_provider() {
+        // With no recency timestamps and no favorites, pairs order by provider
+        // name then model label — a deterministic curated fallback.
+        let snapshot = sample();
+        let rows = models_flat_filtered_from(&snapshot, "");
+        let anthropic: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.provider_id == "anthropic")
+            .map(|r| r.label.as_str())
+            .collect();
+        let mut sorted = anthropic.clone();
+        sorted.sort();
+        assert_eq!(anthropic, sorted);
     }
 
     #[test]

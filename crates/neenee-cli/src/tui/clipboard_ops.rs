@@ -58,7 +58,7 @@ pub(super) fn spawn_clipboard_paste(tx: &mpsc::UnboundedSender<ClipboardRead>) {
 /// On the main prompt (`Modal::None`) a paste follows the chip-or-inline
 /// composer semantics — images stage as `[Image #N]` attachments and large
 /// text blocks collapse into `[Pasted text #N +M lines]` chips. Inside a
-/// free-text modal (provider editor, provider picker filter, history
+/// free-text modal (provider editor, picker filter, history
 /// search) the input line is borrowed as a single-line field, so the paste
 /// splices the text inline at the cursor with newlines stripped (matching
 /// `insert_newline` being a no-op in modals) and skips the chip / attachment
@@ -66,9 +66,11 @@ pub(super) fn spawn_clipboard_paste(tx: &mpsc::UnboundedSender<ClipboardRead>) {
 pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
     match app.active_modal {
         Modal::None => apply_composer_paste(app, read),
-        Modal::HistorySearch | Modal::Provider | Modal::ModelEditor | Modal::CustomProvider => {
-            apply_modal_field_paste(app, read)
-        }
+        Modal::HistorySearch
+        | Modal::Models
+        | Modal::Connections
+        | Modal::ModelEditor
+        | Modal::CustomProvider => apply_modal_field_paste(app, read),
         Modal::Question => apply_question_other_paste(app, read),
         _ => {}
     }

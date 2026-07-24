@@ -44,7 +44,7 @@ pub fn run(component: &str) -> Result<(), Box<dyn std::error::Error>> {
                  permission   the tool-permission sheet (inline)\n  \
                  tool-step    the parallel tools transcript (spacing + lifecycles)\n  \
                  transcript   full transcript fixtures (markdown, CJK, scroll, resize)\n  \
-                 provider     the /provider model picker\n  \
+                 provider     the /connections provider picker\n  \
                  model-editor the API-key / model-id editor\n  \
                  history      the Ctrl+R input-history search\n  \
                  sessions     the session picker\n  \

@@ -326,7 +326,7 @@ fn refuse_if_no_provider(
     let _ = tx.send(turn(
         session_id,
         RoundEvent::Error(
-            "No provider configured. Add one with /provider before sending a message.".to_string(),
+            "No provider configured. Add one with /connections before sending a message.".to_string(),
         ),
     ));
     send_harness_state(tx, session_id, agent, LoopStatus::Idle);

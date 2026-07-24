@@ -98,7 +98,8 @@ fn text_modal_commands_resolve_and_consume_composer() {
     // history + transcript recording — so these must stay in sync with the
     // intercepted set in `process_event`.
     for (cmd, expected) in [
-        ("/provider", InputAction::OpenProvider),
+        ("/models", InputAction::OpenModels),
+        ("/connections", InputAction::OpenConnections),
         ("/permissions", InputAction::OpenPermissions),
         ("/tools", InputAction::OpenTools),
         ("/mcp", InputAction::OpenMcp),
@@ -148,7 +149,7 @@ fn enter_completes_a_slash_prefix() {
 
 #[test]
 fn enter_accepts_a_highlighted_slash_suggestion() {
-    // User typed `/m`, menu shows `/mcp` / `/model` / `/provider`, user
+    // User typed `/m`, menu shows `/mcp` / `/model` / `/models`, user
     // pressed ↓ to highlight `/mcp` (index 1). Enter must accept the
     // highlighted item rather than sending `/m` as a (rejected) command.
     let mut input = "/m".to_string();
@@ -185,7 +186,7 @@ fn enter_accepts_a_highlighted_path_suggestion() {
 #[test]
 fn enter_highlight_wins_over_exact_slash_match() {
     // User typed `/mcp` (exact match) but then pressed ↓ to highlight
-    // `/provider`. The explicit highlight is a stronger signal than the
+    // `/models`. The explicit highlight is a stronger signal than the
     // exact-match fast path, so Enter accepts the highlight.
     let mut input = "/mcp".to_string();
     assert_eq!(
@@ -649,7 +650,7 @@ fn star_in_models_modal_toggles_favorite() {
         &mut input,
         &mut cursor,
         InputContext {
-            active_modal: crate::tui::Modal::Provider,
+            active_modal: crate::tui::Modal::Connections,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -681,7 +682,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
         &mut input,
         &mut cursor,
         InputContext {
-            active_modal: crate::tui::Modal::Provider,
+            active_modal: crate::tui::Modal::Models,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -766,7 +767,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         context,
         &mut drag,
     );
-    assert_eq!(action, InputAction::OpenProvider);
+    assert_eq!(action, InputAction::OpenModels);
 
     // While a modal is already open, Ctrl+M is ignored so it cannot yank
     // the user out of another modal mid-interaction.
@@ -2022,7 +2023,8 @@ fn ctrl_v_returns_paste_in_free_text_modals() {
     let free_text_modals = [
         crate::tui::Modal::None,
         crate::tui::Modal::ModelEditor,
-        crate::tui::Modal::Provider,
+        crate::tui::Modal::Models,
+        crate::tui::Modal::Connections,
         crate::tui::Modal::HistorySearch,
     ];
     for modal in free_text_modals {
@@ -2077,7 +2079,8 @@ fn bracketed_paste_routes_in_free_text_modals() {
     for modal in [
         crate::tui::Modal::None,
         crate::tui::Modal::ModelEditor,
-        crate::tui::Modal::Provider,
+        crate::tui::Modal::Models,
+        crate::tui::Modal::Connections,
         crate::tui::Modal::HistorySearch,
     ] {
         let mut input = String::new();

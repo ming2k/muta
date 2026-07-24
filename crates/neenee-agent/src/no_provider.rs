@@ -63,7 +63,7 @@ impl Provider for NoProvider {
 }
 
 fn no_provider_message() -> String {
-    "No provider configured. Add one with /provider before sending a message.".to_string()
+    "No provider configured. Add one with /connections before sending a message.".to_string()
 }
 
 #[cfg(test)]

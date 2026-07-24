@@ -1,4 +1,5 @@
-//! Two-stage provider/model picker, the API-key / model-id editor, and the
+//! The Connections (provider-instance management) and Models (flat
+//! provider/model picker) modals, the API-key / model-id editor, and the
 //! custom-provider editor modals.
 
 use std::collections::HashMap;
@@ -19,35 +20,26 @@ use crate::tui::primitives::{
 use crate::tui::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::tui::view::Theme;
 
-/// Draw the **two-stage** provider/model picker. Mirrors the input-history
-/// modal's two-mode (browse/search) design within each stage:
+/// Draw the **Connections** modal — the provider-instance management surface
+/// (`/connections`). A ranked provider list (favorites → last-used → name)
+/// with a trailing "＋ Add connection" row; each row shows the provider, its
+/// favorite star, and its active model. Enter activates the provider's current
+/// model (or opens the template chooser from the add row); `*` favorites, `e`
+/// edits, `Shift+D` deletes a custom provider. Mirrors the input-history
+/// modal's two-mode (browse/search) design: `/` enters search, the header
+/// stays title-only, a dedicated search row appears beneath it, and rows
+/// highlight matched chars.
 ///
-/// - **stage 1** (`picker_provider == None`): a ranked *provider* list
-///   (favorites → last-used → name). Each row shows the provider, its key-ready
-///   glyph, active model, and a drill-in chevron. Enter drills into a
-///   multi-model provider (→ stage 2) or activates a single-model one; `*`
-///   favorites and `e` edits the row's key.
-/// - **stage 2** (`picker_provider == Some(row_idx)`): the model sub-list for
-///   the snapshot row at `row_idx`. Enter activates the highlighted model; for a
-///   custom provider, `d` removes a model. Esc returns to stage 1.
-///
-/// Within either stage, `/` enters search: the header stays title-only, a
-/// dedicated search row appears beneath it, and rows highlight matched chars.
-/// `providers` / `models` are the pre-computed stage rows (only the active
-/// stage's is non-empty); `modal_index` selects into the active stage. `scroll`
-/// is read and written back so the offset stays consistent with the clamped
-/// body height; `follow_selection` keeps `modal_index` in view after navigation.
+/// `providers` is the pre-computed row set; `modal_index` selects into it (the
+/// value `providers.len()` is the synthetic add row). `scroll` is read and
+/// written back so the offset stays consistent with the clamped body height;
+/// `follow_selection` keeps `modal_index` in view after navigation.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_models_modal(
+pub fn draw_connections_modal(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
     providers: &[RankedProvider],
-    models: &[RankedModel],
-    picker_provider: Option<usize>,
-    picker_provider_name: Option<&str>,
-    stage2_custom: bool,
     current_provider: &str,
-    current_model: &str,
     modal_index: usize,
     key_status: &HashMap<String, bool>,
     query: &str,
@@ -61,125 +53,38 @@ pub fn draw_models_modal(
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    // Breadcrumb-style title makes the two-stage picker explicit while keeping
-    // the header dry: no row counts, no transient key help, no search input.
-    let title_text: String = match picker_provider_name {
-        Some(name) => format!("Providers / {name}"),
-        None => "Providers".to_string(),
-    };
-
     let header_rect = f.header;
 
-    // Build the footer hint set for the active stage/mode. The destructive
-    // `D delete` (stage 1) and `d remove` (stage 2 custom) use custom band 70
-    // so they survive width collapse longer than plain secondaries — they are
-    // one-key destructive actions the user must be able to find.
-    let stage2_custom_settings = stage2_custom
-        && models
-            .get(modal_index)
-            .is_some_and(|model| model.protocol == "anthropic");
-    let stage2_custom_browse: Vec<FooterHint> = if stage2_custom {
-        let mut hints = vec![
-            FooterHint::navigation("↑↓", "navigate"),
-            FooterHint::secondary("/", "search"),
-            FooterHint::primary("Enter", "activate"),
-        ];
-        if stage2_custom_settings {
-            hints.push(FooterHint::secondary("e", "settings"));
-        }
-        hints.push(FooterHint::always("Esc", "back"));
-        hints
-    } else {
-        vec![
-            FooterHint::navigation("↑↓", "navigate"),
-            FooterHint::secondary("/", "search"),
-            FooterHint::primary("Enter", "activate"),
-            FooterHint::always("Esc", "back"),
-        ]
-    };
-    // `d remove` for stage-2 custom providers — custom band 70.
-    let stage2_custom_extra: Vec<FooterHintWithBand> = if stage2_custom {
-        vec![FooterHintWithBand {
-            key: "d",
-            label: "remove",
-            rank: 70,
-        }]
-    } else {
-        vec![]
-    };
-    let stage1_browse: [FooterHint; 6] = [
+    // The destructive `D delete` uses custom band 70 so it survives width
+    // collapse longer than plain secondaries — it is a one-key destructive
+    // action the user must be able to find.
+    let browse_hints: [FooterHint; 6] = [
         FooterHint::navigation("↑↓", "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary("Enter", "select"),
+        FooterHint::primary("Enter", "activate"),
         FooterHint::secondary("*", "favorite"),
         FooterHint::secondary("e", "edit"),
         FooterHint::always("Esc", "close"),
     ];
-    // `D delete` for stage 1 — custom band 70.
-    let stage1_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
+    let browse_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
         key: "D",
         label: "delete",
         rank: 70,
     }];
-    let stage1_search: [FooterHint; 4] = [
-        FooterHint::secondary("type", "filter"),
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::primary("Enter", "select"),
-        FooterHint::always("Esc", "clear search"),
-    ];
-    let stage2_search: [FooterHint; 4] = [
+    let search_hints: [FooterHint; 4] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation("↑↓", "navigate"),
         FooterHint::primary("Enter", "activate"),
         FooterHint::always("Esc", "clear search"),
     ];
-    let stage2_builtin_browse: [FooterHint; 4] = [
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::secondary("/", "search"),
-        FooterHint::primary("Enter", "activate"),
-        FooterHint::always("Esc", "back"),
-    ];
-
-    // Resolve the active (hints, extra) pair for the current stage/mode.
-    enum Mode<'a> {
-        Stage1Browse,
-        Stage1Search,
-        Stage2Browse {
-            custom_hints: &'a [FooterHint],
-            extra: &'a [FooterHintWithBand],
-        },
-        Stage2Search,
-    }
-    let mode = match (picker_provider.is_some(), search) {
-        (true, true) => Mode::Stage2Search,
-        (true, false) if stage2_custom => Mode::Stage2Browse {
-            custom_hints: &stage2_custom_browse,
-            extra: &stage2_custom_extra,
-        },
-        (true, false) => Mode::Stage2Browse {
-            custom_hints: &stage2_builtin_browse,
-            extra: &[],
-        },
-        (false, true) => Mode::Stage1Search,
-        (false, false) => Mode::Stage1Browse,
-    };
-    let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = match &mode {
-        Mode::Stage1Browse => (&stage1_browse, &stage1_extra),
-        Mode::Stage1Search => (&stage1_search, &[]),
-        Mode::Stage2Browse {
-            custom_hints,
-            extra,
-        } => (custom_hints, extra),
-        Mode::Stage2Search => (&stage2_search, &[]),
+    let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
+        (&search_hints, &[])
+    } else {
+        (&browse_hints, &browse_extra)
     };
 
     if keymap_open {
-        modal_header(
-            frame,
-            header_rect,
-            &format!("{title_text} · keybindings"),
-            theme,
-        );
+        modal_header(frame, header_rect, "Connections · keybindings", theme);
         let body = keymap_body_lines(hints, extra, theme);
         render_body(
             frame,
@@ -197,39 +102,154 @@ pub fn draw_models_modal(
         return area;
     }
 
-    modal_header(frame, header_rect, &title_text, theme);
+    modal_header(frame, header_rect, "Connections", theme);
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {
         draw_picker_search_row(frame, search_rect, query, theme);
     }
 
-    // Stage-2 model rows map 1:1 to `modal_index`; stage-1 inserts non-selectable
-    // group headers, so the body builder reports the selected row's visual line.
-    let (body, follow_line) = if picker_provider.is_some() {
-        (
-            model_list_body(
-                models,
-                current_provider,
-                current_model,
-                modal_index,
-                theme,
-                body_rect.width as usize,
-            ),
-            modal_index,
-        )
-    } else {
-        provider_list_body(
-            providers,
-            current_provider,
-            key_status,
-            modal_index,
-            theme,
-            body_rect.width as usize,
-        )
-    };
+    // The provider list inserts a synthetic add row past the last provider, so
+    // the body builder reports the selected row's visual line.
+    let (body, follow_line) = provider_list_body(
+        providers,
+        current_provider,
+        key_status,
+        modal_index,
+        theme,
+        body_rect.width as usize,
+    );
     let follow = if follow_selection {
         Some(follow_line)
+    } else {
+        None
+    };
+    render_body(
+        frame,
+        body_rect,
+        body,
+        scroll,
+        follow,
+        SCROLL_EDGE_MARGIN,
+        false,
+        theme,
+    );
+
+    if let Some(fo) = f.footer {
+        render_modal_footer_with_more(frame, fo, hints, extra, theme);
+    }
+
+    // The real terminal caret only exists in search mode — browse mode has no
+    // editable field. Place it in the dedicated search row, not in the header.
+    if search && let Some(sr) = search_rect {
+        let prefix = " Search  › ".width() as u16;
+        let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
+        let cursor_y = sr.y;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+    area
+}
+
+/// Draw the **Models** modal — the flat (provider, model) picker
+/// (`Ctrl+M` / `/models`), the daily-driver switch surface. One row per pair
+/// across every provider, `● <model>  · <provider>`; Enter activates the
+/// highlighted pair, `e` opens its per-model settings (effort/thinking,
+/// ADR-0046), and `d` removes the highlighted model when its provider is
+/// user-defined (`highlighted_custom`, pre-computed by the caller). Same
+/// browse/search two-mode design as the Connections modal.
+///
+/// `models` is the pre-computed flat row set; `modal_index` selects into it.
+/// `scroll` is read and written back so the offset stays consistent with the
+/// clamped body height; `follow_selection` keeps `modal_index` in view after
+/// navigation.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_models_modal(
+    frame: &mut Frame,
+    _layout_map: &mut LayoutMap,
+    models: &[RankedModel],
+    highlighted_custom: bool,
+    current_provider: &str,
+    current_model: &str,
+    modal_index: usize,
+    query: &str,
+    cursor_position: usize,
+    scroll: &mut usize,
+    follow_selection: bool,
+    search: bool,
+    keymap_open: bool,
+    theme: &Theme,
+) -> neenee_tui_engine::Rect {
+    let area = modal_area(frame, FixedModalSpec::PROVIDER);
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    let header_rect = f.header;
+
+    // `d remove` (custom providers only) uses custom band 70 so it survives
+    // width collapse longer than plain secondaries — it is a one-key
+    // destructive action the user must be able to find.
+    let browse_hints: [FooterHint; 5] = [
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::secondary("/", "search"),
+        FooterHint::primary("Enter", "activate"),
+        FooterHint::secondary("e", "settings"),
+        FooterHint::always("Esc", "close"),
+    ];
+    let remove_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
+        key: "d",
+        label: "remove",
+        rank: 70,
+    }];
+    let search_hints: [FooterHint; 4] = [
+        FooterHint::secondary("type", "filter"),
+        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::primary("Enter", "activate"),
+        FooterHint::always("Esc", "clear search"),
+    ];
+    let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
+        (&search_hints, &[])
+    } else if highlighted_custom {
+        (&browse_hints, &remove_extra)
+    } else {
+        (&browse_hints, &[])
+    };
+
+    if keymap_open {
+        modal_header(frame, header_rect, "Models · keybindings", theme);
+        let body = keymap_body_lines(hints, extra, theme);
+        render_body(
+            frame,
+            f.body,
+            body,
+            scroll,
+            None,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
+        }
+        return area;
+    }
+
+    modal_header(frame, header_rect, "Models", theme);
+
+    let (search_rect, body_rect) = split_search_body(f.body, search);
+    if let Some(search_rect) = search_rect {
+        draw_picker_search_row(frame, search_rect, query, theme);
+    }
+
+    // Flat model rows map 1:1 to `modal_index`.
+    let body = model_list_body(
+        models,
+        current_provider,
+        current_model,
+        modal_index,
+        theme,
+        body_rect.width as usize,
+    );
+    let follow = if follow_selection {
+        Some(modal_index)
     } else {
         None
     };
@@ -305,9 +325,9 @@ fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Th
     );
 }
 
-/// Build the **stage-1** provider list body. Each row is
-/// `● ★ <provider…>  <model · N ›>`: a leading current-state dot, a favorite
-/// star, the provider name padded to a shared column, and an aligned model
+/// Build the **Connections** provider list body. Each row is
+/// `● ★ <provider…>  <model>`: a leading current-state dot, a favorite star,
+/// the provider name padded to a shared column, and an aligned active-model
 /// suffix. The cursor fills the whole row with the brand tone (no `›` arrow);
 /// the live provider is marked by a green `●`. Returns the body lines and the
 /// *visual* line index of the selected selectable row (`modal_index`).
@@ -340,10 +360,11 @@ fn provider_list_body(
         let is_current = rp.id == current_provider;
         let g = PickerRowStyle::new(theme, sel == modal_index, rp.favorite, is_current);
 
-        // Suffix: the active model's display name plus a drill-in chevron.
-        // Counts stay out of the provider list; stage 2 shows the actual models.
+        // Suffix: the provider's active model display name (what Enter
+        // activates). Model counts stay out of the list; the Models picker
+        // shows the actual pairs.
         let model_name = crate::tui::providers::model_display_name(&rp.model);
-        let suffix = format!("{model_name} ›");
+        let suffix = model_name;
 
         // Pad / truncate the name to the shared column so suffixes align.
         let name = truncate_ellipsis(&rp.label, name_col);
@@ -371,7 +392,7 @@ fn provider_list_body(
         body.push(Line::from(spans));
     }
 
-    // Trailing synthetic "＋ Add provider" row (selectable index == providers.len()).
+    // Trailing synthetic "＋ Add connection" row (selectable index == providers.len()).
     if modal_index == providers.len() {
         selected_visual = body.len();
     }
@@ -384,15 +405,18 @@ fn provider_list_body(
     } else {
         Style::default().fg(theme.brand())
     };
-    body.push(Line::from(Span::styled(" ＋ Add provider", add_style)));
+    body.push(Line::from(Span::styled(" ＋ Add connection", add_style)));
     (body, selected_visual)
 }
 
-/// Build the **stage-2** model list body for the drilled-into provider. Each
-/// row is `● <model display>`, the model name bold; the cursor fills the whole
-/// row (no `›` arrow), and the live model is marked by a green `●`. In search
-/// mode the fuzzy-matched characters are highlighted. An optional reasoning
-/// tag (`◆ think on`) follows the label.
+/// Build the **Models** flat model list body. Each row is
+/// `● <model display>  · <provider>`: the model name bold, then a dim provider
+/// suffix so identical model ids served by different instances stay
+/// distinguishable; the cursor fills the whole row (no `›` arrow), and the
+/// live (provider, model) pair is marked by a green `●`. In search mode the
+/// fuzzy-matched characters of the model label are highlighted (provider-name
+/// fallback rows carry no highlight). An optional reasoning tag
+/// (`◆ think on`) follows the label.
 fn model_list_body(
     models: &[RankedModel],
     current_provider: &str,
@@ -407,12 +431,13 @@ fn model_list_body(
     let mut body: Vec<Line> = Vec::new();
     for (row, rm) in models.iter().enumerate() {
         let is_current = rm.provider_id == current_provider && rm.model == current_model;
-        // Favorite is provider-level; stage 2 lists one provider's models, so the
-        // per-row star is suppressed here to keep the model list uncluttered.
+        // Favorite is provider-level and managed in the Connections modal, so
+        // the per-row star is suppressed here to keep the model list
+        // uncluttered.
         let g = PickerRowStyle::new(theme, row == modal_index, false, is_current);
 
-        // Prefix: dot(1) + gap(2) + indent(1) = 4 columns (matches stage 1's
-        // 4-col prefix so the two stages align vertically).
+        // Prefix: dot(1) + gap(3) = 4 columns (matches the Connections list's
+        // 4-col prefix so the two pickers align vertically).
         const PREFIX_COLS: usize = 4;
 
         // The reasoning tag. ADR-0046: reasoning is opt-in, so a model only
@@ -425,8 +450,10 @@ fn model_list_body(
             (Some(true), None) => " ◆ think on".to_string(),
             _ => String::new(),
         };
+        let suffix = format!(" · {}", rm.provider_label);
         let label_budget = body_width
             .saturating_sub(PREFIX_COLS)
+            .saturating_sub(suffix.width())
             .saturating_sub(tag.width())
             .max(1);
         let label = truncate_ellipsis(&rm.label, label_budget);
@@ -442,6 +469,8 @@ fn model_list_body(
             };
             spans.push(Span::styled(c.to_string(), style));
         }
+        // The dim provider suffix never participates in the fuzzy highlight.
+        spans.push(Span::styled(suffix, g.dim_style));
         if !tag.is_empty() {
             // The reasoning tag dims onto the row; on a brand-filled cursor row
             // it lifts to the contrast foreground so it stays legible.
@@ -457,7 +486,7 @@ fn model_list_body(
     body
 }
 
-/// The "no matches" placeholder body shared by both stages.
+/// The "no matches" placeholder body shared by both pickers.
 fn empty_body(theme: &Theme) -> Vec<Line<'static>> {
     vec![
         Line::from(""),
@@ -475,7 +504,7 @@ fn match_set(m: Option<&crate::tui::fuzzy::FuzzyMatch>) -> std::collections::Has
 }
 
 /// The resolved styling for one picker row, computed once from the row's
-/// selected / current state so both stage bodies paint consistently.
+/// selected / current state so both picker bodies paint consistently.
 ///
 /// State is conveyed across **two independent visual axes**, never collapsed
 /// into a single glyph:
@@ -510,7 +539,7 @@ struct PickerRowStyle {
     /// Style for the row's name characters that ARE fuzzy-matched. Adjusted for
     /// the row's background so matched chars stay readable on a brand fill.
     matched_style: Style,
-    /// Style for the dim suffix (active model, chevron, etc.).
+    /// Style for the dim suffix (active model, provider name, etc.).
     dim_style: Style,
     /// Foreground of a brand-filled row, used to recolor trailing detail (e.g.
     /// the reasoning tag) so it stays legible on the fill.
@@ -556,7 +585,7 @@ impl PickerRowStyle {
 }
 
 /// Draw the provider key editor: a single **API key** field. The model is chosen
-/// from the picker's stage-2 list, so it is not edited here. `input` is the live
+/// from the Models picker, so it is not edited here. `input` is the live
 /// API-key value borrowed from the composer line.
 #[allow(clippy::too_many_arguments)] // modal draw fns thread many context args by nature
 pub fn draw_model_editor(
@@ -883,11 +912,11 @@ pub fn draw_oauth_pending(
     area
 }
 
-/// Draw the provider-template chooser as the provider list's Add provider child
-/// page. It retains the parent panel geometry and uses a breadcrumb header so
-/// navigation does not look like a separate modal. Each row is a label + a
-/// muted one-line description; `↑/↓` move the highlight and Enter opens the
-/// editor.
+/// Draw the provider-template chooser as the Connections list's Add connection
+/// child page. It retains the parent panel geometry and uses a breadcrumb
+/// header so navigation does not look like a separate modal. Each row is a
+/// label + a muted one-line description; `↑/↓` move the highlight and Enter
+/// opens the editor.
 /// `scroll` is read AND written back so the offset stays consistent with the
 /// clamped body height; the highlighted template is followed on-screen so
 /// `↑/↓` navigation keeps it visible even when the list overflows the body.
@@ -900,7 +929,7 @@ pub fn draw_provider_template_chooser(
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, "Providers / Add provider", theme);
+    modal_header(frame, f.header, "Connections / Add connection", theme);
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {

@@ -1042,7 +1042,7 @@ impl Config {
     /// selection changes (favorites, provider metadata edits, TUI
     /// preferences) so they never leak the in-memory selection — which may
     /// carry a resumed session's provider pin — into `config.toml`. The
-    /// `/provider` switch itself calls [`Config::save`]: updating the global
+    /// `/models` switch itself calls [`Config::save`]: updating the global
     /// default is its whole point.
     ///
     /// The lock + disk read makes this cross-process safe: another `neenee`

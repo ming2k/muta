@@ -11,7 +11,8 @@ Project and user-defined commands are covered under
 
 | Command | Description |
 |---------|-------------|
-| `/provider` | Select an LLM provider |
+| `/models` | Switch the active model |
+| `/connections` | Manage LLM provider connections |
 | `/mcp` | Manage MCP servers (enable/disable, reconnect) |
 | `/compact` | Compact older complete turns now |
 | `/clear` | Clear the conversation history |
@@ -36,9 +37,9 @@ Project and user-defined commands are covered under
 | `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program |
 
-Several interactive management commands, including `/provider`, `/tools`, and
-`/config`, are handled in the TUI. Commands that mutate agent or session state
-are dispatched to the backend.
+Several interactive management commands, including `/models`, `/connections`,
+`/tools`, and `/config`, are handled in the TUI. Commands that mutate agent or
+session state are dispatched to the backend.
 
 ### `/serve`
 
@@ -246,4 +247,4 @@ are not shadowed by custom commands.
 
 - [Harness architecture](../explanation/agent-design/harness.md) — pursuit state, autonomous
   loop, durable session, permission broker, context compaction
-- [Modals](tui/modals.md) — the `/provider` and `/sessions` pickers
+- [Modals](tui/modals.md) — the `/models`, `/connections`, and `/sessions` pickers

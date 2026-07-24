@@ -176,7 +176,7 @@ pub trait Provider: Send + Sync {
     /// one JSON file under `dir` (one file per round-trip). When `enabled` is
     /// false, capture stops and `dir` is ignored. Default is a no-op; the
     /// runtime proxy (`ProxyProvider`) overrides it so capture survives
-    /// mid-session `/provider` swaps. See the `/debug trace` command.
+    /// mid-session `/models` swaps. See the `/debug trace` command.
     ///
     /// This lives at the semantic layer (`Vec<Message>` in / events out), not
     /// the HTTP byte layer: request URLs, headers, and transport bytes are not

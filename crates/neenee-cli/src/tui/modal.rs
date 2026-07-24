@@ -10,19 +10,29 @@
 pub enum Modal {
     #[default]
     None,
-    /// Two-stage provider/model picker (`Ctrl+M` / `/model`). **Stage 1** is a
-    /// ranked *provider* list (`App::providers_filtered`); **stage 2**
-    /// (`App::picker_provider` = `Some`) is the model sub-list for a
-    /// drilled-into multi-model provider (`App::provider_models_filtered`).
-    /// Enter on a multi-model provider drills into stage 2; on a single-model
-    /// provider (or any stage-2 row) it activates that (provider, model). Each
-    /// stage mirrors the input-history modal's two-mode design: it opens in
-    /// **browse** mode (composer line not borrowed, typing inert) and `/` drops
-    /// into a **search** sub-layer that borrows the line as a live fuzzy query
+    /// Flat model picker (`Ctrl+M` / `/models`) — the daily-driver switch
+    /// surface. One selectable row per (provider, model) pair across the whole
+    /// snapshot (`App::models_flat_filtered`); Enter activates the highlighted
+    /// pair, `e` opens the pair's per-model settings editor (ADR-0046), and `d`
+    /// removes the highlighted model when its provider is user-defined. It
+    /// mirrors the input-history modal's two-mode design: it opens in **browse**
+    /// mode (composer line not borrowed, typing inert) and `/` drops into a
+    /// **search** sub-layer that borrows the line as a live fuzzy query
     /// (`App::model_search` distinguishes the two). Esc in search returns to
-    /// browse; Esc in stage 2 returns to stage 1; Esc in stage 1 (or an outside
-    /// click) closes and restores the draft.
-    Provider,
+    /// browse; Esc in browse (or an outside click) closes and restores the
+    /// draft.
+    Models,
+    /// Provider-instance management (`/connections`): the ranked provider list
+    /// (`App::providers_filtered`, favorites → last-used → name) with a trailing
+    /// "＋ Add connection" row that opens [`Self::ProviderTemplate`]. Enter
+    /// activates the provider's current model; `*` favorites; `e` edits (built-in
+    /// → API-key editor [`Self::ModelEditor`], custom → meta editor
+    /// [`Self::CustomProvider`]); `Shift+D` deletes a custom provider behind a
+    /// confirm overlay (`App::pending_provider_delete`). Same browse/search
+    /// two-mode design as [`Self::Models`]: `/` borrows the composer line as a
+    /// fuzzy query, Esc in search returns to browse, Esc in browse (or an
+    /// outside click) closes and restores the draft.
+    Connections,
     /// Input-history recall (Ctrl+R). A two-mode surface: it opens in **browse**
     /// mode — a plain reverse-chronological list (newest first, top-focused)
     /// where the composer line is not borrowed and typing is inert — and `/`
@@ -36,16 +46,17 @@ pub enum Modal {
     Permission,
     Question,
     /// Unified provider editor: edit the API key and model-id
-    /// of a catalog entry in one place. Reached via `e` in the picker or
-    /// `Enter` on a no-key model. Replaces the sequential ApiKey / Endpoint /
-    /// ModelName modal chain.
+    /// of a catalog entry in one place. Reached via `e` in the Connections or
+    /// Models pickers or `Enter` on a no-key model. Replaces the sequential
+    /// ApiKey / Endpoint / ModelName modal chain.
     ModelEditor,
-    /// Provider-template chooser: the "Providers / Add provider" child page of
-    /// the provider list. It retains the provider panel footprint and is reached
-    /// from the "＋ Add provider" row at the bottom of the picker's stage-1
-    /// list. `↑/↓` move; `Enter` opens the [`Self::CustomProvider`] editor seeded
-    /// from the chosen template; `Esc` returns to the picker. See
-    /// `App::template_choice` and [`crate::tui::providers::PROVIDER_TEMPLATES`].
+    /// Provider-template chooser: the "Connections / Add connection" child page
+    /// of the Connections list. It retains the provider panel footprint and is
+    /// reached from the "＋ Add connection" row at the bottom of the
+    /// Connections list. `↑/↓` move; `Enter` opens the [`Self::CustomProvider`]
+    /// editor seeded from the chosen template; `Esc` returns to the Connections
+    /// list. See `App::template_choice` and
+    /// [`crate::tui::providers::PROVIDER_TEMPLATES`].
     ProviderTemplate,
     /// OAuth-in-progress sheet for SuperGrok. Stays open while browser authorize
     /// + loopback callback run; on success transitions to [`Self::CustomProvider`].
@@ -56,8 +67,8 @@ pub enum Modal {
     /// template chosen in [`Self::ProviderTemplate`]; `Tab`/`BackTab` cycle the
     /// visible fields, and the focused field borrows the composer line (like
     /// [`Self::ModelEditor`]). `Enter` saves (→ `AgentRequest::AddProvider`) and
-    /// activates; `Esc` returns to the picker. See `App::custom_field` and
-    /// friends.
+    /// activates; `Esc` returns to the Connections list. See `App::custom_field`
+    /// and friends.
     CustomProvider,
     Help,
     Sessions,
@@ -123,7 +134,7 @@ pub enum Modal {
     TokenReport,
     /// Interactive-input injection panel (L3.5 β): shown when a `bash` command
     /// is classified interactive and the agent cannot supply its own input.
-    /// Borrows the composer input line (like `Provider`/`ModelEditor`) for
+    /// Borrows the composer input line (like `Models`/`ModelEditor`) for
     /// free-text entry; masks the typed text when the request is `secret`
     /// (password/passphrase). `Enter` submits (→ `AgentRequest::InputReply`),
     /// `Esc` cancels (→ empty reply → command runs with closed stdin and fails
@@ -173,12 +184,13 @@ impl Modal {
     /// Whether this modal closes when the user clicks outside its rect
     /// (click-outside-to-dismiss). True for the read-only / info overlays
     /// (Help, Session, Sessions, Activity) and for the history
-    /// modal and the model picker: their filter query is ephemeral and the real
-    /// composer draft is safely parked in `stashed_input`, so an outside click
-    /// closes them and restores the draft (via `App::restore_history_draft`) —
-    /// exactly like Esc. Entry modals that hold precious in-progress input
-    /// (ModelEditor, Question) and the permission sheet stay open so an
-    /// accidental click never discards an API key or a pending decision.
+    /// modal and the Connections/Models pickers: their filter query is
+    /// ephemeral and the real composer draft is safely parked in
+    /// `stashed_input`, so an outside click closes them and restores the draft
+    /// (via `App::restore_history_draft`) — exactly like Esc. Entry modals that
+    /// hold precious in-progress input (ModelEditor, Question) and the
+    /// permission sheet stay open so an accidental click never discards an API
+    /// key or a pending decision.
     ///
     /// This is the single source of truth for *which* modals are
     /// click-dismissable; the event loop records the renderer's actual panel
@@ -198,7 +210,8 @@ impl Modal {
                 | Modal::ConfigLayout
                 | Modal::Activity
                 | Modal::HistorySearch
-                | Modal::Provider
+                | Modal::Models
+                | Modal::Connections
                 | Modal::TokenReport
         )
     }
@@ -214,7 +227,8 @@ impl Modal {
     pub fn owns_caret(self) -> bool {
         matches!(
             self,
-            Modal::Provider
+            Modal::Models
+                | Modal::Connections
                 | Modal::ModelEditor
                 | Modal::CustomProvider
                 | Modal::HistorySearch

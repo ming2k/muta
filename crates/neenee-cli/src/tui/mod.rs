@@ -1390,7 +1390,7 @@ pub async fn run_tui(
         template_choice: 0,
         template_scroll: 0,
         model_search: false,
-        picker_provider: None,
+        editor_return_to: Modal::None,
         model_scroll: 0,
         model_modal_follow: true,
         pending_provider_delete: None,

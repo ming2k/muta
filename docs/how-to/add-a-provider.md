@@ -11,7 +11,7 @@ registry presets, bespoke built-ins, and user-defined entries into channels
 with fully resolved credentials, then constructs the concrete `Provider` via
 `build_provider_for_channel` in
 `crates/neenee-providers/src/registry/mod.rs`.
-Startup and `/provider switch` share this single path — there is no separate
+Startup and a `/models` pick share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
 
 ## Choose a path
@@ -65,8 +65,8 @@ api_key_env = "GEMINI_RELAY_KEY"
 model = "gemini-2.5-flash"
 ```
 
-To redirect the **built-in** `google` preset instead (so `/provider switch
-google` and `default_provider = "google"` route through the relay), set the
+To redirect the **built-in** `google` preset instead (so picking `google` in
+`/models` and `default_provider = "google"` route through the relay), set the
 top-level `gemini_base_url` (or export `GEMINI_BASE_URL`):
 
 ```toml
@@ -214,7 +214,7 @@ Then exercise the provider end-to-end:
    renders with the right arguments and result.
 3. If the model advertises reasoning support (e.g. an `acme-reasoner`
    variant), switch to it and confirm a thinking step appears.
-4. Run `/provider switch acme <model>` from inside the TUI and confirm the
+4. Switch to the provider from inside the TUI with `/models` and confirm the
    header updates and the new model is used.
 5. Repeat the tool-call test on a provider that uses the universal fallback
    (a test adapter that ignores `ModelRequest.tool_specs`) to confirm the new

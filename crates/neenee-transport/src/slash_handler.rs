@@ -7,7 +7,7 @@
 //! `/help`, and dispatch can never drift.
 //!
 //! That closed set is the right default for the shared harness commands
-//! (`/provider`, `/mcp`, `/pursue`, …) every agent needs. But an application
+//! (`/models`, `/mcp`, `/pursue`, …) every agent needs. But an application
 //! embedding the server (a future `neenee-quant` binary) often wants its own
 //! commands that run *Rust* logic, not a markdown prompt template (the only
 //! other custom-command mechanism, via `.neenee/commands/*.md`). Forcing those

@@ -2,7 +2,7 @@
 //! agent background task's `match req { … }` dispatch.
 //!
 //! This is the largest handler — it fans the parsed command out across every
-//! `BuiltinCmd` variant (`/provider`, `/mcp`, `/compact`, `/clear`,
+//! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/clear`,
 //! `/permissions`, `/unattended`, `/review`, `/search`, `/resume`,
 //! `/session`, `/sessions`, `/btw`, `/pursue`, `/repeat`, `/init`,
 //! `/skills`, `/skill`, `/export`, `/debug`, `/help`, `/exit`) plus the
@@ -99,7 +99,7 @@ pub async fn dispatch(
         tracing::warn!(?error, cmd = %cmd, "could not persist command echo");
     }
     match BuiltinCmd::from_slash(parts[0]) {
-        Some(BuiltinCmd::Provider) => {
+        Some(BuiltinCmd::Models) | Some(BuiltinCmd::Connections) => {
             // Handled in TUI
         }
         Some(BuiltinCmd::Config) => {

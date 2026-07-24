@@ -120,7 +120,7 @@ pub enum EmptyStateGuidance {
     /// strip rather than a recurring billboard.
     #[default]
     None,
-    /// No usable LLM provider is configured. Steers the user to `/provider`
+    /// No usable LLM provider is configured. Steers the user to `/connections`
     /// before they type, since a message sent against the mock provider goes
     /// nowhere. This is a real setup blocker, not onboarding — it clears the
     /// moment a keyed provider exists, independently of the onboarding flag.
@@ -148,7 +148,7 @@ fn guidance_line_count(guidance: EmptyStateGuidance) -> usize {
 
 /// Build the styled text lines for the guidance section. The logo + blank gap
 /// are rendered by [`draw_empty_state`]; this owns only the copy beneath. The
-/// `info` tone highlights actionable tokens (`/provider`, `/skills`, …) so the
+/// `info` tone highlights actionable tokens (`/connections`, `/skills`, …) so the
 /// next step reads as a affordance, not ambient text — mirroring how the hint
 /// bar uses `info` for the `◆ effort` tag.
 fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'static>> {
@@ -167,7 +167,7 @@ fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'st
             )]),
             Line::from(vec![
                 Span::styled("Run ", muted),
-                Span::styled("/provider", info),
+                Span::styled("/connections", info),
                 Span::styled(" to set one up.", muted),
             ]),
         ],

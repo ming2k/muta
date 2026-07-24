@@ -30,14 +30,14 @@ use tokio::sync::Mutex;
 /// for structured injection provenance. All three are structural no-ops for
 /// legacy snapshots, which load with the new fields at their `#[serde(default)]`
 /// values (`None` / `false`). C6 (per-session provider/model): added
-/// `provider_selection`. A session that has run `/provider` pins its own
+/// `provider_selection`. A session that has run `/models` pins its own
 /// provider + model here so the live selection does not leak into the global
 /// `config.toml` or affect other concurrent sessions.
 const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
-/// only, so one session switching `/provider` does not change what any other
+/// only, so one session switching `/models` does not change what any other
 /// session — or the next fresh session — sees. `None` means "follow the global
 /// default"; the session still tracks the provider selection it was started
 /// with until the user switches.
@@ -169,7 +169,7 @@ struct SessionData {
     #[serde(default)]
     applied_seq: Option<u64>,
     /// Session-scoped provider + model pin (C6). `None` for a session that has
-    /// never run `/provider`; the harness then seeds it from the global default
+    /// never run `/models`; the harness then seeds it from the global default
     /// on first switch. Persisted so resume restores the session's own provider
     /// instead of whatever global default is current at reopen time.
     #[serde(default)]
@@ -997,7 +997,7 @@ impl SessionStore {
     }
 
     /// The session-scoped provider + model pin (C6). `None` means "follow the
-    /// global default"; the harness seeds this on first `/provider` switch.
+    /// global default"; the harness seeds this on first `/models` switch.
     pub async fn provider_selection(&self) -> Option<ProviderSelection> {
         self.state.lock().await.data.provider_selection.clone()
     }
@@ -1005,7 +1005,7 @@ impl SessionStore {
     /// Replace the session-scoped provider + model pin (C6). Persists both the
     /// snapshot and the event log so resume restores the session's own provider
     /// instead of the global default. This is the single write path for the
-    /// per-session provider override; the `/provider` switch handler calls it
+    /// per-session provider override; the `/models` switch handler calls it
     /// instead of mutating `config.toml`'s selection, so one session switching
     /// provider/model never affects another.
     pub async fn set_provider_selection(

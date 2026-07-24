@@ -34,12 +34,12 @@ pub async fn chat(
 ) {
     // Refuse up-front when no real provider is configured: the shared holder
     // is parked on the `NoProvider` sentinel (catalog could not resolve a
-    // channel at startup or the last `/provider` switch). Failing here keeps
+    // channel at startup or the last `/models` switch). Failing here keeps
     // the user's text out of the transcript and surfaces a single notice
     // instead of letting the request reach a non-functional provider.
     if NoProvider::is(agent.provider.as_ref()) {
         let _ = resp_tx.send(AgentResponse::Error(
-            "No provider configured. Add one with /provider before sending a message.".to_string(),
+            "No provider configured. Add one with /connections before sending a message.".to_string(),
         ));
         return;
     }

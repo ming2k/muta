@@ -1,7 +1,7 @@
 //! Provider-delete confirm overlay.
 //!
 //! A small centered confirm panel rendered *on top of* the stage-1 provider
-//! picker (`Modal::Provider`) when the user presses `Shift+D` on a custom
+//! picker (`Modal::Connections`) when the user presses `Shift+D` on a custom
 //! provider. Unlike the drill-in modals (model editor / custom-provider
 //! editor) it does not replace the list — the picker stays visible behind it,
 //! dimmed by an extra [`recess_backdrop`] pass so the user can see exactly

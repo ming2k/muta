@@ -109,7 +109,7 @@ impl ProxyProvider {
 #[async_trait]
 impl Provider for ProxyProvider {
     /// Delegate to the currently active inner provider so attribution tracks
-    /// the live provider even after a mid-session `/provider` switch.
+    /// the live provider even after a mid-session `/models` switch.
     fn provider_id(&self) -> String {
         self.holder
             .read()
@@ -242,7 +242,7 @@ impl Provider for ProxyProvider {
     }
 
     /// Delegate usage support + drain to the live inner provider so attribution
-    /// tracks the active provider even after a mid-session `/provider` swap.
+    /// tracks the active provider even after a mid-session `/models` swap.
     fn usage_supported(&self) -> bool {
         self.holder
             .read()

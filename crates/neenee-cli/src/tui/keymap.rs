@@ -217,8 +217,8 @@ pub enum Action {
     OpenHelp,
     /// Open the input-history recall modal.
     OpenHistory,
-    /// Open the provider / model picker.
-    OpenProvider,
+    /// Open the flat model picker.
+    OpenModels,
     /// Open the Todos modal.
     OpenTodos,
     /// Copy the current selection (or clear input / arm quit — resolved by the
@@ -260,7 +260,7 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
                 code: KeyCode::Char('m'),
             },
             gate: Gate::NoModal,
-            action: Action::OpenProvider,
+            action: Action::OpenModels,
             description: "switch model",
         },
         Binding {
@@ -357,7 +357,7 @@ impl Registry {
             return Some(match binding.action {
                 Action::OpenHelp => InputAction::OpenHelp,
                 Action::OpenHistory => InputAction::OpenHistory,
-                Action::OpenProvider => InputAction::OpenProvider,
+                Action::OpenModels => InputAction::OpenModels,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::CopyOrClear => InputAction::CtrlC,
                 Action::CopySelection => InputAction::CopySelection,
@@ -394,7 +394,7 @@ mod tests {
         let registry = Registry::new();
         let action = registry.resolve(
             key(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            Modal::Provider,
+            Modal::Models,
         );
         assert_eq!(action, Some(InputAction::CtrlC));
     }
@@ -450,13 +450,13 @@ mod tests {
                 KeyCode::Char('c'),
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             ),
-            Modal::Provider,
+            Modal::Models,
         );
         assert_eq!(action, Some(InputAction::CopySelection));
 
         let action = registry.resolve(
             key(KeyCode::Char('c'), KeyModifiers::SUPER),
-            Modal::Provider,
+            Modal::Models,
         );
         assert_eq!(action, Some(InputAction::CopySelection));
     }

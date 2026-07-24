@@ -99,7 +99,7 @@ pub enum SessionEvent {
     },
     /// The session-scoped provider + model pin changed (C6). `selection = None`
     /// means "follow the global default". Snapshot semantics. Set by the
-    /// `/provider` switch handler so the session reopens on its own provider
+    /// `/models` switch handler so the session reopens on its own provider
     /// instead of the global default; read on resume to restore it. The global
     /// `config.toml` selection is left untouched, so one session switching
     /// provider/model never affects another.

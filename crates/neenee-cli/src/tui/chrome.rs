@@ -653,7 +653,7 @@ pub struct HintBarView<'a> {
     /// per-protocol gating (Anthropic: shown only when thinking is opted in;
     /// OpenAI: shown whenever the model exposes an effort knob; Gemini:
     /// never), so this is `None` for models that are not reasoning. Mirrors
-    /// the `◆ think on · {effort}` tag the `/provider` picker shows on a row.
+    /// the `◆ think on · {effort}` tag the `/models` picker shows on a row.
     pub reasoning_effort: Option<&'a str>,
     /// True while the prompt is a `!`-prefixed shell command and no transcript
     /// step is focused. The left side explains the resulting Enter action in
@@ -838,13 +838,13 @@ pub fn draw_hint_bar(
     // model is actually reasoning (caller-resolved and protocol-gated). Sits
     // right after the model name so it reads as an attribute of the model —
     // "Claude Opus 4.8  ◆ high  12k (1%)" — mirroring the `◆` glyph the
-    // `/provider` picker uses for reasoning models. The context meter stays
+    // `/models` picker uses for reasoning models. The context meter stays
     // the last segment of the cluster, so the click-target rect math below is
     // unaffected.
     let mut reasoning_spans: Vec<Span<'static>> = Vec::new();
     if let Some(effort) = reasoning_effort {
         // `◆ {effort}` — the diamond marks a reasoning model, mirroring the
-        // glyph the `/provider` picker uses.
+        // glyph the `/models` picker uses.
         reasoning_spans.extend([
             Span::styled("◆", Style::default().fg(theme.info()).bg(bg)),
             Span::styled(" ", Style::default().bg(bg)),
@@ -1568,7 +1568,7 @@ mod tests {
     fn completion_menu_caps_width_and_truncates_long_descriptions() {
         let theme = Theme::default();
         let completions = [
-            ("/provider", "Select an LLM provider"),
+            ("/models", "Switch the active model"),
             ("/tools", "Manage session tools (enable/disable)"),
             (
                 "/unattended",

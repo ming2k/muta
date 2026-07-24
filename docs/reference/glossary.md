@@ -119,7 +119,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/provider` switch. [Providers](providers.md) |
+| **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/models` switch. [Providers](providers.md) |
 | **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, transport, and optional provider-scoped remote metadata; one per `[[providers.channels]]` entry. [Model Metadata](model-metadata.md) |
 | **transport** | The wire protocol a channel uses (`OpenAi`, `Anthropic`, `Google`). [Configuration](configuration.md) |

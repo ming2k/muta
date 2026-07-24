@@ -3,7 +3,7 @@
 The agent talks to LLM providers through the `Provider` trait
 (`crates/neenee-core/src/capability.rs`). Every provider implementation lives
 in `crates/neenee-providers/src/`. Provider selection happens at startup and
-on `/provider` (the picker) in `crates/neenee-cli/src/main.rs`.
+on `/models` (the flat model picker) in `crates/neenee-cli/src/main.rs`.
 
 ## Capability matrix
 
@@ -42,7 +42,7 @@ Responses API used by the ChatGPT subscription backend.
 ## Provider catalog
 
 `default_provider` in `config.toml` is the **fresh-session default**: the
-provider a new launch lands on. The `/provider` picker accepts the same names
+provider a new launch lands on. The `/models` picker accepts the same names
 and, on a switch, persists the choice back to `default_provider` so the next
 launch follows it; see [Dual-write provider/model
 selection](../adr/0066-dual-write-provider-selection.md). API keys may be

@@ -909,11 +909,12 @@ fn history_rows_browses_reverse_then_ranks_search() {
 #[test]
 fn history_modal_is_click_dismissable_and_restores_draft() {
     use crate::tui::Modal;
-    // The history modal and the flat model picker join the click-outside-to-
+    // The history modal and the two pickers join the click-outside-to-
     // dismiss set (their filter is ephemeral, the draft is parked); entry modals
     // that hold precious input (the editor) stay non-dismissable.
     assert!(Modal::HistorySearch.dismissable_by_outside_click());
-    assert!(Modal::Provider.dismissable_by_outside_click());
+    assert!(Modal::Models.dismissable_by_outside_click());
+    assert!(Modal::Connections.dismissable_by_outside_click());
     assert!(!Modal::ModelEditor.dismissable_by_outside_click());
 
     // restore_history_draft hands the parked composer draft back and clears the
@@ -1092,7 +1093,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         template_choice: 0,
         template_scroll: 0,
         model_search: false,
-        picker_provider: None,
+        editor_return_to: Modal::None,
         model_scroll: 0,
         model_modal_follow: true,
         pending_provider_delete: None,
@@ -1297,10 +1298,9 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
 }
 
 #[test]
-fn picker_add_row_is_the_trailing_stage1_row() {
+fn picker_add_row_is_the_trailing_connections_row() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Provider;
-    app.picker_provider = None;
+    app.active_modal = Modal::Connections;
     // Seed a few snapshot rows so providers_filtered() renders the full list
     // (the picker is snapshot-driven).
     let row = |id: &str| neenee_core::ProviderPickerRow {
@@ -1326,9 +1326,12 @@ fn picker_add_row_is_the_trailing_stage1_row() {
     assert!(providers > 0, "snapshot seeds the full provider list");
     assert_eq!(app.picker_row_count(), providers + 1);
     app.modal_index = providers;
-    assert!(app.picker_on_add_row(), "last stage-1 row is the add row");
+    assert!(
+        app.connections_on_add_row(),
+        "last Connections row is the add row"
+    );
     app.modal_index = providers - 1;
-    assert!(!app.picker_on_add_row());
+    assert!(!app.connections_on_add_row());
 }
 
 /// `Shift+D` on a custom provider must STAGE the deletion (open the confirm
@@ -1339,8 +1342,7 @@ fn picker_add_row_is_the_trailing_stage1_row() {
 #[test]
 fn delete_provider_stages_overlay_without_deleting() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Provider;
-    app.picker_provider = None;
+    app.active_modal = Modal::Connections;
     let custom = |id: &str| neenee_core::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -1382,8 +1384,7 @@ fn delete_provider_stages_overlay_without_deleting() {
 #[test]
 fn delete_provider_ignores_builtin() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Provider;
-    app.picker_provider = None;
+    app.active_modal = Modal::Connections;
     let builtin = |id: &str| neenee_core::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -1940,9 +1941,9 @@ fn modal_paste_inserts_at_cursor_not_at_end() {
 #[test]
 fn modal_paste_applies_to_provider_picker_and_history_search() {
     // The inline paste path is shared by every free-text modal that borrows
-    // the input line, so the provider picker filter and the history search
+    // the input line, so the model picker filter and the history search
     // query paste the same way as the editor.
-    for modal in [Modal::Provider, Modal::HistorySearch] {
+    for modal in [Modal::Models, Modal::HistorySearch] {
         let (mut app, _tmp) = app_in_tempdir(&[], &[]);
         app.active_modal = modal;
         app.input = String::new();
@@ -2177,7 +2178,8 @@ fn caret_owner_none_in_envoy_view() {
 fn caret_owner_modal_for_caret_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     for modal in [
-        Modal::Provider,
+        Modal::Models,
+        Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
         Modal::HistorySearch,
@@ -2325,7 +2327,8 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
     // `owns_caret()`. It therefore appears in neither list here — it is tested
     // separately by `caret_owner_question_owns_caret_only_on_other`.
     let owns = [
-        Modal::Provider,
+        Modal::Models,
+        Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
         Modal::HistorySearch,

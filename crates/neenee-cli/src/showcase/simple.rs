@@ -20,7 +20,7 @@ use crate::tui::model::layout::LayoutMap;
 use crate::tui::view::Theme;
 use crate::tui::view::{
     ActivityModalView, draw_activity_modal, draw_armed_toast, draw_copy_toast, draw_help_modal,
-    draw_history_modal, draw_model_editor, draw_models_modal, draw_sessions_modal,
+    draw_history_modal, draw_connections_modal, draw_model_editor, draw_sessions_modal,
 };
 
 // ─────────────────────────── provider picker ──────────────────────────────
@@ -91,7 +91,7 @@ pub fn provider() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " model picker · {} providers · / to search · q/Ctrl+C=quit",
+                " connections picker · {} providers · / to search · q/Ctrl+C=quit",
                 s.picker.rows.len(),
             );
             let hint = " ↑↓ navigate · Enter select · / search · Esc back/quit ";
@@ -103,16 +103,11 @@ pub fn provider() -> io::Result<()> {
                 // re-anchors the scroll each frame, so a frame-local offset is
                 // sufficient for the showcase.
                 let mut scroll = s.scroll;
-                draw_models_modal(
+                draw_connections_modal(
                     f,
                     &mut lm,
                     &ranked,
-                    &[],
-                    None,
-                    None,
-                    false,
                     &s.picker.default_id,
-                    "",
                     s.index,
                     &s.key_status,
                     &s.query,

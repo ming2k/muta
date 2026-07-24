@@ -255,11 +255,11 @@ pub async fn add(
     // surfaces land on it.
     config.default_model = Some(active_model.clone());
     // Adding a provider is also a live switch: persist the selection as the
-    // global default (like `/provider`), then pin it to this session so resume
+    // global default (like `/models`), then pin it to this session so resume
     // restores it exactly.
     let _ = config.save();
     // Pin the newly-added provider to this session — adding a provider is
-    // also a live switch, so it is pinned like `/provider`.
+    // also a live switch, so it is pinned like `/models`.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
             provider: id.clone(),
@@ -1039,7 +1039,7 @@ async fn activate(
         );
         let _ = resp_tx.send(AgentResponse::Error(format!(
             "No provider configured for '{provider_type}'. \
-             Add one with /provider before sending a message."
+             Add one with /connections before sending a message."
         )));
         // Re-push the picker so the UI reflects that nothing switched.
         let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
@@ -1132,7 +1132,7 @@ pub async fn set_default_model(
         );
         let _ = resp_tx.send(AgentResponse::Error(format!(
             "No provider configured for '{id}'. \
-             Add one with /provider before sending a message."
+             Add one with /connections before sending a message."
         )));
         let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
             config,

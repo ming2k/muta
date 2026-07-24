@@ -60,8 +60,9 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 
 | Modal | Trigger | `centered_rect` | Source |
 |-------|---------|-----------------|--------|
-| [Models](#models-modal) | `Ctrl+M` / `/provider` | 72 × 60 | `draw_models_modal` |
-| [Model editor](#model-editor) | Models modal `e` | 60 × 36 | `draw_model_editor` |
+| [Models](#models-modal) | `Ctrl+M` / `/models` | 72 × 60 | `draw_models_modal` |
+| [Connections](#connections-modal) | `/connections` | 72 × 60 | `draw_connections_modal` |
+| [Model editor](#model-editor) | Models or Connections modal `e` | 60 × 36 | `draw_model_editor` |
 | [Sessions](#sessions-modal) | `/sessions` | 80 × 64 | `draw_sessions_modal` |
 | [Tools](#tools-modal) | `/tools` | 64 × content | `draw_tools_modal` |
 | [History search](#history-search-modal) | `Ctrl+R` | 70 × 72 | `draw_history_modal` |
@@ -79,29 +80,32 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
   configuration flow.
 
 **Click-outside-to-dismiss.** Read-only / info modals — Help, Tool-step
-detail, Tools, Sessions, Permissions, Activity, and History — close when
-the user clicks outside their panel, mirroring `Esc`. Entry modals that
-hold precious in-progress input (Models, Model editor) and the decision
-modals (Question, Permission sheet) stay open so an accidental click never
-discards an API key or a pending decision. The single source of truth is
-`Modal::dismissable_by_outside_click()`.
+detail, Tools, Sessions, Permissions, Activity, History, and the two pickers
+(Models, Connections) — close when the user clicks outside their panel,
+mirroring `Esc`. Entry modals that hold precious in-progress input (Model
+editor) and the decision modals (Question, Permission sheet) stay open so an
+accidental click never discards an API key or a pending decision. The single
+source of truth is `Modal::dismissable_by_outside_click()`.
 
 ## Models modal
 
-Provider/model picker (ADR-0002 phase 3). Borrows the composer input as a
-fuzzy filter. Rows are ranked favorites-first, then last-used, then name.
+Flat (provider, model) picker — the daily-driver switch surface. Every model
+served by every configured connection appears as its own row, ranked
+provider-favorite first, then per-model last-used, then name. Borrows the
+composer input as a fuzzy filter over the model label (a query that matches
+only the provider name keeps its rows, unhighlighted).
 
 ```text
 ╭───────────────────────────────────────────────╮
-│ Models  ❯ openai                              │  ← header (real caret here)
+│ Models  ❯ opus                                │  ← header (real caret here)
 │                                               │
-│  ★  ●  openai       ✓  gpt-4o   · description │  ← selected → brand bg
-│      ●  anthropic    ✗  claude…  · description│
-│  ★     google       ✓  gemini…  · description│
-│      …                                         │
+│  ●  Claude Opus 4.8  · anthropic  ◆ think on  │  ← selected → brand bg
+│  ●  gpt-4o           · openai                 │
+│  ●  gemini-3-pro     · google                 │
+│  …                                            │
 │                                               │
 │ type to filter · ↑↓ navigate · enter activate │
-│ * favorite · esc                              │
+│ e settings · esc                              │
 ╰───────────────────────────────────────────────╯
 ```
 
@@ -109,14 +113,31 @@ fuzzy filter. Rows are ranked favorites-first, then last-used, then name.
 |-----|--------|
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
-| `Enter` | Activate the highlighted row, or the default on empty filter |
-| `*` | Toggle favorite on the highlighted row |
+| `Enter` | Activate the highlighted (provider, model) row |
+| `e` | Open the per-model settings editor (effort / thinking) |
+| `d` | Remove the highlighted model from a custom provider |
 | `Esc` | Close |
 
 `Ctrl+M` opens this modal only on terminals that support the Kitty enhanced
 keyboard protocol. In a raw terminal `Ctrl+M` is byte-identical to `Enter`,
-so on unsupported terminals the key falls through to `Enter` and `/provider`
+so on unsupported terminals the key falls through to `Enter` and `/models`
 is the reliable trigger.
+
+## Connections modal
+
+Provider-instance management surface. Rows are the configured provider
+instances, ranked favorites-first, then last-used, then name, with a
+trailing `＋ Add connection` row that opens the template chooser.
+
+| Key | Effect |
+|-----|--------|
+| printable | Append to the filter (composer is the input source) |
+| `↑` / `↓` | Move selection |
+| `Enter` | Activate the provider's current model (add row: open the template chooser) |
+| `*` | Toggle favorite on the highlighted provider |
+| `e` | Edit — API key for built-ins, full meta editor for custom providers |
+| `D` | Delete a custom provider (confirm overlay) |
+| `Esc` | Close |
 
 ## Model editor
 

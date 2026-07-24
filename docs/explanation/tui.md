@@ -71,7 +71,7 @@ without Kitty forwarding:
 - `Ctrl+H` and `Ctrl+Backspace` both open the help modal (`Ctrl+Backspace`
   no longer deletes a word — use `Alt+Backspace` instead, which still
   works).
-- `Ctrl+M` behaves as `Enter`, so `/provider` is the reliable model-switch
+- `Ctrl+M` behaves as `Enter`, so `/models` is the reliable model-switch
   trigger.
 
 This is a terminal-layer limitation, not a neenee bug, so the reliable

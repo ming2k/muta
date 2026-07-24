@@ -51,7 +51,8 @@ macro_rules! define_builtin_commands {
 }
 
 define_builtin_commands! {
-    Provider    = "/provider"     : "Select an LLM provider",
+    Models      = "/models"       : "Switch the active model",
+    Connections = "/connections"  : "Manage LLM provider connections",
     Tools       = "/tools"        : "Manage session tools (enable/disable)",
     Mcp         = "/mcp"          : "Manage MCP servers (enable/disable, reconnect)",
     Compact     = "/compact"      : "Compact older complete turns now",
