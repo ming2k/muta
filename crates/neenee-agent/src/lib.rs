@@ -144,9 +144,14 @@ mod model_request;
 pub mod no_provider;
 pub mod orchestration;
 mod permission_store;
+#[allow(dead_code)] // machinery: permission policies are wired; the async-gate policy types
+                    // (HookPolicy/BashPolicy/AskUserPolicy) stay as documented placeholders.
 mod permission_policy;
+#[allow(dead_code)] // machinery: the four-stage pipeline types await the full dispatch rewrite.
 mod dispatch_pipeline;
+#[allow(dead_code)] // machinery: disclosure ledger awaits select_tools + tool_specs wiring.
 mod disclosure_ledger;
+#[allow(dead_code)] // machinery: disclosure bridge awaits the select_tools switchover.
 mod disclosure_bridge;
 mod pursuit_prompts;
 pub mod pursuit_state;
@@ -159,7 +164,11 @@ mod shell_input;
 use neenee_skills as skills;
 mod tool_call;
 mod tool_integration;
+#[allow(dead_code)] // machinery: ToolManager logic is reused via Agent methods; the standalone
+                    // struct stays as a tested unit pending the resolved_tools field restructure.
 mod tool_manager;
+#[allow(dead_code)] // machinery: ToolScheduler is tested but not yet the dispatch driver
+                    // (execute_tools_concurrent uses group_by_conflict batching instead).
 mod tool_scheduler;
 pub mod tools;
 
