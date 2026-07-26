@@ -4,8 +4,8 @@
 //! pre-dispatch doom-loop guard (`neenee_agent::doom_guard`). It lives in
 //! `neenee-core` (the domain layer) so the harness↔TUI protocol can carry it
 //! without a `neenee-persistence` dependency; `neenee-persistence::config` re-exports it as
-//! the `[principal.nudge]` TOML table, and `neenee-agent` reads it before each
-//! tool round to decide whether to intercept a repeating call.
+//! the `[principal.nudge]` TOML table, and `neenee-agent` applies it to each
+//! round's guard at ReAct-turn boundaries.
 //!
 //! Default is **disabled** — opt in through the advanced
 //! `[principal.nudge]` sub-table in `config.toml`.
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// User-tunable doom-guard behaviour, deserialized from the `[principal.nudge]`
 /// sub-table of `config.toml`. Governs the pre-dispatch doom-loop guard
 /// (`neenee_agent::doom_guard`): when the model is about to re-issue a watched
-/// tool call it already ran this turn, the guard blocks it before it executes
+/// tool call it already ran this round, the guard blocks it before it executes
 /// and injects an explanatory note so the model changes approach.
 ///
 /// **Default is disabled.** The guard is an opt-in safety net, not a
@@ -30,13 +30,13 @@ use serde::{Deserialize, Serialize};
 /// ```toml
 /// [principal.nudge]
 /// enabled = true   # master switch (default false)
-/// window  = 8      # sliding-window size (recent watched rounds)
+/// window  = 8      # sliding-window size (recent watched signatures)
 /// ```
 ///
 /// Detection is pure signature bookkeeping (no model call) and the block is
 /// non-terminating — the hard backstops (`hard_stop_turns`, `abort`, `Esc`)
 /// still cap. The guard trips on the *first* repeat (threshold 2): a call
-/// already issued this turn is blocked before it runs a second time.
+/// already issued this round is blocked before it runs a second time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DoomGuardConfig {
@@ -45,7 +45,7 @@ pub struct DoomGuardConfig {
     /// `Agent::set_doom_guard_config`; flipped off for envoys and the `/review`
     /// diagnostic regardless of user setting.
     pub enabled: bool,
-    /// Sliding-window size: how many recent watched rounds are considered when
+    /// Sliding-window size: how many recent watched tool-call signatures are considered when
     /// judging whether a signature is recurring. Large enough to span a
     /// `A B A B` thrash, small enough that an old, since-abandoned call ages
     /// out and stops counting. Default `8`.

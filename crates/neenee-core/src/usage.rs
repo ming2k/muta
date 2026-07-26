@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 /// Token usage reported by a single turn.
 ///
-/// Per-turn telemetry only — not booked against any pursuit (ADR-0010 removed
-/// pursuit-level token accounting).
+/// Per-turn telemetry. Pursuit accounting aggregates deltas from this value at
+/// stop-gate boundaries (ADR-0083); the value itself remains generic.
 ///
 /// `cache_creation_input_tokens` / `cache_read_input_tokens` carry prompt-cache
 /// counts. Anthropic reports both: its `input_tokens` is ONLY the uncached

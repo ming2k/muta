@@ -116,19 +116,19 @@ pub enum Modal {
     ConfigThemeCustom,
     /// Transcript layout sub-page of the config manager. Reached from
     /// [`Modal::Config`] by selecting the "Layout" row. Lists the layout
-    /// strategies (Round-band / Legacy); `Space` or `Enter` applies the
+    /// strategies (Turn-band / Legacy); `Space` or `Enter` applies the
     /// selected strategy, which is sent as `AgentRequest::UpdateTuiLayout`
     /// and persisted to `config.toml`. The harness replies with
     /// `AgentResponse::TuiLayoutUpdated`, which re-seeds
     /// `App::transcript_layout`. `Esc` returns to the config root.
     ConfigLayout,
     /// Activity overview: the current pursuit (objective + checklist), the live
-    /// plan-progress breakdown, and the running turn/round/model/elapsed/
+    /// plan-progress breakdown, and the running round/turn/model/elapsed/
     /// status. Opened by clicking the activity bar. The body scrolls via
     /// `App::activity_scroll`.
     Activity,
     /// Context-usage report: current AI-visible context plus request totals by
-    /// user turn, with a model-round drill-down. Value styling distinguishes
+    /// user round, with a ReAct-turn drill-down. Value styling distinguishes
     /// provider-reported counts from local estimates. Opened by clicking the
     /// context meter in the hint bar. Esc / outside-click closes.
     TokenReport,

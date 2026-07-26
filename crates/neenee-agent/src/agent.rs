@@ -65,8 +65,8 @@ impl ScopedToolDisable {
     /// refcount so nested disables compose.
     fn disable(&mut self, tool: &str, restore: neenee_core::RestorePoint) {
         let bucket = match restore {
-            neenee_core::RestorePoint::RoundEnd => &mut self.round_end,
             neenee_core::RestorePoint::TurnEnd => &mut self.turn_end,
+            neenee_core::RestorePoint::RoundEnd => &mut self.round_end,
         };
         *bucket.entry(tool.to_string()).or_insert(0) += 1;
     }
@@ -77,16 +77,15 @@ impl ScopedToolDisable {
         self.round_end.contains_key(tool) || self.turn_end.contains_key(tool)
     }
 
-    /// Drop every RoundEnd-scoped disable (decrementing refcounts). Called at
-    /// the round boundary so tools a hook narrowed for just that round come
-    /// back. TurnEnd disables survive.
-    fn restore_round_end(&mut self) {
-        self.round_end.clear();
+    /// Drop every `TurnEnd` disable at the ReAct-turn boundary. `RoundEnd`
+    /// disables survive until the user round ends.
+    fn restore_turn_end(&mut self) {
+        self.turn_end.clear();
     }
 
-    /// Drop every disable (both buckets). Called at turn end so the toolset is
-    /// fresh for the next user request.
-    fn restore_turn_end(&mut self) {
+    /// Drop every disable (both buckets). Called at user-round end so the
+    /// toolset is fresh for the next user request.
+    fn restore_round_end(&mut self) {
         self.round_end.clear();
         self.turn_end.clear();
     }
@@ -99,13 +98,13 @@ impl ScopedToolDisable {
 
 /// Mid-turn save-point closure installed by orchestration (ADR-0035).
 ///
-/// Invoked at each tool-round boundary with the *current full* turn history.
+/// Invoked at each ReAct-turn boundary with the current full round history.
 /// The implementation diffs against its own durable baseline and appends only
 /// the new tail to the session event log (see `SessionStore::append_turn`).
 /// Errors are surfaced back to the ReAct loop, which treats a persist failure
-/// as a turn-ending error (better to stop than to keep mutating state that may
+/// as a round-ending error (better to stop than to keep mutating state that may
 /// not be recoverable).
-pub(crate) type RoundPersistFn =
+pub(crate) type TurnPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
 /// Estimated token shape of the next provider request.
@@ -176,10 +175,10 @@ pub struct Agent {
     /// with the concrete `todo` / `todo_update` tools installed by
     /// [`crate::tool_integration`].
     todos: Arc<std::sync::Mutex<neenee_core::TodoList>>,
-    /// Harness turn counter, bumped at the start of every `execute_round`.
+    /// Harness round counter, bumped at the start of every `execute_round`.
     /// Shared with the todo tools so they can stamp
-    /// `updated_at_turn` for the TUI stale detector.
-    turn_counter: Arc<std::sync::Mutex<u64>>,
+    /// `updated_at_round` for the TUI stale detector.
+    round_counter: Arc<std::sync::Mutex<u64>>,
     /// In-memory pursuit state: the active [`Pursuit`], the stop-gate armed
     /// flag, and the iteration counter. See [`crate::pursuit_state::PursuitState`].
     pursuit_state: crate::pursuit_state::PursuitState,
@@ -192,24 +191,24 @@ pub struct Agent {
     accounting_actor_id: std::sync::Mutex<String>,
     /// Context-pressure threshold (in tokens) above which the harness asks the
     /// [`ContextProjectionGate`] to project the model-visible window between
-    /// tool rounds. `0` disables mid-turn projection. Derived from the active
+    /// ReAct turns. `0` disables mid-round projection. Derived from the active
     /// model's context window.
     context_prune_threshold_tokens: Arc<std::sync::Mutex<usize>>,
     /// Optional mid-turn model-context projection gate.
     context_projection_gate: Arc<std::sync::Mutex<Option<Arc<dyn ContextProjectionGate>>>>,
-    /// Opt-in hard-stop budget (ADR-0018): abort a turn after this many total
-    /// tool rounds. Seeded from `Config::agent.hard_stop_turns` (default `0`
+    /// Opt-in hard-stop budget (ADR-0018): abort a round after this many ReAct
+    /// turns. Seeded from `Config::principal.hard_stop_turns` (default `0`
     /// = uncapped, matching ADR-0009) and mutated at runtime via
     /// `set_hard_stop_turns`. This is the sole execution cap; session review
-    /// is on-demand (`/review`) and never aborts a turn.
+    /// is on-demand (`/review`) and never aborts a round.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
     /// Advanced pre-dispatch doom-loop guard configuration. Default
     /// **disabled** ([`neenee_core::DoomGuardConfig::default`]); seeded from
     /// `[principal.nudge]` in `config.toml` and forced to
     /// [`neenee_core::DoomGuardConfig::disabled`] for envoys and the review
     /// diagnostic. Held behind an `Arc<RwLock>` because principal-profile
-    /// overlays can replace the configuration atomically; the per-turn guard
-    /// reads it when `TurnState` is constructed.
+    /// overlays can replace the configuration atomically; the per-round guard
+    /// reads it when `RoundState` is constructed.
     doom_guard_config: Arc<std::sync::RwLock<neenee_core::DoomGuardConfig>>,
     /// Whether the model may supply stdin bytes for a `bash` call it emits
     /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
@@ -246,13 +245,13 @@ pub struct Agent {
     /// `None` for agents that were never given a handle (the top-level agent
     /// driven directly by the harness, legacy tests); lazily created by
     /// [`Agent::install_inbox`], which a spawned envoy's dispatcher
-    /// (`EnvoyTool`) calls so the parent can steer it mid-turn. The driver loop
-    /// `take`s the receiver at turn entry and drains it at every tool-round
+    /// (`EnvoyTool`) calls so the parent can steer it mid-round. The driver loop
+    /// `take`s the receiver at round entry and drains it at every ReAct-turn
     /// boundary (see [`Agent::drain_inbox`]). Carries only the
     /// "new-input / control" class ([`AgentOp`]); the request/reply class
     /// (permission / ask_user) bypasses this queue and resolves the parked
     /// oneshot directly via `reply_permission` / `reply_user_question`, since a
-    /// reply must unblock a tool parked mid-turn and cannot wait for the loop.
+    /// reply must unblock a tool parked mid-round and cannot wait for the loop.
     inbox_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<AgentOp>>>,
     inbox_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<AgentOp>>>,
     /// Human-authored inserts for the currently running principal/side round.
@@ -266,14 +265,14 @@ pub struct Agent {
     /// crate stays identity-agnostic and can be reused by frontends that are
     /// not "neenee". See [`AgentIdentity`].
     pub(crate) identity: AgentIdentity,
-    /// Optional mid-turn save point invoked at every tool-round boundary
+    /// Optional mid-round save point invoked at every ReAct-turn boundary
     /// (ADR-0035). The embedding (orchestration) installs a closure that
     /// durably appends the round's new messages to the session log so a crash
     /// after a side-effecting tool call leaves the transcript in sync with the
     /// filesystem instead of rewinding to the previous turn. `None` for
     /// envoys, the review diagnostic, and tests — they have no session of
-    /// their own to persist, so the round boundary is a plain no-op there.
-    round_persist: std::sync::Mutex<Option<RoundPersistFn>>,
+    /// their own to persist, so the turn boundary is a plain no-op there.
+    turn_persist: std::sync::Mutex<Option<TurnPersistFn>>,
     /// Request-scoped projector. The agent owns its lifecycle and supplies live
     /// state snapshots; the assembler owns the pure window-to-request transform.
     model_request_assembler: crate::model_request::ModelRequestAssembler,
@@ -316,7 +315,7 @@ pub struct Agent {
 ///
 /// - **Steering** ([`AgentOp`], via [`EnvoyHandle::submit`]): inject a new
 ///   user message, a hidden inter-agent note, or interrupt/shutdown. Routed
-///   through the agent's inbox and applied at the next tool-round boundary —
+///   through the agent's inbox and applied at the next ReAct-turn boundary —
 ///   safe to defer because nothing is blocked on it.
 /// - **Request/reply** ([`EnvoyHandle::reply_permission`] /
 ///   [`EnvoyHandle::reply_user_question`]): resolve a permission broker or
@@ -325,7 +324,7 @@ pub struct Agent {
 ///   directly — a queued reply would deadlock the parked tool.
 ///
 /// The `Weak<Agent>` means the handle observes the agent's lifetime: once the
-/// envoy's turn ends and the dispatcher drops its `Arc`, every method
+/// envoy's round ends and the dispatcher drops its `Arc`, every method
 /// returns `false` / `None` instead of erroring, so a late reply from the UI
 /// after the envoy finished degrades gracefully.
 #[derive(Clone)]
@@ -357,6 +356,7 @@ impl EnvoyHandle {
     /// `false` if the agent was dropped or no matching pending request exists.
     /// Down-direction counterpart to an up-going
     /// [`AgentEvent::UserQuestionRequest`] / [`EnvoyEvent::UserQuestionRequest`].
+    /// An empty outer answer vector means the operator cancelled.
     pub fn reply_user_question(&self, request_id: &str, answers: Vec<Vec<String>>) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_user_question(request_id, answers)
@@ -383,38 +383,45 @@ impl EnvoyHandle {
     }
 }
 
-/// Mutable bookkeeping threaded through a single turn's tool-dispatch rounds.
+/// Mutable bookkeeping threaded through one user round's ReAct turns.
+///
 #[derive(Default)]
-pub(crate) struct TurnState {
+pub(crate) struct RoundState {
     token_usage: TokenUsage,
-    /// Consecutive rounds whose tool calls were all `Read`-tier. Surfaced to
-    /// user-configured round hooks (`HookEvent::Turn { consecutive_readonly }`)
-    /// so a hook can act on "exploration without progress". Reset to 0 by any
-    /// round containing an `Execute`/`Write` call.
-    pub(crate) consecutive_readonly_rounds: u32,
-    /// The turn-guard registry: holds one or more `RoundGuard`s (e.g.
-    /// `ReadLoopGuard`) and the tool-call data for the round just dispatched.
-    /// Per-turn: lives and dies with this `TurnState` so loop state never
-    /// crosses turns.
+    /// Cumulative usage already charged to the active pursuit at a stop-gate
+    /// boundary. The next boundary books only the delta, avoiding triangular
+    /// over-counting as `token_usage` grows across the whole round.
+    pursuit_booked_usage: TokenUsage,
+    /// Elapsed round time already charged to the active pursuit.
+    pursuit_booked_duration_ms: u64,
+    /// Consecutive ReAct turns whose tool calls were all `Read`-tier. Surfaced
+    /// to user-configured `Turn` hooks so a hook can act on "exploration
+    /// without progress". Reset to 0 by any turn containing an
+    /// `Execute`/`Write` call.
+    pub(crate) consecutive_readonly_turns: u32,
+    /// The round-scoped guard registry: holds one or more `RoundGuard`s (e.g.
+    /// `ReadLoopGuard`) and tool-call data for the ReAct turn just dispatched.
+    /// It lives and dies with this `RoundState`, so loop
+    /// state never crosses user rounds.
     pub(crate) guards: crate::loop_guard::RoundGuardState,
-    /// Exact tool calls that reached a terminal result in this turn. The set
+    /// Exact tool calls that reached a terminal result in this round. The set
     /// becomes an idempotency fence only after a transient provider retry;
-    /// normal model rounds retain their existing repeat-call behavior.
+    /// normal ReAct turns retain their existing repeat-call behavior.
     completed_tool_calls: HashSet<String>,
     /// Snapshot of calls completed before a transient provider failure. Only
     /// this frozen subset is protected: calls first executed after a retry keep
-    /// normal same-turn semantics unless a later provider failure checkpoints
+    /// normal same-round semantics unless a later provider failure checkpoints
     /// them too.
     retry_protected_tool_calls: HashSet<String>,
 }
 
-impl TurnState {
-    /// Build a fresh per-turn guard state with the standard guard set, tuned
+impl RoundState {
+    /// Build a fresh per-round guard state with the standard guard set, tuned
     /// by `config`. Whether the guard is *enabled* (allowed to inject) is
-    /// controlled by `config.enabled`, checked at the round boundary in
+    /// controlled by `config.enabled`, checked at the turn boundary in
     /// [`Agent::apply_guard_actions`] — so the guard state is always present
-    /// even when disabled (it just never fires). Per-turn: lives and dies
-    /// with this `TurnState` so loop state never crosses turns.
+    /// even when disabled (it just never fires). It lives and dies with this
+    /// `RoundState`, so loop state never crosses user rounds.
     fn guards_default(config: neenee_core::DoomGuardConfig) -> crate::loop_guard::RoundGuardState {
         crate::loop_guard::RoundGuardState::new()
             .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
@@ -447,18 +454,18 @@ fn checkpoint_tool_signature(call: &ToolCall) -> String {
     format!("{}\u{0}{arguments}", call.name)
 }
 
-/// Live state for one streaming ReAct turn.
+/// Live state for one streaming user round.
 ///
 /// Orchestration keeps this value across transient provider retries. A retry
 /// therefore resumes the exact provider request that failed while preserving
 /// completed tool results, loop-guard state, hook scope, accounting, and the
 /// steering inbox. `pending_request` stays set until a complete, valid
 /// assistant response has been accepted; re-entry while it is set skips
-/// request preparation and round-start hooks so retrying cannot replay work
+/// request preparation and turn-start hooks so retrying cannot replay work
 /// that already happened at the request boundary.
-pub(crate) struct StreamingTurnState {
-    state: TurnState,
-    tool_rounds: usize,
+pub(crate) struct StreamingRoundState {
+    state: RoundState,
+    turn_index: usize,
     inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
     started_at: std::time::Instant,
     pending_request: Option<neenee_core::ModelRequest>,
@@ -491,7 +498,7 @@ impl RequestAccountingGuard {
         cancel: &CancellationToken,
         provider: &str,
         model: &str,
-        tool_rounds: usize,
+        turn_index: usize,
         projected_prompt_tokens: usize,
     ) -> Self {
         let ledger = agent.token_ledger();
@@ -501,8 +508,8 @@ impl RequestAccountingGuard {
                 &agent.accounting_actor_id(),
                 provider,
                 model,
-                agent.turn_count(),
-                tool_rounds.saturating_add(1) as u32,
+                agent.round_count(),
+                turn_index.saturating_add(1) as u32,
                 projected_prompt_tokens as i64,
             )
         });
@@ -662,7 +669,7 @@ impl AgentBuilder {
     }
 }
 
-/// Outcome returned by the agent after running one turn.
+/// Outcome returned by the agent after running one round.
 #[derive(Debug, Clone)]
 pub struct RoundOutcome {
     pub message: crate::Message,
@@ -725,12 +732,12 @@ impl Agent {
         let thread_id = Arc::new(std::sync::Mutex::new(None));
 
         let mut toolset = toolset;
-        let turn_counter = Arc::new(std::sync::Mutex::new(0u64));
+        let round_counter = Arc::new(std::sync::Mutex::new(0u64));
         let todos = Arc::new(std::sync::Mutex::new(neenee_core::TodoList::default()));
         crate::tool_integration::install_agent_owned_tools(
             &mut toolset,
             Arc::clone(&todos),
-            Arc::clone(&turn_counter),
+            Arc::clone(&round_counter),
         );
 
         // Seed the model-visible view by resolving the pool for the live model
@@ -754,7 +761,7 @@ impl Agent {
             disabled_tools: Arc::new(std::sync::Mutex::new(HashSet::new())),
             scoped_disabled_tools: Arc::new(std::sync::Mutex::new(ScopedToolDisable::default())),
             todos,
-            turn_counter,
+            round_counter,
             pursuit_state,
             permissions: crate::permission_store::PermissionStore::new(),
             ask_user: std::sync::Mutex::new(AskUserState::default()),
@@ -777,7 +784,7 @@ impl Agent {
             inbox_rx: std::sync::Mutex::new(None),
             user_input_queue: std::sync::Mutex::new(None),
             identity,
-            round_persist: std::sync::Mutex::new(None),
+            turn_persist: std::sync::Mutex::new(None),
             model_request_assembler,
             variant_selection: Arc::new(
                 std::sync::Mutex::new(neenee_core::VariantSelection::new()),
@@ -939,9 +946,9 @@ impl Agent {
     }
 
     /// Dev-only dry run: rebuild the head system message and auto-load any
-    /// skills mentioned in the latest visible user turn against a borrowed
+    /// skills mentioned in the latest visible user round against a borrowed
     /// message list, exactly as the next turn would, but with no provider call
-    /// and no mutation of live turn history. Powers
+    /// and no mutation of live round history. Powers
     /// the `/debug preview` so it captures the *real* request shape —
     /// including the freshly composed system prompt and injected skills —
     /// rather than a degenerate reconstruction.
@@ -958,19 +965,19 @@ impl Agent {
         Arc::clone(&self.variant_selection)
     }
 
-    /// Override the opt-in hard-stop budget. Mirrors `[agent] hard_stop_turns`
+    /// Override the opt-in hard-stop budget. Mirrors `[principal] hard_stop_turns`
     /// in `config.toml` but can be flipped at runtime. `0` (the default) leaves
-    /// the turn uncapped, matching ADR-0009. The reviewer envoy gets a
+    /// the round uncapped, matching ADR-0009. The reviewer envoy gets a
     /// tight non-zero bound so a runaway diagnostic cannot loop.
-    pub fn set_hard_stop_turns(&self, rounds: usize) {
+    pub fn set_hard_stop_turns(&self, turns: usize) {
         *self
             .hard_stop_turns
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = rounds;
+            .unwrap_or_else(|e| e.into_inner()) = turns;
     }
 
     /// Current hard-stop budget. Read by the `/hard-stop` slash command (if
-    /// present) and by `check_hard_stop` each round.
+    /// present) and by `check_hard_stop` at each ReAct-turn boundary.
     pub fn get_hard_stop_turns(&self) -> usize {
         *self
             .hard_stop_turns
@@ -990,9 +997,9 @@ impl Agent {
         }
     }
 
-    /// Replace the live doom-guard configuration atomically. The next turn
-    /// reconstructs its per-turn guard from the new settings; the current
-    /// turn, if any, keeps its already-built guard state.
+    /// Replace the live doom-guard configuration atomically. The next round
+    /// reconstructs its per-round guard from the new settings; the current
+    /// round, if any, keeps its already-built guard state.
     ///
     /// Wired from `[principal.nudge]` in `config.toml` at startup and forced to
     /// [`neenee_core::DoomGuardConfig::disabled`] on envoys and the review
@@ -1004,7 +1011,7 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner()) = config;
     }
 
-    /// Snapshot of the live doom-guard configuration. The round boundary reads
+    /// Snapshot of the live doom-guard configuration. The turn boundary reads
     /// `enabled` to gate the pre-dispatch doom check.
     pub fn doom_guard_config(&self) -> neenee_core::DoomGuardConfig {
         *self
@@ -1014,7 +1021,7 @@ impl Agent {
     }
 
     /// Whether the doom guard is currently armed (allowed to block). Convenience
-    /// wrapper over [`Self::doom_guard_config`] for the round-boundary fast path.
+    /// wrapper over [`Self::doom_guard_config`] for the turn-boundary fast path.
     pub fn doom_guard_enabled(&self) -> bool {
         self.doom_guard_config().enabled
     }
@@ -1075,7 +1082,7 @@ impl Agent {
             .clone()
     }
 
-    /// Book one turn's token usage into [`TurnState::token_usage`] and, when a
+    /// Book one turn's token usage into [`RoundState::token_usage`] and, when a
     /// ledger is installed, into the token-source ledger.
     ///
     /// `streamed_usage` is the usage reported mid-stream (OpenAI
@@ -1088,7 +1095,7 @@ impl Agent {
     /// that classification so the token-source report modal can render it.
     fn book_turn_usage(
         &self,
-        state: &mut TurnState,
+        state: &mut RoundState,
         response: &Message,
         streamed_usage: Option<TokenUsage>,
         request: &mut RequestAccountingGuard,
@@ -1123,30 +1130,30 @@ impl Agent {
         self.hooks.set(registry);
     }
 
-    /// Install the mid-turn save point fired at every tool-round boundary
-    /// (ADR-0035). The closure receives the *current full* turn history and
+    /// Install the mid-round save point fired at every ReAct-turn boundary
+    /// (ADR-0035). The closure receives the current full round history and
     /// should durably append only the new tail (see
     /// `SessionStore::append_turn`). Called once by orchestration after the
     /// agent is built and the session is open; envoys and the review
-    /// diagnostic never call this, so the default `None` keeps their round
+    /// diagnostic never call this, so the default `None` keeps their turn
     /// boundaries no-ops.
-    pub fn set_turn_persist(&self, f: RoundPersistFn) {
-        *self.round_persist.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    pub fn set_turn_persist(&self, f: TurnPersistFn) {
+        *self.turn_persist.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 
-    /// Fire the mid-turn save point if installed. Returns `Ok(())` when no
+    /// Fire the mid-round save point if installed. Returns `Ok(())` when no
     /// closure is set (the envoy / review / test path) so the call site
-    /// stays unconditional. Invoked at the round boundary — after a round's
+    /// stays unconditional. Invoked at the turn boundary — after a turn's
     /// tool results are in `messages` and before the next model request.
-    async fn fire_round_persist(&self, messages: &[Message]) -> Result<(), HarnessError> {
+    async fn fire_turn_persist(&self, messages: &[Message]) -> Result<(), HarnessError> {
         let f = self
-            .round_persist
+            .turn_persist
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         match f {
             Some(f) => f(messages).await.map_err(|error| {
-                HarnessError::Other(format!("could not persist mid-turn round: {error}"))
+                HarnessError::Other(format!("could not persist mid-round turn: {error}"))
             }),
             None => Ok(()),
         }
@@ -1220,7 +1227,7 @@ impl Agent {
             .await
     }
 
-    /// Between tool rounds, if context pressure exceeds the configured budget,
+    /// Between ReAct turns, if context pressure exceeds the configured budget,
     /// hand the live message list to the [`ContextProjectionGate`] so it can
     /// produce and persist the next model-visible window.
     async fn project_context_if_needed(
@@ -1264,8 +1271,8 @@ impl Agent {
         Arc::clone(&self.thread_id)
     }
 
-    pub fn turn_counter_handle(&self) -> Arc<std::sync::Mutex<u64>> {
-        Arc::clone(&self.turn_counter)
+    pub fn round_counter_handle(&self) -> Arc<std::sync::Mutex<u64>> {
+        Arc::clone(&self.round_counter)
     }
 
     pub fn set_accounting_actor_id(&self, actor_id: impl Into<String>) {
@@ -1302,27 +1309,27 @@ impl Agent {
         *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = neenee_core::TodoList::default();
     }
 
-    /// Current harness turn counter — bumped at the start of every
+    /// Current harness round counter — bumped at the start of every
     /// `execute_round`. Used by the TUI to detect a stale task panel (one
-    /// whose `updated_at_turn` lags the current turn by more than
+    /// whose `updated_at_round` lags the current round by more than
     /// `TODO_STALE_TURN_THRESHOLD`).
-    pub fn turn_count(&self) -> u64 {
-        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn round_count(&self) -> u64 {
+        *self.round_counter.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Advance the turn counter. Called once per `execute_round`. The TUI
-    /// reads the resulting value to compute "not updated for N turns".
-    pub fn bump_turn(&self) {
-        let mut g = self.turn_counter.lock().unwrap_or_else(|e| e.into_inner());
+    /// Advance the round counter. Called once per `execute_round`. The TUI
+    /// reads the resulting value to compute "not updated for N rounds".
+    pub fn bump_round(&self) {
+        let mut g = self.round_counter.lock().unwrap_or_else(|e| e.into_inner());
         *g = g.saturating_add(1);
     }
 
-    /// Restore the turn counter to a persisted value on resume (ADR-0048
+    /// Restore the round counter to a persisted value on resume (ADR-0048
     /// Phase 2). The counter is session-scoped; without this a resumed
     /// session's todo stale-detector comparisons reset to 0 and go stale
     /// immediately.
-    pub fn restore_turn_count(&self, count: u64) {
-        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
+    pub fn restore_round_count(&self, count: u64) {
+        *self.round_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
     pub fn get_unattended(&self) -> bool {
@@ -1410,7 +1417,7 @@ impl Agent {
 
     // ── Pursuit stop-gate ───────────────────────────────────────────────
     // `/pursue <condition>` arms the gate. Each time the model would end the
-    // turn, the gate re-injects the condition and forces another round until
+    // round, the gate re-injects the condition and forces another turn until
     // the model signals completion, the safety cap is hit, or the pursuit is
     // disarmed. See [`PursuitState::continuation`].
 
@@ -1418,8 +1425,16 @@ impl Agent {
         self.pursuit_state.arm();
     }
 
+    pub fn resume_pursuit(&self) {
+        self.pursuit_state.resume();
+    }
+
     pub fn disarm_pursuit(&self) {
         self.pursuit_state.disarm();
+    }
+
+    pub fn stop_pursuit(&self, reason: impl Into<String>) -> Option<Pursuit> {
+        self.pursuit_state.stop(reason)
     }
 
     pub fn is_pursuit_armed(&self) -> bool {
@@ -1430,10 +1445,10 @@ impl Agent {
         self.pursuit_state.iterations()
     }
 
-    /// A snapshot of the per-pursuit runtime counters (turns / tokens /
-    /// wall-clock), zeroed when the pursuit is armed and accumulated each
-    /// continuation round (ADR-0069). Used to surface usage in the stop
-    /// summary and to enforce [`neenee_core::PursuitBudget`].
+    /// A snapshot of the per-pursuit runtime counters (passes / tokens /
+    /// wall-clock), zeroed when the pursuit is armed and accumulated at each
+    /// stop-gate boundary (ADR-0083). Used to surface usage in the stop summary
+    /// and to enforce [`neenee_core::PursuitBudget`].
     pub fn pursuit_stats(&self) -> PursuitStats {
         self.pursuit_state.stats()
     }
@@ -1441,8 +1456,8 @@ impl Agent {
     /// Restore the stop-gate runtime view (armed + iterations) from persisted
     /// state on resume (ADR-0048 Phase 2). Does not reset the iteration
     /// counter — an armed pursuit mid-iteration resumes with its count intact.
-    pub fn restore_pursuit_runtime(&self, armed: bool, iterations: u32) {
-        self.pursuit_state.restore_runtime(armed, iterations);
+    pub fn restore_pursuit_runtime(&self, armed: bool, iterations: u32, stats: PursuitStats) {
+        self.pursuit_state.restore_runtime(armed, iterations, stats);
     }
 
     pub(crate) fn pursuit_continuation(&self, response: &Message) -> Option<String> {
@@ -1450,12 +1465,12 @@ impl Agent {
             .continuation(response, MAX_PURSUIT_ITERATIONS)
     }
 
-    /// The turn-end gate (ADR-0025). Combines the `/pursue` stop-gate with any
+    /// The round-end gate (ADR-0025). Combines the `/pursue` stop-gate with any
     /// `Stop` hooks: a pursuit forcing continuation wins; otherwise a `Stop`
-    /// hook may force another round with feedback. Returns `None` to let the
-    /// turn end — i.e. both the pursuit gate and every Stop hook must agree to
-    /// stop. The pursuit gate is queried first so its safety-cap disarm side
-    /// effect is preserved.
+    /// hook may force another turn with feedback. Returns `None` to let the
+    /// round end — i.e. both the pursuit gate and every Stop hook must agree
+    /// to stop. The pursuit gate is queried first so its safety-cap disarm
+    /// side effect is preserved.
     ///
     /// Returns the prompt together with the [`InjectionKind`] that produced it,
     /// so the push site stamps the correct provenance (pursuit continuation vs
@@ -1474,38 +1489,62 @@ impl Agent {
             .map(|prompt| (prompt, InjectionKind::Hook(HookEventKind::Stop)))
     }
 
-    /// Book the just-finished turn's usage into the active pursuit's runtime
-    /// stats and, when a budget is ≥75% consumed, inject a convergence reminder
-    /// (ADR-0069). Called at every turn-exit gate so each continuation round and
-    /// the final round are accounted. No-op when no pursuit is armed.
-    ///
-    /// The reminder rides the [`<system-reminder>`] authoritative channel so the
-    /// model treats "converge now" as a directive, not a suggestion — mirroring
-    /// kimi-code's budget-band guidance.
-    ///
-    /// [`<system-reminder>`]: crate::conversation_context::system_reminder
-    fn book_pursuit_turn(&self, state: &TurnState, messages: &mut Vec<Message>, duration_ms: u64) {
+    /// Book the usage delta since the previous stop-gate boundary into the
+    /// active pursuit (ADR-0083). This runs before continuation policy so a
+    /// budget reached by the just-finished pass stops immediately.
+    fn book_pursuit_pass(&self, state: &mut RoundState, duration_ms: u64) {
         if !self.pursuit_state.is_armed() {
             return;
         }
-        self.pursuit_state.book_turn(state.token_usage, duration_ms);
+        let previous = state.pursuit_booked_usage;
+        let delta = TokenUsage {
+            prompt_tokens: state
+                .token_usage
+                .prompt_tokens
+                .saturating_sub(previous.prompt_tokens),
+            completion_tokens: state
+                .token_usage
+                .completion_tokens
+                .saturating_sub(previous.completion_tokens),
+            total_tokens: state
+                .token_usage
+                .total_tokens
+                .saturating_sub(previous.total_tokens),
+            cache_creation_input_tokens: state
+                .token_usage
+                .cache_creation_input_tokens
+                .saturating_sub(previous.cache_creation_input_tokens),
+            cache_read_input_tokens: state
+                .token_usage
+                .cache_read_input_tokens
+                .saturating_sub(previous.cache_read_input_tokens),
+        };
+        let duration_delta = duration_ms.saturating_sub(state.pursuit_booked_duration_ms);
+        self.pursuit_state.book_pass(delta, duration_delta);
+        state.pursuit_booked_usage = state.token_usage;
+        state.pursuit_booked_duration_ms = duration_ms;
+    }
+
+    /// Inject convergence guidance after continuation has been approved and a
+    /// configured budget is at least 75% consumed.
+    fn inject_pursuit_convergence_reminder(&self, messages: &mut Vec<Message>) {
         let stats = self.pursuit_state.stats();
         // Convergence guidance: once any budget axis crosses 75%, steer the
         // model toward finishing rather than starting new optional work. Fires
-        // once per crossing band to avoid repeating the same nudge each round.
+        // once per crossing band to avoid repeating the same nudge on later turns.
         if let Some(pursuit) = self.pursuit_state.get()
             && let Some(budget) = pursuit.budget
             && let Some(fraction) =
-                budget.usage_fraction(stats.turns, stats.tokens, stats.wall_clock_ms)
+                budget.usage_fraction(stats.passes, stats.tokens, stats.wall_clock_ms)
             && (0.75..1.0).contains(&fraction)
         {
             crate::conversation_context::inject_reminders(messages, |sink| {
                 sink.remind(format!(
-                    "Pursuit budget is {:.0}% consumed (turns {}, tokens {}, {:.0}s). \
+                    "Pursuit budget is {:.0}% consumed (passes {}, tokens {}, {:.0}s). \
                      Converge on the objective: finish in-flight work, verify it, and \
                      emit {marker} rather than starting new optional work.",
                     fraction * 100.0,
-                    stats.turns,
+                    stats.passes,
                     stats.tokens,
                     stats.wall_clock_ms as f64 / 1000.0,
                     marker = crate::PURSUIT_COMPLETE_MARKER,
@@ -1537,6 +1576,9 @@ impl Agent {
         self.permissions.reject_pending();
     }
 
+    /// Resolve a parked `ask_user` request. An empty outer vector means the
+    /// operator cancelled; answered questions remain distinguishable because
+    /// they carry one inner vector per question (which may itself be empty).
     pub fn reply_user_question(&self, request_id: &str, answers: Vec<Vec<String>>) -> bool {
         let sender = self
             .ask_user
@@ -1545,12 +1587,15 @@ impl Agent {
             .pending
             .remove(request_id);
         sender.is_some_and(|sender| {
-            sender
-                .send(Some(UserQuestionReply {
+            let reply = if answers.is_empty() {
+                None
+            } else {
+                Some(UserQuestionReply {
                     request_id: request_id.to_string(),
                     answers,
-                }))
-                .is_ok()
+                })
+            };
+            sender.send(reply).is_ok()
         })
     }
 
@@ -1589,7 +1634,7 @@ impl Agent {
         })
     }
 
-    /// Cancel every parked input request (e.g. on turn end / interrupt),
+    /// Cancel every parked input request (e.g. on round end / interrupt),
     /// resolving each with `None` so the awaiting dispatch returns a
     /// cancelled result.
     pub fn reject_pending_inputs(&self) {
@@ -1619,7 +1664,7 @@ impl Agent {
     /// the caller can steer the agent with mid-turn — the entry point of
     /// full-duplex (ADR-0029). Requires `Arc<Self>` because the handle holds a
     /// `Weak<Agent>` so it can observe the agent's lifetime without keeping it
-    /// alive after its dispatcher ends the turn.
+    /// alive after its dispatcher ends the round.
     ///
     /// Idempotent: the first call creates the `mpsc` pair (sender stored on the
     /// agent so [`Agent::submit`] works too, receiver left for the driver to
@@ -1801,8 +1846,8 @@ impl Agent {
     }
 
     /// Drain every op currently buffered in the inbox and apply it to the live
-    /// turn. Called by the driver at the top of every tool round (the only
-    /// place it is safe to mutate `messages` or end the turn).
+    /// round. Called by the driver at the top of every ReAct turn (the only
+    /// place it is safe to mutate `messages` or end the round).
     ///
     /// Returns `false` when an `Interrupt` / `Shutdown` was observed — the
     /// caller then returns [`HarnessError::Interrupted`] (`Shutdown` is the
@@ -1963,22 +2008,22 @@ impl Agent {
         }
     }
 
-    /// Restore every RoundEnd-scoped disable. Called at the round boundary.
-    pub(crate) fn restore_scoped_round_end(&self) {
-        let mut scoped = self
-            .scoped_disabled_tools
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        scoped.restore_round_end();
-    }
-
-    /// Restore every scoped disable (both buckets). Called at turn end.
+    /// Restore every `TurnEnd` disable at the ReAct-turn boundary.
     pub(crate) fn restore_scoped_turn_end(&self) {
         let mut scoped = self
             .scoped_disabled_tools
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         scoped.restore_turn_end();
+    }
+
+    /// Restore every scoped disable (both buckets) at user-round end.
+    pub(crate) fn restore_scoped_round_end(&self) {
+        let mut scoped = self
+            .scoped_disabled_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scoped.restore_round_end();
     }
 
     /// Restore the disabled-tool mask from a persisted set on resume
@@ -2110,7 +2155,7 @@ impl Agent {
         .await
     }
 
-    #[tracing::instrument(skip_all, name = "turn", fields(streaming = false))]
+    #[tracing::instrument(skip_all, name = "round", fields(streaming = false))]
     pub async fn run_with_events<F>(
         &self,
         messages: &mut Vec<Message>,
@@ -2120,13 +2165,13 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let turn_start = std::time::Instant::now();
-        let mut state = TurnState {
-            guards: TurnState::guards_default(self.doom_guard_config()),
-            ..TurnState::default()
+        let round_started_at = std::time::Instant::now();
+        let mut state = RoundState {
+            guards: RoundState::guards_default(self.doom_guard_config()),
+            ..RoundState::default()
         };
-        let mut tool_rounds = 0;
-        // Take the steering inbox receiver for this turn (ADR-0029). `None` for
+        let mut turn_index = 0;
+        // Take the steering inbox receiver for this round (ADR-0029). `None` for
         // a non-steerable agent (no `install_inbox` call) → `drain_inbox` is a
         // no-op. Taken once per agent: a re-run after the first returns `None`
         // too, which is fine for the top-level harness (driven directly) and
@@ -2142,7 +2187,7 @@ impl Agent {
             if cancel.is_cancelled() {
                 return Err(HarnessError::Interrupted);
             }
-            // Apply any steering ops queued since the last round (inject a
+            // Apply any steering ops queued since the last turn (inject a
             // message, or abort via Interrupt/Shutdown) before requesting the
             // next completion. Replies (permission/ask_user) do NOT flow here
             // — they resolve the parked oneshot directly.
@@ -2152,15 +2197,15 @@ impl Agent {
             if self.admit_user_inputs(user_input_generation, messages, false, &mut on_event) > 0 {
                 // User input is an admission boundary just like a tool result:
                 // persist it before the provider can observe it.
-                self.fire_round_persist(messages).await?;
+                self.fire_turn_persist(messages).await?;
             }
 
             crate::conversation_context::inject_mentioned_skills(&self.skills_registry, messages);
-            // RoundStart hooks (symmetric to the round-end Turn hooks): inject
-            // any context at the top of this round's attention, before the
+            // TurnStart hooks (symmetric to the turn-end Turn hooks): inject
+            // any context at the top of this turn's attention, before the
             // model is asked for its next completion. No-op without a
             // `[hooks]` config (envoys, tests).
-            self.run_round_start_hooks(messages, &state, tool_rounds)
+            self.run_turn_start_hooks(messages, &state, turn_index)
                 .await;
             let request = self.model_request(messages);
             let request_projection = Self::estimate_model_request(&request).total_tokens;
@@ -2171,11 +2216,12 @@ impl Agent {
                 cancel,
                 &request_provider,
                 &request_model,
-                tool_rounds,
+                turn_index,
                 request_projection,
             );
             on_event(AgentEvent::ModelRequestStarted {
-                tool_round: tool_rounds,
+                round: self.round_count(),
+                turn: turn_index,
                 context_tokens: request_projection,
             });
 
@@ -2219,19 +2265,19 @@ impl Agent {
                 )
                 .await?
             {
-                tool_rounds += 1;
-                if self.check_hard_stop(tool_rounds).is_break() {
+                turn_index += 1;
+                if self.check_hard_stop(turn_index).is_break() {
                     return Err(self.hard_stop_error());
                 }
                 self.project_context_if_needed(messages, cancel).await?;
                 // Mid-turn save point (ADR-0035): see the streaming path.
-                self.fire_round_persist(messages).await?;
-                self.run_turn_hooks(messages, &state, tool_rounds).await;
-                // Restore RoundEnd-scoped disables now that the round is over,
-                // so tools a hook narrowed for just this round come back for
-                // the next one. TurnEnd-scoped disables survive until the turn
+                self.fire_turn_persist(messages).await?;
+                self.run_turn_hooks(messages, &state, turn_index).await;
+                // Restore TurnEnd disables now that the ReAct turn is over, so
+                // tools narrowed for one turn come back for the next.
+                // RoundEnd disables survive until the user round
                 // ends (see the return path below).
-                self.restore_scoped_round_end();
+                self.restore_scoped_turn_end();
                 continue;
             }
 
@@ -2239,12 +2285,12 @@ impl Agent {
             // insert queued during the just-finished provider request does the
             // same. When neither applies, `close_if_empty` atomically closes
             // admission before this round returns.
+            let duration_ms = round_started_at.elapsed().as_millis() as u64;
+            self.book_pursuit_pass(&mut state, duration_ms);
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                // Book the turn's usage + maybe inject a convergence reminder
-                // before forcing another round (ADR-0069).
-                self.book_pursuit_turn(&state, messages, turn_start.elapsed().as_millis() as u64);
+                self.inject_pursuit_convergence_reminder(messages);
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
@@ -2258,27 +2304,19 @@ impl Agent {
                 continue_round = true;
             }
             if continue_round {
-                tool_rounds += 1;
-                if self.check_hard_stop(tool_rounds).is_break() {
+                turn_index += 1;
+                if self.check_hard_stop(turn_index).is_break() {
                     return Err(self.hard_stop_error());
                 }
-                self.fire_round_persist(messages).await?;
-                self.run_turn_hooks(messages, &state, tool_rounds).await;
-                self.restore_scoped_round_end();
+                self.fire_turn_persist(messages).await?;
+                self.run_turn_hooks(messages, &state, turn_index).await;
+                self.restore_scoped_turn_end();
                 continue;
             }
 
-            // Turn end: clear every scoped disable so the toolset is fresh for
-            // the next user request.
-            self.restore_scoped_turn_end();
-            let duration_ms = turn_start.elapsed().as_millis() as u64;
-            // Book the final turn's usage into the pursuit (ADR-0069). When the
-            // gate already booked a continuation round above this is a no-op
-            // double-count guard only if the gate did not fire — so we book only
-            // when the gate did not already book this round.
-            if !continue_round {
-                self.book_pursuit_turn(&state, messages, duration_ms);
-            }
+            // User-round end: clear every scoped disable so the toolset is
+            // fresh for the next user request.
+            self.restore_scoped_round_end();
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: state.token_usage,
@@ -2287,7 +2325,7 @@ impl Agent {
         }
     }
 
-    #[tracing::instrument(skip_all, name = "turn", fields(streaming = true))]
+    #[tracing::instrument(skip_all, name = "round", fields(streaming = true))]
     pub async fn run_streaming_with_events<F>(
         &self,
         messages: &mut Vec<Message>,
@@ -2297,24 +2335,24 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let mut turn = self.begin_streaming_turn();
-        self.resume_streaming_with_events(messages, cancel, &mut turn, on_event)
+        let mut round = self.begin_streaming_round();
+        self.resume_streaming_with_events(messages, cancel, &mut round, on_event)
             .await
     }
 
-    /// Start the durable in-memory state for one streaming ReAct turn.
+    /// Start the durable in-memory state for one streaming user round.
     ///
     /// The top-level orchestrator retains this across transient provider
     /// failures so it can retry the failed request without re-entering the
-    /// turn from scratch. Standalone callers use [`Self::run_streaming_with_events`],
+    /// round from scratch. Standalone callers use [`Self::run_streaming_with_events`],
     /// which creates and consumes the state in one call.
-    pub(crate) fn begin_streaming_turn(&self) -> StreamingTurnState {
-        StreamingTurnState {
-            state: TurnState {
-                guards: TurnState::guards_default(self.doom_guard_config()),
-                ..TurnState::default()
+    pub(crate) fn begin_streaming_round(&self) -> StreamingRoundState {
+        StreamingRoundState {
+            state: RoundState {
+                guards: RoundState::guards_default(self.doom_guard_config()),
+                ..RoundState::default()
             },
-            tool_rounds: 0,
+            turn_index: 0,
             inbox_rx: self
                 .inbox_rx
                 .lock()
@@ -2326,17 +2364,17 @@ impl Agent {
         }
     }
 
-    /// Run or resume a streaming turn from its last provider-request boundary.
+    /// Run or resume a streaming round from its last provider-request boundary.
     ///
-    /// A [`HarnessError::Retryable`] leaves `turn` reusable. If the failed
+    /// A [`HarnessError::Retryable`] leaves `round` reusable. If the failed
     /// request followed completed tool calls, their messages and the complete
-    /// per-turn state are already present, so the next invocation sends the
+    /// per-round state are already present, so the next invocation sends the
     /// same pending provider request instead of executing those tools again.
     pub(crate) async fn resume_streaming_with_events<F>(
         &self,
         messages: &mut Vec<Message>,
         cancel: &CancellationToken,
-        turn: &mut StreamingTurnState,
+        round: &mut StreamingRoundState,
         mut on_event: F,
     ) -> Result<RoundOutcome, HarnessError>
     where
@@ -2347,46 +2385,46 @@ impl Agent {
                 return Err(HarnessError::Interrupted);
             }
 
-            let resuming_provider_request = turn.pending_request.is_some();
+            let resuming_provider_request = round.pending_request.is_some();
             if resuming_provider_request {
-                turn.state.protect_completed_tools_for_retry();
+                round.state.protect_completed_tools_for_retry();
             }
-            if turn.pending_request.is_none() {
-                // Apply steering ops queued since the last round before
+            if round.pending_request.is_none() {
+                // Apply steering ops queued since the last turn before
                 // preparing a new provider request. Replies bypass this (see
                 // `drain_inbox`). A transient retry deliberately skips this
                 // block: the already-prepared request is the checkpoint.
-                if !self.drain_inbox(&mut turn.inbox_rx, messages) {
+                if !self.drain_inbox(&mut round.inbox_rx, messages) {
                     return Err(HarnessError::Interrupted);
                 }
                 if self.admit_user_inputs(
-                    turn.user_input_generation,
+                    round.user_input_generation,
                     messages,
                     false,
                     &mut on_event,
                 ) > 0
                 {
-                    self.fire_round_persist(messages).await?;
+                    self.fire_turn_persist(messages).await?;
                 }
 
                 crate::conversation_context::inject_mentioned_skills(
                     &self.skills_registry,
                     messages,
                 );
-                // RoundStart hooks belong to a logical model round, not to
+                // TurnStart hooks belong to a logical ReAct turn, not to
                 // each network attempt. Run them once before checkpointing the
                 // request so retries cannot duplicate injected context or hook
                 // side effects.
-                self.run_round_start_hooks(messages, &turn.state, turn.tool_rounds)
+                self.run_turn_start_hooks(messages, &round.state, round.turn_index)
                     .await;
-                turn.pending_request = Some(self.model_request(messages));
+                round.pending_request = Some(self.model_request(messages));
             }
             tracing::debug!(
-                tool_round = turn.tool_rounds,
+                turn = round.turn_index,
                 resumed = resuming_provider_request,
                 "requesting model completion"
             );
-            let Some(request) = turn.pending_request.as_ref() else {
+            let Some(request) = round.pending_request.as_ref() else {
                 return Err(HarnessError::from(
                     "internal error: provider request was not assembled".to_string(),
                 ));
@@ -2399,11 +2437,12 @@ impl Agent {
                 cancel,
                 &request_provider,
                 &request_model,
-                turn.tool_rounds,
+                round.turn_index,
                 request_projection,
             );
             on_event(AgentEvent::ModelRequestStarted {
-                tool_round: turn.tool_rounds,
+                round: self.round_count(),
+                turn: round.turn_index,
                 context_tokens: request_projection,
             });
             // Race the model request against cancellation so an interrupt
@@ -2612,9 +2651,9 @@ impl Agent {
             // The request checkpoint is consumed only after a complete,
             // valid response is available. Any earlier return leaves it set
             // so orchestration can retry this exact request.
-            turn.pending_request = None;
+            round.pending_request = None;
             self.book_turn_usage(
-                &mut turn.state,
+                &mut round.state,
                 &response,
                 streamed_usage.take(),
                 &mut request_accounting,
@@ -2627,48 +2666,46 @@ impl Agent {
                 .dispatch_tool_calls(
                     &response,
                     messages,
-                    &mut turn.state,
+                    &mut round.state,
                     emitted_text,
                     cancel,
                     &mut on_event,
                 )
                 .await?
             {
-                turn.tool_rounds += 1;
-                if self.check_hard_stop(turn.tool_rounds).is_break() {
+                round.turn_index += 1;
+                if self.check_hard_stop(round.turn_index).is_break() {
                     return Err(self.hard_stop_error());
                 }
                 self.project_context_if_needed(messages, cancel).await?;
-                // Mid-turn save point (ADR-0035): persist this round's new
+                // Mid-round save point (ADR-0035): persist this turn's new
                 // messages (the assistant response + all tool results) before
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.
-                self.fire_round_persist(messages).await?;
-                self.run_turn_hooks(messages, &turn.state, turn.tool_rounds)
+                self.fire_turn_persist(messages).await?;
+                self.run_turn_hooks(messages, &round.state, round.turn_index)
                     .await;
-                // Restore RoundEnd-scoped disables (mirror of the non-streaming
-                // path). TurnEnd-scoped disables survive until turn end.
-                self.restore_scoped_round_end();
+                // Restore TurnEnd-scoped disables (mirror of the non-streaming
+                // path). RoundEnd-scoped disables survive until user-round end.
+                self.restore_scoped_turn_end();
                 continue;
             }
 
-            // Turn-exit gates (mirror of the non-streaming path). The insert
+            // Round-exit gates (mirror of the non-streaming path). The insert
             // drain happens after the provider response commits, so an input
             // typed during a would-be final answer can still force one more
             // turn in this same round.
+            let duration_ms = round.started_at.elapsed().as_millis() as u64;
+            self.book_pursuit_pass(&mut round.state, duration_ms);
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
                 self.pursuit_state.bump_iterations();
-                self.book_pursuit_turn(
-                    &turn.state,
-                    messages,
-                    turn.started_at.elapsed().as_millis() as u64,
-                );
+                self.inject_pursuit_convergence_reminder(messages);
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
             let admitted = self.admit_user_inputs(
-                turn.user_input_generation,
+                round.user_input_generation,
                 messages,
                 !continue_round,
                 &mut on_event,
@@ -2677,27 +2714,23 @@ impl Agent {
                 continue_round = true;
             }
             if continue_round {
-                turn.tool_rounds += 1;
-                if self.check_hard_stop(turn.tool_rounds).is_break() {
+                round.turn_index += 1;
+                if self.check_hard_stop(round.turn_index).is_break() {
                     return Err(self.hard_stop_error());
                 }
-                self.fire_round_persist(messages).await?;
-                self.run_turn_hooks(messages, &turn.state, turn.tool_rounds)
+                self.fire_turn_persist(messages).await?;
+                self.run_turn_hooks(messages, &round.state, round.turn_index)
                     .await;
-                self.restore_scoped_round_end();
+                self.restore_scoped_turn_end();
                 continue;
             }
 
-            // Turn end: clear every scoped disable so the toolset is fresh for
-            // the next user request.
-            self.restore_scoped_turn_end();
-            let duration_ms = turn.started_at.elapsed().as_millis() as u64;
-            if !continue_round {
-                self.book_pursuit_turn(&turn.state, messages, duration_ms);
-            }
+            // User-round end: clear every scoped disable so the toolset is
+            // fresh for the next user request.
+            self.restore_scoped_round_end();
             return Ok(RoundOutcome {
                 message: response,
-                token_usage: turn.state.token_usage,
+                token_usage: round.state.token_usage,
                 duration_ms,
             });
         }
@@ -2711,8 +2744,8 @@ impl Agent {
     ///
     /// `streamed_text` is true when the response text was already streamed to
     /// the UI, so a recognised text-fallback tool call retracts it with an
-    /// `AssistantDiscard`. Returns `true` when a tool round ran (the caller
-    /// should loop again), `false` when the turn is complete.
+    /// `AssistantDiscard`. Returns `true` when a tool-carrying ReAct turn ran
+    /// (the caller should loop again), `false` when the round is complete.
     ///
     /// `cancel` makes tool execution cooperative: if the turn is interrupted
     /// mid-flight, every already-announced [`AgentEvent::ToolCall`] is paired
@@ -2722,7 +2755,7 @@ impl Agent {
         &self,
         response: &Message,
         messages: &mut Vec<Message>,
-        state: &mut TurnState,
+        state: &mut RoundState,
         streamed_text: bool,
         cancel: &CancellationToken,
         on_event: &mut F,
@@ -2737,19 +2770,19 @@ impl Agent {
             .as_ref()
             .filter(|calls| !calls.is_empty())
         {
-            // Classify this round once, for two consumers: the round-hook axis
+            // Classify this turn once, for two consumers: the turn-hook axis
             // (consecutive read-only streak, surfaced to user hooks) and the
-            // turn-guard registry (checked at the round boundary). Any call
+            // round-scoped guard registry (checked at the turn boundary). Any call
             // whose target is a real Path/Command (i.e. not Unspecified) makes
-            // the round "progress", resetting both.
+            // the turn "progress", resetting both.
             let all_read = tool_calls
                 .iter()
                 .all(|c| self.tool_target_is_unspecified(&c.name, &c.arguments));
             if all_read {
-                state.consecutive_readonly_rounds =
-                    state.consecutive_readonly_rounds.saturating_add(1);
+                state.consecutive_readonly_turns =
+                    state.consecutive_readonly_turns.saturating_add(1);
             } else {
-                state.consecutive_readonly_rounds = 0;
+                state.consecutive_readonly_turns = 0;
             }
 
             // A provider retry may produce the same tool request again even
@@ -2777,13 +2810,13 @@ impl Agent {
             }
 
             // Pre-dispatch doom-loop check (the decisive intervention). Before
-            // any tool runs this round, ask the doom guard whether any call is a
-            // repeat of one already issued this turn. A repeat is blocked here
+            // any tool runs this turn, ask the doom guard whether any call is a
+            // repeat of one already issued this round. A repeat is blocked here
             // and now — the tool never executes, so its result never enters
             // context. Unlike the post-hoc read-loop guard, this covers all
             // watched tools (bash/webfetch/edit/...), not just reads, and trips
             // on the *first* repeat (threshold = 2). `Block` records the
-            // repeated signatures into the per-turn mask, so the per-call
+            // repeated signatures into the per-round mask, so the per-call
             // `is_blocked` filter below short-circuits them without re-running
             // the guard. We surface the guard's message as a notice + a hidden
             // user message so the model learns the call is refused.
@@ -2808,7 +2841,7 @@ impl Agent {
                             NoticeSource::TurnGuard,
                         )
                         .with_body(
-                            "The agent tried to re-run a tool call it already issued this turn. \
+                            "The agent tried to re-run a tool call it already issued this round. \
                              The call was blocked before it ran — the result it already has is \
                              unchanged, so re-running it cannot help. The agent must change \
                              approach (or call `abort`).",
@@ -2835,7 +2868,7 @@ impl Agent {
                 });
             }
             // Signature-level loop guard (ADR-0036): a call whose canonical
-            // signature is in the per-turn block mask — set either by the
+            // signature is in the per-round block mask — set either by the
             // read-loop guard (a repeat that escalated past a nudge) or by the
             // doom guard above (any watched tool's first repeat) — is
             // short-circuited here, before execution. The model gets an
@@ -2847,7 +2880,7 @@ impl Agent {
             let blocked_output = |name: &str| {
                 ToolOutput::Text(format!(
                     "[loop guard] This call ({name}) is blocked for the rest of the turn \
-                     because it was a repeat of one already issued this turn. Re-running it \
+                     because it was a repeat of one already issued this round. Re-running it \
                      cannot help: the result is already in context above. Act on it now \
                      (use what you already have, try a *different* command/file/query), or, \
                      if you cannot proceed, say so explicitly or call `abort`."
@@ -2903,7 +2936,7 @@ impl Agent {
                             )
                             .with_body(format!(
                                 "A tool call ({}) was blocked by the loop guard — it is a \
-                                 repeat of a call already issued this turn. Use the result \
+                                 repeat of a call already issued this round. Use the result \
                                  already in context, or try a different call.",
                                 c.name,
                             ))
@@ -2968,14 +3001,14 @@ impl Agent {
                         .await;
                 }
             }
-            // If the user denied permission for any call, stop the turn here
+            // If the user denied permission for any call, stop the round here
             // instead of feeding the (possibly partial) results back to the
             // model and asking it to continue.
             // If the doom guard blocked any repeats this round, deliver its
             // consolidated message as a hidden user note alongside the blocked
             // tool results, so the model learns *why* its call was refused and
             // what to do instead. Non-terminating: the turn continues with the
-            // (now masked) signatures hard-blocked for subsequent rounds.
+            // (now masked) signatures hard-blocked for subsequent turns in this round.
             if let Some(message) = doom_message {
                 messages.push(crate::conversation_context::hidden_user(
                     InjectionKind::LoopReviewNudge,
@@ -2992,17 +3025,17 @@ impl Agent {
             }
             tracing::debug!(tool = %call.name, "tool call (text fallback)");
             crate::tool_call::attach_fallback_tool_call(messages, &call);
-            // Classify + feed this round to the guard, mirroring the native
-            // path. The text-fallback emits one call per round, so a read-only
-            // round is exactly "this single call is read-tier". Without this the
-            // guard would never see text-fallback rounds and a model on such a
+            // Classify + feed this turn to the guard, mirroring the native
+            // path. The text-fallback emits one call per turn, so a read-only
+            // turn is exactly "this single call is read-tier". Without this the
+            // guard would never see text-fallback turns and a model on such a
             // provider could loop with zero coverage.
             let all_read = self.tool_target_is_unspecified(&call.name, &call.arguments);
             if all_read {
-                state.consecutive_readonly_rounds =
-                    state.consecutive_readonly_rounds.saturating_add(1);
+                state.consecutive_readonly_turns =
+                    state.consecutive_readonly_turns.saturating_add(1);
             } else {
-                state.consecutive_readonly_rounds = 0;
+                state.consecutive_readonly_turns = 0;
             }
             let checkpoint_replay = state.is_checkpoint_replay(&call);
             if checkpoint_replay {
@@ -3086,7 +3119,7 @@ impl Agent {
                     )
                     .with_body(format!(
                         "A tool call ({}) was blocked by the loop guard — it is a repeat \
-                         of a call already issued this turn. Use the result already in \
+                         of a call already issued this round. Use the result already in \
                          context, or try a different call.",
                         call.name,
                     ))
@@ -3094,7 +3127,7 @@ impl Agent {
                 ));
                 let output = ToolOutput::Text(format!(
                     "[loop guard] This call ({}) is blocked for the rest of the turn \
-                     because it was a repeat of one already issued this turn. Re-running it \
+                     because it was a repeat of one already issued this round. Re-running it \
                      cannot help: the result is already in context above. Act on it now \
                      (use what you already have, try a *different* command/file/query), or, \
                      if you cannot proceed, say so explicitly or call `abort`.",
@@ -3155,7 +3188,7 @@ impl Agent {
         result: &ToolOutput,
         duration_ms: u64,
         messages: &mut Vec<Message>,
-        state: &mut TurnState,
+        state: &mut RoundState,
         checkpoint_replay: bool,
         emit_event: bool,
         on_event: &mut F,
@@ -3177,7 +3210,7 @@ impl Agent {
             state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
             state.token_usage.completion_tokens += sub_usage.completion_tokens;
             // Still count the summary bytes that the parent model will
-            // actually re-read on the next round.
+            // actually re-read on the next turn.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
         } else {
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
@@ -3298,8 +3331,8 @@ impl Agent {
 
     /// Whether a tool call's [`ScopeTarget`] is [`ScopeTarget::Unspecified`] —
     /// i.e. the tool declares no locatable target (a pure read/search like
-    /// `read_text`, `grep`). Used to classify a round as read-only for the
-    /// round-hook streak counter. An unknown tool name reads as `true`
+    /// `read_text`, `grep`). Used to classify a turn as read-only for the
+    /// turn-hook streak counter. An unknown tool name reads as `true`
     /// (unspecified), matching the trait default.
     fn tool_target_is_unspecified(&self, name: &str, arguments: &str) -> bool {
         match self
@@ -3321,15 +3354,16 @@ impl Agent {
     /// `Inject` context into hidden user messages. `Deny` is already discarded
     /// by [`HookRegistry::run_turn`], so a turn hook cannot abort the round.
     /// `ScopeTools` disables are applied to the scoped mask.
-    async fn run_turn_hooks(&self, messages: &mut Vec<Message>, state: &TurnState, turn: usize) {
+    async fn run_turn_hooks(&self, messages: &mut Vec<Message>, state: &RoundState, turn: usize) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
         }
         let side = registry
             .run_turn(
+                self.round_count(),
                 turn,
-                state.consecutive_readonly_rounds,
+                state.consecutive_readonly_turns,
                 &self.hook_session_id(),
                 self.hook_cwd().as_deref(),
             )
@@ -3343,33 +3377,34 @@ impl Agent {
         self.apply_scoped_disables(&side.scoped_disables);
     }
 
-    /// Fire user-configured `RoundStart` hooks at the *start* of each tool
-    /// round (after tools are prepared, before the next model completion) and
+    /// Fire `TurnStart` hooks at the start of each ReAct
+    /// turn (after tools are prepared, before the next model completion) and
     /// fold any `Inject` context into hidden user messages. `Deny` is already
-    /// discarded by [`HookRegistry::run_round_start`], so a round-start hook
+    /// discarded by [`HookRegistry::run_turn_start`], so this hook
     /// cannot abort the round. `ScopeTools` disables are applied to the scoped
     /// mask. The symmetric partner of [`Self::run_turn_hooks`].
-    async fn run_round_start_hooks(
+    async fn run_turn_start_hooks(
         &self,
         messages: &mut Vec<Message>,
-        state: &TurnState,
-        round: usize,
+        state: &RoundState,
+        turn: usize,
     ) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
         }
         let side = registry
-            .run_round_start(
-                round,
-                state.consecutive_readonly_rounds,
+            .run_turn_start(
+                self.round_count(),
+                turn,
+                state.consecutive_readonly_turns,
                 &self.hook_session_id(),
                 self.hook_cwd().as_deref(),
             )
             .await;
         for context in side.injected {
             messages.push(crate::conversation_context::hidden_user(
-                InjectionKind::Hook(HookEventKind::RoundStart),
+                InjectionKind::Hook(HookEventKind::TurnStart),
                 context,
             ));
         }
@@ -3404,19 +3439,19 @@ impl Agent {
             .await;
     }
 
-    /// The opt-in hard-stop gate (ADR-0018). Called once per tool round with
-    /// the count of rounds that have already run this turn. Returns
+    /// The opt-in hard-stop gate (ADR-0018). Called once per continuing ReAct
+    /// turn with the count of turns already run in this round. Returns
     /// `ControlFlow::Break` only when a finite `hard_stop_turns` budget was
-    /// configured and `rounds` has reached it — the caller converts that into
+    /// configured and `turns` has reached it — the caller converts that into
     /// a terminal `HarnessError` via [`Self::hard_stop_error`]. The default
-    /// budget (`0`) keeps the turn uncapped, exactly matching ADR-0009.
+    /// budget (`0`) keeps the round uncapped, exactly matching ADR-0009.
     ///
-    /// Session review no longer fires from the turn loop: it is on-demand via
+    /// Session review no longer fires automatically from the loop: it is on-demand via
     /// `/review` ([`Self::review_now`]), which runs the diagnostic envoy
     /// against the live transcript and reports a verdict without aborting.
-    fn check_hard_stop(&self, rounds: usize) -> std::ops::ControlFlow<()> {
+    fn check_hard_stop(&self, turns: usize) -> std::ops::ControlFlow<()> {
         let budget = self.get_hard_stop_turns();
-        if budget > 0 && rounds >= budget {
+        if budget > 0 && turns >= budget {
             std::ops::ControlFlow::Break(())
         } else {
             std::ops::ControlFlow::Continue(())
@@ -3430,34 +3465,35 @@ impl Agent {
     fn hard_stop_error(&self) -> HarnessError {
         let budget = self.get_hard_stop_turns();
         HarnessError::Other(format!(
-            "Agent stopped: the configured hard-stop budget of {budget} tool \
-             rounds was reached. This budget is opt-in (`hard_stop_turns`); \
-             raise it or set it to 0 (the default) for an uncapped turn."
+            "Agent stopped: the configured hard-stop budget of {budget} ReAct \
+             turns was reached. This budget is opt-in (`hard_stop_turns`); \
+             raise it or set it to 0 (the default) for an uncapped round."
         ))
     }
 
     /// Collapse a set of review verdicts into one human-facing alert string.
     /// Empty when every dimension is healthy (the TUI treats empty as "clear
     /// any prior alert"). Otherwise the worst status wins, with each
-    /// non-healthy dimension's detail folded in. The round count gives the
-    /// user a sense of how long the turn has run. Associated (no `&self`) so
+    /// non-healthy dimension's detail folded in. The turn count gives the user
+    /// a sense of how long the round has run. Associated (no `&self`) so
     /// the `/review` handler and tests can call it without an `Agent` handle.
-    pub fn render_review_alert(verdicts: &[ReviewVerdict], rounds: usize) -> String {
+    pub fn render_review_alert(verdicts: &[ReviewVerdict], turns: usize) -> String {
         let worst = verdicts.iter().map(|v| v.status).max();
         match worst {
             None | Some(ReviewStatus::Healthy) => String::new(),
             Some(status) => {
                 let label = status.label();
+                let turn_unit = if turns == 1 { "turn" } else { "turns" };
                 let details: Vec<&str> = verdicts
                     .iter()
                     .filter(|v| v.status != ReviewStatus::Healthy && !v.detail.trim().is_empty())
                     .map(|v| v.detail.trim())
                     .collect();
                 if details.is_empty() {
-                    format!("review: {label} · {rounds} rounds — Esc to interrupt")
+                    format!("review: {label} · {turns} {turn_unit} — Esc to interrupt")
                 } else {
                     format!(
-                        "review: {label} · {rounds} rounds — {} — Esc to interrupt",
+                        "review: {label} · {turns} {turn_unit} — {} — Esc to interrupt",
                         details.join("; ")
                     )
                 }
@@ -3468,19 +3504,18 @@ impl Agent {
     /// On-demand session review (ADR-0018): run the bounded read-only
     /// diagnostic envoy against `messages` and return one verdict per
     /// registered dimension. Driven by the `/review` command — the harness no
-    /// longer fires review on a round cadence. Safe to call while a turn is
+    /// longer fires review on a turn cadence. Safe to call while a round is
     /// running: the reviewer is an independent child agent that only reads a
-    /// transcript snapshot and cannot mutate the parent's turn state.
+    /// transcript snapshot and cannot mutate the parent's round state.
     pub async fn review_now(&self, messages: &[Message]) -> Vec<ReviewVerdict> {
-        let rounds = Self::estimate_tool_rounds(messages);
-        self.run_session_review(messages, rounds).await
+        let turns = Self::estimate_completed_turns(messages);
+        self.run_session_review(messages, turns).await
     }
 
-    /// Rough count of tool rounds represented by `messages`: the number of
-    /// assistant messages that carry tool calls. Used to label on-demand
-    /// review output with a sense of how long the turn has run, since the
-    /// `/review` handler does not own the live round counter.
-    pub fn estimate_tool_rounds(messages: &[Message]) -> usize {
+    /// Rough count of tool-carrying turns represented by `messages`: the
+    /// number of assistant messages that carry tool calls. Used to label
+    /// on-demand review output with a sense of how long the round has run.
+    pub fn estimate_completed_turns(messages: &[Message]) -> usize {
         messages
             .iter()
             .filter(|m| {
@@ -3524,12 +3559,17 @@ impl Agent {
                 return ToolOutput::Text(format!("Invalid ask_user questions: {}", e));
             }
         };
-        if questions.is_empty() {
-            return ToolOutput::Text("ask_user requires at least one question.".to_string());
+        if !(1..=5).contains(&questions.len()) {
+            return ToolOutput::Text(
+                "ask_user requires between one and five questions.".to_string(),
+            );
         }
         for (i, q) in questions.iter().enumerate() {
-            if q.options.is_empty() {
-                return ToolOutput::Text(format!("ask_user question {} has no options.", i + 1));
+            if !(2..=4).contains(&q.options.len()) {
+                return ToolOutput::Text(format!(
+                    "ask_user question {} requires between two and four options.",
+                    i + 1
+                ));
             }
         }
 
@@ -4186,7 +4226,7 @@ pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScopedToolDisable, TurnState, checkpoint_tool_signature, envoy_result_text};
+    use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, envoy_result_text};
 
     fn tool_call(id: &str, arguments: &str) -> neenee_core::ToolCall {
         neenee_core::ToolCall {
@@ -4210,7 +4250,7 @@ mod tests {
     fn provider_retry_protects_only_calls_completed_before_its_checkpoint() {
         let before_retry = tool_call("first", r#"{"path":"before"}"#);
         let after_retry = tool_call("second", r#"{"path":"after"}"#);
-        let mut state = TurnState::default();
+        let mut state = RoundState::default();
         state.remember_completed_tool(&before_retry);
         state.protect_completed_tools_for_retry();
         state.remember_completed_tool(&after_retry);
@@ -4290,49 +4330,49 @@ mod tests {
     fn scoped_disable_hides_until_restore() {
         let mut scoped = ScopedToolDisable::default();
         assert!(!scoped.contains("bash"));
-        scoped.disable("bash", RestorePoint::RoundEnd);
+        scoped.disable("bash", RestorePoint::TurnEnd);
         assert!(scoped.contains("bash"));
-        scoped.restore_round_end();
+        scoped.restore_turn_end();
         assert!(
             !scoped.contains("bash"),
-            "RoundEnd restore must re-enable the tool"
+            "TurnEnd restore must re-enable the tool"
         );
         assert!(scoped.is_empty(), "both buckets drained");
     }
 
-    /// RoundEnd restore only clears RoundEnd disables — TurnEnd disables
-    /// survive the round boundary.
+    /// `TurnEnd` restore clears the turn-scoped bucket only; `RoundEnd`
+    /// disables survive until the user-round boundary.
     #[test]
-    fn round_end_restore_keeps_turn_end_disables() {
+    fn turn_end_restore_keeps_round_end_disables() {
         let mut scoped = ScopedToolDisable::default();
-        scoped.disable("bash", RestorePoint::RoundEnd);
-        scoped.disable("edit_file", RestorePoint::TurnEnd);
-        scoped.restore_round_end();
+        scoped.disable("bash", RestorePoint::TurnEnd);
+        scoped.disable("edit_file", RestorePoint::RoundEnd);
+        scoped.restore_turn_end();
         assert!(
             !scoped.contains("bash"),
-            "RoundEnd disable must be restored at the round boundary"
+            "TurnEnd disable must be restored at the ReAct-turn boundary"
         );
         assert!(
             scoped.contains("edit_file"),
-            "TurnEnd disable must survive the round boundary"
+            "RoundEnd disable must survive the ReAct-turn boundary"
         );
     }
 
     /// Nested disables compose via refcount: two hooks disable `bash` at
-    /// different restore points; the earlier (RoundEnd) restore must NOT bring
-    /// it back while the later (TurnEnd) is still in effect.
+    /// different restore points; the earlier (TurnEnd) restore must NOT bring
+    /// it back while the later (RoundEnd) is still in effect.
     #[test]
     fn nested_disables_refcount_correctly() {
         let mut scoped = ScopedToolDisable::default();
-        scoped.disable("bash", RestorePoint::TurnEnd);
         scoped.disable("bash", RestorePoint::RoundEnd);
+        scoped.disable("bash", RestorePoint::TurnEnd);
         assert!(scoped.contains("bash"));
-        scoped.restore_round_end();
+        scoped.restore_turn_end();
         assert!(
             scoped.contains("bash"),
-            "bash still hidden: the TurnEnd disable outlives the RoundEnd restore"
+            "bash still hidden: the RoundEnd disable outlives the TurnEnd restore"
         );
-        scoped.restore_turn_end();
-        assert!(!scoped.contains("bash"), "bash back after turn end");
+        scoped.restore_round_end();
+        assert!(!scoped.contains("bash"), "bash back after round end");
     }
 }

@@ -1,11 +1,11 @@
 //! General-purpose doom-loop guard: a pre-dispatch detector that intercepts
-//! *any* tool call whose signature has already been issued this turn, before
+//! *any* tool call whose signature has already been issued this round, before
 //! the tool runs — not just reads.
 //!
 //! # Why a separate guard
 //!
 //! [`crate::loop_guard::ReadLoopGuard`] is read-only, post-hoc, and defaults
-//! to off: it observes a round *after* the tools have executed, nudges the
+//! to off: it observes a turn *after* the tools have executed, nudges the
 //! model, and only hard-blocks on the *next* recurrence. That means the
 //! repeating call's result is already in context when the nudge lands — the
 //! model sees "I read it successfully" right next to "don't read it again", a
@@ -21,14 +21,14 @@
 //!   `glob`, `list_dir`, `bash`, `webfetch`, `websearch`, `edit_file`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
 //! - **First repeat trips it (threshold = 2)**: by the time a call recurs in
-//!   one turn, it is almost never productive, and the cost of letting it run
+//!   one round, it is almost never productive, and the cost of letting it run
 //!   (context bloat + a contradictory nudge) outweighs the rare false positive.
-//!   A progress round (any *different* tool call) still clears the window, so
+//!   A progress turn (any *different* tool call) still clears the window, so
 //!   legitimate interleave is unaffected.
 //!
 //! Detection is pure signature bookkeeping — no model call. The action is a
 //! [`crate::loop_guard::GuardAction::Block`]: the signature is masked for the
-//! rest of the turn and an explanatory note is injected, so the model learns
+//! rest of the round and an explanatory note is injected, so the model learns
 //! the call is now refused and must change approach (or call `abort`).
 //!
 //! # Relation to `NudgeConfig`
@@ -126,14 +126,14 @@ pub fn doom_signature(name: &str, args: &str) -> String {
 
 /// The pre-dispatch doom-loop detector.
 ///
-/// One lives per turn in `TurnState` (see [`crate::agent::TurnState`]) and is
-/// dropped when the turn ends, so state never leaks across turns. The window
-/// is a sliding record of the signatures of the last `config.window` watched
-/// rounds; a signature that has already appeared in the window trips the guard
+/// One lives per user round in `RoundState` (see [`crate::agent::RoundState`]) and is
+/// dropped when the round ends, so state never leaks across rounds. The window
+/// is a sliding record of the last `config.window` watched tool-call
+/// signatures; a signature that has already appeared in the window trips the guard
 /// the *next* time it is about to run.
 pub struct DoomLoopGuard {
     config: DoomGuardConfig,
-    /// Signatures of watched rounds already seen this turn (within the
+    /// Signatures of watched tool calls already seen this round (within the
     /// window). A signature about to run that is *already present* here is a
     /// repeat → block.
     window: VecDeque<String>,
@@ -141,7 +141,7 @@ pub struct DoomLoopGuard {
 
 impl DoomLoopGuard {
     /// Construct a guard tuned by `config`. Thresholds are read live from the
-    /// config, so a runtime `set_nudge_config` update takes effect next turn.
+    /// config, so a runtime `set_doom_guard_config` update takes effect next round.
     pub fn new(config: DoomGuardConfig) -> Self {
         Self {
             config,
@@ -155,21 +155,21 @@ impl DoomLoopGuard {
     }
 
     /// Pre-dispatch check: given the signatures of the calls about to run this
-    /// round, decide whether to block *before* any of them executes.
+    /// turn, decide whether to block *before* any of them executes.
     ///
     /// Returns a [`GuardAction::Block`] if any call's signature is already in
-    /// the window (i.e. it has run before this turn), listing every repeated
+    /// the window (i.e. it has run earlier in this round), listing every repeated
     /// signature so the dispatch layer can mask all of them. The caller is
     /// responsible for (a) not executing the blocked calls, (b) recording the
-    /// signatures in its per-turn mask, and (c) pushing the block's message.
+    /// signatures in its per-round mask, and (c) pushing the block's message.
     ///
     /// After this returns, the caller records *every* watched signature from
-    /// the round (repeated or not) into the window, so the next round can
-    /// detect a fresh repeat. Non-watched rounds (no watched tool) are a no-op
-    /// and do not touch the window — but a round that mixes a watched call
+    /// turn (repeated or not) into the window, so the next turn can
+    /// detect a fresh repeat. Turns with no watched tool are a no-op
+    /// and do not touch the window — but a turn that mixes a watched call
     /// with anything else still feeds its watched signatures in.
     ///
-    /// Note: unlike the read-loop guard, a "progress" round does **not** clear
+    /// Note: unlike the read-loop guard, a "progress" turn does **not** clear
     /// this window. Rationale: an `A B A` pattern (do X, do Y, do X again) is
     /// still a doom loop if X is `bash run-tests`. The read guard clears on
     /// progress because reads are cheap and exploration is legitimate; here
@@ -185,7 +185,7 @@ impl DoomLoopGuard {
             .cloned()
             .collect();
         // Record every signature now, so the window reflects what has been
-        // dispatched this turn regardless of whether we block. A blocked call
+        // dispatched this round regardless of whether we block. A blocked call
         // never executes, but conceptually it *was* issued — and leaving it
         // out would let the model retry the identical call once unblocked.
         for sig in signatures {
@@ -203,7 +203,7 @@ impl DoomLoopGuard {
             .collect::<Vec<_>>()
             .join("\n");
         let message = format!(
-            "You are repeating a tool call that already ran this turn:\n{summary}\n\
+            "You are repeating a tool call that already ran this round:\n{summary}\n\
              Re-running it cannot change the result you already have. This call is now \
              **blocked** for the rest of the turn — calling it again returns an error, \
              not a fresh result. Act on what you already have, try a *different* \

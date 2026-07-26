@@ -182,8 +182,8 @@ pub async fn reconnect_mcp_server(
 }
 
 /// `AgentRequest::ExitSideView` — tear down the live `/btw` side session
-/// (ADR-0017). Any in-flight side turn is cancelled; the side file stays on
-/// disk, recoverable via `/sessions`. The primary turn — if running — is
+/// (ADR-0017). Any in-flight side round is cancelled; the side file stays on
+/// disk, recoverable via `/sessions`. The primary round — if running — is
 /// untouched.
 pub async fn exit_side_view(
     side: &Arc<AsyncRwLock<Option<SideSession>>>,

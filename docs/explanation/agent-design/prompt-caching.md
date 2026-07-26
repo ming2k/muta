@@ -1,14 +1,14 @@
 # Prompt caching and cost control
 
-> Companion to [ADR-0067](../../../adr/0067-modular-prompt-cache-control.md)
+> Companion to [ADR-0067](../../adr/0067-modular-prompt-cache-control.md)
 > (the *decision*) and [Token accounting](token-accounting.md) (how tokens are
 > *counted*). This page is about how caching *saves* them — and the one rule
 > that keeps the savings honest.
 
-Prompt caching is the dominant cost lever for a multi-turn agent. A cached
+Prompt caching is the dominant cost lever for a multi-round agent session. A cached
 prefix is billed at roughly **0.1× input** (Anthropic) or folded into a
 discount (OpenAI, Gemini, Moonshot). On a long coding session the stable
-prefix — system prompt, tool schemas, recent turns — is the bulk of every
+prefix — system prompt, tool schemas, recent rounds — is the bulk of every
 request, so whether that bulk is read from cache or re-billed at full price is
 the difference between a cheap session and an expensive one.
 
@@ -145,7 +145,7 @@ three-strategy partition is load-bearing.
 
 ## See also
 
-- [ADR-0067](../../../adr/0067-modular-prompt-cache-control.md) — the decision
+- [ADR-0067](../../adr/0067-modular-prompt-cache-control.md) — the decision
   record for the modular policy.
 - [Token accounting](token-accounting.md) — how tokens (cached or not) are
   counted, attributed as reported vs estimated, and surfaced in the report

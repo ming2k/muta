@@ -9,7 +9,7 @@
 //! Frontends drive the harness through [`execute_round`],
 //! [`start_interactive_round`], [`start_pursuit`], and
 //! [`start_repeat_scheduler`]. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
-//! future GUI); the actual turn machinery is shared here.
+//! future GUI); the actual round machinery is shared here.
 //!
 //! All items are `pub` because they are assembled by the binary, which knows
 //! the concrete provider/tool instances and the frontend's request channel.
@@ -40,16 +40,16 @@ use neenee_persistence::{
     RepeatStore,
     config::Config,
     session::{
-        ContextProjectionCheckpoint, ContextProjectionResult, PursuitCheckpoint, SessionStore,
-        UNCAPPED_ITERATIONS, run_compaction,
+        ContextProjectionCheckpoint, ContextProjectionResult, PursuitCheckpoint,
+        PursuitCheckpointStatus, PursuitRuntime, SessionStore, run_compaction,
     },
 };
 
 /// Wrap a session-scoped [`RoundEvent`] in the [`AgentResponse::Round`]
-/// envelope (ADR-0017). Every per-turn emitter routes through this so the
+/// envelope (ADR-0017). Every round-scoped emitter routes through this so the
 /// session id is attached uniformly, letting the TUI key transcript buffers
 /// by `session_id` and dispatch primary vs `/btw` side events correctly.
-pub fn turn(session_id: &str, event: RoundEvent) -> AgentResponse {
+pub fn round_response(session_id: &str, event: RoundEvent) -> AgentResponse {
     AgentResponse::Round {
         session_id: session_id.to_string(),
         event,
@@ -374,7 +374,7 @@ pub struct ContextProjectionSettings {
     /// Pressure (estimated in tokens) is compared against these to decide when
     /// to prune and when to run a full summarizing compaction.
     pub budget: neenee_core::ContextBudget,
-    pub preserve_turns: usize,
+    pub preserve_rounds: usize,
     /// Use the active model to produce an anchored structured summary.
     pub summarize: bool,
     /// Enable cheap tool-result pruning (pre-turn and mid-turn).
@@ -394,7 +394,7 @@ impl ContextProjectionSettings {
     pub fn from_config(config: &Config, window_tokens: usize) -> Self {
         Self {
             budget: config.compaction.resolve(window_tokens),
-            preserve_turns: config.compaction_preserve_turns,
+            preserve_rounds: config.compaction_preserve_rounds,
             summarize: config.compaction_summarize,
             prune: config.compaction_prune,
             prune_protect_chars: config.compaction_prune_protect_tokens
@@ -425,7 +425,7 @@ mod projection_settings_tests {
     fn compaction_target_accounts_for_projected_request_overhead() {
         let settings = ContextProjectionSettings {
             budget: neenee_core::CompactionPolicy::default().resolve(200_000),
-            preserve_turns: 6,
+            preserve_rounds: 6,
             summarize: true,
             prune: true,
             prune_protect_chars: 24_000,
@@ -442,8 +442,8 @@ mod projection_settings_tests {
     }
 }
 
-/// Mid-turn model-context projection gate: prunes old tool results durably when
-/// the active turn is approaching the model's context budget.
+/// Mid-round model-context projection gate: prunes old tool results durably
+/// when the active round is approaching the model's context budget.
 pub struct MidTurnPruneProjectionGate {
     pub session: Arc<SessionStore>,
     pub prune_protect_chars: usize,
@@ -478,24 +478,34 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
     }
 }
 
-/// Emit the current harness snapshot (mode, pursuit, loop status, unattended)
-/// to the UI.
+/// Emit the current harness snapshot (mode, pursuit, round counter, loop
+/// status, unattended) to the UI.
 pub fn send_harness_state(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
     agent: &Agent,
     loop_status: LoopStatus,
 ) {
-    let _ = tx.send(turn(
+    // Running/Pursue snapshots are emitted after lifecycle admission but
+    // immediately before `execute_round` performs the counter bump. Project
+    // that admitted round here so frontends receive the authoritative display
+    // value without locally guessing from transcript length.
+    let round_counter = agent
+        .round_count()
+        .saturating_add(u64::from(!loop_status.is_idle()));
+    let _ = tx.send(round_response(
         session_id,
         RoundEvent::HarnessState(HarnessSnapshot {
             pursuit: agent.get_pursuit(),
             loop_status,
+            round_counter,
             unattended: agent.get_unattended(),
         }),
     ));
 }
 
+/// Refresh the durable pursuit objective for the session currently selected
+/// by `SessionStore`.
 pub async fn refresh_agent_pursuit(agent: &Agent, session: &SessionStore) -> Option<Pursuit> {
     match session.pursuit().await {
         Some(pursuit) => {
@@ -509,15 +519,143 @@ pub async fn refresh_agent_pursuit(agent: &Agent, session: &SessionStore) -> Opt
     }
 }
 
+/// Restore both pursuit layers when selecting or bootstrapping a session.
+///
+/// Unlike [`refresh_agent_pursuit`], this replaces the attempt runtime too
+/// and therefore must not be used as a live status refresh while a round is
+/// advancing counters.
+pub async fn restore_agent_pursuit(agent: &Agent, session: &SessionStore) -> Option<Pursuit> {
+    // Session switches reuse the principal Agent. Restore the monotonic round
+    // counter before any HarnessState for the selected session is emitted.
+    agent.restore_round_count(session.round_counter().await);
+    let pursuit = refresh_agent_pursuit(agent, session).await;
+    match session.pursuit_runtime().await {
+        Some(runtime) => agent.restore_pursuit_runtime(
+            runtime.armed,
+            runtime.iterations,
+            crate::PursuitStats {
+                passes: runtime.passes,
+                tokens: runtime.tokens,
+                wall_clock_ms: runtime.wall_clock_ms,
+            },
+        ),
+        None => agent.restore_pursuit_runtime(false, 0, crate::PursuitStats::default()),
+    }
+    pursuit
+}
+
 pub fn emit_pursuit_updated(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
     pursuit: &Pursuit,
 ) {
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         session_id,
         RoundEvent::PursuitUpdated(pursuit.clone()),
     ));
+}
+
+fn pursuit_runtime(agent: &Agent) -> Option<PursuitRuntime> {
+    if !agent.is_pursuit_armed() && agent.pursuit_iterations() == 0 {
+        return None;
+    }
+    let stats = agent.pursuit_stats();
+    Some(PursuitRuntime {
+        armed: agent.is_pursuit_armed(),
+        iterations: agent.pursuit_iterations(),
+        passes: stats.passes,
+        tokens: stats.tokens,
+        wall_clock_ms: stats.wall_clock_ms,
+    })
+}
+
+fn pursuit_checkpoint(agent: &Agent, status: PursuitCheckpointStatus) -> Option<PursuitCheckpoint> {
+    let pursuit = agent.get_pursuit()?;
+    Some(PursuitCheckpoint {
+        pursuit: pursuit.objective,
+        // `iterations` counts forced continuations. Checkpoints expose the
+        // one-based pursuit pass so iteration and max_iterations share a unit.
+        iteration: agent
+            .pursuit_iterations()
+            .saturating_add(1)
+            .min(crate::MAX_PURSUIT_ITERATIONS) as usize,
+        max_iterations: crate::MAX_PURSUIT_ITERATIONS as usize,
+        status,
+    })
+}
+
+async fn persist_current_pursuit(
+    agent: &Agent,
+    session: &SessionStore,
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: &str,
+) {
+    let Some(pursuit) = agent.get_pursuit() else {
+        return;
+    };
+    match session.set_pursuit(Some(pursuit.clone())).await {
+        Ok(()) => emit_pursuit_updated(tx, session_id, &pursuit),
+        Err(error) => {
+            let _ = tx.send(round_response(
+                session_id,
+                RoundEvent::Error(format!("Failed to persist pursuit state: {error}")),
+            ));
+        }
+    }
+}
+
+/// Settle a pursuit attempt that another lifecycle operation superseded.
+///
+/// The superseded task is generation-guarded and must not mutate shared state
+/// while a successor owns it. The caller that performed the supersession
+/// therefore owns this disarm + persistence step (ADR-0078/0083).
+pub async fn stop_superseded_pursuit(
+    agent: &Agent,
+    session: &SessionStore,
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: &str,
+    reason: &str,
+) -> bool {
+    let Some(current) = agent.get_pursuit() else {
+        return false;
+    };
+    let armed = agent.is_pursuit_armed();
+    let stored = session.pursuit().await;
+    // The gate may have disarmed and stamped a specific reason immediately
+    // before supersession. Flush that state if its owning task became stale;
+    // do not re-settle an older, already persisted stopped objective.
+    let pending_terminal_flush =
+        current.terminal_reason.is_some() && stored.as_ref() != Some(&current);
+    if !armed && !pending_terminal_flush {
+        return false;
+    }
+    if armed {
+        agent.stop_pursuit(reason);
+    }
+    persist_current_pursuit(agent, session, tx, session_id).await;
+    if let Err(error) = session.set_pursuit_runtime(pursuit_runtime(agent)).await {
+        let _ = tx.send(round_response(
+            session_id,
+            RoundEvent::Error(format!("Failed to persist pursuit runtime: {error}")),
+        ));
+    }
+    let status = if agent
+        .get_pursuit()
+        .is_some_and(|pursuit| pursuit.is_complete)
+    {
+        PursuitCheckpointStatus::Completed
+    } else {
+        PursuitCheckpointStatus::Interrupted
+    };
+    if let Some(checkpoint) = pursuit_checkpoint(agent, status)
+        && let Err(error) = session.set_checkpoint(Some(checkpoint)).await
+    {
+        let _ = tx.send(round_response(
+            session_id,
+            RoundEvent::Error(format!("Failed to persist pursuit checkpoint: {error}")),
+        ));
+    }
+    true
 }
 
 #[derive(Clone)]
@@ -526,7 +664,7 @@ pub struct RoundContext {
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     pub token: CancellationToken,
     pub session: Arc<SessionStore>,
-    /// Session id this turn belongs to (ADR-0017). Tags every emitted
+    /// Session id this round belongs to (ADR-0017). Tags every emitted
     /// [`RoundEvent`] so the TUI routes primary vs `/btw` side events correctly.
     pub session_id: String,
     pub projection: ContextProjectionSettings,
@@ -555,7 +693,7 @@ pub struct InteractiveRoundContext {
     pub tx: mpsc::UnboundedSender<AgentResponse>,
     pub lifecycle: Arc<RoundLifecycle>,
     pub session: Arc<SessionStore>,
-    /// Session id this turn belongs to (ADR-0017). Tags every emitted
+    /// Session id this round belongs to (ADR-0017). Tags every emitted
     /// [`RoundEvent`] so the TUI routes primary vs `/btw` side events correctly.
     pub session_id: String,
     pub projection: ContextProjectionSettings,
@@ -572,20 +710,31 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     } = context.lifecycle.begin().await;
     if let Some(previous) = previous {
         context.agent.reject_pending_permissions();
+        context.agent.reject_pending_user_questions();
         context.agent.reject_pending_inputs();
         let _ = context.tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
+    // Also settles a crash-restored armed attempt that has no live predecessor
+    // token: an ordinary user round is an explicit choice not to resume it.
+    stop_superseded_pursuit(
+        &context.agent,
+        &context.session,
+        &context.tx,
+        &context.session_id,
+        "superseded by a new round",
+    )
+    .await;
     for stale in context
         .agent
         .begin_user_input_round(context.session_id.clone(), generation)
     {
-        let _ = context.tx.send(turn(
+        let _ = context.tx.send(round_response(
             &context.session_id,
             RoundEvent::UserInputUnavailable { input_id: stale.id },
         ));
     }
-    let _ = context.tx.send(turn(
+    let _ = context.tx.send(round_response(
         &context.session_id,
         RoundEvent::Activity("starting request".to_string()),
     ));
@@ -614,7 +763,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         )
         .await;
         for pending in context.agent.close_user_input_round(generation) {
-            let _ = context.tx.send(turn(
+            let _ = context.tx.send(round_response(
                 &context.session_id,
                 RoundEvent::UserInputUnavailable {
                     input_id: pending.id,
@@ -625,13 +774,13 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         match result {
             Ok(_) => {}
             Err(HarnessError::Interrupted) if is_current => {
-                let _ = context.tx.send(turn(
+                let _ = context.tx.send(round_response(
                     &context.session_id,
                     RoundEvent::Text("... [Interrupted]".to_string()),
                 ));
             }
             Err(error) if is_current => {
-                let _ = context.tx.send(turn(
+                let _ = context.tx.send(round_response(
                     &context.session_id,
                     RoundEvent::Error(error.to_string()),
                 ));
@@ -665,19 +814,15 @@ pub async fn execute_round(
         retry_max_ms,
         emit_round_completed,
     } = context;
-    // Bind accounting to the session that admitted this turn. The principal
+    // Bind accounting to the session that admitted this round. The principal
     // agent survives `/session open` and `/resume`, so its construction-time
     // thread id is not sufficient for attribution.
     agent.set_thread_id(session_id.clone());
     if let Some(ledger) = agent.token_ledger() {
         ledger.set_active_session(session_id.clone());
     }
-    // Bump the harness turn counter first thing so anything that reads it
-    // during this turn (e.g. the `todo` / `todo_update` tools stamping
-    // `updated_at_turn`) sees the new value. The TUI's stale detector
-    // compares this against `TodoList::updated_at_turn`.
-    agent.bump_turn();
-    let _ = tx.send(turn(
+    let previous_round = agent.round_count();
+    let _ = tx.send(round_response(
         &session_id,
         RoundEvent::Activity("saving request".to_string()),
     ));
@@ -688,7 +833,7 @@ pub async fn execute_round(
     if !input.hidden {
         match agent.fire_user_prompt_submit(&input.prompt).await {
             crate::hooks::UserPromptVerdict::Deny(reason) => {
-                let _ = tx.send(turn(
+                let _ = tx.send(round_response(
                     &session_id,
                     RoundEvent::Text(format!("Prompt blocked by hook: {reason}")),
                 ));
@@ -700,28 +845,33 @@ pub async fn execute_round(
             crate::hooks::UserPromptVerdict::Allow => {}
         }
     }
+    // The prompt is now admitted. Bump exactly once before request assembly so
+    // hooks, token accounting, todos, and emitted positions share one round
+    // number. A prompt rejected by UserPromptSubmit never opens a round.
+    agent.bump_round();
+    let admitted_round = agent.round_count();
 
     let admitted_session_id = session.id().await;
-    // Build `turn_history` — the round's working scratch — from the session's
+    // Build `round_history` — the round's working scratch — from the session's
     // authoritative `model_window` plus the new user message (ADR-0048). The
     // session is the single source of truth for message truth; this clone is
     // the only transient copy, and it is committed back to the session before
-    // the turn ends, so the wire body (a projection of this scratch, which is
+    // the round ends, so the wire body (a projection of this scratch, which is
     // itself a projection of the session) can never diverge from the durable
     // state. The user message is pushed here *before* the durable commit so a
-    // mid-turn crash is recoverable (ADR-0035); on an unrecoverable Phase-1
+    // mid-round crash is recoverable (ADR-0035); on an unrecoverable Phase-1
     // failure the unsend path below pops it back out and reverts the session.
     // Snapshot the user's prompt and images before they are moved into the
-    // user message. If the turn is interrupted in Phase 1 (request sent but no
+    // user message. If the round is interrupted in Phase 1 (request sent but no
     // response bytes received), we unsend the message: pop it back out of the
     // context and restore these to the TUI input box for re-editing.
     let unsent_prompt = input.prompt.clone();
     let unsent_images = input.images.clone();
 
-    let mut turn_history = {
+    let mut round_history = {
         let mut th = session.model_window().await;
         th.push(if input.hidden {
-            crate::conversation_context::hidden_user(InjectionKind::HiddenTurnInput, input.prompt)
+            crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
         } else {
             let message = Message::new(Role::User, input.prompt);
             let message = match input.display_prompt {
@@ -740,36 +890,56 @@ pub async fn execute_round(
         });
         th
     };
-    session.replace_messages(turn_history.clone()).await?;
+    session.replace_messages(round_history.clone()).await?;
+    // Persist admission immediately. Mid-round crash recovery must not restore
+    // the transcript from round N while leaving the session counter at N-1.
+    session.set_round_counter(admitted_round).await?;
 
-    // Install the mid-turn save point (ADR-0035) so every tool-round boundary
+    // Install the mid-round save point (ADR-0035) so every ReAct-turn boundary
     // durably appends its new messages to the session log. This is the fix for
-    // the resume-after-crash gap: without it, a turn that ran side-effecting
-    // tools and then crashed rewinds the transcript to the previous turn,
+    // the resume-after-crash gap: without it, a round that ran side-effecting
+    // tools and then crashed rewinds the transcript to the previous round,
     // leaving it out of sync with the filesystem. The closure clones the
     // session `Arc` and the message slice (the `BoxFuture` is `'static`), then
     // delegates to `SessionStore::append_turn`, which writes only the delta.
     {
         let session_for_round = Arc::clone(&session);
+        let agent_for_round = Arc::clone(&agent);
         let accounting_ledger = agent.token_ledger();
         let accounting_session_id = session_id.clone();
         agent.set_turn_persist(Arc::new(move |messages: &[Message]| {
             let session = Arc::clone(&session_for_round);
+            let agent = Arc::clone(&agent_for_round);
             let snapshot = messages.to_vec();
             let ledger = accounting_ledger.clone();
             let session_id = accounting_session_id.clone();
             Box::pin(async move {
                 session.append_turn(&snapshot).await?;
+                let round_counter = agent.round_count();
+                if round_counter != session.round_counter().await {
+                    session.set_round_counter(round_counter).await?;
+                }
                 if let Some(ledger) = ledger {
                     session
                         .set_request_usage_records(ledger.records_for_session(&session_id))
                         .await?;
                 }
+                let runtime = pursuit_runtime(&agent);
+                if runtime != session.pursuit_runtime().await {
+                    session.set_pursuit_runtime(runtime).await?;
+                }
+                if agent.is_pursuit_armed()
+                    && let Some(checkpoint) =
+                        pursuit_checkpoint(&agent, PursuitCheckpointStatus::Running)
+                    && session.checkpoint().await.as_ref() != Some(&checkpoint)
+                {
+                    session.set_checkpoint(Some(checkpoint)).await?;
+                }
                 Ok(())
             })
         }));
     }
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         &session_id,
         RoundEvent::Activity("preparing context".to_string()),
     ));
@@ -778,21 +948,21 @@ pub async fn execute_round(
     // (ADR-0019) so it engages only once pressure crosses that fraction of the
     // window — not every turn — mirroring the mid-turn gate. Pruning also
     // self-limits to runs that reclaim meaningful space.
-    let mut request_estimate = agent.estimate_next_request_tokens(&turn_history);
+    let mut request_estimate = agent.estimate_next_request_tokens(&round_history);
     if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {
-        prune_and_commit(&mut turn_history, &session, &projection).await?;
-        request_estimate = agent.estimate_next_request_tokens(&turn_history);
+        prune_and_commit(&mut round_history, &session, &projection).await?;
+        request_estimate = agent.estimate_next_request_tokens(&round_history);
     }
     if request_estimate.total_tokens > projection.budget.compaction_threshold_tokens {
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Activity("compacting context".to_string()),
         ));
         let extra = agent.fire_pre_compact().await;
         let compaction_settings = projection.for_request(request_estimate);
         if let Some(checkpoint) = compact_round_history(
-            &mut turn_history,
+            &mut round_history,
             &session,
             &compaction_settings,
             Some(agent.provider.clone()),
@@ -803,7 +973,7 @@ pub async fn execute_round(
             send_compaction(&tx, &session_id, &checkpoint);
         }
         agent.fire_post_compact().await;
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Activity("preparing context".to_string()),
         ));
@@ -814,11 +984,11 @@ pub async fn execute_round(
     let mut attempt: usize = 0;
     let retry_limit = retry_max_attempts.clamp(1, 10);
     let mut compacted_after_overflow = false;
-    // Keep the ReAct turn alive across network attempts. Completed tool rounds
+    // Keep the ReAct turn alive across network attempts. Completed prior turns
     // are already durably checkpointed above; retaining this state means a
     // retry resumes the pending provider request with the same history, guard
-    // registry, hooks, and accounting instead of replaying the turn.
-    let mut streaming_turn = agent.begin_streaming_turn();
+    // registry, hooks, and accounting instead of replaying side effects.
+    let mut streaming_round = agent.begin_streaming_round();
     let result = loop {
         attempt += 1;
         let activity_for_run = tool_activity.clone();
@@ -827,31 +997,36 @@ pub async fn execute_round(
         let accounting_session = Arc::clone(&session);
         let accounting_session_id = session_id.clone();
         let result = agent
-            .resume_streaming_with_events(&mut turn_history, &token, &mut streaming_turn, |event| {
-                if matches!(event, AgentEvent::ToolCall { .. }) {
-                    activity_for_run.store(true, Ordering::SeqCst);
-                }
-                if matches!(event, AgentEvent::ModelRequestStarted { .. })
-                    && let Some(ledger) = accounting_ledger.clone()
-                {
-                    // Persist the in-flight state without blocking streaming.
-                    // The task reads the ledger when it runs, so if completion
-                    // races ahead it writes the newer terminal record rather
-                    // than overwriting it with a stale in-flight snapshot.
-                    let session = Arc::clone(&accounting_session);
-                    let session_id = accounting_session_id.clone();
-                    tokio::spawn(async move {
-                        let records = ledger.records_for_session(&session_id);
-                        if let Err(error) = session.set_request_usage_records(records).await {
-                            tracing::warn!(
-                                %error,
-                                "could not persist in-flight request usage"
-                            );
-                        }
-                    });
-                }
-                relay_agent_event(&tx, &session_id, event, &streamed_for_run);
-            })
+            .resume_streaming_with_events(
+                &mut round_history,
+                &token,
+                &mut streaming_round,
+                |event| {
+                    if matches!(event, AgentEvent::ToolCall { .. }) {
+                        activity_for_run.store(true, Ordering::SeqCst);
+                    }
+                    if matches!(event, AgentEvent::ModelRequestStarted { .. })
+                        && let Some(ledger) = accounting_ledger.clone()
+                    {
+                        // Persist the in-flight state without blocking streaming.
+                        // The task reads the ledger when it runs, so if completion
+                        // races ahead it writes the newer terminal record rather
+                        // than overwriting it with a stale in-flight snapshot.
+                        let session = Arc::clone(&accounting_session);
+                        let session_id = accounting_session_id.clone();
+                        tokio::spawn(async move {
+                            let records = ledger.records_for_session(&session_id);
+                            if let Err(error) = session.set_request_usage_records(records).await {
+                                tracing::warn!(
+                                    %error,
+                                    "could not persist in-flight request usage"
+                                );
+                            }
+                        });
+                    }
+                    relay_agent_event(&tx, &session_id, event, &streamed_for_run);
+                },
+            )
             .await;
 
         let Err(error) = result else {
@@ -865,12 +1040,12 @@ pub async fn execute_round(
             && !tool_activity.load(Ordering::SeqCst)
         {
             let overflow_settings = ContextProjectionSettings {
-                preserve_turns: projection.preserve_turns.max(1),
+                preserve_rounds: projection.preserve_rounds.max(1),
                 ..projection.clone()
             }
-            .for_request(agent.estimate_next_request_tokens(&turn_history));
+            .for_request(agent.estimate_next_request_tokens(&round_history));
             if compact_round_history(
-                &mut turn_history,
+                &mut round_history,
                 &session,
                 &overflow_settings,
                 Some(agent.provider.clone()),
@@ -881,7 +1056,7 @@ pub async fn execute_round(
             {
                 compacted_after_overflow = true;
                 if streamed_text.swap(false, Ordering::SeqCst) {
-                    let _ = tx.send(turn(&session_id, RoundEvent::StreamDiscard));
+                    let _ = tx.send(round_response(&session_id, RoundEvent::StreamDiscard));
                 }
                 if let Some(checkpoint) = session.last_projection().await {
                     send_compaction(&tx, &session_id, &checkpoint);
@@ -906,7 +1081,7 @@ pub async fn execute_round(
             )));
         }
         if streamed_text.swap(false, Ordering::SeqCst) {
-            let _ = tx.send(turn(&session_id, RoundEvent::StreamDiscard));
+            let _ = tx.send(round_response(&session_id, RoundEvent::StreamDiscard));
         }
         let base_ms = retry_delay_ms(attempt, retry_after_ms, retry_base_ms, retry_max_ms);
         // Apply equal jitter (half fixed, half random) to de-synchronise
@@ -929,7 +1104,7 @@ pub async fn execute_round(
         } else {
             ""
         };
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Notice(
                 neenee_core::AgentNotice::new(
@@ -947,7 +1122,7 @@ pub async fn execute_round(
                 .with_surface(NoticeSurface::Toast),
             ),
         ));
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::RetryScheduled {
                 attempt: attempt + 1,
@@ -962,9 +1137,9 @@ pub async fn execute_round(
         }
     };
     // Phase-1 unsend: if the user interrupted before any model output reached
-    // the client (no streamed text) and no tool has executed this turn, the
-    // turn is reversible at the conversation layer. Pop the user message back
-    // out of the context, revert the session store to its pre-turn state, and
+    // the client (no streamed text) and no tool has executed this round, the
+    // round is reversible at the conversation layer. Pop the user message back
+    // out of the context, revert the session store to its pre-round state, and
     // hand the prompt back to the TUI for re-editing. Returning `Ok(false)`
     // (rather than propagating `Err(Interrupted)`) keeps
     // `start_interactive_round`'s interrupt handler from emitting the generic
@@ -979,19 +1154,21 @@ pub async fn execute_round(
         && !streamed_text.load(Ordering::SeqCst)
         && !tool_activity.load(Ordering::SeqCst)
     {
-        // The user message is the last entry in `turn_history` (pushed before
-        // the streaming turn). Only a non-hidden turn is unsentable: hidden
+        // The user message is the last entry in `round_history` (pushed before
+        // the streaming round). Only a non-hidden round is unsentable: hidden
         // control prompts (pursuit continuation, verify nudge) are harness-
         // internal and should not be surfaced as editable user input.
-        if turn_history
+        if round_history
             .last()
             .is_some_and(|m| m.role == Role::User && !input.hidden)
         {
-            turn_history.pop();
-            session.replace_messages(turn_history).await?;
+            round_history.pop();
+            session.replace_messages(round_history).await?;
+            agent.restore_round_count(previous_round);
+            session.set_round_counter(previous_round).await?;
             persist_request_usage(&agent, &session, &session_id).await?;
             send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
-            let _ = tx.send(turn(
+            let _ = tx.send(round_response(
                 &session_id,
                 RoundEvent::UnsentInput {
                     prompt: unsent_prompt,
@@ -1004,11 +1181,11 @@ pub async fn execute_round(
     if session.id().await != admitted_session_id {
         return Err(HarnessError::Interrupted);
     }
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         &session_id,
         RoundEvent::Activity("saving response".to_string()),
     ));
-    session.replace_messages(turn_history).await?;
+    session.replace_messages(round_history).await?;
     persist_request_usage(&agent, &session, &session_id).await?;
     // Publish from the final committed history on every terminal path. This
     // reconciles the pre-wire estimate after interruption, tool cancellation,
@@ -1030,7 +1207,7 @@ pub async fn execute_round(
             }
             Ok(None) => {}
             Err(error) => {
-                let _ = tx.send(turn(
+                let _ = tx.send(round_response(
                     &session_id,
                     RoundEvent::Error(format!("Failed to mark pursuit complete: {error}")),
                 ));
@@ -1050,10 +1227,10 @@ pub async fn execute_round(
         .trim()
         .to_string();
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {
-        let _ = tx.send(turn(&session_id, RoundEvent::Text(visible)));
+        let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible)));
     }
     if requested_completion && !completed {
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Text(
                 "Pursuit completion marker ignored: no active pursuit is set.".to_string(),
@@ -1061,7 +1238,7 @@ pub async fn execute_round(
         ));
     }
     if completed {
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Text("Pursuit completed.".to_string()),
         ));
@@ -1079,7 +1256,7 @@ pub async fn execute_round(
     let agent_todos = agent.todos();
     if !agent_todos.items.is_empty() && agent_todos.is_all_done() {
         agent.clear_todos();
-        let _ = tx.send(turn(
+        let _ = tx.send(round_response(
             &session_id,
             RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
         ));
@@ -1096,7 +1273,7 @@ pub async fn execute_round(
     }
 
     // Mirror session-scoped runtime state to the durable session (ADR-0048
-    // Phase 2): the disabled-tool mask, the turn counter, and the pursuit
+    // Phase 2): the disabled-tool mask, the round counter, and the pursuit
     // stop-gate runtime view. Each is compared against the durable value and
     // skipped on a match to avoid a no-op event-log entry (mirroring the todos
     // diff above).
@@ -1106,20 +1283,13 @@ pub async fn execute_round(
     {
         tracing::warn!(error = %err, "could not persist disabled tools");
     }
-    let agent_turn = agent.turn_count();
-    if agent_turn != session.turn_counter().await
-        && let Err(err) = session.set_turn_counter(agent_turn).await
+    let agent_round = agent.round_count();
+    if agent_round != session.round_counter().await
+        && let Err(err) = session.set_round_counter(agent_round).await
     {
-        tracing::warn!(error = %err, "could not persist turn counter");
+        tracing::warn!(error = %err, "could not persist round counter");
     }
-    let desired_runtime = if agent.is_pursuit_armed() || agent.pursuit_iterations() > 0 {
-        Some(neenee_persistence::session::PursuitRuntime {
-            armed: agent.is_pursuit_armed(),
-            iterations: agent.pursuit_iterations(),
-        })
-    } else {
-        None
-    };
+    let desired_runtime = pursuit_runtime(&agent);
     if desired_runtime != session.pursuit_runtime().await
         && let Err(err) = session.set_pursuit_runtime(desired_runtime).await
     {
@@ -1127,7 +1297,7 @@ pub async fn execute_round(
     }
 
     if emit_round_completed {
-        let _ = tx.send(turn(&session_id, RoundEvent::RoundCompleted));
+        let _ = tx.send(round_response(&session_id, RoundEvent::RoundCompleted));
     }
     Ok(completed)
 }
@@ -1139,7 +1309,7 @@ fn send_context_projection(
     messages: &[Message],
 ) {
     let tokens = agent.estimate_next_request_tokens(messages).total_tokens;
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         session_id,
         RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
             tokens,
@@ -1216,47 +1386,48 @@ pub fn relay_agent_event(
     streamed_text: &std::sync::atomic::AtomicBool,
 ) {
     let response = match event {
-        AgentEvent::Notice(notice) => turn(session_id, RoundEvent::Notice(notice)),
+        AgentEvent::Notice(notice) => round_response(session_id, RoundEvent::Notice(notice)),
         AgentEvent::ModelRequestStarted {
-            tool_round,
+            round,
+            turn,
             context_tokens,
         } => {
             // The projection is session-scoped and was computed at the exact
             // pre-wire boundary, after hooks and request preparation.
-            let _ = tx.send(turn(
+            let _ = tx.send(round_response(
                 session_id,
                 RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
                     tokens: context_tokens,
                     source: neenee_core::ContextTokenSource::Projection,
                 }),
             ));
-            // Structured round signal first, so the Activity modal can show
-            // `turn N · round M · waiting for model` with the round as a
+            // Structured turn signal first, so the Activity modal can show
+            // `round N · turn M · waiting for model` with the turn as a
             // first-class field rather than text-mining it out of the status
             // string. The bare status follows as the `Activity` below.
-            let _ = tx.send(turn(
+            let _ = tx.send(round_response(
                 session_id,
-                RoundEvent::TurnStarted { turn: tool_round },
+                RoundEvent::TurnStarted { round, turn },
             ));
-            turn(
+            round_response(
                 session_id,
                 RoundEvent::Activity("waiting for model".to_string()),
             )
         }
         AgentEvent::ContextTokens(snapshot) => {
-            turn(session_id, RoundEvent::ContextTokens(snapshot))
+            round_response(session_id, RoundEvent::ContextTokens(snapshot))
         }
         AgentEvent::UserInputInserted(input) => {
-            turn(session_id, RoundEvent::UserInputInserted(input))
+            round_response(session_id, RoundEvent::UserInputInserted(input))
         }
         AgentEvent::AssistantDelta { delta, start } => {
             if start {
-                let _ = tx.send(turn(session_id, RoundEvent::StreamStart));
+                let _ = tx.send(round_response(session_id, RoundEvent::StreamStart));
             }
             streamed_text.store(true, Ordering::SeqCst);
-            turn(session_id, RoundEvent::StreamDelta(delta))
+            round_response(session_id, RoundEvent::StreamDelta(delta))
         }
-        AgentEvent::AssistantEnd(content) => turn(
+        AgentEvent::AssistantEnd(content) => round_response(
             session_id,
             RoundEvent::StreamEnd(
                 content
@@ -1265,22 +1436,22 @@ pub fn relay_agent_event(
                     .to_string(),
             ),
         ),
-        AgentEvent::AssistantDiscard => turn(session_id, RoundEvent::StreamDiscard),
+        AgentEvent::AssistantDiscard => round_response(session_id, RoundEvent::StreamDiscard),
         AgentEvent::ReasoningDelta { delta, start } => {
             if start {
-                let _ = tx.send(turn(session_id, RoundEvent::StreamStart));
+                let _ = tx.send(round_response(session_id, RoundEvent::StreamStart));
             }
             streamed_text.store(true, Ordering::SeqCst);
-            turn(session_id, RoundEvent::StreamReasoningDelta(delta))
+            round_response(session_id, RoundEvent::StreamReasoningDelta(delta))
         }
         AgentEvent::ReasoningEnd(content) => {
-            turn(session_id, RoundEvent::StreamReasoningEnd(content))
+            round_response(session_id, RoundEvent::StreamReasoningEnd(content))
         }
         AgentEvent::ToolCall {
             id,
             name,
             arguments,
-        } => turn(
+        } => round_response(
             session_id,
             RoundEvent::ToolCall {
                 id,
@@ -1294,7 +1465,7 @@ pub fn relay_agent_event(
             output,
             structured,
             duration_ms,
-        } => turn(
+        } => round_response(
             session_id,
             RoundEvent::ToolResult {
                 id,
@@ -1305,21 +1476,23 @@ pub fn relay_agent_event(
             },
         ),
         AgentEvent::ToolCancelled { id, name } => {
-            turn(session_id, RoundEvent::ToolCancelled { id, name })
+            round_response(session_id, RoundEvent::ToolCancelled { id, name })
         }
         AgentEvent::ToolStream { id, stream } => {
-            turn(session_id, RoundEvent::ToolStream { id, stream })
+            round_response(session_id, RoundEvent::ToolStream { id, stream })
         }
         AgentEvent::PursuitUpdated(pursuit) => {
-            turn(session_id, RoundEvent::PursuitUpdated(pursuit))
+            round_response(session_id, RoundEvent::PursuitUpdated(pursuit))
         }
-        AgentEvent::TodosUpdated(todos) => turn(session_id, RoundEvent::TodosUpdated(todos)),
+        AgentEvent::TodosUpdated(todos) => {
+            round_response(session_id, RoundEvent::TodosUpdated(todos))
+        }
         AgentEvent::UnattendedChanged(enabled) => {
-            turn(session_id, RoundEvent::UnattendedChanged(enabled))
+            round_response(session_id, RoundEvent::UnattendedChanged(enabled))
         }
         AgentEvent::SessionReview { alert } => {
             if !alert.trim().is_empty() {
-                let _ = tx.send(turn(
+                let _ = tx.send(round_response(
                     session_id,
                     RoundEvent::Notice(
                         neenee_core::AgentNotice::new(
@@ -1333,19 +1506,21 @@ pub fn relay_agent_event(
                     ),
                 ));
             }
-            turn(session_id, RoundEvent::SessionReview { alert })
+            round_response(session_id, RoundEvent::SessionReview { alert })
         }
         AgentEvent::PermissionRequest(request) => {
-            turn(session_id, RoundEvent::PermissionRequest(request))
+            round_response(session_id, RoundEvent::PermissionRequest(request))
         }
         AgentEvent::UserQuestionRequest(request) => {
-            turn(session_id, RoundEvent::UserQuestionRequest(request))
+            round_response(session_id, RoundEvent::UserQuestionRequest(request))
         }
-        AgentEvent::InputRequest(request) => turn(session_id, RoundEvent::InputRequest(request)),
+        AgentEvent::InputRequest(request) => {
+            round_response(session_id, RoundEvent::InputRequest(request))
+        }
         AgentEvent::Envoy {
             parent_call_id,
             event,
-        } => turn(
+        } => round_response(
             session_id,
             RoundEvent::Envoy {
                 parent_call_id,
@@ -1369,7 +1544,7 @@ pub async fn compact_round_history(
     let Some(result) = run_compaction(
         history,
         settings.budget.target_tokens,
-        settings.preserve_turns,
+        settings.preserve_rounds,
         provider,
         extra_context,
     )
@@ -1428,7 +1603,7 @@ pub fn send_compaction(
     session_id: &str,
     checkpoint: &ContextProjectionCheckpoint,
 ) {
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         session_id,
         RoundEvent::Compacted {
             archived_messages: checkpoint.archived_messages,
@@ -1450,15 +1625,19 @@ pub struct PursuitContext {
     pub retry_max_attempts: usize,
     pub retry_base_ms: u64,
     pub retry_max_ms: u64,
+    /// Preserve a restored in-flight attempt's iteration and budget counters.
+    /// Fresh objectives and explicitly re-armed stopped attempts set this
+    /// false and start at zero.
+    pub resume_runtime: bool,
 }
 
-/// Run a pursuit: arm the stop-gate and execute a single agent turn.
+/// Run a pursuit: arm the stop-gate and execute a single agent round.
 ///
 /// The gate (`Agent::pursuit_continuation`) re-injects the condition and
-/// forces additional rounds *within* the turn until the model signals
+/// forces additional turns *within* the round until the model signals
 /// completion, the safety cap is hit, or the pursuit is interrupted — so a
 /// single `execute_round` here runs to completion instead of looping whole
-/// turns (the old `/loop` model).
+/// rounds (the old `/loop` model).
 ///
 /// Terminates when:
 /// - the model emits `PURSUIT_COMPLETE_MARKER` (`Ok(true)`);
@@ -1466,7 +1645,7 @@ pub struct PursuitContext {
 ///   completion signal);
 /// - the user interrupts (`Esc` or `/pursue stop`);
 /// - a newer request supersedes this one (generation bump);
-/// - a provider or tool pipeline error aborts the turn.
+/// - a provider or tool pipeline error aborts the round.
 pub async fn start_pursuit(context: PursuitContext, condition: String) {
     let RoundBegin {
         token,
@@ -1475,6 +1654,7 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
     } = context.lifecycle.begin().await;
     if let Some(previous) = previous {
         context.agent.reject_pending_permissions();
+        context.agent.reject_pending_user_questions();
         context.agent.reject_pending_inputs();
         let _ = context.tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
@@ -1488,24 +1668,24 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
     );
 
     tokio::spawn(async move {
-        // Arm the stop-gate so `execute_round`'s turn loop keeps driving toward
+        // Arm the stop-gate so `execute_round`'s ReAct loop keeps driving toward
         // the condition instead of ending on the first stop. The gate
         // self-disarms on cap/completion; we also disarm below as a backstop.
-        context.agent.arm_pursuit();
-        let _ = context
-            .session
-            .set_checkpoint(Some(PursuitCheckpoint {
-                pursuit: condition.clone(),
-                iteration: 1,
-                max_iterations: UNCAPPED_ITERATIONS,
-                status: "running".to_string(),
-            }))
-            .await;
+        if context.resume_runtime {
+            context.agent.resume_pursuit();
+        } else {
+            context.agent.arm_pursuit();
+        }
+        if let Some(checkpoint) =
+            pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Running)
+        {
+            let _ = context.session.set_checkpoint(Some(checkpoint)).await;
+        }
         let prompt = format!(
             "Pursue this pursuit until it is fully achieved and verified:\n\
              {condition}\n\
              Work autonomously: inspect the current state, use tools, implement and verify \
-             work. Do not stop at a plan. The harness keeps this turn going until the pursuit is \
+             work. Do not stop at a plan. The harness keeps this round going until the pursuit is \
              done, so keep making concrete progress. Emit {marker} only once the entire pursuit \
              is achieved and verified.",
             condition = condition,
@@ -1533,19 +1713,28 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
             },
         )
         .await;
+        // A newer round may have superseded this attempt while it was
+        // unwinding. Its pursuit runtime now owns the shared agent state, so a
+        // stale task must not disarm or persist over the successor.
+        if !context.lifecycle.is_current(generation) {
+            return;
+        }
         context.agent.disarm_pursuit();
+        // `execute_round` may have persisted the runtime while the gate was
+        // still armed (for example on marker completion). Persist the terminal
+        // disarmed view so resume cannot restart a finished attempt.
+        let _ = context
+            .session
+            .set_pursuit_runtime(pursuit_runtime(&context.agent))
+            .await;
         match outcome {
             Ok(true) => {
-                let _ = context
-                    .session
-                    .set_checkpoint(Some(PursuitCheckpoint {
-                        pursuit: condition.clone(),
-                        iteration: 1,
-                        max_iterations: UNCAPPED_ITERATIONS,
-                        status: "completed".to_string(),
-                    }))
-                    .await;
-                let _ = context.tx.send(turn(
+                if let Some(checkpoint) =
+                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Completed)
+                {
+                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
+                }
+                let _ = context.tx.send(round_response(
                     &context.session_id,
                     RoundEvent::Text("Pursuit complete.".to_string()),
                 ));
@@ -1554,15 +1743,21 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
                 // The stop-gate disarmed without a completion signal: either
                 // the safety cap was reached or the model stopped without
                 // emitting the marker.
-                let _ = context
-                    .session
-                    .set_checkpoint(Some(PursuitCheckpoint {
-                        pursuit: condition.clone(),
-                        iteration: 1,
-                        max_iterations: UNCAPPED_ITERATIONS,
-                        status: "interrupted".to_string(),
-                    }))
-                    .await;
+                context
+                    .agent
+                    .stop_pursuit("stopped without a completion signal");
+                persist_current_pursuit(
+                    &context.agent,
+                    &context.session,
+                    &context.tx,
+                    &context.session_id,
+                )
+                .await;
+                if let Some(checkpoint) =
+                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Interrupted)
+                {
+                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
+                }
                 // Surface *why* the loop stopped when a budget tripped
                 // (ADR-0060), plus a usage summary so the cost is visible.
                 let stats = context.agent.pursuit_stats();
@@ -1571,47 +1766,56 @@ pub async fn start_pursuit(context: PursuitContext, condition: String) {
                     .get_pursuit()
                     .and_then(|p| p.terminal_reason)
                     .unwrap_or_else(|| "safety cap reached or no completion signal".to_string());
-                let summary = if stats.turns > 0 {
+                let summary = if stats.passes > 0 {
                     format!(
-                        "Pursuit stopped: {reason} ({} turn{}, {} tokens, {:.0}s).",
-                        stats.turns,
-                        if stats.turns == 1 { "" } else { "s" },
+                        "Pursuit stopped: {reason} ({} pass{}, {} tokens, {:.0}s).",
+                        stats.passes,
+                        if stats.passes == 1 { "" } else { "s" },
                         stats.tokens,
                         stats.wall_clock_ms as f64 / 1000.0
                     )
                 } else {
                     format!("Pursuit stopped: {reason}.")
                 };
-                let _ = context
-                    .tx
-                    .send(turn(&context.session_id, RoundEvent::Text(summary)));
+                let _ = context.tx.send(round_response(
+                    &context.session_id,
+                    RoundEvent::Text(summary),
+                ));
             }
             Err(HarnessError::Interrupted) => {
-                let _ = context
-                    .session
-                    .set_checkpoint(Some(PursuitCheckpoint {
-                        pursuit: condition.clone(),
-                        iteration: 1,
-                        max_iterations: UNCAPPED_ITERATIONS,
-                        status: "interrupted".to_string(),
-                    }))
-                    .await;
-                let _ = context.tx.send(turn(
+                context.agent.stop_pursuit("interrupted");
+                persist_current_pursuit(
+                    &context.agent,
+                    &context.session,
+                    &context.tx,
+                    &context.session_id,
+                )
+                .await;
+                if let Some(checkpoint) =
+                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Interrupted)
+                {
+                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
+                }
+                let _ = context.tx.send(round_response(
                     &context.session_id,
                     RoundEvent::Text("Pursuit interrupted.".to_string()),
                 ));
             }
             Err(error) => {
-                let _ = context
-                    .session
-                    .set_checkpoint(Some(PursuitCheckpoint {
-                        pursuit: condition.clone(),
-                        iteration: 1,
-                        max_iterations: UNCAPPED_ITERATIONS,
-                        status: "error".to_string(),
-                    }))
-                    .await;
-                let _ = context.tx.send(turn(
+                context.agent.stop_pursuit(format!("error: {error}"));
+                persist_current_pursuit(
+                    &context.agent,
+                    &context.session,
+                    &context.tx,
+                    &context.session_id,
+                )
+                .await;
+                if let Some(checkpoint) =
+                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Error)
+                {
+                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
+                }
+                let _ = context.tx.send(round_response(
                     &context.session_id,
                     RoundEvent::Error(error.to_string()),
                 ));
@@ -1669,7 +1873,7 @@ pub async fn run_repeat_tick(
 
 /// Spawn the durable `/repeat` scheduler. Every `tick_interval` it prunes
 /// expired jobs and fires any that are due, dispatching each prompt as a
-/// normal `AgentRequest::Chat` turn through `tx`.
+/// normal `AgentRequest::Chat` round through `tx`.
 pub fn start_repeat_scheduler(
     store: RepeatStore,
     tx: mpsc::UnboundedSender<AgentRequest>,
@@ -1704,7 +1908,7 @@ mod repeat_tests {
         let dispatched = run_repeat_tick(&store, &tx, now).await.unwrap();
         assert_eq!(dispatched, 1);
 
-        // The prompt was enqueued as a chat turn.
+        // The prompt was enqueued as a chat round.
         match rx.recv().await {
             Some(AgentRequest::Chat { text, .. }) => assert_eq!(text, "run tests"),
             other => panic!("expected Chat, got {other:?}"),

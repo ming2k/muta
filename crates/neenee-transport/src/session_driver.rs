@@ -11,8 +11,9 @@
 //! by the original inline task. This keeps the dispatch body unchanged while
 //! making its ownership boundary explicit.
 
+use crate::commands::CustomCommand;
 use neenee_agent::catalog;
-use neenee_agent::orchestration::{send_harness_state, turn};
+use neenee_agent::orchestration::{round_response, send_harness_state};
 use neenee_agent::{Agent, EnvoyRegistry, RoundLifecycle};
 use neenee_core::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use neenee_mcp::McpRuntime;
@@ -20,7 +21,6 @@ use neenee_persistence::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
-use crate::commands::CustomCommand;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -159,7 +159,7 @@ impl SessionDriver {
         let initial_context = agent
             .estimate_next_request_tokens(&session.model_window().await)
             .total_tokens;
-        let _ = resp_tx.send(turn(
+        let _ = resp_tx.send(round_response(
             &initial_session_id,
             neenee_core::RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
                 tokens: initial_context,
@@ -622,7 +622,7 @@ impl SessionDriver {
                     .restore_session(&post_session_id, session.request_usage_records().await);
                 token_ledger.set_active_session(post_session_id.clone());
                 agent.set_thread_id(post_session_id.clone());
-                agent.restore_turn_count(session.turn_counter().await);
+                agent.restore_round_count(session.round_counter().await);
             }
 
             // Re-publish a session-scoped projection only when the AI-visible
@@ -633,7 +633,7 @@ impl SessionDriver {
             // request) from overwriting a fresh provider-reported context
             // anchor with the lower local estimate.
             if session_changed || provider_or_model_changed || post_projection != pre_projection {
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                     &post_session_id,
                     neenee_core::RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
                         tokens: post_projection,

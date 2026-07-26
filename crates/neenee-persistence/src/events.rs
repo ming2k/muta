@@ -29,11 +29,11 @@ pub enum SessionEvent {
         project_root: PathBuf,
         schema_version: u32,
     },
-    /// The active message list was replaced (e.g. after a turn, on open, or
+    /// The active message list was replaced (e.g. after a round, on open, or
     /// after tool-result pruning).
     MessagesReplaced { messages: Vec<Message> },
     /// Messages were appended to the active list without rewriting the whole
-    /// window. Emitted at tool-round boundaries mid-turn so a crash after a
+    /// window. Emitted at ReAct-turn boundaries mid-round so a crash after a
     /// side-effecting tool call still leaves the transcript in sync with the
     /// filesystem. Replayed by appending to `data.messages`; a `MessagesReplaced`
     /// later in the log supersedes it (snapshot semantics). See ADR-0035.
@@ -87,10 +87,11 @@ pub enum SessionEvent {
     DisabledToolsSet {
         tools: std::collections::HashSet<String>,
     },
-    /// The harness turn counter advanced (ADR-0048 Phase 2). Snapshot
-    /// semantics. Mirrors `Agent::turn_counter` so a resumed session's todo
+    /// The harness round counter advanced (ADR-0048 Phase 2). Snapshot
+    /// semantics. Mirrors `Agent::round_counter` so a resumed session's todo
     /// stale-detector comparisons stay valid.
-    TurnCounterSet { counter: u64 },
+    #[serde(alias = "turn_counter_set")]
+    RoundCounterSet { counter: u64 },
     /// Insert or replace one lifecycle-aware request attempt. The key makes
     /// replay idempotent and avoids rewriting the full ledger on every stream
     /// boundary.
@@ -350,7 +351,7 @@ mod tests {
         // Event logs written before the prune/compact rename used the tag
         // `compaction_committed`. The serde alias on `ContextProjectionCommitted`
         // must keep those lines replayable, or resuming an old session would
-        // drop its archived turns. Regression guard for the rename.
+        // drop its archived rounds. Regression guard for the rename.
         let dir =
             std::env::temp_dir().join(format!("neenee-events-legacy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -439,7 +440,7 @@ mod tests {
         // The incremental event (ADR-0035) must serialize under its snake_case
         // tag and round-trip through the log. A `MessagesReplaced` seeds the
         // window, then a `MessagesAppended` extends it — the exact interleave
-        // `append_turn` produces inside a real turn.
+        // `append_turn` produces at a turn boundary inside a real round.
         let dir =
             std::env::temp_dir().join(format!("neenee-events-append-{}", uuid::Uuid::new_v4()));
         let log = EventLog::new(dir.join("events.jsonl"));
@@ -450,7 +451,7 @@ mod tests {
         .unwrap();
         log.append(SessionEvent::MessagesAppended {
             messages: vec![
-                neenee_core::Message::new(neenee_core::Role::Assistant, "round 1"),
+                neenee_core::Message::new(neenee_core::Role::Assistant, "turn 1"),
                 neenee_core::Message::new(neenee_core::Role::Tool, "result 1"),
             ],
         })
@@ -471,4 +472,17 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+#[test]
+fn round_counter_event_writes_canonical_tag_and_reads_legacy_tag() {
+    let legacy: SessionEvent =
+        serde_json::from_str(r#"{"type":"turn_counter_set","counter":7}"#).unwrap();
+    assert!(matches!(
+        legacy,
+        SessionEvent::RoundCounterSet { counter: 7 }
+    ));
+
+    let serialized = serde_json::to_string(&SessionEvent::RoundCounterSet { counter: 7 }).unwrap();
+    assert!(serialized.contains("\"type\":\"round_counter_set\""));
+    assert!(!serialized.contains("\"type\":\"turn_counter_set\""));
 }

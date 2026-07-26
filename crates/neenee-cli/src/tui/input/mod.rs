@@ -458,10 +458,11 @@ pub enum InputAction {
     /// single-select it is a harmless no-op because the highlight already
     /// *is* the live selection.
     QuestionToggle,
-    /// Submit the question modal answers (Enter). For single-select this
-    /// submits the highlighted option; for multi-select it submits the
-    /// whole toggle set.
+    /// Advance to the next question, or submit all answers from the final
+    /// question (Enter).
     QuestionSubmit,
+    /// Return to the previous question (Shift+Tab).
+    QuestionPrevious,
     /// Cancel the question modal.
     QuestionCancel,
     /// Submit the input-injection panel's typed text (L3.5 β).
@@ -1254,13 +1255,15 @@ pub fn process_event(
                     }
                 }
                 KeyCode::BackTab => {
-                    // Shift+Tab steps backward through the custom-provider
-                    // editor's fields; elsewhere it is a no-op (transcript focus
+                    // Shift+Tab steps backward through multi-field / multi-page
+                    // modal state; elsewhere it is a no-op (transcript focus
                     // uses Ctrl+Up/Ctrl-Down, not Tab).
                     if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
                     } else if context.active_modal == super::Modal::ConfigThemeCustom {
                         InputAction::ConfigThemeField { delta: -1 }
+                    } else if context.active_modal == super::Modal::Question {
+                        InputAction::QuestionPrevious
                     } else {
                         InputAction::None
                     }
@@ -3807,6 +3810,29 @@ mod tests {
         assert_eq!(action, InputAction::None);
         assert_eq!(input, "abc");
         assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn shift_tab_returns_to_the_previous_question() {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent {
+                code: KeyCode::BackTab,
+                modifiers: KeyModifiers::SHIFT,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Question,
+                ..Default::default()
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::QuestionPrevious);
     }
 
     #[test]

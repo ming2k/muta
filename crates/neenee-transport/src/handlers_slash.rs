@@ -19,12 +19,14 @@
 //! it fires session-start hooks every time `/pursue status` runs. Preserved
 //! verbatim; not this refactor's job to fix.
 
+use crate::commands::{CustomCommand, expand_command};
+use crate::project::init_neenee_config;
 use neenee_agent::Agent;
 use neenee_agent::RoundLifecycle;
 use neenee_agent::orchestration::{
     ContextProjectionSettings, PursuitContext, RoundInput, compact_round_history,
-    emit_pursuit_updated, refresh_agent_pursuit, send_compaction, send_harness_state,
-    start_pursuit, turn,
+    emit_pursuit_updated, refresh_agent_pursuit, restore_agent_pursuit, round_response,
+    send_compaction, send_harness_state, start_pursuit, stop_superseded_pursuit,
 };
 use neenee_core::{
     AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
@@ -35,8 +37,6 @@ use neenee_persistence::{
     RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
-use crate::commands::{CustomCommand, expand_command};
-use crate::project::init_neenee_config;
 
 use std::collections::HashMap;
 use std::sync::{
@@ -52,6 +52,29 @@ use crate::session_view::{build_sessions_overview, resume_session, short_session
 use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
 use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
+
+async fn supersede_for_session_switch(
+    lifecycle: &RoundLifecycle,
+    agent: &Agent,
+    session: &SessionStore,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+) {
+    lifecycle.supersede();
+    agent.reject_pending_permissions();
+    agent.reject_pending_user_questions();
+    agent.reject_pending_inputs();
+    let _ = resp_tx.send(AgentResponse::PermissionsCleared);
+    lifecycle.cancel_current().await;
+    let session_id = session.id().await;
+    stop_superseded_pursuit(
+        agent,
+        session,
+        resp_tx,
+        &session_id,
+        "superseded by a session switch",
+    )
+    .await;
+}
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
@@ -122,7 +145,7 @@ pub async fn dispatch(
         Some(BuiltinCmd::Permissions) => {
             if parts.get(1) == Some(&"clear") {
                 agent.clear_allowed_tools();
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                     &session.id().await,
                     RoundEvent::Text("Always-allowed tool rules cleared.".to_string()),
                 ));
@@ -133,7 +156,10 @@ pub async fn dispatch(
                 } else {
                     format!("Always-allowed tools:\n- {}", allowed.join("\n- "))
                 };
-                let _ = resp_tx.send(turn(&session.id().await, RoundEvent::Text(message)));
+                let _ = resp_tx.send(round_response(
+                    &session.id().await,
+                    RoundEvent::Text(message),
+                ));
             }
         }
         Some(BuiltinCmd::Unattended) => {
@@ -151,7 +177,7 @@ pub async fn dispatch(
             };
             let enabled = next.unwrap_or_else(|| !agent.get_unattended());
             agent.set_unattended(enabled);
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Text(format!(
                     "Unattended {}: the agent {} run without human intervention — the question \
@@ -161,12 +187,12 @@ pub async fn dispatch(
                     if enabled { "will" } else { "won't" },
                 )),
             ));
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::UnattendedChanged(enabled),
             ));
             // No `send_harness_state` here: toggling unattended is not a
-            // turn lifecycle transition, so emitting a `HarnessState("idle")`
+            // round lifecycle transition, so emitting a `HarnessState("idle")`
             // would make the HarnessState handler clear the live activity
             // cell (`activity_status`) and momentarily hide the activity bar
             // mid-turn. The `UnattendedChanged` event above already mirrors
@@ -183,34 +209,34 @@ pub async fn dispatch(
             if parts.iter().skip(1).any(|t| !t.trim().is_empty()) {
                 let _ = resp_tx.send(AgentResponse::Error(
                     "`/review` takes no arguments. Usage: `/review` runs an \
-                                     on-demand diagnostic of the current turn."
+                                     on-demand diagnostic of the current round."
                         .to_string(),
                 ));
                 return;
             }
             let transcript = session.full_transcript().await;
-            let rounds = Agent::estimate_tool_rounds(&transcript);
-            if rounds == 0 {
-                let _ = resp_tx.send(turn(
+            let turns = Agent::estimate_completed_turns(&transcript);
+            if turns == 0 {
+                let _ = resp_tx.send(round_response(
                     &session.id().await,
                     RoundEvent::Text(
-                        "Nothing to review yet — no tool rounds in the current \
-                                         transcript."
+                        "Nothing to review yet — no ReAct turns in the current \
+                         round."
                             .to_string(),
                     ),
                 ));
                 return;
             }
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Activity("running session review…".to_string()),
             ));
             let verdicts = agent.review_now(&transcript).await;
             // Mirror the worst verdict into the activity-bar
             // banner (empty alert clears it when healthy).
-            let alert = Agent::render_review_alert(&verdicts, rounds);
+            let alert = Agent::render_review_alert(&verdicts, turns);
             if !alert.trim().is_empty() {
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                     &session.id().await,
                     RoundEvent::Notice(
                         AgentNotice::new(
@@ -224,19 +250,19 @@ pub async fn dispatch(
                     ),
                 ));
             }
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::SessionReview { alert },
             ));
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::Text(format_review_report(&verdicts, rounds)),
+                RoundEvent::Text(format_review_report(&verdicts, turns)),
             ));
         }
         Some(BuiltinCmd::Search) => {
             let query = cmd.strip_prefix("/search").unwrap_or("").trim();
             if query.is_empty() {
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                     &session.id().await,
                     RoundEvent::Text("Usage: /search <query>".to_string()),
                 ));
@@ -258,7 +284,7 @@ pub async fn dispatch(
                 {
                     Ok(results) => {
                         if results.is_empty() {
-                            let _ = resp_tx.send(turn(
+                            let _ = resp_tx.send(round_response(
                                 &session.id().await,
                                 RoundEvent::Text("No relevant history found.".to_string()),
                             ));
@@ -268,7 +294,7 @@ pub async fn dispatch(
                             for (i, (text, score)) in results.iter().enumerate() {
                                 lines.push(format!("{}. [score={:.3}]\n{}", i + 1, score, text));
                             }
-                            let _ = resp_tx.send(turn(
+                            let _ = resp_tx.send(round_response(
                                 &session.id().await,
                                 RoundEvent::Text(lines.join("\n\n")),
                             ));
@@ -281,14 +307,12 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Resume) => {
-            lifecycle.supersede();
-            agent.reject_pending_permissions();
-            let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-            lifecycle.cancel_current().await;
+            supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
             match resume_session(session, parts.get(1).copied()).await {
                 Ok((id, transcript)) => {
+                    restore_agent_pursuit(agent, session).await;
                     let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!("Resumed session {}.", short_session_id(&id))),
                     ));
@@ -318,7 +342,7 @@ pub async fn dispatch(
                         )
                     })
                     .unwrap_or_else(|| "none".to_string());
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                                         &session.id().await,
                                         RoundEvent::Text(format!(
                                     "Session: {}\nForked from: {}\nModel-window messages: {}\nArchived transcript messages: {}\nLoop checkpoint: {}\nLast context projection: {}",
@@ -352,7 +376,7 @@ pub async fn dispatch(
                             )
                         })
                         .collect::<Vec<_>>();
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!("Sessions:\n{}", lines.join("\n"))),
                     ));
@@ -362,13 +386,11 @@ pub async fn dispatch(
                 }
             },
             "fork" => {
-                lifecycle.supersede();
-                agent.reject_pending_permissions();
-                let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-                lifecycle.cancel_current().await;
+                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
                 match session.fork().await {
                     Ok((id, parent_id)) => {
-                        let _ = resp_tx.send(turn(
+                        restore_agent_pursuit(agent, session).await;
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Forked session {} from {}.", id, parent_id)),
                         ));
@@ -386,12 +408,10 @@ pub async fn dispatch(
                     ));
                     return;
                 };
-                lifecycle.supersede();
-                agent.reject_pending_permissions();
-                let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-                lifecycle.cancel_current().await;
+                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
                 match session.open(id).await {
                     Ok(()) => {
+                        restore_agent_pursuit(agent, session).await;
                         let transcript = session.full_transcript().await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the opened session's own
@@ -405,7 +425,7 @@ pub async fn dispatch(
                             provider_usage,
                         )
                         .await;
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Opened session {}.", id)),
                         ));
@@ -417,12 +437,10 @@ pub async fn dispatch(
                 }
             }
             "resume" => {
-                lifecycle.supersede();
-                agent.reject_pending_permissions();
-                let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-                lifecycle.cancel_current().await;
+                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
                 match resume_session(session, parts.get(2).copied()).await {
                     Ok((id, transcript)) => {
+                        restore_agent_pursuit(agent, session).await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the resumed session's own
                         // provider pin (or the global default if it has none).
@@ -435,7 +453,7 @@ pub async fn dispatch(
                             provider_usage,
                         )
                         .await;
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Resumed session {}.", short_session_id(&id))),
                         ));
@@ -447,13 +465,11 @@ pub async fn dispatch(
                 }
             }
             "new" => {
-                lifecycle.supersede();
-                agent.reject_pending_permissions();
-                let _ = resp_tx.send(AgentResponse::PermissionsCleared);
-                lifecycle.cancel_current().await;
+                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
                 agent.clear_todos();
                 match session.reset().await {
                     Ok(id) => {
+                        restore_agent_pursuit(agent, session).await;
                         // C6: a fresh session has no provider pin, so the live
                         // provider falls back to the global default.
                         crate::handlers_provider::reapply_session_selection(
@@ -465,12 +481,12 @@ pub async fn dispatch(
                             provider_usage,
                         )
                         .await;
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
                         ));
                         let _ = resp_tx.send(AgentResponse::ConversationCleared);
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Started new session: {}", id)),
                         ));
@@ -497,7 +513,7 @@ pub async fn dispatch(
             // (ADR-0017): fork the primary into a
             // self-contained side file, build a fresh side
             // `Agent` + store + history, and switch the view.
-            // The primary turn keeps running untouched —
+            // The primary round keeps running untouched —
             // unlike `/session open`, we deliberately do NOT
             // bump the generation counter, reject permissions,
             // or cancel the primary token.
@@ -536,7 +552,7 @@ pub async fn dispatch(
                 .agent
                 .estimate_next_request_tokens(&side_session.store.model_window().await)
                 .total_tokens;
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &side_id,
                 RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
                     tokens: side_context,
@@ -547,7 +563,7 @@ pub async fn dispatch(
             active_view_side.store(true, Ordering::SeqCst);
             // Tell the TUI to enter the side view (seeds the
             // side buffer + records the routing keys) before
-            // the first side turn starts streaming.
+            // the first side round starts streaming.
             let _ = resp_tx.send(AgentResponse::SideViewOpened {
                 side_id: side_id.clone(),
                 primary_id,
@@ -582,7 +598,7 @@ pub async fn dispatch(
             let settings =
                 ContextProjectionSettings::from_config(config, active_context_window(agent))
                     .for_request(agent.estimate_next_request_tokens(&current));
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Activity("compacting context".to_string()),
             ));
@@ -600,9 +616,9 @@ pub async fn dispatch(
                     send_compaction(resp_tx, &session.id().await, &checkpoint);
                 }
                 Ok(None) => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
-                        RoundEvent::Text("Not enough complete turns to compact.".to_string()),
+                        RoundEvent::Text("Not enough complete rounds to compact.".to_string()),
                     ));
                 }
                 Err(error) => {
@@ -628,7 +644,10 @@ pub async fn dispatch(
                     Ok(Some(pursuit)) => {
                         agent.set_pursuit(pursuit.clone());
                         emit_pursuit_updated(tx, session_id, &pursuit);
-                        let _ = tx.send(turn(session_id, RoundEvent::Text(success(&pursuit))));
+                        let _ = tx.send(round_response(
+                            session_id,
+                            RoundEvent::Text(success(&pursuit)),
+                        ));
                     }
                     Ok(None) => {
                         let _ = tx.send(AgentResponse::Error(empty.into()));
@@ -640,22 +659,32 @@ pub async fn dispatch(
             }
 
             if rest == "stop" {
-                if lifecycle.cancel_current().await {
-                    let _ = resp_tx.send(turn(
+                let stopped = agent.is_pursuit_armed() && lifecycle.cancel_current().await;
+                if stopped {
+                    if let Some(pursuit) = agent.stop_pursuit("stopped by user") {
+                        match session.set_pursuit(Some(pursuit.clone())).await {
+                            Ok(()) => emit_pursuit_updated(resp_tx, &session.id().await, &pursuit),
+                            Err(error) => {
+                                let _ = resp_tx.send(AgentResponse::Error(error));
+                            }
+                        }
+                    }
+                    let _ = resp_tx.send(round_response(
                         &thread_id,
                         RoundEvent::Text("Pursuit stop requested.".to_string()),
                     ));
                 } else {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &thread_id,
                         RoundEvent::Text("No pursuit is running.".to_string()),
                     ));
                 }
-                // Genuine lifecycle transition (mirrors `interrupt`): flip the
-                // harness to idle eagerly so the activity bar reflects the
-                // stopped work before the cancelled task's own terminal idle,
-                // which is gated behind persistence fsyncs.
-                send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+                if stopped {
+                    // Genuine lifecycle transition (mirrors `interrupt`):
+                    // flip the harness to idle eagerly so the activity bar
+                    // reflects the stopped work before terminal persistence.
+                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+                }
                 return;
             }
 
@@ -663,7 +692,7 @@ pub async fn dispatch(
                 refresh_agent_pursuit(agent, session).await;
 
                 // SessionStart hooks (ADR-0025): inject setup context before the first
-                // turn. Resume vs fresh start is surfaced so a hook can branch.
+                // round. Resume vs fresh start is surfaced so a hook can branch.
                 {
                     let source = match &startup {
                         StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
@@ -686,11 +715,15 @@ pub async fn dispatch(
                         let mut m = format_pursuit_status(&pursuit);
                         if armed {
                             let stats = agent.pursuit_stats();
+                            let pass = iterations
+                                .saturating_add(1)
+                                .min(neenee_agent::MAX_PURSUIT_ITERATIONS);
                             m.push_str(&format!(
-                                "\nPursuit active · gate iteration {iterations} · \
-                                 {} turn{}, {} tokens, {:.0}s",
-                                stats.turns,
-                                if stats.turns == 1 { "" } else { "s" },
+                                "\nPursuit active · pass {pass}/{} · \
+                                 {} completed pass{}, {} tokens, {:.0}s",
+                                neenee_agent::MAX_PURSUIT_ITERATIONS,
+                                stats.passes,
+                                if stats.passes == 1 { "" } else { "es" },
                                 stats.tokens,
                                 stats.wall_clock_ms as f64 / 1000.0
                             ));
@@ -699,7 +732,7 @@ pub async fn dispatch(
                     }
                     None => "No active pursuit. Start one with /pursue <condition>.".to_string(),
                 };
-                let _ = resp_tx.send(turn(&thread_id, RoundEvent::Text(message)));
+                let _ = resp_tx.send(round_response(&thread_id, RoundEvent::Text(message)));
             } else if rest == "clear" {
                 agent.disarm_pursuit();
                 match session.set_pursuit(None).await {
@@ -710,14 +743,15 @@ pub async fn dispatch(
                             // via the non-gated channel so the activity bar's
                             // `⟴` badge updates without flushing the live
                             // activity cell (which a `HarnessState("idle")`
-                            // would do, flickering the bar mid-turn).
-                            let _ = resp_tx.send(turn(&thread_id, RoundEvent::PursuitCleared));
-                            let _ = resp_tx.send(turn(
+                            // would do, flickering the bar mid-round).
+                            let _ = resp_tx
+                                .send(round_response(&thread_id, RoundEvent::PursuitCleared));
+                            let _ = resp_tx.send(round_response(
                                 &thread_id,
                                 RoundEvent::Text("Pursuit cleared.".to_string()),
                             ));
                         } else {
-                            let _ = resp_tx.send(turn(
+                            let _ = resp_tx.send(round_response(
                                 &thread_id,
                                 RoundEvent::Text("No pursuit to clear.".to_string()),
                             ));
@@ -754,7 +788,7 @@ pub async fn dispatch(
                                 let _ = session.replace_messages(messages).await;
                             }
                             emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
-                            let _ = resp_tx.send(turn(
+                            let _ = resp_tx.send(round_response(
                                 &thread_id,
                                 RoundEvent::Text(format!("Pursuit updated: {}", pursuit.objective)),
                             ));
@@ -778,7 +812,7 @@ pub async fn dispatch(
                         .to_string(),
                 ));
             } else if rest == "budget" || rest.starts_with("budget ") {
-                // `/pursue budget turns=20 tokens=500000 time=1800000` sets hard
+                // `/pursue budget passes=20 tokens=500000 time=1800000` sets hard
                 // budgets on the active pursuit (ADR-0069). Any subset may be
                 // given; an axis omitted leaves it uncapped. `/pursue budget`
                 // (no args) clears the budget. Budgets are opt-in only and never
@@ -793,7 +827,7 @@ pub async fn dispatch(
                                     agent.set_pursuit(pursuit.clone());
                                     emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
                                     let label = format_pursuit_budget(pursuit.budget);
-                                    let _ = resp_tx.send(turn(
+                                    let _ = resp_tx.send(round_response(
                                         &thread_id,
                                         RoundEvent::Text(format!("Pursuit budget {label}.")),
                                     ));
@@ -821,10 +855,11 @@ pub async fn dispatch(
             } else {
                 // `/pursue <condition>` sets a fresh condition and drives it;
                 // `/pursue` (empty) re-arms and drives the existing pursuit.
+                let resume_runtime = rest.is_empty() && agent.is_pursuit_armed();
                 let condition = if rest.is_empty() {
                     match session.pursuit().await {
                         Some(pursuit) if !pursuit.is_complete => {
-                            let _ = resp_tx.send(turn(
+                            let _ = resp_tx.send(round_response(
                                 &thread_id,
                                 RoundEvent::Text(format!(
                                     "Resuming pursuit on existing pursuit: {}",
@@ -873,6 +908,7 @@ pub async fn dispatch(
                         retry_max_attempts: config.provider_retry_max_attempts,
                         retry_base_ms: config.provider_retry_base_ms,
                         retry_max_ms: config.provider_retry_max_ms,
+                        resume_runtime,
                     },
                     condition,
                 )
@@ -880,13 +916,13 @@ pub async fn dispatch(
             }
             // `/pursue status` / unsupported-subcommand paths reach here. None
             // of them mutate harness state, so there is nothing to mirror and
-            // no turn boundary to signal — a `HarnessState("idle")` here would
+            // no round boundary to signal — a `HarnessState("idle")` here would
             // only flicker the activity bar.
         }
         Some(BuiltinCmd::Repeat) => {
             let rest = cmd.strip_prefix("/repeat").unwrap_or("").trim();
             if rest.is_empty() || rest == "help" {
-                let _ = resp_tx.send(turn(
+                let _ = resp_tx.send(round_response(
                                     &session.id().await,
                                     RoundEvent::Text(
                                         "Usage: /repeat <cron> <prompt>\n\
@@ -901,7 +937,7 @@ pub async fn dispatch(
             if rest == "list" {
                 let jobs = repeat_store_for_commands.list().await.unwrap_or_default();
                 if jobs.is_empty() {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text("No /repeat jobs scheduled.".to_string()),
                     ));
@@ -916,7 +952,7 @@ pub async fn dispatch(
                             j.prompt,
                         ));
                     }
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(lines.join("\n")),
                     ));
@@ -927,13 +963,13 @@ pub async fn dispatch(
                 let id = id.trim();
                 match repeat_store_for_commands.delete(id).await {
                     Ok(true) => {
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Cancelled repeat job {id}.")),
                         ));
                     }
                     Ok(false) => {
-                        let _ = resp_tx.send(turn(
+                        let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("No repeat job with id {id}.")),
                         ));
@@ -975,7 +1011,7 @@ pub async fn dispatch(
             };
             match repeat_store_for_commands.add(&cron, &prompt, next).await {
                 Ok(job) => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Scheduled repeat job {} (`{}`), next {}. Running now.",
@@ -1000,7 +1036,7 @@ pub async fn dispatch(
             let target = parts.get(1).copied().unwrap_or(".");
             match init_neenee_config(std::path::Path::new(target)) {
                 Ok(created) if created.is_empty() => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "neenee is already configured in '{}'. Nothing to do.",
@@ -1009,7 +1045,7 @@ pub async fn dispatch(
                     ));
                 }
                 Ok(created) => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Initialized neenee configuration in '{}'.\nCreated:\n{}",
@@ -1036,8 +1072,10 @@ pub async fn dispatch(
                     };
                     match tool.call("{}").await {
                         Ok(output) => {
-                            let _ =
-                                resp_tx.send(turn(&session.id().await, RoundEvent::Text(output)));
+                            let _ = resp_tx.send(round_response(
+                                &session.id().await,
+                                RoundEvent::Text(output),
+                            ));
                         }
                         Err(error) => {
                             let _ = resp_tx.send(AgentResponse::Error(error));
@@ -1047,7 +1085,7 @@ pub async fn dispatch(
                 "reload" => {
                     skills_registry_for_commands.reload().await;
                     let count = skills_registry_for_commands.lock().list().len();
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!("Skills reloaded. {} skill(s) available.", count)),
                     ));
@@ -1071,7 +1109,10 @@ pub async fn dispatch(
                 };
                 match tool.call(&args).await {
                     Ok(output) => {
-                        let _ = resp_tx.send(turn(&session.id().await, RoundEvent::Text(output)));
+                        let _ = resp_tx.send(round_response(
+                            &session.id().await,
+                            RoundEvent::Text(output),
+                        ));
                     }
                     Err(error) => {
                         let _ = resp_tx.send(AgentResponse::Error(error));
@@ -1084,14 +1125,19 @@ pub async fn dispatch(
             agent.clear_todos();
             let _ = session.set_todos(neenee_core::TodoList::default()).await;
             let _ = resp_tx.send(AgentResponse::ConversationCleared);
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
             ));
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Text("Conversation history cleared.".to_string()),
             ));
+            // `/clear` removes transcript content but deliberately preserves
+            // the session's monotonic round counter. Re-publish it after the
+            // generic ConversationCleared reset so the frontend does not
+            // mistake clearing history for starting a new session.
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Export) => {
             let messages = session.model_window().await;
@@ -1111,7 +1157,7 @@ pub async fn dispatch(
             let char_count = markdown.chars().count();
             match ui.copy_to_clipboard(&markdown).await {
                 Ok(crate::CopyOutcome::Native) => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Session exported to clipboard ({} messages, {} chars). \
@@ -1122,7 +1168,7 @@ pub async fn dispatch(
                     ));
                 }
                 Ok(crate::CopyOutcome::Osc52) => {
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Session exported via OSC52 ({} messages, {} chars). \
@@ -1165,7 +1211,7 @@ pub async fn dispatch(
                     let dir =
                         neenee_persistence::paths::get().project_network_dir(project_root_for_side);
                     agent.provider.set_debug_capture(enabled, dir.clone());
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Trace {}: each provider round-trip {} written to\n  {}",
@@ -1266,7 +1312,7 @@ pub async fn dispatch(
                     } else {
                         "of unknown window".to_string()
                     };
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Preview (dry run, wire body, probe \"This is a test.\") — \
@@ -1284,7 +1330,7 @@ pub async fn dispatch(
                 }
                 None => {
                     let trace_on = agent.provider.debug_capture_enabled();
-                    let _ = resp_tx.send(turn(
+                    let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
                             "Debug status:\n- trace: {}\n\nUsage:\n\
@@ -1335,7 +1381,7 @@ pub async fn dispatch(
             for (name, desc) in BuiltinCmd::ALL {
                 lines.push(format!("{name:<13} — {desc}"));
             }
-            let _ = resp_tx.send(turn(
+            let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Text(format!(
                     "{}

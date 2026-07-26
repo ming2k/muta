@@ -119,6 +119,7 @@ components:
           payload:
             type: History
             session_id: session-123
+            round_counter: 0
             messages: []
     Response:
       name: Response
@@ -162,13 +163,17 @@ components:
       unevaluatedProperties: false
     HistoryEnvelope:
       type: object
-      required: [type, session_id, messages]
+      required: [type, session_id, round_counter, messages]
       properties:
         type:
           const: History
         session_id:
           type: string
           description: Id of the hosted session this transcript snapshot belongs to.
+        round_counter:
+          type: integer
+          minimum: 0
+          description: Authoritative monotonic round counter for the hosted session.
         messages:
           type: array
           items:
@@ -751,10 +756,11 @@ components:
       properties:
         HarnessState:
           type: object
-          required: [pursuit, loop_status, unattended]
+          required: [pursuit, loop_status, round_counter, unattended]
           properties:
             pursuit: { oneOf: [{ $ref: '#/components/schemas/Pursuit' }, { type: 'null' }] }
             loop_status: { type: string, enum: [idle, running, pursue] }
+            round_counter: { type: integer, minimum: 0 }
             unattended: { type: boolean }
           additionalProperties: false
       additionalProperties: false
@@ -800,8 +806,10 @@ components:
       properties:
         TurnStarted:
           type: object
-          required: [turn]
-          properties: { turn: { type: integer, minimum: 0 } }
+          required: [round, turn]
+          properties:
+            round: { type: integer, minimum: 1 }
+            turn: { type: integer, minimum: 0 }
           additionalProperties: false
       additionalProperties: false
     EventStreamDelta: { type: object, required: [StreamDelta], properties: { StreamDelta: { type: string } }, additionalProperties: false }
@@ -990,7 +998,7 @@ components:
       additionalProperties: false
     TodoList:
       type: object
-      required: [items, next_id, updated_at_turn]
+      required: [items, next_id, updated_at_round]
       properties:
         items:
           type: array
@@ -1005,7 +1013,7 @@ components:
               updated_at: { type: integer, minimum: 0 }
             additionalProperties: false
         next_id: { type: integer, minimum: 1 }
-        updated_at_turn: { type: integer, minimum: 0 }
+        updated_at_round: { type: integer, minimum: 0 }
       additionalProperties: false
     DoomGuardConfig:
       type: object

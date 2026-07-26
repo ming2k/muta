@@ -45,7 +45,16 @@ impl Provider for TestStreamProvider {
         &self,
         _request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        let chunks = ["This ", "is ", "a ", "streaming ", "mock ", "response ", "from ", "neenee!"];
+        let chunks = [
+            "This ",
+            "is ",
+            "a ",
+            "streaming ",
+            "mock ",
+            "response ",
+            "from ",
+            "neenee!",
+        ];
         Ok(futures::stream::iter(chunks.into_iter().map(|c| Ok(c.to_string()))).boxed())
     }
 }
@@ -76,7 +85,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             session_id: session.id().await,
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
-                preserve_turns: 6,
+                preserve_rounds: 6,
                 summarize: false,
                 prune: false,
                 prune_protect_chars: 0,
@@ -95,11 +104,11 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
         },
     )
     .await
-    .expect("turn completes with the mock provider");
+    .expect("round completes with the mock provider");
 
     // The bool return is pursuit-completion (the model emitted the marker AND the
-    // pursuit checklist allows it), not turn-completion. With no pursuit set the
-    // value is always false; the turn still ran end to end and persisted.
+    // stop-gate accepted it), not round completion. With no pursuit set the
+    // value is always false; the round still ran end to end and persisted.
     assert!(!completed, "no pursuit is set, so completion flag is false");
 
     // Snapshot the live state before dropping everything.

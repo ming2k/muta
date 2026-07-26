@@ -61,10 +61,10 @@ pub enum InjectionKind {
     /// A user-configured hook returned `HookOutcome::Inject`. Carries the
     /// lifecycle event so "which hook axis injected this" is recoverable.
     /// Sites: `HookRegistry::{session_start, run_post_tool_use,
-    /// run_post_tool_use_failure, check_stop, run_turn, run_round_start}`.
+    /// run_post_tool_use_failure, check_stop, run_turn, run_turn_start}`.
     Hook(HookEventKind),
     /// Pursuit stop-gate re-applied the continuation prompt to keep the model
-    /// on-task mid-turn. Site: `PursuitState::inject_continuation` and the
+    /// on-task mid-round at a turn boundary. Site: `PursuitState::inject_continuation` and the
     /// `stop_gate` continuation arm.
     PursuitContinuation,
     /// The active pursuit's objective was changed mid-flight. Site:
@@ -89,7 +89,7 @@ pub enum InjectionKind {
     /// The visible transcript snapshot handed to the bounded session-review
     /// envoy. Site: `Agent::run_session_review`.
     SessionReviewInput,
-    /// Implicit skill auto-load: the latest user turn mentioned a skill name,
+    /// Implicit skill auto-load: the latest user round mentioned a skill name,
     /// so the skill body was injected in-context. Site:
     /// `neenee-agent`'s conversation-context skill injection policy.
     ImplicitSkill,
@@ -103,22 +103,23 @@ pub enum InjectionKind {
     /// — and the nudge is non-terminating: it steers off the loop, the hard
     /// backstops (`hard_stop_turns`, `abort`, `Esc`) still cap. This is a
     /// harness-internal steering injection, distinct from the user-configurable
-    /// `Hook(Round)` axis. Site: `Agent::maybe_inject_loop_nudge`
+    /// `Hook(Turn)` axis. Site: `Agent::maybe_inject_loop_nudge`
     /// (`crate::loop_guard`).
     LoopReviewNudge,
-    /// Context-compaction checkpoint: an LLM summary of archived turns wrapped
+    /// Context-compaction checkpoint: an LLM summary of archived rounds wrapped
     /// under the stable checkpoint header. Site: `checkpoint_message`.
     CompactionCheckpoint,
     /// A harness-internal prompt admitted through the orchestration layer as a
-    /// hidden user turn (for example resume/replay input). Site:
+    /// hidden user round (for example resume/replay input). Site:
     /// `execute_round`'s `input.hidden` branch.
-    HiddenTurnInput,
+    #[serde(alias = "hidden_turn_input")]
+    HiddenRoundInput,
     /// A non-driving command echo: the literal text of a user invocation that
     /// is recorded in the durable transcript for resume/export/audit
     /// faithfulness but is **never sent to the model**. Covers slash commands
     /// (`/pursue …`) and `!command` shell passthroughs, both of which the
     /// harness handles directly without an LLM roundtrip. Distinct from
-    /// `HiddenTurnInput` (which *is* a driving hidden prompt): a `CommandEcho`
+    /// `HiddenRoundInput` (which *is* a driving hidden prompt): a `CommandEcho`
     /// carries no instruction for the model. Projected out before the wire by
     /// model-request assembly. Site: `handlers_slash::dispatch` and
     /// `shell::run_shell_command`. (ADR-0050.)
@@ -276,7 +277,7 @@ pub struct EnvoyMeta {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Whether the envoy finished by hitting an error path (32-round
+    /// Whether the envoy finished by hitting an error path (32-turn
     /// limit, repeated-call guard, provider error). Mirrors
     /// `ToolOutput::Envoy { summary.starts_with("Error") }` but stored
     /// explicitly so consumers do not have to string-sniff.
@@ -695,7 +696,7 @@ mod tests {
             InjectionKind::Hook(HookEventKind::PostToolUse),
             InjectionKind::Hook(HookEventKind::Stop),
             InjectionKind::Hook(HookEventKind::Turn),
-            InjectionKind::Hook(HookEventKind::RoundStart),
+            InjectionKind::Hook(HookEventKind::TurnStart),
             InjectionKind::PursuitContinuation,
             InjectionKind::PursuitObjectiveUpdated,
             InjectionKind::InterAgent,
@@ -705,7 +706,7 @@ mod tests {
             InjectionKind::ImplicitSkill,
             InjectionKind::SystemPrompt,
             InjectionKind::CompactionCheckpoint,
-            InjectionKind::HiddenTurnInput,
+            InjectionKind::HiddenRoundInput,
             InjectionKind::LoopReviewNudge,
             InjectionKind::CommandEcho,
             InjectionKind::ToolImage,
@@ -727,6 +728,16 @@ mod tests {
             sorted.len(),
             forms.len(),
             "injection kinds must serialise to distinct wire forms: {forms:?}"
+        );
+    }
+
+    #[test]
+    fn hidden_round_input_writes_canonical_name_and_reads_legacy_name() {
+        let legacy: InjectionKind = serde_json::from_str("\"hidden_turn_input\"").unwrap();
+        assert_eq!(legacy, InjectionKind::HiddenRoundInput);
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            "\"hidden_round_input\""
         );
     }
 
@@ -771,7 +782,7 @@ mod tests {
             !Message::injected(
                 Role::User,
                 "x",
-                InjectionOrigin::new(InjectionKind::HiddenTurnInput)
+                InjectionOrigin::new(InjectionKind::HiddenRoundInput)
             )
             .is_command_echo()
         );

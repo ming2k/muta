@@ -75,6 +75,7 @@ async fn run(project_root: &std::path::Path) -> Result<(), String> {
                 && let Ok(Wire::History {
                     session_id,
                     messages,
+                    ..
                 }) = serde_json::from_str::<Wire>(&text)
             {
                 return Ok((session_id, messages.len()));

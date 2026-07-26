@@ -294,7 +294,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
-                preserve_turns: 6,
+                preserve_rounds: 6,
                 summarize: false,
                 prune: false,
                 prune_protect_chars: 0,
@@ -398,7 +398,7 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
             session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
-                preserve_turns: 6,
+                preserve_rounds: 6,
                 summarize: false,
                 prune: false,
                 prune_protect_chars: 0,
@@ -472,7 +472,7 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
             session: session.clone(),
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
-                preserve_turns: 6,
+                preserve_rounds: 6,
                 summarize: false,
                 prune: false,
                 prune_protect_chars: 0,
@@ -541,7 +541,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             session,
             projection: ContextProjectionSettings {
                 budget: neenee_core::CompactionPolicy::default().resolve(100_000),
-                preserve_turns: 6,
+                preserve_rounds: 6,
                 summarize: false,
                 prune: false,
                 prune_protect_chars: 0,

@@ -31,23 +31,20 @@ fn display_width_u16(s: &str) -> u16 {
     s.width() as u16
 }
 
-/// Turn / time label drawn *outside* a sent user-message panel (on the row
+/// Round / time label drawn *outside* a sent user-message panel (on the row
 /// above it, on plain `surface`), so the panel itself holds only the typed
-/// text. The "Sent" word is dropped: `turn N · HH:MM` is enough provenance,
+/// text. The "Sent" word is dropped: `round N · HH:MM` is enough provenance,
 /// and queued messages keep their `⏸ Queued` pending marker.
 ///
 /// The whole header row is composed from the shared `MetaStrip` component
 /// (`render/components/meta_strip.rs`) — the same two-tone "anchor · detail"
-/// treatment the assistant round header uses. Because a user turn is the
+/// treatment the assistant turn header uses. Because a user round is the
 /// larger, user-perceived scope, the strip leads with a `▌` gutter rail (accent
 /// tone) before the anchor, giving it a stronger visual anchor than the
-/// in-round band.
+/// in-round turn band.
 ///
-/// `msg.turn` is the conversation *turn* counter stamped at send time (one
-/// bump per user↔assistant exchange), NOT the tool-round counter shown in the
-/// Activity modal — hence "turn", not "round".
 fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
-    // The anchor is the first token of the header (the turn provenance), drawn
+    // The anchor is the first token of the header (the round provenance), drawn
     // in info-tone bold. Empty when there is no anchor (legacy message or a
     // queued message, which renders its own pending marker instead).
     if is_queued {
@@ -56,8 +53,8 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     if msg.origin == crate::tui::model::document::UserMessageOrigin::Insert {
         return "↳ insert".to_string();
     }
-    if let Some(turn) = msg.turn {
-        format!("turn {}", turn)
+    if let Some(round) = msg.round {
+        format!("round {}", round)
     } else {
         String::new()
     }
@@ -74,9 +71,9 @@ fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
     if msg.origin == crate::tui::model::document::UserMessageOrigin::Insert {
         return match (msg.turn, msg.sent_at_ms) {
             (Some(turn), Some(sent_at_ms)) => {
-                format!("turn {turn} · {}", sent_time_label(sent_at_ms))
+                format!("round {turn} · {}", sent_time_label(sent_at_ms))
             }
-            (Some(turn), None) => format!("turn {turn}"),
+            (Some(turn), None) => format!("round {turn}"),
             (None, Some(sent_at_ms)) => sent_time_label(sent_at_ms),
             (None, None) => "Sent".to_string(),
         };
@@ -324,17 +321,17 @@ pub fn draw_message_body(
                             *skip_rows = skip_rows.saturating_sub(1);
                         } else if *current_y < area.y + area.height {
                             // Two-tone label, no background band (matches the
-                            // round header row in `layout_default`): the turn
+                            // turn header row in `layout_default`): the round
                             // anchor is info-tone bold, the time reads as
-                            // muted metadata. Because a user turn is the larger
+                            // muted metadata. Because a user round is the larger
                             // user-visible scope, it gets an explicit gutter
                             // rail before the anchor. Use a filled left half
                             // block (`▌`) rather than a box-drawing line: it
                             // reads as a stronger visual guide without looking
                             // like a border. The rail consumes the same width
-                            // as the old text gap, so `turn N` / `⏸ Queued`
+                            // as the old text gap, so `round N` / `⏸ Queued`
                             // stay aligned with the message body.
-                            let turn_gutter = if USER_MESSAGE_TEXT_GAP_COLS == 0 {
+                            let round_gutter = if USER_MESSAGE_TEXT_GAP_COLS == 0 {
                                 String::new()
                             } else {
                                 format!(
@@ -345,17 +342,17 @@ pub fn draw_message_body(
                             let strip = if is_queued {
                                 MetaStrip::new()
                                     .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
-                                    .lead(turn_gutter.clone(), MetaTone::Accent)
+                                    .lead(round_gutter.clone(), MetaTone::Accent)
                                     .status("⏸ Queued", MetaTone::WarningItalic)
                                     .fill_tail(theme.surface())
                             } else {
                                 let mut strip = MetaStrip::new()
                                     .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
-                                    .lead(turn_gutter, MetaTone::Accent)
+                                    .lead(round_gutter, MetaTone::Accent)
                                     .anchor(sent_header_anchor(msg, is_queued))
                                     .fill_tail(theme.surface());
                                 let meta = sent_header_meta(msg, is_queued);
-                                if msg.turn.is_some() {
+                                if msg.round.is_some() {
                                     strip = strip.detail(meta);
                                 } else {
                                     strip = strip.status(meta, MetaTone::Muted);

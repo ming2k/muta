@@ -1,26 +1,26 @@
-//! The guard-action type and the per-turn guard state that backs the pre-dispatch
+//! The guard-action type and the per-round guard state that backs the pre-dispatch
 //! doom-loop detector ([`crate::doom_guard`]).
 //!
 //! The old read-only, post-hoc `ReadLoopGuard` (nudge-then-block, read-only) was
 //! replaced by [`crate::doom_guard::DoomLoopGuard`], which intercepts *any*
 //! watched tool's repeat *before* it executes. See that module for the rationale.
 //! What remains here is the shared vocabulary — the [`GuardAction`] a guard
-//! returns, and [`RoundGuardState`] — the per-turn carrier that holds the doom
-//! guard and the per-turn block mask the dispatch layer consults.
+//! returns, and [`RoundGuardState`] — the per-round carrier that holds the doom
+//! guard and the per-round block mask the dispatch layer consults.
 
 use std::collections::HashSet;
 
-/// The outcome a guard returns for a round of tool calls.
+/// The outcome a guard returns for one ReAct turn's tool calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum GuardAction {
-    /// No action — the round is fine, keep going.
+    /// No action — the turn is fine, keep going.
     #[default]
     Continue,
     /// Inject `message` as a hidden user message before the next model request.
-    /// Non-terminating: the turn keeps running.
+    /// Non-terminating: the round keeps running.
     Inject(String),
     /// Hard-block one or more tool-call `signatures` for the remainder of this
-    /// turn. The agent records them in a per-turn mask ([`RoundGuardState`]) and
+    /// round. The agent records them in a per-round mask ([`RoundGuardState`]) and
     /// short-circuits any subsequent call whose canonical signature matches,
     /// returning an explanatory `ToolOutput` instead of executing it — so the
     /// model *cannot* re-issue the looped call, only issue something *different*.
@@ -33,7 +33,7 @@ pub enum GuardAction {
         signatures: Vec<String>,
         message: String,
     },
-    /// Abort the turn with `reason` as a terminal error. Hard-terminating.
+    /// Abort the round with `reason` as a terminal error. Hard-terminating.
     Abort(String),
 }
 
@@ -123,22 +123,22 @@ impl GuardAction {
     }
 }
 
-/// Per-turn state carrying the pre-dispatch doom-loop guard and the per-turn
-/// block mask the dispatch layer consults. Lives in `TurnState`; one per turn,
-/// dropped when the turn ends, so block state never leaks across turns.
+/// Per-round state carrying the pre-dispatch doom-loop guard and the per-round
+/// block mask the dispatch layer consults. Lives in `RoundState`; one per round,
+/// dropped when the round ends, so block state never leaks across rounds.
 #[derive(Default)]
 pub struct RoundGuardState {
     /// The pre-dispatch doom-loop guard. Consulted by [`Self::check_doom_ahead`]
     /// before any tool runs. `None` when nudging is disabled (the agent does not
     /// attach one).
     doom: Option<crate::doom_guard::DoomLoopGuard>,
-    /// Tool-call signatures hard-blocked by the doom guard this turn
+    /// Tool-call signatures hard-blocked by the doom guard this round
     /// ([`GuardAction::Block`]). The dispatch layer consults
     /// [`Self::is_blocked`] before executing a call and short-circuits any
-    /// match. Per-turn: cleared when the turn ends (the `TurnState` owning it is
-    /// dropped), so a block never leaks across turns. A progress round does
+    /// match. Per-round: cleared when the round ends (the `RoundState` owning it is
+    /// dropped), so a block never leaks across rounds. A progress turn does
     /// *not* clear it — blocking a proven-looping call for the remainder of the
-    /// turn is the point, even if the model makes other progress in between.
+    /// round is the point, even if the model makes other progress in between.
     blocked_signatures: HashSet<String>,
 }
 
@@ -158,15 +158,15 @@ impl RoundGuardState {
     }
 
     /// Pre-dispatch check: given the `(name, args)` pairs of the calls about
-    /// to execute this round, ask the doom guard whether any is a repeat of a
-    /// call already issued this turn. Returns the guard's [`GuardAction`]
+    /// to execute this turn, ask the doom guard whether any is a repeat of a
+    /// call already issued this round. Returns the guard's [`GuardAction`]
     /// (`Block` to intercept, `Continue` to proceed) and, on `Block`, records
-    /// the repeated signatures in the per-turn mask so [`Self::is_blocked`]
+    /// the repeated signatures in the per-round mask so [`Self::is_blocked`]
     /// short-circuits them at dispatch time too.
     ///
     /// This runs *before* the tools execute — the decisive difference from the
     /// removed post-hoc read-loop guard, which fired after the repeat had
-    /// already run. `calls` is the full round (all tools the model asked for);
+    /// already run. `calls` is the full turn (all tools the model asked for);
     /// the doom guard keys only on its watched set, so unwatched tools are
     /// transparent and never enter the window or trip a block.
     pub fn check_doom_ahead(&mut self, calls: &[(&str, &str)]) -> GuardAction {
@@ -192,7 +192,7 @@ impl RoundGuardState {
         action
     }
 
-    /// Whether a single call (name + raw args) is hard-blocked this turn by the
+    /// Whether a single call (name + raw args) is hard-blocked this round by the
     /// doom guard's signature mask. Unwatched tools never have a doom signature,
     /// so they are always admitted.
     pub fn is_blocked(&self, name: &str, args: &str) -> bool {

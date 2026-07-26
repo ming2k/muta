@@ -16,7 +16,7 @@
 - [Request flow](../explanation/request-flow.md) — HTTP transactions, SSE streaming, ReAct loop
 - [Provider capabilities](../explanation/provider-capabilities.md) — tool calling and reasoning across model weights, runtime, and client
 - [Guided decoding](../explanation/guided-decoding.md) — constrained decoding, FSM compilation, chat templates
-- [Tool rounds](../explanation/agent-design/rounds-and-turns.md) — tool call lifecycle: declaration, gating, execution, and re-entry
+- [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) — tool call lifecycle: declaration, gating, execution, and re-entry
 
 ## Policy
 

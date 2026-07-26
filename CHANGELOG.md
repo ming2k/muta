@@ -47,12 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [ADR-0068](docs/adr/0068-system-reminder-dynamic-injection.md).
 
 - **Pursuit budgets and runtime stats (ADR-0069).** `/pursue budget
-  turns=N tokens=N time=Ms` sets opt-in hard budgets on an active pursuit;
+  passes=N tokens=N time=Ms` sets opt-in hard budgets on an active pursuit;
   reaching any budget stops the loop with a named `terminal_reason` and a usage
-  summary. `/pursue status` now shows live turns/tokens/elapsed, and a
+  summary. `/pursue status` now shows live passes/tokens/elapsed, and a
   convergence reminder fires past 75% of a budget. The marker-based stop-gate
   is preserved (no LLM judge). See
-  [ADR-0069](docs/adr/0069-pursuit-budgets-and-stats.md).
+  [ADR-0069](docs/adr/0069-pursuit-budgets-and-stats.md) and its accounting
+  refinement,
+  [ADR-0083](docs/adr/0083-crash-consistent-pursuit-attempt-accounting.md).
 
 - **Configurable TUI color schemes.** The redesigned flat `/config` Settings
   overlay now includes live-previewed Zen, Midnight, Nord, Catppuccin, and
@@ -102,6 +104,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it (for example a string `"3"` for an integer `offset`).
 
 ### Changed
+
+- **Multi-question prompts now have a complete paged interaction.** `Enter`
+  advances through up to five question pages and submits only from the final
+  page; `Shift+Tab` goes back, with each page retaining its highlight,
+  selections, and free-form **Other** text. `ask_user` now enforces its
+  documented two-to-four-option contract.
+
+- **Pursuit attempt state is crash-consistent and observable in matching
+  units.** Checkpoints now store a typed status plus the actual one-based
+  pursuit pass and 50-pass safety limit. Runtime persistence includes
+  pass/token/time budget counters; resuming a restored in-flight pursuit
+  preserves them. Every non-completion path records a terminal reason, while
+  completion and re-arm clear stale reasons. See
+  [ADR-0083](docs/adr/0083-crash-consistent-pursuit-attempt-accounting.md).
 
 - **Pursuit contained behind the stop-gate; pursuit module slimmed to its
   domain values (ADR-0082).** Pursuit now has a written containment
@@ -264,9 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TUI layout and color scheme) keep preserving the on-disk selection. See
   [ADR-0066](docs/adr/0066-dual-write-provider-selection.md).
 
-- **Context request usage now follows the conversation's turn and round
-  structure.** The report lists one total per turn and opens each turn into
-  its model rounds, instead of grouping requests by provider and model.
+- **Context request usage now follows the conversation's round and turn
+  structure.** The report lists one total per round and opens each round into
+  its ReAct turns, instead of grouping requests by provider and model.
   Provider-reported values use bold styling, local estimates use underlining,
   and mixed totals use both, with a compact source legend before the list.
 
@@ -350,6 +366,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   factory when the multi-session server move resumes.
 
 ### Fixed
+
+- **Cancelling an `ask_user` modal now settles the parked agent request.**
+  `Esc` sends an explicit cancellation sentinel before closing the modal, so
+  the tool returns a cancelled result instead of leaving its round blocked.
+  The empty outer answer list is reserved for cancellation; valid
+  multi-select replies remain distinguishable by carrying one inner list per
+  question.
+
+- **Round/turn semantics now follow ADR-0047 end to end.** A round is the
+  complete user↔agent exchange and contains one or more ReAct turns; a turn is
+  one model request plus its tool work. Runtime events and counters,
+  transcript grouping, Activity and token reports, hooks, compaction, schemas,
+  and current documentation now use that hierarchy. History and harness
+  snapshots carry the persisted round counter, so compacted/resumed/attached
+  sessions retain absolute numbering. New persistence/config output uses
+  canonical round names; legacy `turn_counter`,
+  `updated_at_turn`, `turn_counter_set`, `compaction_preserve_turns`,
+  `RoundStart`, `round_end`, `turn_end`, pursuit `turns`, and `max_turns`
+  values remain load-compatible.
+
+- **Round supersession now settles every parked request and pursuit attempt.**
+  Starting a successor, a direct shell command, interruption, or switching
+  sessions rejects permission, question, and interactive-input waiters. The
+  caller that supersedes a pursuit records its terminal reason and checkpoint
+  before the stale task relinquishes ownership.
 
 - **The opencode-go seed no longer includes models the relay does not serve.**
   Legacy-config migration seeds one channel per entry of

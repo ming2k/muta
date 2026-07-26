@@ -55,5 +55,5 @@ wraps `Tool::parameters()`.
 
 - [Tool access](access.md) — access tiers, capability axes, permission broker
 - [How to add a tool](../../how-to/add-a-tool.md) — implementing the `Tool` trait
-- [Tool rounds](../../explanation/agent-design/rounds-and-turns.md) — how schemas are
+- [Rounds and turns](../../explanation/agent-design/rounds-and-turns.md) — how schemas are
   injected, streamed, and fell back to text

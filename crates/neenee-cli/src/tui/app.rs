@@ -197,8 +197,8 @@ pub struct App {
     pub context_tokens: Option<neenee_core::ContextTokenSnapshot>,
     /// Scroll offset of the TokenReport modal body.
     pub token_report_scroll: usize,
-    /// `true` when the TokenReport modal is drilled into one turn's model-round
-    /// usage; `false` when it shows the session's turn list.
+    /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
+    /// usage; `false` when it shows the session's round list.
     pub token_report_detail: bool,
     /// Screen rect of the `todos d/t` segment on the activity bar, so a click
     /// on it opens the Activity modal directly on the Todos section. `None`
@@ -349,24 +349,24 @@ pub struct App {
     /// hides it. A plan approved via `plan_exit` seeds this list from its
     /// `##` headings.
     pub todos: Option<TodoList>,
-    /// Harness turn counter, mirrored each frame. Surfaced inside the
-    /// Activity modal as `turn N` (the activity bar itself no longer shows
+    /// Harness round counter, mirrored each frame. Surfaced inside the
+    /// Activity modal as `round N` (the activity bar itself no longer shows
     /// the structural counters — it surfaces status/plan/elapsed and is the
     /// click target that opens the modal).
     pub round_count: u64,
-    /// Current tool round within the active turn (1-indexed for display:
-    /// `0` means the turn has started but no model request has fired yet —
+    /// Current turn within the active round (1-indexed for display:
+    /// `0` means the round has started but no model request has fired yet —
     /// e.g. the "queued" / "preparing context" phase). Mirrored each frame
     /// from the response listener; shown in the Activity modal as
-    /// `turn N · round M · <status>`.
+    /// `round N · turn M · <status>`.
     pub current_turn: u64,
     /// Session-review alert (ADR-0016), or empty when inactive. While
     /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
     /// segment. Mirrored each frame from the response listener.
     pub review_alert: String,
-    /// Wall-clock instant the current turn started, or `None` between turns.
+    /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
-    pub turn_started_at: Option<std::time::Instant>,
+    pub round_started_at: Option<std::time::Instant>,
     /// Active tab inside the Activity modal ([`Modal::Activity`]).
     /// Ignored while any other modal is open.
     pub activity_tab: ActivityTab,
@@ -458,8 +458,8 @@ pub struct App {
     /// modal is open.
     pub hovered_step: Option<usize>,
     /// Which layout strategy arranges the transcript message stream. Selected
-    /// via `[tui] transcript_layout`; defaults to the round-banded layout (each
-    /// tool round grouped under a labelled header). See
+    /// via `[tui] transcript_layout`; defaults to the turn-banded layout (each
+    /// tool-bearing ReAct turn grouped under a labelled header). See
     /// `crate::tui::view::layout::Strategy`.
     pub transcript_layout: crate::tui::view::layout::Strategy,
     /// Canonical active color-scheme id (`zen`, a built-in preset, or

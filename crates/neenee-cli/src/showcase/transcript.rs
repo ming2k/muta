@@ -58,7 +58,7 @@ pub fn run() -> io::Result<()> {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,

@@ -281,7 +281,7 @@ full set you are permitted to use — work within it, do not request others. \
 You are non-interactive: never ask the user any \
 question — if information is missing, make a reasonable assumption, note it \
 explicitly in your answer, or report that you could not find it. Run at most a \
-handful of tool rounds, then answer.",
+handful of turns, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(READ_ONLY_TOOLS),
         allow_user_interaction: false,
@@ -427,7 +427,7 @@ evaluate trading strategies: pull market data, run backtests, and review open \
 positions. Report findings concisely with concrete numbers (returns, Sharpe, \
 drawdown, exposure). The toolset handed to you is the full set you are \
 permitted to use — work within it, do not request others. You are non-interactive: never ask a question; if data is missing, say \
-so. Run at most a handful of tool rounds, then answer.",
+so. Run at most a handful of turns, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(QUANT_ANALYSIS_TOOLS),
         allow_user_interaction: false,

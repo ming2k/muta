@@ -118,10 +118,10 @@ pub struct TodoList {
     /// never reused after a removal, even across save/resume.
     #[serde(default = "default_next_id")]
     pub next_id: u64,
-    /// Harness turn counter value the last time the list changed. The TUI
-    /// compares this against the current turn counter to flag a stale panel.
-    #[serde(default)]
-    pub updated_at_turn: u64,
+    /// Harness round counter value the last time the list changed. The TUI
+    /// compares this against the current round counter to flag a stale panel.
+    #[serde(default, alias = "updated_at_turn")]
+    pub updated_at_round: u64,
 }
 
 fn default_next_id() -> u64 {
@@ -133,7 +133,7 @@ impl Default for TodoList {
         Self {
             items: Vec::new(),
             next_id: 1,
-            updated_at_turn: 0,
+            updated_at_round: 0,
         }
     }
 }
@@ -177,7 +177,7 @@ impl TodoList {
     /// [`MAX_TODOS`], ≤ one `InProgress`) — validation lives in the callers
     /// so the user-facing `/todos` command and the model-facing `todo` tool
     /// can surface violations with their own appropriate error shape.
-    pub fn reconcile(&mut self, desired: &[(String, TodoStatus)], now: u64, turn: u64) -> bool {
+    pub fn reconcile(&mut self, desired: &[(String, TodoStatus)], now: u64, round: u64) -> bool {
         // Snapshot current items so id allocation (which mutates self) does
         // not fight the immutable lookups used to match identity.
         let current: Vec<TodoItem> = self.items.clone();
@@ -218,7 +218,7 @@ impl TodoList {
         if changed {
             self.items = new_items;
             self.next_id = next_id;
-            self.updated_at_turn = turn;
+            self.updated_at_round = round;
         }
         changed
     }
@@ -226,9 +226,9 @@ impl TodoList {
     /// Update the status of items matched by `key`. `key` is either a 1-based
     /// display position (`"1"`, `"3"`) or, when not a valid position, a
     /// case-insensitive substring of the content (all matches updated).
-    /// Returns the number of items changed. Stamps `updated_at_turn` only
+    /// Returns the number of items changed. Stamps `updated_at_round` only
     /// when at least one item moved.
-    pub fn update(&mut self, key: &str, status: TodoStatus, now: u64, turn: u64) -> usize {
+    pub fn update(&mut self, key: &str, status: TodoStatus, now: u64, round: u64) -> usize {
         let mut changed = 0;
         let trimmed = key.trim();
         // Position match takes priority when it is a valid 1-based index.
@@ -245,7 +245,7 @@ impl TodoList {
                 changed += 1;
             }
             if changed > 0 {
-                self.updated_at_turn = turn;
+                self.updated_at_round = round;
             }
             return changed;
         }
@@ -261,7 +261,7 @@ impl TodoList {
             }
         }
         if changed > 0 {
-            self.updated_at_turn = turn;
+            self.updated_at_round = round;
         }
         changed
     }
@@ -311,7 +311,18 @@ mod tests {
         assert_eq!(list.items[0].created_at, 100);
         assert_eq!(list.items[0].status, TodoStatus::Completed);
         assert_eq!(list.items[0].updated_at, 200);
-        assert_eq!(list.updated_at_turn, 2);
+        assert_eq!(list.updated_at_round, 2);
+    }
+
+    #[test]
+    fn round_stamp_writes_canonical_key_and_reads_legacy_key() {
+        let legacy = r#"{"items":[],"next_id":1,"updated_at_turn":7}"#;
+        let list: TodoList = serde_json::from_str(legacy).unwrap();
+        assert_eq!(list.updated_at_round, 7);
+
+        let serialized = serde_json::to_string(&list).unwrap();
+        assert!(serialized.contains("\"updated_at_round\":7"));
+        assert!(!serialized.contains("\"updated_at_turn\""));
     }
 
     #[test]
@@ -358,7 +369,7 @@ mod tests {
         assert_eq!(list.update("1", TodoStatus::InProgress, 200, 3), 1);
         assert_eq!(list.items[0].status, TodoStatus::InProgress);
         assert_eq!(list.items[1].status, TodoStatus::Pending);
-        assert_eq!(list.updated_at_turn, 3);
+        assert_eq!(list.updated_at_round, 3);
     }
 
     #[test]

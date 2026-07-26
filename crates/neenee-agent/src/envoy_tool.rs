@@ -101,7 +101,7 @@ pub struct EnvoyTool {
 struct EnvoyAccountingContext {
     ledger: Arc<neenee_core::TokenSourceLedger>,
     session_id: Arc<std::sync::Mutex<Option<String>>>,
-    turn_counter: Arc<std::sync::Mutex<u64>>,
+    round_counter: Arc<std::sync::Mutex<u64>>,
 }
 
 impl EnvoyTool {
@@ -127,17 +127,17 @@ impl EnvoyTool {
     /// Bind the parent's session-scoped accounting handles. Each spawned
     /// envoy gets its own actor id while sharing the session ledger, so nested
     /// provider requests are visible without colliding with the principal's
-    /// turn/round numbers.
+    /// round/turn numbers.
     pub fn bind_accounting(
         &self,
         ledger: Arc<neenee_core::TokenSourceLedger>,
         session_id: Arc<std::sync::Mutex<Option<String>>>,
-        turn_counter: Arc<std::sync::Mutex<u64>>,
+        round_counter: Arc<std::sync::Mutex<u64>>,
     ) {
         *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) = Some(EnvoyAccountingContext {
             ledger,
             session_id,
-            turn_counter,
+            round_counter,
         });
     }
 
@@ -234,7 +234,7 @@ impl Tool for EnvoyTool {
         // handle in the registry (ADR-0029) so a user reply can flow back down
         // into this exact child while it runs.
         //
-        // Failure path: an envoy that hit the 32-round limit, repeated-call
+        // Failure path: an envoy that hit the 32-turn limit, repeated-call
         // guard, or a provider error returns an Envoy payload too — the
         // structured `failed` flag is set so the UI classifies it as Failed
         // without text-sniffing, and the partial transcript is preserved so
@@ -272,7 +272,7 @@ struct EnvoyOutcome {
     /// Final assistant content, mirrored for convenience so the parent doesn't
     /// have to scan `messages` for the last Assistant turn.
     final_content: String,
-    /// Whether the envoy terminated abnormally (hit the tool-round cap,
+    /// Whether the envoy terminated abnormally (hit its turn cap,
     /// repeated-call guard, or a provider error). Drives the structured
     /// `failed` flag on the returned [`neenee_core::ToolOutput::Envoy`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
@@ -338,15 +338,15 @@ impl EnvoyTool {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
                 .unwrap_or_default();
-            let turn = *accounting
-                .turn_counter
+            let round = *accounting
+                .round_counter
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let actor = call_id
                 .map(|id| format!("envoy:{id}"))
                 .unwrap_or_else(|| format!("envoy:{}", uuid::Uuid::new_v4()));
             envoy.set_thread_id(session_id);
-            envoy.restore_turn_count(turn);
+            envoy.restore_round_count(round);
             envoy.set_accounting_actor_id(actor);
             envoy.install_token_ledger(accounting.ledger);
         }
@@ -413,7 +413,7 @@ impl EnvoyTool {
         // On failure we surface the partial transcript anyway — both so the
         // parent's tool-result message carries the envoy's work-in-progress
         // `children` and so the real token cost (which can be substantial for a
-        // 32-round burnout) reaches the parent pursuit accounting. The
+        // 32-turn burnout) reaches the parent pursuit accounting. The
         // `final_content` is prefixed `Error: …` so the existing failure
         // classifier (`starts_with("Error")`) and the TUI's red Failed badge
         // both trigger.
@@ -477,11 +477,11 @@ impl EnvoyTool {
             neenee_core::AgentEvent::Notice(notice) => {
                 on_event(neenee_core::EnvoyEvent::Notice(notice));
             }
-            neenee_core::AgentEvent::ModelRequestStarted { tool_round, .. } => {
-                let status = if tool_round == 0 {
+            neenee_core::AgentEvent::ModelRequestStarted { turn, .. } => {
+                let status = if turn == 0 {
                     "waiting for model".to_string()
                 } else {
-                    format!("waiting for model · turn {}", tool_round + 1)
+                    format!("waiting for model · turn {}", turn + 1)
                 };
                 on_event(neenee_core::EnvoyEvent::Activity(status));
             }

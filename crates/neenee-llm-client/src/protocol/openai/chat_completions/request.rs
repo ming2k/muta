@@ -62,7 +62,7 @@ pub struct BodyInput<'a> {
     pub reasoning_effort: Option<Effort>,
     /// Optional session-scoped prompt-cache key (Moonshot / Kimi). When set, the
     /// body carries `prompt_cache_key` so the server-side cache namespaces per
-    /// session and repeated prefixes (system prompt, recent turns) hit at a
+    /// session and repeated prefixes (system prompt, recent messages) hit at a
     /// discount. Resolved from the model's [`neenee_core::CachePolicy`] by the
     /// provider adapter; `None` omits the field entirely (OpenAI ignores it
     /// harmlessly, but we still don't send it unless the policy is `SessionKey`).
@@ -224,7 +224,7 @@ pub fn body_with_capabilities(
         && !key.is_empty()
     {
         // Moonshot / Kimi: a session-scoped cache key namespaces the server-side
-        // prompt cache so repeated prefixes (system prompt + recent turns) hit
+        // prompt cache so repeated prefixes (system prompt + recent messages) hit
         // across steps in a session. Relays that don't recognise the field
         // ignore it harmlessly.
         body["prompt_cache_key"] = json!(key);

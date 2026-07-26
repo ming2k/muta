@@ -16,7 +16,7 @@ In practice:
 | Transcript horizontal gutter | `view.rs::transcript_band_rect` | Apply `TRANSCRIPT_H_INSET` once before the stream is rendered | Re-applying the same gutter inside message components |
 | Inter-message / group spacing | `render/layout/*` through `Stream::gap` / `Stream::message_gap` | Add blank rows through the shared stream helpers so scroll height and clipping stay correct | Drawing ad-hoc blank rows in a component to separate it from the next message |
 | Component interior | The component renderer, using `render/design.rs` tokens | Use named tokens such as `USER_MESSAGE_TEXT_GAP_COLS`, `TOOL_STEP_BODY_TOP_GAP_ROWS`, `REASONING_TRACE_BLOCK_GAP_ROWS` | Hard-coding `2`, `1`, `repeat(2)`, or local `h_inset` values for visual spacing |
-| Shared one-line metadata | `components/meta_strip.rs` | Compose `turn N · time` / `round N · model · time` with `MetaStrip` | Rebuilding separator and tone spacing by hand |
+| Shared one-line metadata | `components/meta_strip.rs` | Compose `round N · time` / `round N · model · time` with `MetaStrip` | Rebuilding separator and tone spacing by hand |
 
 ## Horizontal gutter contract
 
@@ -46,13 +46,13 @@ Layout strategies own the space between transcript items:
 
 | Relationship | Blank rows | Token / rule |
 |--------------|------------|--------------|
-| Round header → first component | 1 | `ROUND_HEADER_BODY_GAP_ROWS` |
+| Turn header → first component | 1 | `TURN_HEADER_BODY_GAP_ROWS` |
 | Thinking header → first expanded reasoning line | 0 | `REASONING_TRACE_BODY_TOP_GAP_ROWS` |
 | Thinking ↔ tool batch / assistant text | 1 | `MESSAGE_GAP_ROWS` |
-| Tool-like → tool-like in the same known round | 0 | Same-round batch rule |
+| Tool-like → tool-like in the same known turn | 0 | Same-turn batch rule |
 | Tool-like → assistant text | 1 | `MESSAGE_GAP_ROWS` |
-| Different rounds, user messages, or notices | 1 | `MESSAGE_GAP_ROWS` |
-| Adjacent collapsed legacy tools with no round stamp | 0 | Compatibility fallback |
+| Different turns, user messages, or notices | 1 | `MESSAGE_GAP_ROWS` |
+| Adjacent collapsed legacy tools with no turn stamp | 0 | Compatibility fallback |
 
 Do not add a component-local trailing blank row just to separate from the next
 message. That usually double-counts spacing and can also make scroll accounting
@@ -80,9 +80,9 @@ first. A named token explains intent; a bare `2usize` does not.
 
 Tool steps deliberately support a compact log shape:
 
-- tool steps in the same known round stack flush regardless of whether they
+- tool steps in the same known turn stack flush regardless of whether they
   are collapsed or expanded;
-- old restored steps without a round stamp retain the collapsed-adjacency
+- old restored steps without a turn stamp retain the collapsed-adjacency
   fallback;
 - an expanded body sits directly under its header — grouping is carried by the
   body indent (`TOOL_STEP_BODY_INDENT_COLS`) alone, with **no** top blank row
@@ -101,5 +101,5 @@ parallel tool batch visually tight.
 Spacing is a visual behavior, so it should be locked with snapshot or grid
 assertions when changed. Existing examples include collapsed tool steps stacking
 flush and expanded tool bodies padding themselves. Add similar coverage for new
-spacing rules, especially when changing user panels, reasoning traces, round
+spacing rules, especially when changing user panels, reasoning traces, turn
 headers, or code/tool-result bands.

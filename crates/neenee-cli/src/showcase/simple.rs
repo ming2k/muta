@@ -19,8 +19,8 @@ use crate::tui::fuzzy;
 use crate::tui::model::layout::LayoutMap;
 use crate::tui::view::Theme;
 use crate::tui::view::{
-    ActivityModalView, draw_activity_modal, draw_armed_toast, draw_copy_toast, draw_help_modal,
-    draw_history_modal, draw_connections_modal, draw_model_editor, draw_sessions_modal,
+    ActivityModalView, draw_activity_modal, draw_armed_toast, draw_connections_modal,
+    draw_copy_toast, draw_help_modal, draw_history_modal, draw_model_editor, draw_sessions_modal,
 };
 
 // ─────────────────────────── provider picker ──────────────────────────────
@@ -457,7 +457,7 @@ pub fn activity() -> io::Result<()> {
                         current_turn: 2,
                         review_alert: "",
                         current_model: "claude-sonnet-4-5",
-                        turn_started_at: Some(s.started),
+                        round_started_at: Some(s.started),
                         activity: "running envoy · exploring the codebase",
                     },
                     &mut scroll,

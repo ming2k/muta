@@ -28,6 +28,8 @@ Lookup-oriented documentation — tables, lists, and exact values.
 
 - [Paths](paths.md) — every file neenee reads or writes, by XDG category,
   with override precedence and cleanup quick reference
+- [State and status model](state-model.md) — lifecycle subjects, transition
+  authorities, parked requests, projections, and non-FSM status vocabularies
 
 ## TUI
 

@@ -473,7 +473,7 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     // preamble \n\n persistence \n\n pursuit.
     let expected = "You are neenee, an expert AI coding assistant.\n\
      \n\
-     See the task through to a real result in this turn. Don't stop at analysis \
+     See the task through to a real result in this round. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \
      If a tool call fails or you hit a blocker, try to resolve it yourself before \
      yielding; only hand back to the user when the work is actually done or you \
@@ -545,7 +545,7 @@ fn pursuit_gate_returns_continuation_when_armed_and_active() {
 }
 
 #[test]
-fn pursuit_gate_lets_turn_end_on_completion_marker() {
+fn pursuit_gate_lets_round_end_on_completion_marker() {
     let agent = agent();
     agent.set_pursuit(active_pursuit("ship"));
     agent.arm_pursuit();
@@ -557,7 +557,7 @@ fn pursuit_gate_lets_turn_end_on_completion_marker() {
 }
 
 #[test]
-fn pursuit_gate_lets_turn_end_without_active_pursuit() {
+fn pursuit_gate_lets_round_end_without_active_pursuit() {
     let agent = agent();
     agent.arm_pursuit();
     let resp = Message::new(Role::Assistant, "working".to_string());
@@ -565,7 +565,7 @@ fn pursuit_gate_lets_turn_end_without_active_pursuit() {
 }
 
 #[test]
-fn pursuit_gate_lets_turn_end_when_pursuit_already_complete() {
+fn pursuit_gate_lets_round_end_when_pursuit_already_complete() {
     let agent = agent();
     let mut done = active_pursuit("ship");
     done.is_complete = true;
@@ -573,6 +573,92 @@ fn pursuit_gate_lets_turn_end_when_pursuit_already_complete() {
     agent.arm_pursuit();
     let resp = Message::new(Role::Assistant, "working".to_string());
     assert!(agent.pursuit_continuation(&resp).is_none());
+}
+
+#[tokio::test]
+async fn pursuit_pass_budget_stops_on_the_exact_boundary() {
+    let agent = agent();
+    let mut pursuit = active_pursuit("ship");
+    pursuit.budget = Some(neenee_core::PursuitBudget {
+        max_passes: Some(2),
+        ..Default::default()
+    });
+    agent.set_pursuit(pursuit);
+    agent.arm_pursuit();
+    let mut messages = vec![Message::new(Role::User, "start")];
+
+    let outcome = agent
+        .run_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await
+        .expect("budget stop is a normal round outcome");
+
+    assert_eq!(outcome.message.content, "done");
+    assert_eq!(agent.pursuit_stats().passes, 2);
+    assert!(!agent.is_pursuit_armed());
+    assert_eq!(
+        agent.get_pursuit().unwrap().terminal_reason.as_deref(),
+        Some("pursuit pass budget reached (2/2)")
+    );
+}
+
+#[tokio::test]
+async fn superseding_owner_settles_and_persists_the_pursuit_attempt() {
+    let directory =
+        std::env::temp_dir().join(format!("neenee-pursuit-supersede-{}", uuid::Uuid::new_v4()));
+    let store = neenee_persistence::session::SessionStore::for_path(directory.join("session.json"));
+    let agent = agent();
+    let pursuit = active_pursuit("ship");
+    store.set_pursuit(Some(pursuit.clone())).await.unwrap();
+    store
+        .set_pursuit_runtime(Some(neenee_persistence::session::PursuitRuntime {
+            armed: true,
+            iterations: 3,
+            passes: 3,
+            tokens: 12_000,
+            wall_clock_ms: 4_000,
+        }))
+        .await
+        .unwrap();
+    crate::orchestration::restore_agent_pursuit(&agent, &store).await;
+    assert!(agent.is_pursuit_armed());
+    assert_eq!(agent.pursuit_iterations(), 3);
+    assert_eq!(agent.pursuit_stats().tokens, 12_000);
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+    assert!(
+        crate::orchestration::stop_superseded_pursuit(
+            &agent,
+            &store,
+            &tx,
+            "session",
+            "superseded by a new round",
+        )
+        .await
+    );
+
+    assert!(!agent.is_pursuit_armed());
+    assert_eq!(
+        store.pursuit().await.unwrap().terminal_reason.as_deref(),
+        Some("superseded by a new round")
+    );
+    let checkpoint = store.checkpoint().await.unwrap();
+    assert_eq!(
+        checkpoint.status,
+        neenee_persistence::session::PursuitCheckpointStatus::Interrupted
+    );
+    assert_eq!(checkpoint.iteration, 4);
+    assert_eq!(
+        checkpoint.max_iterations,
+        crate::MAX_PURSUIT_ITERATIONS as usize
+    );
+    let runtime = store.pursuit_runtime().await.unwrap();
+    assert!(!runtime.armed);
+    assert_eq!(runtime.iterations, 3);
+    assert_eq!(runtime.passes, 3);
+    assert_eq!(runtime.tokens, 12_000);
+    assert_eq!(runtime.wall_clock_ms, 4_000);
+
+    let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]
@@ -606,14 +692,14 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
 
     assert_eq!(response.message.content, "done");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let model_rounds = events
+    let model_turns = events
         .iter()
         .filter_map(|event| match event {
-            AgentEvent::ModelRequestStarted { tool_round, .. } => Some(*tool_round),
+            AgentEvent::ModelRequestStarted { turn, .. } => Some(*turn),
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(model_rounds, vec![0, 1]);
+    assert_eq!(model_turns, vec![0, 1]);
     assert!(events.iter().any(|event| matches!(
         event,
         AgentEvent::ToolCall { name, arguments, .. }
@@ -626,13 +712,13 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
 }
 
 #[tokio::test]
-async fn round_persist_fires_at_each_tool_round_boundary() {
-    // ADR-0035: the mid-turn save point must fire once per completed tool
-    // round, carrying the full history including that round's tool results.
-    // `StreamingToolProvider` does two rounds (round 0 = tool call, round 1 =
-    // terminal text), so exactly one round boundary is crossed and the
+async fn turn_persist_fires_at_each_react_turn_boundary() {
+    // ADR-0035: the mid-round save point must fire once per completed
+    // tool-carrying turn, carrying the full history including that turn's
+    // tool results. `StreamingToolProvider` produces two turns (turn 0 = tool
+    // call, turn 1 = terminal text), so exactly one continuing-turn boundary is crossed and the
     // callback should see three messages: user prompt + assistant + tool
-    // result. The final round (plain text, no tools) does not cross a
+    // result. The final turn (plain text, no tools) does not cross a
     // boundary and must not fire the callback.
     let calls = Arc::new(AtomicUsize::new(0));
     let seen_lengths: Arc<std::sync::Mutex<Vec<usize>>> =
@@ -659,15 +745,15 @@ async fn round_persist_fires_at_each_tool_round_boundary() {
         .unwrap();
     assert_eq!(outcome.message.content, "done");
 
-    // Exactly one boundary crossing (after round 0's tool result). The
+    // Exactly one boundary crossing (after turn 0's tool result). The
     // callback receives the full live history: [user, assistant, tool_result]
     // = 3. Request-scoped system policy is deliberately absent. The final
-    // round (plain text, no tools) does not cross a boundary and must not fire.
+    // turn (plain text, no tools) does not cross a boundary and must not fire.
     let recorded = seen_lengths.lock().unwrap().clone();
     assert_eq!(
         recorded,
         vec![3],
-        "round persist fires once with the full history"
+        "turn persist fires once with the full history"
     );
 }
 
@@ -847,8 +933,8 @@ async fn zero_argument_tool_call_survives_stream_finalization() {
     let calls = tool.calls_handle();
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c1", "alpha", "")]),
-            text_round("done"),
+            turn(&[("c1", "alpha", "")]),
+            text_turn("done"),
         ])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
@@ -895,7 +981,7 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
         crate::AgentIdentity::default(),
     );
     agent.set_thread_id("interrupt-session");
-    agent.bump_turn();
+    agent.bump_round();
     let ledger = neenee_core::TokenSourceLedger::shared();
     agent.install_token_ledger(ledger.clone());
     let token = CancellationToken::new();
@@ -1119,7 +1205,7 @@ async fn cancelling_during_tool_execution_emits_tool_cancelled() {
     started.notified().await;
     token.cancel();
 
-    let outcome = handle.await.expect("turn task panicked");
+    let outcome = handle.await.expect("round task panicked");
     assert!(
         matches!(outcome, Err(HarnessError::Interrupted)),
         "expected the turn to be interrupted, got {outcome:?}"
@@ -1361,20 +1447,20 @@ async fn schema_violating_call_never_reaches_the_tool() {
 // ---- Golden-transcript harness ----------------------------------------
 //
 // `ScriptedProvider` replays a fixed list of streamed events — one script
-// per model round — so a whole agent turn runs deterministically and its
+// per ReAct turn — so a whole agent round runs deterministically and its
 // emitted `AgentEvent` stream can be asserted as a stable golden
 // transcript. This pins the loop's externally-visible contract (tool-call
 // ordering, native vs text-fallback dispatch, concurrent result ordering,
 // the repeated-call guard, and permission gating) independently of any real
 // provider, so the refactors that follow can lean on it as a safety net.
 
-/// A model round that streams a single chunk of assistant text.
-fn text_round(text: &str) -> Vec<ProviderStreamEvent> {
+/// A ReAct turn that streams a single chunk of assistant text.
+fn text_turn(text: &str) -> Vec<ProviderStreamEvent> {
     vec![ProviderStreamEvent::TextDelta(text.to_string())]
 }
 
-/// A model round that streams native tool calls as `(id, name, arguments)`.
-fn tool_round(calls: &[(&str, &str, &str)]) -> Vec<ProviderStreamEvent> {
+/// A ReAct turn that streams native tool calls as `(id, name, arguments)`.
+fn turn(calls: &[(&str, &str, &str)]) -> Vec<ProviderStreamEvent> {
     calls
         .iter()
         .enumerate()
@@ -1390,13 +1476,13 @@ fn tool_round(calls: &[(&str, &str, &str)]) -> Vec<ProviderStreamEvent> {
 }
 
 struct ScriptedProvider {
-    rounds: std::sync::Mutex<std::collections::VecDeque<Vec<ProviderStreamEvent>>>,
+    turns: std::sync::Mutex<std::collections::VecDeque<Vec<ProviderStreamEvent>>>,
 }
 
 impl ScriptedProvider {
-    fn new(rounds: Vec<Vec<ProviderStreamEvent>>) -> Self {
+    fn new(turns: Vec<Vec<ProviderStreamEvent>>) -> Self {
         Self {
-            rounds: std::sync::Mutex::new(rounds.into_iter().collect()),
+            turns: std::sync::Mutex::new(turns.into_iter().collect()),
         }
     }
 }
@@ -1419,14 +1505,14 @@ impl Provider for ScriptedProvider {
         _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         // A turn that runs past its script gets a terminal "done" so the
-        // loop exits rather than hanging on a missing round.
-        let round = self
-            .rounds
+        // loop exits rather than hanging on a missing turn.
+        let turn = self
+            .turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .pop_front()
-            .unwrap_or_else(|| text_round("done"));
-        Ok(Box::pin(stream::iter(round.into_iter().map(Ok))))
+            .unwrap_or_else(|| text_turn("done"));
+        Ok(Box::pin(stream::iter(turn.into_iter().map(Ok))))
     }
 }
 
@@ -1515,8 +1601,8 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::Notice(notice) => {
                 format!("notice {:?} {:?}", notice.kind, notice.title)
             }
-            AgentEvent::ModelRequestStarted { tool_round, .. } => {
-                format!("model-request turn={tool_round}")
+            AgentEvent::ModelRequestStarted { turn, .. } => {
+                format!("model-request turn={turn}")
             }
             AgentEvent::ContextTokens(_) => "context-tokens".to_string(),
             AgentEvent::UserInputInserted(input) => {
@@ -1570,9 +1656,9 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
         .collect()
 }
 
-/// Drive one full turn, auto-answering any permission prompt with `decision`
+/// Drive one full round, auto-answering any permission prompt with `decision`
 /// so write-capable tools don't deadlock the loop.
-async fn run_golden_turn(
+async fn run_golden_round(
     agent: &Agent,
     prompt: &str,
     decision: PermissionDecision,
@@ -1591,11 +1677,11 @@ async fn run_golden_turn(
 }
 
 #[tokio::test]
-async fn golden_native_tool_round_then_final_text() {
+async fn golden_native_tool_turn_then_final_text() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c1", "alpha", "{\"k\":1}"), ("c2", "beta", "{\"k\":2}")]),
-            text_round("all done"),
+            turn(&[("c1", "alpha", "{\"k\":1}"), ("c2", "beta", "{\"k\":2}")]),
+            text_turn("all done"),
         ])),
         vec![
             Arc::new(RecordingTool::read("alpha", "A-out")),
@@ -1604,7 +1690,7 @@ async fn golden_native_tool_round_then_final_text() {
         crate::AgentIdentity::default(),
     );
 
-    let (events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
     assert_eq!(outcome.unwrap().message.content, "all done");
     // Calls are announced up front, then results land in input (FIFO) order
@@ -1628,14 +1714,14 @@ async fn golden_native_tool_round_then_final_text() {
 async fn golden_text_fallback_tool_call_is_discarded_then_dispatched() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            text_round("{\"tool\":\"alpha\",\"arguments\":{\"k\":1}}"),
-            text_round("finished"),
+            text_turn("{\"tool\":\"alpha\",\"arguments\":{\"k\":1}}"),
+            text_turn("finished"),
         ])),
         vec![Arc::new(RecordingTool::read("alpha", "A-out"))],
         crate::AgentIdentity::default(),
     );
 
-    let (events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
     assert_eq!(outcome.unwrap().message.content, "finished");
     // The streamed JSON is shown, then discarded once recognised as a tool
@@ -1661,10 +1747,10 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     // The equality-guard hard abort was removed in favour of the soft
     // loop-review intervention. Identical calls now all execute; the turn
     // ends when the model stops calling tools (the scripted provider runs
-    // out of rounds).
+    // out of turns).
     let tool = RecordingTool::read("alpha", "A-out");
     let calls = tool.calls_handle();
-    let identical = || tool_round(&[("c", "alpha", "{}")]);
+    let identical = || turn(&[("c", "alpha", "{}")]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             identical(),
@@ -1677,11 +1763,11 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     );
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
 
-    let (_events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
+    let (_events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
-    // No hard abort — all 4 rounds execute.
+    // No hard abort — all 4 turns execute.
     assert_eq!(calls.lock().unwrap().len(), 4);
-    // The turn completes normally (provider exhausts its rounds).
+    // The round completes normally (provider exhausts its turns).
     let _ = outcome.unwrap();
 }
 
@@ -1698,12 +1784,12 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
     // command locator makes two identical calls share a signature.
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
-    let cmd = || tool_round(&[("c", "bash", r#"{"command":"make test"}"#)]);
+    let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(), // 1st: allowed, executes
             cmd(), // 2nd: repeat → blocked before execution
-            text_round("done"),
+            text_turn("done"),
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
@@ -1765,16 +1851,16 @@ async fn doom_block_is_surgical_across_files() {
     // Two reads of big.rs (2nd is a repeat → blocked), then a read of small.rs
     // (must succeed — different path), then a list_dir (must succeed — different
     // tool), then done.
-    let read_big = || tool_round(&[("c", "read_text", r#"{"path":"big.rs"}"#)]);
-    let read_small = || tool_round(&[("c", "read_text", r#"{"path":"small.rs"}"#)]);
-    let list = || tool_round(&[("c", "list_dir", r#"{"path":"."}"#)]);
+    let read_big = || turn(&[("c", "read_text", r#"{"path":"big.rs"}"#)]);
+    let read_small = || turn(&[("c", "read_text", r#"{"path":"small.rs"}"#)]);
+    let list = || turn(&[("c", "list_dir", r#"{"path":"."}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             read_big(),
             read_big(),
             read_small(),
             list(),
-            text_round("done"),
+            text_turn("done"),
         ])),
         vec![Arc::new(reader), Arc::new(lister)],
         crate::AgentIdentity::default(),
@@ -1817,13 +1903,13 @@ async fn doom_block_is_surgical_across_files() {
 /// default ever flips.
 #[tokio::test]
 async fn doom_guard_suppressed_when_disabled() {
-    let cmd = || tool_round(&[("c", "bash", r#"{"command":"make test"}"#)]);
+    let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(),
             cmd(),
             cmd(),
-            text_round("done"),
+            text_turn("done"),
         ])),
         vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
         crate::AgentIdentity::default(),
@@ -1860,8 +1946,8 @@ async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
     let calls = bash.calls_handle();
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
-            text_round("done"),
+            turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            text_turn("done"),
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
@@ -1893,8 +1979,8 @@ async fn bash_policy_user_allow_overrides_builtin_confirm() {
     let calls = bash.calls_handle();
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
-            text_round("done"),
+            turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            text_turn("done"),
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
@@ -1925,22 +2011,22 @@ async fn bash_policy_user_allow_overrides_builtin_confirm() {
 }
 
 #[tokio::test]
-async fn golden_rejected_write_tool_terminates_turn() {
+async fn golden_rejected_write_tool_terminates_round() {
     let tool = RecordingTool::write("writer", "WROTE");
     let calls = tool.calls_handle();
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c1", "writer", "{\"path\":\"x\"}")]),
-            text_round("stopped"),
+            turn(&[("c1", "writer", "{\"path\":\"x\"}")]),
+            text_turn("stopped"),
         ])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
     );
 
-    let (events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
-    // The turn ends immediately after the denied permission; the second
-    // model round ("stopped") is never reached.
+    // The round ends immediately after the denied permission; the second
+    // ReAct turn ("stopped") is never reached.
     assert_eq!(outcome.unwrap().message.content, "");
     assert!(
         calls.lock().unwrap().is_empty(),
@@ -1960,7 +2046,7 @@ async fn golden_rejected_write_tool_terminates_turn() {
 }
 
 #[tokio::test]
-async fn golden_reasoning_precedes_text_in_the_same_round() {
+async fn golden_reasoning_precedes_text_in_the_same_turn() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![vec![
             ProviderStreamEvent::ReasoningDelta("think".to_string()),
@@ -1970,7 +2056,7 @@ async fn golden_reasoning_precedes_text_in_the_same_round() {
         crate::AgentIdentity::default(),
     );
 
-    let (events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Reject).await;
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
     assert_eq!(outcome.unwrap().message.content, "answer");
     // Deltas surface in stream-arrival order (reasoning first here), but the
@@ -2002,8 +2088,8 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
     });
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c1", "ask_user", &ask_args.to_string())]),
-            text_round("done"),
+            turn(&[("c1", "ask_user", &ask_args.to_string())]),
+            text_turn("done"),
         ])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
@@ -2031,6 +2117,45 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
 }
 
 #[tokio::test]
+async fn ask_user_tool_unblocks_with_a_cancelled_result() {
+    let ask_args = serde_json::json!({
+        "questions": [{
+            "header": "style",
+            "question": "Which error handling style?",
+            "options": [
+                { "label": "anyhow (Recommended)", "description": "Simple" },
+                { "label": "thiserror", "description": "Structured" }
+            ],
+            "multi_select": false
+        }]
+    });
+    let agent = Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            turn(&[("c1", "ask_user", &ask_args.to_string())]),
+            text_turn("acknowledged"),
+        ])),
+        vec![Arc::new(crate::tools::AskUserTool)],
+        crate::AgentIdentity::default(),
+    );
+
+    let mut messages = vec![Message::new(Role::User, "choose")];
+    let mut events = Vec::new();
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |event| {
+            if let AgentEvent::UserQuestionRequest(request) = &event {
+                agent.reply_user_question(&request.id, Vec::new());
+            }
+            events.push(event);
+        })
+        .await;
+
+    assert_eq!(outcome.unwrap().message.content, "acknowledged");
+    assert!(transcript(&events).iter().any(|line| {
+        line.starts_with("tool-result ask_user") && line.contains("User cancelled the question")
+    }));
+}
+
+#[tokio::test]
 async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
     // The model still names ask_user (carried from an older tool list), but
     // under unattended the harness must not park on it. The call short-
@@ -2049,8 +2174,8 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
     });
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            tool_round(&[("c1", "ask_user", &ask_args.to_string())]),
-            text_round("decided on my own"),
+            turn(&[("c1", "ask_user", &ask_args.to_string())]),
+            text_turn("decided on my own"),
         ])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
@@ -2086,7 +2211,7 @@ async fn unattended_hides_ask_user_from_the_advertised_toolset() {
     // name it in the first place. `ModelRequest` snapshots the visible set, so
     // asserting it is absent from that set is the model-facing truth.
     let agent = Agent::new(
-        Arc::new(ScriptedProvider::new(vec![text_round("ok")])),
+        Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     );
@@ -2238,49 +2363,49 @@ async fn agent_without_project_root_never_writes_permissions_file() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ---- Uncapped tool rounds ----------------------------------------------
+// ---- Uncapped ReAct turns ----------------------------------------------
 //
-// The per-turn tool-round cap was removed (along with the soft convergence
+// The per-round turn cap was removed (along with the soft convergence
 // nudge) to align with the codex / claude-code agentic-loop model: the
-// turn runs until the model stops calling tools, with context compaction
+// round runs until the model stops calling tools, with context compaction
 // as the backstop. This test pins the new behaviour — a long sequence of
 // distinct tool calls runs well past the previous hard cap of 32 and only
 // stops when the model finally emits a text answer.
 
 #[tokio::test]
-async fn turn_runs_uncapped_until_model_emits_text() {
-    // 64 distinct tool rounds — well past any historical cap — followed by a
-    // text answer. Each read round uses a distinct argument so the
-    // repeated-call guard never trips, and every 4th round is a Write. This
-    // mirrors the uncapped contract: the turn is bounded by the model
-    // choosing to stop, not by raw round count (ADR-0009). Session review is
-    // on-demand only (`/review`), so the turn loop never fires a diagnostic
+async fn round_runs_uncapped_until_model_emits_text() {
+    // 64 distinct tool-carrying turns — well past any historical cap —
+    // followed by a text answer. Each read turn uses a distinct argument so
+    // the repeated-call guard never trips, and every fourth turn is a Write.
+    // This mirrors the uncapped contract: the round is bounded by the model
+    // choosing to stop, not by raw turn count (ADR-0009). Session review is
+    // on-demand only (`/review`), so the ReAct loop never fires a diagnostic
     // to consume the shared scripted stream (ADR-0018).
     let write = RecordingTool::write("writer", "WROTE");
     let read = RecordingTool::read("alpha", "out");
-    let mut rounds: Vec<Vec<ProviderStreamEvent>> = Vec::new();
+    let mut turns: Vec<Vec<ProviderStreamEvent>> = Vec::new();
     for i in 0..64 {
         if i > 0 && i % 4 == 0 {
-            rounds.push(tool_round(&[("cw", "writer", &format!("{{\"i\":{i}}}"))]));
+            turns.push(turn(&[("cw", "writer", &format!("{{\"i\":{i}}}"))]));
         } else {
-            rounds.push(tool_round(&[("c", "alpha", &format!("{{\"i\":{i}}}"))]));
+            turns.push(turn(&[("c", "alpha", &format!("{{\"i\":{i}}}"))]));
         }
     }
-    rounds.push(text_round("all done"));
+    turns.push(text_turn("all done"));
     let agent = Agent::new(
-        Arc::new(ScriptedProvider::new(rounds)),
+        Arc::new(ScriptedProvider::new(turns)),
         vec![Arc::new(read), Arc::new(write)],
         crate::AgentIdentity::default(),
     );
 
-    let (events, outcome) = run_golden_turn(&agent, "go", PermissionDecision::Always).await;
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Always).await;
 
     assert_eq!(outcome.unwrap().message.content, "all done");
     assert!(
         !events
             .iter()
             .any(|event| matches!(event, AgentEvent::SessionReview { .. })),
-        "the turn loop must not emit review events; review is on-demand only"
+        "the ReAct loop must not emit review events; review is on-demand only"
     );
 }
 
@@ -2288,18 +2413,18 @@ async fn turn_runs_uncapped_until_model_emits_text() {
 // Session review (ADR-0018, superseding the periodic ADR-0016 design)
 // ─────────────────────────────────────────────────────────────────────
 
-/// Build a turn of N distinct read-only `alpha` calls (each with a different
+/// Build N distinct read-only `alpha` turns (each with a different
 /// path so they count as distinct calls rather than repeats), optionally
-/// followed by a final text round. Drives the round counter past a review
-/// line without accumulating repeated-call counts.
-fn distinct_read_rounds(n: usize, suffix: Option<&str>) -> Vec<Vec<ProviderStreamEvent>> {
-    let mut rounds: Vec<Vec<ProviderStreamEvent>> = (0..n)
-        .map(|i| tool_round(&[("c", "alpha", &format!("{{\"path\":\"f{i}\"}}"))]))
+/// followed by a final text turn. Drives the turn count past a review line
+/// without accumulating repeated-call counts.
+fn distinct_read_turns(n: usize, suffix: Option<&str>) -> Vec<Vec<ProviderStreamEvent>> {
+    let mut turns: Vec<Vec<ProviderStreamEvent>> = (0..n)
+        .map(|i| turn(&[("c", "alpha", &format!("{{\"path\":\"f{i}\"}}"))]))
         .collect();
     if let Some(s) = suffix {
-        rounds.push(text_round(s));
+        turns.push(text_turn(s));
     }
-    rounds
+    turns
 }
 
 #[test]
@@ -2321,7 +2446,7 @@ fn render_review_alert_collapses_verdicts() {
     // All healthy → empty string (clears the activity-bar alert).
     let healthy = vec![ReviewVerdict::healthy("looping")];
     assert_eq!(Agent::render_review_alert(&healthy, 64), "");
-    // Stuck dominates Watch; both non-healthy details fold in, round count
+    // Stuck dominates Watch; both non-healthy details fold in, turn count
     // surfaces, and the worst status label wins.
     let mixed = vec![
         ReviewVerdict {
@@ -2337,23 +2462,23 @@ fn render_review_alert_collapses_verdicts() {
     ];
     let alert = Agent::render_review_alert(&mixed, 80);
     assert!(alert.starts_with("review: stuck"), "{alert}");
-    assert!(alert.contains("80 rounds"), "{alert}");
+    assert!(alert.contains("80 turns"), "{alert}");
     assert!(alert.contains("re-reading f.rs"), "{alert}");
     assert!(alert.contains("slow"), "{alert}");
 }
 
 #[test]
-fn estimate_tool_rounds_counts_assistant_tool_call_messages() {
+fn estimate_completed_turns_counts_assistant_tool_call_messages() {
     use crate::agent::Agent;
     // No messages → 0.
-    assert_eq!(Agent::estimate_tool_rounds(&[]), 0);
+    assert_eq!(Agent::estimate_completed_turns(&[]), 0);
     let mut msgs = vec![
         Message::new(Role::User, "go"),
         Message::new(Role::Assistant, "thinking"),
     ];
-    // Assistant without tool calls → not a round.
-    assert_eq!(Agent::estimate_tool_rounds(&msgs), 0);
-    // Two assistant messages carrying tool calls → two rounds; a plain text
+    // Assistant without tool calls → not a completed tool-bearing turn.
+    assert_eq!(Agent::estimate_completed_turns(&msgs), 0);
+    // Two assistant messages carrying tool calls → two completed turns; a plain text
     // assistant message in between does not inflate the count.
     let mut with_calls = msgs[1].clone();
     with_calls.tool_calls = Some(vec![neenee_core::ToolCall {
@@ -2370,17 +2495,17 @@ fn estimate_tool_rounds_counts_assistant_tool_call_messages() {
         arguments: "{}".into(),
     }]);
     msgs.push(third);
-    assert_eq!(Agent::estimate_tool_rounds(&msgs), 2);
+    assert_eq!(Agent::estimate_completed_turns(&msgs), 2);
 }
 
 #[tokio::test]
 async fn hard_stop_aborts_when_budget_configured() {
     // hard_stop_turns is the only opt-in execution cap. With it set to 3, the
-    // 3rd tool round trips the budget and the turn aborts with the budget in
+    // The third tool-bearing turn trips the budget and the round aborts with the budget in
     // the message.
     let tool = RecordingTool::read("alpha", "A-out");
     let agent = Agent::new(
-        Arc::new(ScriptedProvider::new(distinct_read_rounds(10, None))),
+        Arc::new(ScriptedProvider::new(distinct_read_turns(10, None))),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
     );
@@ -2390,7 +2515,7 @@ async fn hard_stop_aborts_when_budget_configured() {
     let error = agent
         .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
         .await
-        .expect_err("hard-stop budget must abort the turn");
+        .expect_err("hard-stop budget must abort the round");
 
     let message = match error {
         HarnessError::Other(message) => message,
@@ -2406,18 +2531,18 @@ async fn hard_stop_aborts_when_budget_configured() {
 async fn review_now_runs_diagnostic_and_returns_verdict() {
     // On-demand review (`/review` → `Agent::review_now`) feeds the transcript
     // to the REVIEW envoy, which shares the scripted provider. The next
-    // scripted round is the reviewer's verdict JSON; `review_now` parses it
+    // scripted turn is the reviewer's verdict JSON; `review_now` parses it
     // back into a `ReviewVerdict` keyed to the `looping` dimension.
     let verdict_json =
         r#"{"verdicts":[{"dimension":"looping","status":"stuck","detail":"re-reading"}]}"#;
     let tool = RecordingTool::read("alpha", "A-out");
     let agent = Agent::new(
-        Arc::new(ScriptedProvider::new(vec![text_round(verdict_json)])),
+        Arc::new(ScriptedProvider::new(vec![text_turn(verdict_json)])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
     );
 
-    // A transcript with one tool round so the estimate is meaningful.
+    // A transcript with one tool-bearing turn so the estimate is meaningful.
     let mut transcript = vec![Message::new(Role::User, "go")];
     let mut assistant = Message::new(Role::Assistant, String::new());
     assistant.tool_calls = Some(vec![neenee_core::ToolCall {
@@ -2432,13 +2557,13 @@ async fn review_now_runs_diagnostic_and_returns_verdict() {
     assert_eq!(verdicts[0].dimension, "looping");
     assert_eq!(verdicts[0].status, ReviewStatus::Stuck);
     assert_eq!(verdicts[0].detail, "re-reading");
-    // The on-demand alert renders with the estimated round count.
+    // The on-demand alert renders with the estimated turn count.
     let alert = crate::agent::Agent::render_review_alert(
         &verdicts,
-        crate::agent::Agent::estimate_tool_rounds(&transcript),
+        crate::agent::Agent::estimate_completed_turns(&transcript),
     );
     assert!(alert.contains("review: stuck"), "{alert}");
-    assert!(alert.contains("1 rounds"), "{alert}");
+    assert!(alert.contains("1 turn"), "{alert}");
 }
 
 #[test]

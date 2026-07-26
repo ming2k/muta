@@ -6,7 +6,7 @@
 //! because — like the `task` tool — it spawns a bounded read-only envoy via
 //! [`crate::Agent`]. The difference is who drives it: `task` is a *model* tool
 //! call, whereas the review runner is *user* driven, fired by the `/review`
-//! command ([`Agent::review_now`]) rather than on a round cadence.
+//! command ([`Agent::review_now`]) rather than on a ReAct-turn cadence.
 //!
 //! ## The built-in dimension
 //!
@@ -32,7 +32,7 @@ const TRANSCRIPT_SNAPSHOT_BUDGET_CHARS: usize = 8_000;
 /// The first session-review dimension: is the agent stuck in an unproductive
 /// exploration loop? Distinct from a model that is legitimately reading its
 /// way through a large task — the reviewer is asked to tell those apart from
-/// the transcript, which a dumb round counter cannot.
+/// the transcript, which a dumb turn counter cannot.
 #[derive(Debug, Default)]
 pub struct LoopingReview;
 
@@ -61,7 +61,7 @@ pub fn default_reviews() -> Vec<Arc<dyn SessionReview>> {
 }
 
 impl Agent {
-    /// Run the periodic session-review diagnostic against the live transcript
+    /// Run the on-demand session-review diagnostic against the live transcript
     /// snapshot and return one verdict per registered dimension.
     ///
     /// Spawns a bounded read-only envoy (the [`REVIEW`] profile) with its
@@ -77,7 +77,7 @@ impl Agent {
     pub(crate) async fn run_session_review(
         &self,
         messages: &[Message],
-        tool_rounds: usize,
+        turn_index: usize,
     ) -> Vec<ReviewVerdict> {
         let dimensions = self.effective_reviews();
         if dimensions.is_empty() {
@@ -120,7 +120,7 @@ impl Agent {
 
         let transcript = serialize_transcript(messages, TRANSCRIPT_SNAPSHOT_BUDGET_CHARS);
         let user = format!(
-            "The agent under review has completed {tool_rounds} tool rounds this turn. \
+            "The agent under review has completed {turn_index} ReAct turns in this round. \
              Here is a compact, most-recent-last snapshot of its transcript:\n\n\
              {transcript}\n\n\
              Evaluate every dimension listed above and return the JSON object now."
@@ -158,7 +158,7 @@ impl Agent {
 /// Flatten the transcript into a compact text excerpt the reviewer can read in
 /// one glance. Keeps the most recent messages within `budget` chars (older
 /// traffic is dropped from the front once the budget is exceeded) because the
-/// signal for "stuck now" lives in recent rounds, not the turn's opening.
+/// signal for "stuck now" lives in recent rounds, not the round's opening.
 ///
 /// Tool calls are summarised by name + arguments; results are truncated to a
 /// short prefix so the reviewer sees *what* was called and *whether* it

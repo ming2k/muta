@@ -3,7 +3,7 @@
 //! A [`MetaStrip`] is a horizontal rail made of small replaceable [`MetaChip`]s:
 //! anchors (`round 61`, `turn 61`), status chips (`⏸ Queued`), and muted
 //! details (`GLM-5.2`, `19:46`).  It centralizes the repeated two-tone
-//! "anchor · detail · time" treatment used by assistant round headers and sent
+//! "anchor · detail · time" treatment used by assistant turn headers and sent
 //! user-message headers.
 
 use std::borrow::Cow;

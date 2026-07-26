@@ -19,33 +19,31 @@ change, and reduce the visible presentation to pure functions of them.
 
 | Axis | Type | Owner | Persisted? | Drives |
 |------|------|-------|------------|--------|
-| **Lifecycle** | kind-specific (`ToolStatus`, or `running: bool` for reasoning) | model / harness | yes | accent (hue) |
+| **Lifecycle** | kind-specific (`ToolStatus`, or duration absent/present for reasoning) | model / harness | yes | accent or lifecycle text |
 | **Disclosure** | `Disclosure` (Collapsed / Expanded) | model, user, or auto default | yes, with a `user_pinned` flag | weight + body visibility |
 | **Interaction** | `Interaction` (Idle / Hovered / Focused) | pointer / keyboard hit-test | no — recomputed every frame | weight |
 
 Lifecycle is **kind-specific** and therefore not unified here: tool steps carry
-it through `ToolStatus` (5 states); reasoning traces carry it through a single
-running boolean (2 states). Both resolve to an `Option<Color>` accent at the
-call site and pass it in. The state module never asks "what kind of step is
-this?" to pick a color.
+it through `ToolStatus` (5 states); reasoning traces derive streaming/finished
+from whether a duration exists. Tool renderers resolve lifecycle to an
+optional accent; reasoning carries no accent and expresses completion in its
+summary text. The state module never asks “what kind of step is this?”.
 
 ## The two presentation channels
 
 The summary line's color is the composition of two independent channels:
 
-- **accent** (hue) — from Lifecycle. A non-`Ok` tool lifecycle and a denied
-  step stay visibly accented even when collapsed and idle, so a running,
-  failed, or denied call cannot hide. An `Ok` tool step and any reasoning
+- **accent** (hue) — from Lifecycle. A non-`Ok` tool lifecycle stays visibly
+  classified even when collapsed and idle. An `Ok` tool step and any reasoning
   trace yield `None`, handing control to the weight channel.
 - **weight** (luminance) — from Disclosure × Interaction, via
   `summary_weight`. Decides how bright the summary reads (active vs. hover vs.
   muted), never which hue.
 
 Keeping the channels separate is what makes behavior consistent across step
-kinds and immune to the old "focus leaks into color" class of bug: keyboard
-focus is a separate concern from disclosure and is conveyed by its own cue
-(the `↑` / `↓` focus ring), never by stealing the open/hover luminance
-channel.
+kinds. Keyboard focus is a separate concern from disclosure: on a collapsed
+summary it uses the same transient lift as hover, while an expanded summary
+stays pinned at full foreground weight.
 
 ## Disclosure FSM
 
@@ -126,12 +124,10 @@ from the layout-map hit-test. Never persisted.
                   pointer enters summary
 ```
 
-`Interaction::Focused` is reserved in the type for the keyboard focus ring but
-is deliberately **not** fed into the weight channel: the
-`(Collapsed, Focused)` arm reduces to `theme.muted()`, identical to
-`(Collapsed, Idle)`. This is the regression guard for "collapsed focused step
-stays highlighted" — focus is conveyed by its own cue (the focus ring), never
-by raising the summary's luminance.
+`Interaction::Focused` shares the hover rung. A collapsed focused or hovered
+summary resolves to `theme.hover()`; a collapsed idle summary resolves to
+`theme.muted()`. Expanded summaries resolve to `theme.fg()` regardless of
+interaction, so pointing at or focusing an open body never makes it recede.
 
 ## Lifecycle accent
 
@@ -139,28 +135,30 @@ The accent color a renderer passes to `summary_text_color`, by source:
 
 | Step kind | Lifecycle | Accent | Source |
 |-----------|-----------|--------|--------|
-| Tool | `Running` | `Some(theme.info)` — steady accent against the summary bg | `draw_tool_step` |
-| Tool | `Failed` | `Some(theme.error_fg)` | `draw_tool_step`, `draw_envoy_bar` |
+| Tool | `Running` | `Some(theme.muted)` — neutral pending state | `draw_tool_step` |
+| Tool | `Failed` | `Some(theme.err)` | `draw_tool_step`, `draw_envoy_bar` |
 | Tool | `Denied` | `Some(theme.warn)` — distinct from a runtime failure | `draw_tool_step`, `draw_envoy_bar` |
-| Tool | `Cancelled` | `Some(theme.text_muted)` — reads as inert, not as a fresh failure | `draw_tool_step`, `draw_envoy_bar` |
+| Tool | `Cancelled` | `Some(theme.dim)` — reads as inert, not as a fresh failure | `draw_tool_step`, `draw_envoy_bar` |
 | Tool | `Ok` | `None` — hands control to the weight channel | `draw_tool_step`, `draw_envoy_bar` |
-| Reasoning | streaming / finished | `None` — the lifecycle reads from the summary text (duration omitted while streaming) and the steady `info` hue; the marker is always `+`/`-`, never a streaming glyph | `draw_reasoning_trace` |
+| Reasoning | streaming / finished | `None` — lifecycle reads from the summary text (duration omitted while streaming); the marker is always `+`/`-` | `draw_reasoning_trace` |
 
-A `Some(accent)` always overrides the weight channel outright. `None` falls
-through to `summary_weight`. This is what keeps a collapsed, idle, failed step
-visibly red — failure must never hide behind a muted tone.
+A `Some(accent)` supplies the dominant hue, then blends toward the
+disclosure/interaction weight. Collapsed idle leaves the accent unchanged;
+collapsed hover/focus blends 35% toward `theme.hover()`; expanded blends 60%
+toward `theme.fg()`. `None` falls through to `summary_weight`.
 
 ## Color resolution table
 
-The full `summary_text_color(disclosure, interaction, accent)` truth table.
-The first matching row wins:
+The full `summary_text_color(accent, disclosure, interaction)` resolution:
 
 | Disclosure | Interaction | `accent` | Summary color |
 |------------|-------------|----------|---------------|
-| any | any | `Some(c)` | `c` |
+| Collapsed | Idle | `Some(c)` | `c` |
+| Collapsed | Hovered or Focused | `Some(c)` | `c` blended 35% toward `theme.hover()` |
+| Expanded | any | `Some(c)` | `c` blended 60% toward `theme.fg()` |
 | Expanded | any | `None` | `theme.fg()` |
-| Collapsed | Hovered | `None` | `theme.hover()` |
-| Collapsed | Idle or Focused | `None` | `theme.muted()` |
+| Collapsed | Hovered or Focused | `None` | `theme.hover()` |
+| Collapsed | Idle | `None` | `theme.muted()` |
 
 ## Invariants worth keeping
 
@@ -171,14 +169,14 @@ one of the historical bugs the state machine was introduced to fix:
   `user_pinned`; user toggles do not mutate Lifecycle. The only thing that
   crosses the seam is the auto-default re-evaluation, and it goes through the
   pinned-gated setter.
-- **Accent overrides weight, never the reverse.** A failed step stays red
-  whether collapsed, idle, or under the pointer.
-- **Focus never brightens.** `Interaction::Focused` exists in the type to keep
-  the match exhaustive, but it collapses to the same weight as `Idle`.
+- **Accent owns hue; weight modulates it.** Lifecycle classification remains
+  dominant while hover/focus and disclosure still have visible affordances.
+- **Focus equals hover.** Both lift a collapsed summary to the same rung and
+  introduce no fourth luminance state.
 - **Expansion dominates interaction.** An open step is always the primary
   foreground; the pointer state cannot dim it.
-- **Reasoning never carries a text accent.** Its lifecycle is marker-only, so
-  the weight ladder stays meaningful on reasoning summaries.
+- **Reasoning never carries a text accent.** Its lifecycle is expressed in
+  summary text, so the weight ladder stays meaningful.
 
 ## Source
 

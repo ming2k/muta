@@ -140,13 +140,14 @@ There are two discriminator levels:
 - `type` identifies the transport envelope: `Request`, `History`, or `Response`.
 - Rust enums use serde's default externally tagged representation.
 
-The initial `History` frame carries the hosted session's id alongside the
-transcript:
+The initial `History` frame carries the hosted session's id and authoritative
+monotonic round counter alongside the transcript:
 
 ```json
 {
   "type": "History",
   "session_id": "session-123",
+  "round_counter": 6,
   "messages": []
 }
 ```
@@ -211,6 +212,19 @@ A session-scoped streaming response has three levels:
 }
 ```
 
+`TurnStarted` carries both levels of the execution position. `round` is
+one-based for the enclosing user exchange; `turn` is the zero-based ReAct
+model-request index within that round:
+
+```json
+{
+  "type": "Response",
+  "Round": {
+    "session_id": "session-123",
+    "event": { "TurnStarted": { "round": 7, "turn": 0 } }
+  }
+}
+
 ## Core frontend flows
 
 ### Chat and streaming
@@ -269,6 +283,9 @@ Render every question and return one list of selected labels per question:
 
 Preserve question order. A multi-select question may contain multiple labels.
 The UI may use a free-form answer where supported by its interaction model.
+To cancel, send an empty outer `answers` array. A valid submission always
+contains one inner array per question, so an unanswered multi-select page is
+represented by an empty inner array and remains distinct from cancellation.
 
 ### Interactive command input
 

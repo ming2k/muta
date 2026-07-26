@@ -19,15 +19,15 @@ pub(crate) const STEP_MIN_WIDTH: usize = 8;
 /// prose-like body content inside that band.
 pub(crate) const TOOL_STEP_BODY_INDENT_COLS: usize = 2;
 
-/// One blank row inserted at semantic transcript, round, or component-segment
-/// boundaries. Consecutive tool-like components in one known round are the
+/// One blank row inserted at semantic transcript, turn, or component-segment
+/// boundaries. Consecutive tool-like components in one known turn are the
 /// compact exception and use zero rows.
 pub(crate) const MESSAGE_GAP_ROWS: usize = 1;
 
-/// Separation between a round metadata header and its first component. The
+/// Separation between a turn metadata header and its first component. The
 /// header labels the group but is not part of the component stack, so one row
 /// preserves the hierarchy without giving every child its own top margin.
-pub(crate) const ROUND_HEADER_BODY_GAP_ROWS: usize = 1;
+pub(crate) const TURN_HEADER_BODY_GAP_ROWS: usize = 1;
 
 /// Vertical chrome rows around a sent user message panel: one top transition
 /// row and one bottom transition row.
@@ -49,8 +49,8 @@ pub(crate) const USER_MESSAGE_TRANSITION_ROWS: usize = 1;
 /// reads the named token.
 ///
 /// The layout closes the body only when the next component crosses a semantic
-/// round/message boundary. There is no dedicated bottom-gap token: an extra
-/// one would break the flush same-round tool batch.
+/// turn/message boundary. There is no dedicated bottom-gap token: an extra
+/// one would break the flush same-turn tool batch.
 pub(crate) const TOOL_STEP_BODY_TOP_GAP_ROWS: usize = 0;
 pub(crate) const TOOL_STEP_SECTION_GAP_ROWS: usize = 1;
 pub(crate) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS;

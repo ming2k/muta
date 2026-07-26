@@ -37,11 +37,10 @@ pub use crate::tui::overlays::{
     draw_activity_modal, draw_armed_toast, draw_config_layout_modal, draw_config_modal,
     draw_config_theme_custom_modal, draw_config_theme_modal, draw_connections_modal,
     draw_copy_toast, draw_custom_provider_editor, draw_help_modal, draw_history_modal,
-    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
-    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
-    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
-    draw_sessions_modal, draw_skills_modal, draw_token_report_modal, draw_tools_modal,
-    token_report_turn_count,
+    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
+    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
+    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_round_count,
 };
 use crate::tui::page_header::{PageHeader, draw_page_header};
 pub use crate::tui::primitives::recess_backdrop;
@@ -144,7 +143,7 @@ pub struct TranscriptView<'a> {
     pub cell_selection: Option<&'a CellDragInfo>,
     /// Transient running status shown in a thin bar above the input box.
     /// Empty / "idle" means the status bar is hidden; every other value
-    /// (including "responding") keeps the bar up for the full turn lifecycle.
+    /// (including "responding") keeps the bar up for the full round lifecycle.
     pub activity: &'a str,
     /// Animation phase for the breathing dot and status-text shimmer.
     pub spinner_phase: usize,
@@ -175,9 +174,9 @@ pub struct TranscriptView<'a> {
     /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
     /// segment.
     pub review_alert: String,
-    /// Wall-clock instant the current turn started, or `None` between turns.
+    /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
-    pub turn_started_at: Option<std::time::Instant>,
+    pub round_started_at: Option<std::time::Instant>,
     /// Session-state flag rendered as `unattended` on the state bar directly
     /// below the input box (the row appears only while on).
     pub unattended: bool,
@@ -372,7 +371,7 @@ pub fn draw_transcript(
         pursuit,
         todos,
         review_alert,
-        turn_started_at,
+        round_started_at,
         unattended,
         hovered_step,
         focused_target,
@@ -651,7 +650,7 @@ pub fn draw_transcript(
     let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
 
     // The transient activity bar sits directly above the input box. It stays
-    // up for the entire active turn lifecycle (queued → responding → tool
+    // up for the entire active round lifecycle (queued → responding → tool
     // work → finalizing), including the streaming phase, and hides only when
     // idle. Keeping it up during "responding" avoids a layout shift at the
     // stream boundary and sustains the breathing-dot liveness anchor
@@ -667,7 +666,7 @@ pub fn draw_transcript(
             pursuit,
             todos,
             &review_alert,
-            turn_started_at,
+            round_started_at,
             activity,
             spinner_phase,
             theme,
@@ -783,7 +782,7 @@ mod tests {
                         pursuit: None,
                         todos: None,
                         review_alert: String::new(),
-                        turn_started_at: None,
+                        round_started_at: None,
                         unattended: false,
                         hovered_step: None,
                         focused_target: None,
@@ -1072,7 +1071,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -1112,7 +1111,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -1189,7 +1188,7 @@ mod tests {
                         pursuit: None,
                         todos: None,
                         review_alert: String::new(),
-                        turn_started_at: None,
+                        round_started_at: None,
                         unattended: false,
                         hovered_step: None,
                         focused_target: None,
@@ -1290,7 +1289,7 @@ mod tests {
                         pursuit: None,
                         todos: None,
                         review_alert: String::new(),
-                        turn_started_at: None,
+                        round_started_at: None,
                         unattended: false,
                         hovered_step: None,
                         focused_target: None,
@@ -1368,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_index_uses_segmented_same_round_geometry() {
+    fn virtual_index_uses_segmented_same_turn_geometry() {
         let mut thinking = TranscriptMessage::thinking("reasoning").with_turn(3);
         thinking.set_thinking_duration(1);
         let first = TranscriptMessage::tool_step("a", "read_text", r#"{"path":"a"}"#).with_turn(3);
@@ -1504,7 +1503,7 @@ mod tests {
                         pursuit: None,
                         todos: None,
                         review_alert: String::new(),
-                        turn_started_at: None,
+                        round_started_at: None,
                         unattended: false,
                         hovered_step: None,
                         focused_target: None,
@@ -1569,7 +1568,7 @@ mod tests {
                         pursuit: None,
                         todos: None,
                         review_alert: String::new(),
-                        turn_started_at: None,
+                        round_started_at: None,
                         unattended: false,
                         hovered_step: None,
                         focused_target: None,
@@ -1633,7 +1632,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -1953,7 +1952,8 @@ mod tests {
         let visible_rows = (rect.height as usize)
             .saturating_sub(crate::tui::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
             .max(1);
-        let caret_row = (flushed.1 - rect.y - crate::tui::design::COMPOSER_TEXT_ROW_OFFSET) as usize;
+        let caret_row =
+            (flushed.1 - rect.y - crate::tui::design::COMPOSER_TEXT_ROW_OFFSET) as usize;
         assert!(
             caret_row < visible_rows,
             "flushed caret row {caret_row} outside the {visible_rows} visible rows"
@@ -2235,7 +2235,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -2380,7 +2380,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -2459,7 +2459,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -2752,7 +2752,8 @@ mod tests {
         // than indexing into an empty slice.
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
         let empty: Vec<String> = Vec::new();
-        let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> = crate::tui::fuzzy::rank(&empty, "");
+        let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> =
+            crate::tui::fuzzy::rank(&empty, "");
         terminal.draw(|f| {
             draw_history_modal(
                 f,
@@ -2907,7 +2908,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -2963,7 +2964,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -3028,7 +3029,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -3080,7 +3081,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -3157,7 +3158,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -3230,7 +3231,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,
@@ -3305,7 +3306,7 @@ mod tests {
                     pursuit: None,
                     todos: None,
                     review_alert: String::new(),
-                    turn_started_at: None,
+                    round_started_at: None,
                     unattended: false,
                     hovered_step: None,
                     focused_target: None,

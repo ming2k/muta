@@ -7,7 +7,7 @@ message array evolves across the loop.
 For the request-scoped context that feeds each transaction, see
 [Model context](agent-design/model-context.md). For the tool protocol that
 decides *when* a tool call appears in a response, see
-[Tool rounds](agent-design/rounds-and-turns.md). For the high-level round steps,
+[Rounds and turns](agent-design/rounds-and-turns.md). For the high-level round steps,
 see [Harness architecture](agent-design/harness.md). For which providers speak
 this contract, see [Providers](../reference/providers.md).
 
@@ -51,7 +51,7 @@ at the adapter boundary. `GoogleProvider` sends Google
 `functionDeclarations` instead of OpenAI `tools`/`tool_choice`.
 Providers with no native function calling send no tool declaration and rely
 on the universal text fallback. See
-[Tool rounds](agent-design/rounds-and-turns.md) for the fallback.
+[Rounds and turns](agent-design/rounds-and-turns.md) for the fallback.
 
 Orphan `tool` messages whose `tool_call_id` has no matching preceding
 assistant `tool_calls` are filtered before the body is serialized. This
@@ -151,23 +151,23 @@ flowchart TD
     F --> G{"response has<br/>tool_calls?"}
     G -- yes --> I["execute_tool — local, no HTTP"]
     I --> J["push tool result"]
-    J --> K["relieve pressure + read-loop guard<br/>+ turn hooks; tool_rounds += 1"]
+    J --> K["relieve pressure + read-loop guard<br/>+ turn hooks; turn_index += 1"]
     K --> C
     G -- no --> L{"fallback JSON<br/>parses?"}
     L -- yes --> M["attach_fallback_tool_call"]
     M --> N["execute_tool; push result"]
-    N --> C
+    N --> K
     L -- no --> O["return response — loop exits"]
 ```
 
-The loop has **no per-turn cap**. The earlier `MAX_TOOL_ROUNDS = 32`
-hard limit was removed in [ADR-0009](../adr/0009-uncapped-agentic-loop.md);
-the loop now runs until the model emits a final assistant message with no
-tool call, with the deterministic read-loop guard
-([ADR-0034](../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md)),
-on-demand session review
-([ADR-0016](../adr/0016-session-review-over-round-counting.md)), and
-context compaction as backstops.
+The loop has **no default per-round turn cap**. The earlier
+`MAX_TOOL_ROUNDS = 32` hard limit was removed in
+[ADR-0009](../adr/0009-uncapped-agentic-loop.md); the loop now runs until the
+model emits a final assistant message with no tool call, with the deterministic
+read-loop guard
+([ADR-0034](../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md))
+and context compaction as backstops. `/review` is an on-demand diagnostic, not
+an automatic transition or termination condition.
 
 ### Tool dispatch
 
@@ -237,7 +237,7 @@ assistant message becomes the round's final answer.
 The `tools` array is byte-identical across all three requests. The
 `messages` array grows monotonically; neenee never edits prior messages
 (except the attribution step described in
-[Tool rounds](agent-design/rounds-and-turns.md)).
+[Rounds and turns](agent-design/rounds-and-turns.md)).
 
 ### Exit conditions
 
@@ -282,7 +282,7 @@ response was plain text.
 The resulting `messages` evolution is identical to the native path. The
 only difference is whether the tool call arrives as a structured
 `tool_calls` field or is parsed out of `content`. See
-[Tool rounds](agent-design/rounds-and-turns.md) for the parsing rules and their limits.
+[Rounds and turns](agent-design/rounds-and-turns.md) for the parsing rules and their limits.
 
 ## Retry interaction
 
@@ -310,7 +310,7 @@ by a fresh one.
 
 ## See also
 
-- [Tool rounds](agent-design/rounds-and-turns.md) — schema injection and fallback mechanics
+- [Rounds and turns](agent-design/rounds-and-turns.md) — schema injection and fallback mechanics
 - [Provider capabilities](provider-capabilities.md) — why providers differ
   on streaming and tool support
 - [Harness architecture](agent-design/harness.md) — round execution, retry, safety bounds

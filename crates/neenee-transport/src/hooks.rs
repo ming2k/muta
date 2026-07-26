@@ -255,17 +255,21 @@ fn context_to_json(ctx: &HookContext) -> String {
             value["last_message"] = json!(last_message);
         }
         HookEvent::Turn {
+            round,
             turn,
             consecutive_readonly,
         } => {
+            value["round"] = json!(round);
             value["turn"] = json!(turn);
             value["consecutive_readonly"] = json!(consecutive_readonly);
         }
-        HookEvent::RoundStart {
+        HookEvent::TurnStart {
             round,
+            turn,
             consecutive_readonly,
         } => {
             value["round"] = json!(round);
+            value["turn"] = json!(turn);
             value["consecutive_readonly"] = json!(consecutive_readonly);
         }
         HookEvent::PermissionRequest { request } => {
@@ -310,7 +314,7 @@ fn event_name(event: &HookEvent) -> &'static str {
         HookEvent::PreCompact => "PreCompact",
         HookEvent::PostCompact => "PostCompact",
         HookEvent::Turn { .. } => "Turn",
-        HookEvent::RoundStart { .. } => "RoundStart",
+        HookEvent::TurnStart { .. } => "TurnStart",
         HookEvent::PermissionRequest { .. } => "PermissionRequest",
         HookEvent::UserQuestion { .. } => "UserQuestion",
     }
@@ -388,5 +392,23 @@ mod tests {
             interpret_output(result("{not json", "", Some(0))),
             HookOutcome::Pass
         );
+    }
+
+    #[test]
+    fn turn_hook_json_carries_the_nested_round_and_turn_position() {
+        let ctx = HookContext {
+            session_id: "session-1".to_string(),
+            cwd: None,
+            event: HookEvent::TurnStart {
+                round: 7,
+                turn: 2,
+                consecutive_readonly: 1,
+            },
+        };
+        let value: serde_json::Value = serde_json::from_str(&context_to_json(&ctx)).unwrap();
+        assert_eq!(value["event"], "TurnStart");
+        assert_eq!(value["round"], 7);
+        assert_eq!(value["turn"], 2);
+        assert_eq!(value["consecutive_readonly"], 1);
     }
 }

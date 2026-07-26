@@ -47,12 +47,40 @@ pub struct ProviderSelection {
     pub model: Option<String>,
 }
 
-/// Sentinel value for `PursuitCheckpoint::max_iterations` indicating an uncapped
-/// run. `/pursue` runs until the model emits the completion marker, the user
-/// runs `/pursue stop`, an error aborts the pursuit, or a newer request
-/// supersedes it. Stored on the checkpoint so legacy snapshots that carry a
-/// finite `max_iterations` from pre-ADR-0009 versions still load cleanly.
+/// Legacy sentinel for checkpoints written before pursuit's explicit safety
+/// cap was projected into the durable checkpoint. Kept public so old callers
+/// and snapshots remain source-compatible; new checkpoints carry the real cap.
 pub const UNCAPPED_ITERATIONS: usize = usize::MAX;
+
+/// Durable projection of a pursuit run's terminal/non-terminal condition.
+///
+/// This is deliberately separate from [`Pursuit`]: the pursuit is the durable
+/// objective record, while this status describes one execution attempt.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PursuitCheckpointStatus {
+    Running,
+    Completed,
+    Interrupted,
+    Error,
+    /// Forward-compatible fallback for a status written by a newer version.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl std::fmt::Display for PursuitCheckpointStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Interrupted => "interrupted",
+            Self::Error => "error",
+            Self::Unknown => "unknown",
+        };
+        f.write_str(value)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PursuitCheckpoint {
@@ -61,15 +89,15 @@ pub struct PursuitCheckpoint {
     pub pursuit: String,
     pub iteration: usize,
     pub max_iterations: usize,
-    pub status: String,
+    #[serde(default)]
+    pub status: PursuitCheckpointStatus,
 }
 
 /// The session-scoped runtime view of a pursuit, persisted separately from the
-/// `Pursuit` core type (ADR-0048 Phase 2). The `Pursuit` (objective +
-/// `is_complete`) is the durable objective record; this carries the stop-gate
-/// runtime state (`armed` + `iterations`) that previously lived only in
-/// `Agent::pursuit_state` and was silently lost on resume — leaving an
-/// armed pursuit disarmed mid-iteration.
+/// `Pursuit` core type (ADR-0048 Phase 2; ADR-0083). The `Pursuit` is the durable
+/// objective record; this carries the stop-gate attempt state (armed flag,
+/// continuation count, and budget counters) that otherwise lives only in
+/// `Agent::pursuit_state` and would be lost on resume.
 ///
 /// `#[serde(default)]` on the field keeps legacy snapshots loadable as `None`
 /// (no runtime view), matching the ADR-0017/0022 backward-compat contract.
@@ -77,8 +105,18 @@ pub struct PursuitCheckpoint {
 pub struct PursuitRuntime {
     /// Whether the stop-gate was armed when the session was last persisted.
     pub armed: bool,
-    /// Stop-gate iteration counter at the last persist.
+    /// Forced-continuation count at the last persist.
     pub iterations: u32,
+    /// Pursuit passes charged against the optional pursuit budget.
+    /// `turns` is the pre-ADR-0083 persistence key.
+    #[serde(default, alias = "turns")]
+    pub passes: u32,
+    /// Tokens charged against the optional pursuit budget.
+    #[serde(default)]
+    pub tokens: u64,
+    /// Active wall-clock time charged against the optional pursuit budget.
+    #[serde(default)]
+    pub wall_clock_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -181,13 +219,13 @@ struct SessionData {
     /// an empty set (all tools enabled) and no migration.
     #[serde(default)]
     disabled_tools: std::collections::HashSet<String>,
-    /// Harness turn counter, the session-scoped monotonic watermark (ADR-0048
+    /// Harness round counter, the session-scoped monotonic watermark (ADR-0048
     /// Phase 2). Bumped at the start of every round; read by the todo
-    /// stale-detector via `updated_at_turn`. Persisted so a resumed session's
+    /// stale-detector via `updated_at_round`. Persisted so a resumed session's
     /// staleness comparisons stay valid instead of the counter resetting to 0.
-    /// `#[serde(default)]` so legacy snapshots load as 0.
-    #[serde(default)]
-    turn_counter: u64,
+    /// The alias keeps pre-ADR-0047 snapshots readable.
+    #[serde(default, alias = "turn_counter")]
+    round_counter: u64,
     /// Per-request token accounting for this session. Unlike the historical
     /// process-global ledger, these records survive resume and cannot leak
     /// across `/session open` boundaries.
@@ -222,7 +260,7 @@ impl Default for SessionData {
             applied_seq: None,
             provider_selection: None,
             disabled_tools: std::collections::HashSet::new(),
-            turn_counter: 0,
+            round_counter: 0,
             request_usage_records: Vec::new(),
             pursuit_runtime: None,
         }
@@ -454,8 +492,8 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::DisabledToolsSet { tools } => {
                 data.disabled_tools = tools.clone();
             }
-            SessionEvent::TurnCounterSet { counter } => {
-                data.turn_counter = *counter;
+            SessionEvent::RoundCounterSet { counter } => {
+                data.round_counter = *counter;
             }
             SessionEvent::RequestUsageUpsert { record } => {
                 if let Some(existing) = data
@@ -590,12 +628,12 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             },
         });
     }
-    if data.turn_counter > 0 {
+    if data.round_counter > 0 {
         events.push(crate::events::EventEnvelope {
             seq: events.len() as u64,
             timestamp: data.updated_at,
-            event: SessionEvent::TurnCounterSet {
-                counter: data.turn_counter,
+            event: SessionEvent::RoundCounterSet {
+                counter: data.round_counter,
             },
         });
     }
@@ -720,7 +758,7 @@ impl SessionStore {
 
     /// Construct a store pinned to a brand-new, empty session file in
     /// `sessions_dir`. The file is **not** written until the session gains
-    /// real content, so a `neenee` that starts and exits without a turn
+    /// real content, so a `neenee` that starts and exits without a round
     /// leaves no empty-file litter behind.
     fn pin_fresh(project_root: PathBuf, sessions_dir: PathBuf, blob_store: BlobStore) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
@@ -754,7 +792,7 @@ impl SessionStore {
     }
 
     /// The authoritative model-visible message window (ADR-0048). This is the
-    /// single source of truth for message truth: the turn clones from here, the
+    /// single source of truth for message truth: the round clones from here, the
     /// provider serializes a projection of this, and every write flows back
     /// through `replace_messages` / `mutate_messages` / `append_turn`.
     pub async fn model_window(&self) -> Vec<Message> {
@@ -915,24 +953,24 @@ impl SessionStore {
             .await
     }
 
-    /// The harness turn counter, the session-scoped monotonic watermark
+    /// The harness round counter, the session-scoped monotonic watermark
     /// (ADR-0048 Phase 2). `0` for a fresh session. Restored on resume so the
-    /// todo stale-detector's `updated_at_turn` comparisons stay valid.
-    pub async fn turn_counter(&self) -> u64 {
-        self.state.lock().await.data.turn_counter
+    /// todo stale-detector's `updated_at_round` comparisons stay valid.
+    pub async fn round_counter(&self) -> u64 {
+        self.state.lock().await.data.round_counter
     }
 
-    /// Replace the turn counter. Mirrors `Agent::turn_counter` so resume
+    /// Replace the round counter. Mirrors `Agent::round_counter` so resume
     /// restores it. The single write path for the counter.
-    pub async fn set_turn_counter(&self, counter: u64) -> Result<(), String> {
+    pub async fn set_round_counter(&self, counter: u64) -> Result<(), String> {
         let (path, data) = {
             let mut state = self.state.lock().await;
-            state.data.turn_counter = counter;
+            state.data.round_counter = counter;
             state.data.updated_at = unix_timestamp();
             ensure_event_log_started(&state.event_log, &state.data)?;
             state
                 .event_log
-                .append(SessionEvent::TurnCounterSet { counter })?;
+                .append(SessionEvent::RoundCounterSet { counter })?;
             (state.path.clone(), state.data.clone())
         };
         self.persist_off_runtime(path, data, self.blob_store.clone())
@@ -1034,6 +1072,7 @@ impl SessionStore {
         let current = self.pursuit().await;
         if let Some(mut pursuit) = current {
             pursuit.is_complete = true;
+            pursuit.terminal_reason = None;
             self.set_pursuit(Some(pursuit.clone())).await?;
             Ok(Some(pursuit))
         } else {
@@ -1113,15 +1152,15 @@ impl SessionStore {
     /// Incrementally persist new messages appended since the last durable
     /// write, without rewriting the full snapshot (ADR-0035).
     ///
-    /// The caller passes the *current full* turn history. This method diffs it
+    /// The caller passes the *current full* round history. This method diffs it
     /// against the messages already durable in `data.model_window` and appends only
     /// the tail as a `MessagesAppended` event to the append-only log — O(delta),
     /// not O(history). The snapshot cache (`session.json`) is intentionally
-    /// **not** rewritten here: it stays at the last turn boundary and is
-    /// refreshed by `replace_messages` at turn end. On resume, `load_or_seed`
+    /// **not** rewritten here: it stays at the last round boundary and is
+    /// refreshed by `replace_messages` at round end. On resume, `load_or_seed`
     /// replays the log (authoritative), so the appended tail is recovered.
     ///
-    /// This is the mid-turn save point: a crash after a side-effecting tool
+    /// This is the mid-round save point at a completed turn boundary: a crash after a side-effecting tool
     /// call leaves the transcript in sync with the filesystem instead of
     /// rewinding to the previous turn. If `current` is no longer than the
     /// durable prefix (e.g. a compaction already replaced messages) this is a
@@ -1180,7 +1219,7 @@ impl SessionStore {
                 }
             } else {
                 // Advance the in-memory state and append the delta event. The
-                // snapshot cache is not touched (stays at the turn boundary).
+                // snapshot cache is not touched (stays at the round boundary).
                 let delta = current[baseline..].to_vec();
                 state.data.model_window.extend(delta.clone());
                 state.data.updated_at = unix_timestamp();
@@ -1657,7 +1696,7 @@ fn compact_log_if_needed(log_path: &Path, data: &SessionData) -> Result<(), Stri
 /// `seq > applied_seq`. This is O(snapshot + tail), not O(snapshot + history).
 /// The snapshot is written on every turn-boundary persist with its watermark
 /// stamped to the log's high-water mark, so a clean close leaves an empty tail
-/// and resume is a single JSON read. A crash mid-turn (after `append_turn`
+/// and resume is a single JSON read. A crash mid-round (after `append_turn`
 /// appended a `MessagesAppended` event but before the next `replace_messages`
 /// rewrote the snapshot) leaves a short tail of at most a few events, replayed
 /// in O(tail).
@@ -1822,18 +1861,18 @@ pub struct ContextProjectionResult {
 }
 
 /// Header prepended to every compaction checkpoint message. Doubles as the
-/// classifier that excludes checkpoints from the user-turn count and lets a
+/// classifier that excludes checkpoints from the user-round count and lets a
 /// later compaction extract the previous summary for incremental updates.
 const CHECKPOINT_HEADER: &str = "[Conversation checkpoint]\n\
-     Earlier complete turns were compacted. Treat this as durable context, not a new user request.\n\n";
+     Earlier complete rounds were compacted. Treat this as durable context, not a new user request.\n\n";
 
 /// Per-message excerpt cap used by the deterministic excerpt fallback.
 const EXCERPT_CAP: usize = 1_500;
 
 pub struct CompactionSelection {
-    /// Older complete turns moved out of the model-visible window.
+    /// Older complete rounds moved out of the model-visible window.
     pub archived: Vec<Message>,
-    /// Recent turns preserved verbatim after the checkpoint.
+    /// Recent rounds preserved verbatim after the checkpoint.
     pub tail: Vec<Message>,
     /// Body of a prior checkpoint message, when present, fed forward as the
     /// anchored summary so each compaction updates rather than restarts.
@@ -1841,10 +1880,10 @@ pub struct CompactionSelection {
 }
 
 /// Split a message list into the archived head and the verbatim tail. Returns
-/// `None` when there are not enough complete user turns to compact.
+/// `None` when there are not enough complete user rounds to compact.
 pub fn select_compaction(
     messages: &[Message],
-    preserve_turns: usize,
+    preserve_rounds: usize,
 ) -> Option<CompactionSelection> {
     let user_indices = messages
         .iter()
@@ -1853,18 +1892,18 @@ pub fn select_compaction(
             message.role == Role::User
                 && !message.content.starts_with("[Conversation checkpoint]")
                 // Non-driving command echoes are recorded as Role::User for
-                // resume/audit faithfulness but are not real turns; exclude
-                // them so they don't inflate the turn count and skew which
-                // turns compaction preserves (ADR-0050).
+                // resume/audit faithfulness but are not real rounds; exclude
+                // them so they don't inflate the round count and skew which
+                // rounds compaction preserves (ADR-0050).
                 && !message.is_command_echo()
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    if user_indices.len() <= preserve_turns {
+    if user_indices.len() <= preserve_rounds {
         return None;
     }
 
-    let keep_from = user_indices[user_indices.len() - preserve_turns];
+    let keep_from = user_indices[user_indices.len() - preserve_rounds];
     let archived = messages[..keep_from]
         .iter()
         .filter(|message| message.role != Role::System)
@@ -1901,14 +1940,14 @@ pub fn select_compaction(
 
 /// Choose the deepest coherent compaction that leaves room for the checkpoint
 /// summary inside the configured working-memory target. The configured number
-/// of preserved turns is still preferred, but on a large-context model it must
+/// of preserved rounds is still preferred, but on a large-context model it must
 /// not make the absolute active-window ceiling ineffective.
 fn select_compaction_for_target(
     messages: &[Message],
-    preserve_turns: usize,
+    preserve_rounds: usize,
     target_tokens: usize,
 ) -> Option<CompactionSelection> {
-    let complete_turns = messages
+    let complete_rounds = messages
         .iter()
         .filter(|message| {
             message.role == Role::User
@@ -1916,14 +1955,16 @@ fn select_compaction_for_target(
                 && !message.is_command_echo()
         })
         .count();
-    // Keep the current/latest real turn verbatim. If that one turn alone is
+    // Keep the current/latest real round verbatim. If that one round alone is
     // enormous it can exceed a soft target, but the projection never silently
     // truncates the user's current request.
-    let maximum = preserve_turns.min(complete_turns.saturating_sub(1)).max(1);
+    let maximum = preserve_rounds
+        .min(complete_rounds.saturating_sub(1))
+        .max(1);
     let tail_budget = target_tokens.saturating_mul(3) / 4;
     let mut fallback = None;
-    for turns in (1..=maximum).rev() {
-        let selection = select_compaction(messages, turns)?;
+    for rounds in (1..=maximum).rev() {
+        let selection = select_compaction(messages, rounds)?;
         if estimate_tokens(&selection.tail) <= tail_budget {
             return Some(selection);
         }
@@ -2061,10 +2102,10 @@ pub fn build_excerpt_summary(
 pub fn compact_messages(
     messages: &[Message],
     target_tokens: usize,
-    preserve_turns: usize,
+    preserve_rounds: usize,
 ) -> Option<ContextProjectionResult> {
     let before_chars = estimate_bytes(messages);
-    let selection = select_compaction_for_target(messages, preserve_turns, target_tokens)?;
+    let selection = select_compaction_for_target(messages, preserve_rounds, target_tokens)?;
     let summary_tokens = summary_token_budget(target_tokens, &selection.tail);
     let budget_chars = summary_char_budget(summary_tokens);
     let summary = truncate_summary_to_token_budget(
@@ -2084,7 +2125,7 @@ pub fn compact_messages(
 
 const SUMMARIZATION_SYSTEM_PROMPT: &str = "\
 You are an anchored context summarization assistant for coding sessions.\n\
-Summarize only the conversation history you are given. The newest turns may be \
+Summarize only the conversation history you are given. The newest rounds may be \
 kept verbatim outside your summary, so focus on the older context that still \
 matters for continuing the work.\n\
 If a <previous-summary> block is included, treat it as the current anchored \
@@ -2160,7 +2201,7 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
         // (otherwise the LLM only sees "[task result]:\n<final text>" and
         // cannot decide whether the envoy's tool usage is worth mentioning
         // in the anchored summary). The nested view is hard-capped to avoid
-        // blowing the budget on a single envoy that ran for 30 tool rounds.
+        // blowing the budget on a single envoy that ran for 30 turns.
         if let Some(children) = &message.children
             && !children.is_empty()
         {
@@ -2328,13 +2369,13 @@ pub async fn summarize_with_provider(
 pub async fn run_compaction(
     history: &mut Vec<Message>,
     target_tokens: usize,
-    preserve_turns: usize,
+    preserve_rounds: usize,
     provider: Option<Arc<dyn Provider>>,
     extra_context: Vec<String>,
 ) -> Result<Option<ContextProjectionResult>, String> {
     let before_chars = estimate_bytes(history);
     let before_tokens = estimate_tokens(history);
-    let Some(selection) = select_compaction_for_target(history, preserve_turns, target_tokens)
+    let Some(selection) = select_compaction_for_target(history, preserve_rounds, target_tokens)
     else {
         return Ok(None);
     };
@@ -2579,15 +2620,49 @@ mod tests {
                 pursuit: "test".to_string(),
                 iteration: 2,
                 max_iterations: 8,
-                status: "running".to_string(),
+                status: PursuitCheckpointStatus::Running,
             }))
             .await
             .unwrap();
 
         let data: SessionData = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(data.model_window[0].content, messages[0].content);
-        assert_eq!(data.loop_checkpoint.unwrap().iteration, 2);
+        let checkpoint = data.loop_checkpoint.unwrap();
+        assert_eq!(checkpoint.iteration, 2);
+        assert_eq!(checkpoint.status, PursuitCheckpointStatus::Running);
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn legacy_pursuit_runtime_defaults_new_budget_counters() {
+        let runtime: PursuitRuntime =
+            serde_json::from_str(r#"{"armed":true,"iterations":4}"#).unwrap();
+
+        assert!(runtime.armed);
+        assert_eq!(runtime.iterations, 4);
+        assert_eq!(runtime.passes, 0);
+        assert_eq!(runtime.tokens, 0);
+        assert_eq!(runtime.wall_clock_ms, 0);
+
+        let legacy: PursuitRuntime =
+            serde_json::from_str(r#"{"armed":true,"iterations":4,"turns":3}"#).unwrap();
+        assert_eq!(legacy.passes, 3);
+        let serialized = serde_json::to_string(&legacy).unwrap();
+        assert!(serialized.contains("\"passes\":3"));
+        assert!(!serialized.contains("\"turns\""));
+    }
+
+    #[test]
+    fn pursuit_checkpoint_status_is_forward_compatible() {
+        let future: PursuitCheckpoint = serde_json::from_str(
+            r#"{"goal":"ship","iteration":2,"max_iterations":50,"status":"paused"}"#,
+        )
+        .unwrap();
+        let legacy: PursuitCheckpoint =
+            serde_json::from_str(r#"{"goal":"ship","iteration":2,"max_iterations":50}"#).unwrap();
+
+        assert_eq!(future.status, PursuitCheckpointStatus::Unknown);
+        assert_eq!(legacy.status, PursuitCheckpointStatus::Unknown);
     }
 
     #[test]
@@ -2959,7 +3034,7 @@ mod tests {
         assert_eq!(loaded.len(), 3, "all items round-trip through disk");
         assert_eq!(loaded.items[0].content, "Summary");
         assert_eq!(loaded.items[0].status, neenee_core::TodoStatus::Completed);
-        assert_eq!(loaded.updated_at_turn, 4);
+        assert_eq!(loaded.updated_at_round, 4);
         // Identity is stable: the first item's id is unchanged after the update.
         assert_eq!(loaded.items[0].id, list.items[0].id);
 
@@ -3053,7 +3128,7 @@ mod tests {
     #[tokio::test]
     async fn session_runtime_state_round_trips_through_disk() {
         // ADR-0048 Phase 2: the session-scoped runtime state — disabled-tool
-        // mask, turn counter, and pursuit stop-gate runtime view — must
+        // mask, round counter, and pursuit stop-gate runtime view — must
         // survive persist + reload so a resumed session restores the agent's
         // exact state instead of silently dropping a toggle, resetting the
         // counter, or disarming an in-flight pursuit.
@@ -3062,45 +3137,70 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         assert!(store.disabled_tools().await.is_empty());
-        assert_eq!(store.turn_counter().await, 0);
+        assert_eq!(store.round_counter().await, 0);
         assert!(store.pursuit_runtime().await.is_none());
 
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("bash".to_string());
         disabled.insert("edit_file".to_string());
         store.set_disabled_tools(disabled.clone()).await.unwrap();
-        store.set_turn_counter(42).await.unwrap();
+        store.set_round_counter(42).await.unwrap();
         store
             .set_pursuit_runtime(Some(PursuitRuntime {
                 armed: true,
                 iterations: 3,
+                passes: 3,
+                tokens: 12_345,
+                wall_clock_ms: 9_000,
             }))
             .await
             .unwrap();
 
         let loaded = SessionStore::for_path(path.clone());
         assert_eq!(loaded.disabled_tools().await, disabled);
-        assert_eq!(loaded.turn_counter().await, 42);
+        assert_eq!(loaded.round_counter().await, 42);
         let runtime = loaded
             .pursuit_runtime()
             .await
             .expect("pursuit runtime round-trips through disk");
         assert!(runtime.armed);
         assert_eq!(runtime.iterations, 3);
+        assert_eq!(runtime.passes, 3);
+        assert_eq!(runtime.tokens, 12_345);
+        assert_eq!(runtime.wall_clock_ms, 9_000);
 
         // Clearing each (None / 0 / empty) persists.
         loaded
             .set_disabled_tools(std::collections::HashSet::new())
             .await
             .unwrap();
-        loaded.set_turn_counter(0).await.unwrap();
+        loaded.set_round_counter(0).await.unwrap();
         loaded.set_pursuit_runtime(None).await.unwrap();
         let cleared = SessionStore::for_path(path.clone());
         assert!(cleared.disabled_tools().await.is_empty());
-        assert_eq!(cleared.turn_counter().await, 0);
+        assert_eq!(cleared.round_counter().await, 0);
         assert!(cleared.pursuit_runtime().await.is_none());
 
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn session_snapshot_round_counter_writes_canonical_key_and_reads_legacy_key() {
+        let mut canonical = serde_json::to_value(SessionData {
+            round_counter: 11,
+            ..SessionData::default()
+        })
+        .unwrap();
+        let object = canonical.as_object_mut().unwrap();
+        let counter = object.remove("round_counter").unwrap();
+        object.insert("turn_counter".to_string(), counter);
+
+        let loaded: SessionData = serde_json::from_value(canonical).unwrap();
+        assert_eq!(loaded.round_counter, 11);
+
+        let serialized = serde_json::to_string(&loaded).unwrap();
+        assert!(serialized.contains("\"round_counter\":11"));
+        assert!(!serialized.contains("\"turn_counter\""));
     }
 
     #[tokio::test]
@@ -3132,7 +3232,7 @@ mod tests {
         // only log events *after* the watermark are replayed. The
         // operationally important case is a lagging snapshot — a crash mid-turn
         // left `append_turn`'s `MessagesAppended` event in the log but the
-        // snapshot still at the previous turn boundary. The tail replay must
+        // snapshot still at the previous round boundary. The tail replay must
         // recover it. This is the "log authoritative for the tail" contract.
         let directory =
             std::env::temp_dir().join(format!("neenee-fastpath-lag-{}", uuid::Uuid::new_v4()));
@@ -3334,39 +3434,40 @@ mod tests {
 
     #[tokio::test]
     async fn append_turn_persists_delta_and_survives_reload() {
-        // The mid-turn save point (ADR-0035): `append_turn` writes only the
+        // The mid-round, turn-boundary save point (ADR-0035): `append_turn`
+        // writes only the
         // new tail as a `MessagesAppended` event, and a fresh `SessionStore`
         // at the same path must replay it to recover the full history. This
         // is the resume-after-crash contract — the whole point of the feature.
         let directory =
-            std::env::temp_dir().join(format!("neenee-append-round-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-append-turn-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
-        // Turn opens with one user message, durably written.
+        // The round opens with one user message, durably written.
         store
             .replace_messages(vec![Message::new(neenee_core::Role::User, "user prompt")])
             .await
             .unwrap();
 
-        // Round 1 adds an assistant response + a tool result. The caller
+        // Turn 1 adds an assistant response + a tool result. The caller
         // passes the *full* current history; the store appends only the tail.
-        let round1 = vec![
+        let turn1 = vec![
             Message::new(neenee_core::Role::User, "user prompt"),
             Message::new(neenee_core::Role::Assistant, "I will run a tool"),
             Message::new(neenee_core::Role::Tool, "tool output"),
         ];
-        store.append_turn(&round1).await.unwrap();
+        store.append_turn(&turn1).await.unwrap();
 
-        // Round 2 adds more. The snapshot cache is still at the turn-open
+        // Turn 2 adds more. The snapshot cache is still at the round-open
         // state (one message); only the event log has grown.
-        let round2 = vec![
+        let turn2 = vec![
             Message::new(neenee_core::Role::User, "user prompt"),
             Message::new(neenee_core::Role::Assistant, "I will run a tool"),
             Message::new(neenee_core::Role::Tool, "tool output"),
             Message::new(neenee_core::Role::Assistant, "done"),
         ];
-        store.append_turn(&round2).await.unwrap();
+        store.append_turn(&turn2).await.unwrap();
 
         // The live in-memory state reflects all appends.
         let live = store.model_window().await;
@@ -3377,7 +3478,7 @@ mod tests {
         // including the appended tail the snapshot never recorded.
         let reloaded = SessionStore::for_path(path.clone());
         let recovered = reloaded.model_window().await;
-        assert_eq!(recovered.len(), 4, "appended rounds survive reload");
+        assert_eq!(recovered.len(), 4, "appended turns survive reload");
         assert_eq!(recovered[2].content, "tool output");
         assert_eq!(recovered[3].content, "done");
 
@@ -3602,7 +3703,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_keeps_recent_complete_turns() {
+    fn compaction_keeps_recent_complete_rounds() {
         let messages = vec![
             Message::new(neenee_core::Role::System, "system"),
             Message::new(neenee_core::Role::User, "old question"),
@@ -3634,7 +3735,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_requires_an_older_complete_turn() {
+    fn compaction_requires_an_older_complete_round() {
         let messages = vec![
             Message::new(neenee_core::Role::User, "question"),
             Message::new(neenee_core::Role::Assistant, "answer"),
@@ -3645,14 +3746,14 @@ mod tests {
     #[test]
     fn compaction_reduces_preserved_tail_to_honor_working_memory_target() {
         let mut messages = Vec::new();
-        for turn in 0..4 {
-            let body = format!("turn-{turn} {}", "word ".repeat(200));
+        for round in 0..4 {
+            let body = format!("round-{round} {}", "word ".repeat(200));
             messages.push(Message::new(Role::User, body.clone()));
             messages.push(Message::new(Role::Assistant, body));
         }
 
-        // Three complete turns are requested, but that would consume almost
-        // all of this 800-token target. The selector keeps one recent turn so
+        // Three complete rounds are requested, but that would consume almost
+        // all of this 800-token target. The selector keeps one recent round so
         // a checkpoint still has room to carry durable task state.
         let selection = select_compaction_for_target(&messages, 3, 800).unwrap();
         assert_eq!(

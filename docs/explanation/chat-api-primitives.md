@@ -8,7 +8,8 @@ rest of the agent design reads as their consequence rather than a series of
 independent choices.
 
 For the byte-level wire shape, see [Request flow](request-flow.md). For the
-turn trip of a single tool call, see [Tool rounds](agent-design/rounds-and-turns.md).
+request/response cycle of a single tool call, see
+[Rounds and turns](agent-design/rounds-and-turns.md).
 For why providers differ on which primitives they implement, see
 [Provider capabilities](provider-capabilities.md).
 
@@ -98,12 +99,13 @@ client re-sends: messages + tools   ← next turn
 ```
 
 The loop ends when the model replies with no `tool_calls` — and that is also
-protocol, not policy. neenee adds guards on top (a repeated-call limit, a
-periodic session-review diagnostic), but the loop's existence and termination
+protocol, not policy. neenee adds guards on top (a repeated-call limit and
+an optional hard stop), but the loop's existence and termination
 condition come from the contract. See
-[ADR-0009](../adr/0009-uncapped-agentic-loop.md) for why the turn count was
-left uncapped to match this, and [ADR-0016](../adr/0016-session-review-over-round-counting.md)
-for the diagnostic that watches uncapped turns.
+[ADR-0009](../adr/0009-uncapped-agentic-loop.md) for why the per-round turn
+count was left uncapped to match this, and
+[Slash commands](../reference/commands.md#review) for the on-demand
+session-review diagnostic.
 
 Two protocol constraints shape the harness:
 
@@ -139,7 +141,7 @@ each a specialization of one or more of these primitives.
 ## See also
 
 - [Request flow](request-flow.md) — the wire-level shape of each transaction
-- [Tool rounds](agent-design/rounds-and-turns.md) — the turn trip of one tool call
+- [Rounds and turns](agent-design/rounds-and-turns.md) — the request/response cycle of one tool call
 - [Provider capabilities](provider-capabilities.md) — which providers implement
   which primitives
 - [Pursuits](agent-design/pursuits.md) — the pursuit as a system-prompt anchor

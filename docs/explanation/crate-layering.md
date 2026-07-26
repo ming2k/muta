@@ -74,7 +74,7 @@ These crates implement the contracts below orchestration:
 
 ### `neenee-agent` — orchestration
 
-The engine. `Agent` + the turn/round loop (ADR-0047), model-request and
+The engine. `Agent` + the round/turn loop (ADR-0047), model-request and
 system-prompt policy, durable conversation-context injection, tool-call
 dispatch and compatibility parsing, context projection, pursuit continuation,
 shell input policy, `ProxyProvider`, skill context injection,

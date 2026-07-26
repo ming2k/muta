@@ -9,20 +9,21 @@ use neenee_core::{ReviewStatus, ReviewVerdict};
 /// the conversation stream. Complements the transient activity-bar alert
 /// (which carries only the worst status + details) by listing every dimension
 /// with its status label and the reviewer's detail sentence.
-pub fn format_review_report(verdicts: &[ReviewVerdict], rounds: usize) -> String {
+pub fn format_review_report(verdicts: &[ReviewVerdict], turns: usize) -> String {
+    let turn_unit = if turns == 1 { "turn" } else { "turns" };
     let worst = verdicts.iter().map(|v| v.status).max();
     let headline = match worst {
         None => {
             return format!(
-                "Session review (~{rounds} tool rounds): no review dimensions registered."
+                "Session review (~{turns} {turn_unit}): no review dimensions registered."
             );
         }
         Some(ReviewStatus::Healthy) => {
-            format!("Session review (~{rounds} tool rounds): no concerns found.")
+            format!("Session review (~{turns} {turn_unit}): no concerns found.")
         }
         Some(status) => {
             format!(
-                "Session review (~{rounds} tool rounds) — verdict: {}.",
+                "Session review (~{turns} {turn_unit}) — verdict: {}.",
                 status.label()
             )
         }

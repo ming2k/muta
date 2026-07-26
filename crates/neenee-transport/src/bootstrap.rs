@@ -18,9 +18,11 @@
 //! short-circuits and must be dispatched by the caller before invoking
 //! [`assemble`].
 
+use crate::commands::{CustomCommand, discover_commands};
 use neenee_agent::catalog;
 use neenee_agent::orchestration::{
-    MidTurnPruneProjectionGate, ProxyProvider, refresh_agent_pursuit, start_repeat_scheduler, turn,
+    MidTurnPruneProjectionGate, ProxyProvider, restore_agent_pursuit, round_response,
+    start_repeat_scheduler,
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_core::{
@@ -35,7 +37,6 @@ use neenee_persistence::{
     session::SessionStore,
 };
 use neenee_skills::{SkillCatalog, SkillRegistry};
-use crate::commands::{CustomCommand, discover_commands};
 
 use crate::startup::{BuiltinCmd, StartupMode};
 use crate::{SessionDriver, UiBridge};
@@ -257,7 +258,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let embedding_store: Arc<AsyncRwLock<embedding::EmbeddingStore>> =
         Arc::new(AsyncRwLock::new(embedding_store));
     // Background scheduler: every 30s prune expired jobs and fire any that are
-    // due, dispatching each prompt as a normal chat turn.
+    // due, dispatching each prompt as a normal chat round.
     start_repeat_scheduler(
         repeat_store.clone(),
         req_tx.clone(),
@@ -432,7 +433,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     neenee_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
     if unattended_at_start {
         agent.set_unattended(true);
-        let _ = resp_tx.send(turn(
+        let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Text(
                 "Unattended ON: the agent will run without human intervention (no confirmations, no questions).".to_string(),
@@ -452,7 +453,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let restored_messages = session.full_transcript().await;
 
     // Mid-turn context projection: when pruning is enabled, install a gate that
-    // clears old tool results between tool rounds once pressure crosses the
+    // clears old tool results between ReAct turns once pressure crosses the
     // prune threshold. The threshold is derived from the active model's context
     // window and re-seeded whenever the provider switches (see
     // `reseed_prune_threshold`), so it tracks the live model rather than a
@@ -497,7 +498,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // separate SQLite db.
     let thread_id = session.id().await;
     agent.set_thread_id(&thread_id);
-    refresh_agent_pursuit(&agent, &session).await;
+    restore_agent_pursuit(&agent, &session).await;
 
     // Restore the unified task list so resume re-shows the sticky panel with
     // the same items (and identity) the model last persisted. An empty list
@@ -507,15 +508,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.set_todos(persisted_todos);
     }
 
-    // Restore session-scoped runtime state from the durable session
-    // (ADR-0048 Phase 2). Without these the resumed agent silently drops a
-    // user's tool-disable toggles, resets the turn counter (corrupting todo
-    // staleness), and disarms an in-flight pursuit.
+    // Restore the remaining session-scoped runtime state (ADR-0048 Phase 2).
+    // `restore_agent_pursuit` above restored both pursuit layers together;
+    // these restore the orthogonal tool mask and round counter.
     agent.restore_disabled_tools(session.disabled_tools().await);
-    agent.restore_turn_count(session.turn_counter().await);
-    if let Some(runtime) = session.pursuit_runtime().await {
-        agent.restore_pursuit_runtime(runtime.armed, runtime.iterations);
-    }
+    agent.restore_round_count(session.round_counter().await);
 
     // Load history — awaited here after running concurrently with the agent
     // setup above. `unwrap` is safe: `spawn_blocking` only panics if the
@@ -536,12 +533,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let embedding_store_for_commands = embedding_store.clone();
     let repeat_store_for_commands = repeat_store.clone();
     let req_tx_for_commands = req_tx.clone();
-    // `/btw` side-conversation state (ADR-0017). The primary turn machinery is
+    // `/btw` side-conversation state (ADR-0017). The primary round machinery is
     // left exactly as-is; this slot peers it with an optional live side
     // session + an "active view" flag that routes `Chat` to whichever session
     // the user is currently composing into.
-    let side: Arc<AsyncRwLock<Option<crate::side::SideSession>>> =
-        Arc::new(AsyncRwLock::new(None));
+    let side: Arc<AsyncRwLock<Option<crate::side::SideSession>>> = Arc::new(AsyncRwLock::new(None));
     let active_view_side = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let base_tools_for_side = base_tools.clone();
     let project_root_for_side = project_root.clone();
@@ -565,7 +561,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     envoy_tool_handle.bind_accounting(
         token_ledger.clone(),
         agent.thread_id_handle(),
-        agent.turn_counter_handle(),
+        agent.round_counter_handle(),
     );
 
     let driver = SessionDriver {

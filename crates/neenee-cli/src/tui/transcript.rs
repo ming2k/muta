@@ -107,11 +107,12 @@ pub(super) fn transcript_messages_from_core(
     config: &TuiConfig,
 ) -> Vec<TranscriptMessage> {
     let mut restored = Vec::new();
-    // Model-request counter for restored assistant turns. Each
-    // `Role::Assistant` message is one round, so the counter increments per
-    // assistant message and stamps its thinking, tools, and text — mirroring
-    // the live `TurnStarted` path so restored spacing has identical boundaries.
+    // Reconstruct the canonical Round -> Turn position from the durable
+    // transcript. A driving visible user message opens a round; every
+    // assistant response advances the ReAct turn within it. Inserts and
+    // non-driving command echoes do not open rounds.
     let mut restored_round: u64 = 0;
+    let mut restored_turn: u64 = 0;
     // Index of every still-unfinished tool step, queued per tool name. A tool
     // result pairs with the *earliest* unfinished step of the same name (live
     // order), so a per-name FIFO reproduces the old forward-scan semantics in
@@ -121,6 +122,15 @@ pub(super) fn transcript_messages_from_core(
     for mut message in messages {
         if message.hidden || message.role == Role::System {
             continue;
+        }
+        let is_insert = message
+            .origin
+            .as_ref()
+            .is_some_and(|origin| origin.kind == neenee_core::InjectionKind::UserSteer);
+        let opens_round = message.role == Role::User && !is_insert && !message.is_command_echo();
+        if opens_round {
+            restored_round = restored_round.saturating_add(1);
+            restored_turn = 0;
         }
         // Attribution travels on every part so a resumed session that mixed
         // models still shows which model produced each turn.
@@ -132,7 +142,12 @@ pub(super) fn transcript_messages_from_core(
                 .map(|seconds| seconds.saturating_mul(1000))
         });
         if message.role == Role::Assistant {
-            restored_round = restored_round.saturating_add(1);
+            if restored_round == 0 {
+                // Defensive compatibility for imported assistant-first
+                // transcripts that predate a driving user message.
+                restored_round = 1;
+            }
+            restored_turn = restored_turn.saturating_add(1);
             // Mirrors the live path's `StreamReasoningDelta` gate: a hidden-chain
             // model (`ReasoningSummary`, e.g. GPT-5.x) never disclosed its full
             // reasoning chain, so its persisted `reasoning_content` is only a
@@ -157,7 +172,8 @@ pub(super) fn transcript_messages_from_core(
                 let mut thinking = TranscriptMessage::thinking(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();
-                thinking.turn = Some(restored_round);
+                thinking.round = Some(restored_round);
+                thinking.turn = Some(restored_turn);
                 thinking.set_thinking_duration(0);
                 // Honor the configured default expand state for reasoning
                 // traces so resumed sessions match live behavior.
@@ -178,7 +194,8 @@ pub(super) fn transcript_messages_from_core(
                     );
                     step.provider = provider.clone();
                     step.model = model.clone();
-                    step.turn = Some(restored_round);
+                    step.round = Some(restored_round);
+                    step.turn = Some(restored_turn);
                     step.sent_at_ms = message_sent_at_ms;
                     pending_steps
                         .entry(call.name)
@@ -214,16 +231,48 @@ pub(super) fn transcript_messages_from_core(
         }
         if let Some(mut transcript_message) = transcript_message_from_core(message) {
             if transcript_message.role == Role::Assistant {
-                transcript_message.turn = Some(restored_round);
+                transcript_message.round = Some(restored_round);
+                transcript_message.turn = Some(restored_turn);
+            } else if transcript_message.role == Role::User
+                && transcript_message.origin == UserMessageOrigin::Chat
+            {
+                transcript_message.round = Some(restored_round);
             } else if transcript_message.role == Role::User
                 && transcript_message.origin == UserMessageOrigin::Insert
             {
-                transcript_message.turn = Some(restored_round.saturating_add(1));
+                transcript_message.round = (restored_round > 0).then_some(restored_round);
             }
             restored.push(transcript_message);
         }
     }
     restored
+}
+
+/// Align a reconstructed transcript tail with the session's authoritative
+/// monotonic round counter.
+///
+/// Legacy messages do not persist round positions, and compaction may remove
+/// older visible rounds. Reconstruction therefore yields a relative `1..N`
+/// tail. The session counter identifies which real round `N` represents.
+pub(super) fn rebase_transcript_rounds(
+    messages: &mut [TranscriptMessage],
+    authoritative_round: u64,
+) {
+    let Some(restored_round) = messages.iter().filter_map(|message| message.round).max() else {
+        return;
+    };
+    let Some(offset) = authoritative_round.checked_sub(restored_round) else {
+        // Never move a transcript backwards when handed a stale snapshot.
+        return;
+    };
+    if offset == 0 {
+        return;
+    }
+    for message in messages {
+        if let Some(round) = &mut message.round {
+            *round = round.saturating_add(offset);
+        }
+    }
 }
 
 /// Freeze any in-flight reasoning traces in `messages`.
@@ -264,4 +313,24 @@ pub(super) fn format_tool_call(name: &str, arguments: &str) -> String {
         .and_then(|value| serde_json::to_string_pretty(&value).ok())
         .unwrap_or_else(|| arguments.to_string());
     format!("Calling `{}`\n\n```json\n{}\n```", name, arguments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rebase_transcript_rounds;
+    use crate::tui::model::document::TranscriptMessage;
+    use neenee_core::Role;
+
+    #[test]
+    fn rebases_a_compacted_relative_tail_to_the_session_round_counter() {
+        let mut messages = vec![
+            TranscriptMessage::new(Role::User, "older").with_round(1),
+            TranscriptMessage::new(Role::Assistant, "reply").with_round(2),
+        ];
+
+        rebase_transcript_rounds(&mut messages, 42);
+
+        assert_eq!(messages[0].round, Some(41));
+        assert_eq!(messages[1].round, Some(42));
+    }
 }

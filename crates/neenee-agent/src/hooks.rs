@@ -165,7 +165,7 @@ impl HookRegistry {
     }
 
     /// `PostToolUse`: observers run; every `Inject` context is collected to be
-    /// appended as hidden user messages on the next round.
+    /// appended as hidden user messages on the next turn.
     pub async fn run_post_tool_use(
         &self,
         tool_name: &str,
@@ -227,8 +227,8 @@ impl HookRegistry {
             .collect()
     }
 
-    /// `Stop`: the first `Deny` reason forces another round (feeding the reason
-    /// back to the model). `None` lets the turn end. Mirrors `/pursue`'s gate;
+    /// `Stop`: the first `Deny` reason forces another turn (feeding the reason
+    /// back to the model). `None` lets the round end. Mirrors `/pursue`'s gate;
     /// the two compose (stop requires both to agree).
     pub async fn check_stop(
         &self,
@@ -364,14 +364,15 @@ impl HookRegistry {
         let _ = self.fire(HookEventKind::SessionEnd, None, &ctx).await;
     }
 
-    /// `Turn` (ADR-0030): fires once per tool turn. Every `Inject` context is
-    /// collected as hidden user messages for the next turn. `Deny` is
-    /// **ignored** by contract — a turn-count hook cannot abort the round (the
-    /// ADR-0009 concern). `ScopeTools` disables are gathered for the agent to
-    /// apply. `consecutive_readonly` carries the read-only streak so a hook can
-    /// target exploration-without-progress without re-deriving it.
+    /// `Turn` (ADR-0030): fires after each non-terminal ReAct turn, before the
+    /// next model request. Every `Inject` context is collected as hidden user
+    /// messages for that request. `Deny` is **ignored** by contract — a
+    /// turn-count hook cannot abort the round (the ADR-0009 concern).
+    /// `ScopeTools` disables are gathered for the agent to apply.
+    /// `consecutive_readonly` carries the read-only streak.
     pub async fn run_turn(
         &self,
+        round: u64,
         turn: usize,
         consecutive_readonly: u32,
         session_id: &str,
@@ -384,6 +385,7 @@ impl HookRegistry {
             session_id: session_id.to_string(),
             cwd: cwd.map(Path::to_path_buf),
             event: HookEvent::Turn {
+                round,
                 turn,
                 consecutive_readonly,
             },
@@ -391,16 +393,16 @@ impl HookRegistry {
         HookSideEffects::from_outcomes(self.fire(HookEventKind::Turn, None, &ctx).await)
     }
 
-    /// `RoundStart`: the symmetric partner of [`Self::run_turn`], fired at the
-    /// start of each tool round — after tools are prepared but before the next
-    /// model completion. Every `Inject` context is collected as hidden user
-    /// messages that land at the top of the model's attention for this round,
-    /// and `ScopeTools` disables are gathered. `Deny` is **ignored** by
-    /// contract (same constraint as `Turn`). Use this to re-inject context per
-    /// round (e.g. re-anchor the principal's role after read-only delegations).
-    pub async fn run_round_start(
+    /// `TurnStart`: symmetric partner of
+    /// [`Self::run_turn`], fired at the start of each ReAct turn — after tools
+    /// are prepared but before the next model completion. Every `Inject`
+    /// context is collected as hidden user messages at the top of the model's
+    /// attention for this turn, and `ScopeTools` disables are gathered. `Deny`
+    /// is **ignored** by contract (same constraint as `Turn`).
+    pub async fn run_turn_start(
         &self,
-        round: usize,
+        round: u64,
+        turn: usize,
         consecutive_readonly: u32,
         session_id: &str,
         cwd: Option<&Path>,
@@ -411,12 +413,13 @@ impl HookRegistry {
         let ctx = HookContext {
             session_id: session_id.to_string(),
             cwd: cwd.map(Path::to_path_buf),
-            event: HookEvent::RoundStart {
+            event: HookEvent::TurnStart {
                 round,
+                turn,
                 consecutive_readonly,
             },
         };
-        HookSideEffects::from_outcomes(self.fire(HookEventKind::RoundStart, None, &ctx).await)
+        HookSideEffects::from_outcomes(self.fire(HookEventKind::TurnStart, None, &ctx).await)
     }
 
     /// `PermissionRequest`: observe-only. The agent is about to block waiting
@@ -536,81 +539,81 @@ mod tests {
         HookRegistry::new(hooks)
     }
 
-    /// `RoundStart` honours `Inject` like `Turn` does — the symmetric round
-    /// boundary collects injected context for the upcoming round.
+    /// `TurnStart` honours `Inject` like `Turn` does — the symmetric turn
+    /// boundary collects injected context for the upcoming turn.
     #[tokio::test]
-    async fn round_start_collects_inject() {
+    async fn turn_start_collects_inject() {
         let reg = registry_of(vec![Arc::new(StubHook {
-            kind: HookEventKind::RoundStart,
+            kind: HookEventKind::TurnStart,
             outcome: HookOutcome::Inject {
                 context: "re-anchor".to_string(),
             },
         })]);
-        let side = reg.run_round_start(0, 0, "s", None).await;
+        let side = reg.run_turn_start(1, 0, 0, "s", None).await;
         assert_eq!(side.injected, vec!["re-anchor".to_string()]);
         assert!(side.scoped_disables.is_empty());
     }
 
-    /// `RoundStart` must discard `Deny` — a round-start hook cannot gate the
-    /// turn (same ADR-0009 concern that constrains `Turn`). Only `Inject`
+    /// `TurnStart` must discard `Deny` — a turn-start hook cannot gate the
+    /// round (same ADR-0009 concern that constrains `Turn`). Only `Inject`
     /// (and `ScopeTools`) survives the filter.
     #[tokio::test]
-    async fn round_start_discards_deny() {
+    async fn turn_start_discards_deny() {
         let reg = registry_of(vec![
             Arc::new(StubHook {
-                kind: HookEventKind::RoundStart,
+                kind: HookEventKind::TurnStart,
                 outcome: HookOutcome::Deny {
                     reason: "no".to_string(),
                 },
             }),
             Arc::new(StubHook {
-                kind: HookEventKind::RoundStart,
+                kind: HookEventKind::TurnStart,
                 outcome: HookOutcome::Inject {
                     context: "ok".to_string(),
                 },
             }),
         ]);
-        let side = reg.run_round_start(0, 0, "s", None).await;
+        let side = reg.run_turn_start(1, 0, 0, "s", None).await;
         assert_eq!(side.injected, vec!["ok".to_string()]);
     }
 
-    /// Routing isolation: a `Turn` hook must not fire on `RoundStart` and vice
+    /// Routing isolation: a `Turn` hook must not fire on `TurnStart` and vice
     /// versa. Guards against a future refactor that folds both into one path
     /// and accidentally cross-triggers.
     #[tokio::test]
-    async fn round_start_is_routed_separately_from_turn() {
+    async fn turn_start_is_routed_separately_from_turn() {
         let reg = registry_of(vec![Arc::new(StubHook {
             kind: HookEventKind::Turn,
             outcome: HookOutcome::Inject {
                 context: "turn-leak".to_string(),
             },
         })]);
-        let side = reg.run_round_start(0, 0, "s", None).await;
+        let side = reg.run_turn_start(1, 0, 0, "s", None).await;
         assert!(
             side.injected.is_empty() && side.scoped_disables.is_empty(),
-            "Turn hook must not fire on RoundStart"
+            "Turn hook must not fire on TurnStart"
         );
     }
 
-    /// `ScopeTools` outcomes are collected by `RoundStart` (and `Turn`) so the
+    /// `ScopeTools` outcomes are collected by `TurnStart` (and `Turn`) so the
     /// agent can apply them to its scoped-disable mask. Regression guard that
     /// the side-effect channel actually carries scoped disables.
     #[tokio::test]
-    async fn round_start_collects_scope_tools() {
+    async fn turn_start_collects_scope_tools() {
         let reg = registry_of(vec![Arc::new(StubHook {
-            kind: HookEventKind::RoundStart,
+            kind: HookEventKind::TurnStart,
             outcome: HookOutcome::ScopeTools {
                 disable: vec!["bash".to_string(), "edit_file".to_string()],
-                restore_at: RestorePoint::RoundEnd,
+                restore_at: RestorePoint::TurnEnd,
             },
         })]);
-        let side = reg.run_round_start(0, 0, "s", None).await;
+        let side = reg.run_turn_start(1, 0, 0, "s", None).await;
         assert!(side.injected.is_empty());
         assert_eq!(
             side.scoped_disables,
             vec![
-                ("bash".to_string(), RestorePoint::RoundEnd),
-                ("edit_file".to_string(), RestorePoint::RoundEnd),
+                ("bash".to_string(), RestorePoint::TurnEnd),
+                ("edit_file".to_string(), RestorePoint::TurnEnd),
             ]
         );
     }

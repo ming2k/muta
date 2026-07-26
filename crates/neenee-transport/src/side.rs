@@ -1,16 +1,16 @@
 //! `/btw` side-conversation machinery (ADR-0017): the live side session, the
 //! primary-status watcher that streams coarse updates to the side banner, and
-//! the active-turn router that directs a prompt at whichever session the user
+//! the active-round router that directs a prompt at whichever session the user
 //! is currently composing into. Extracted verbatim from `main.rs`.
 //!
-//! The primary turn machinery is intentionally untouched here — a side session
-//! peers the primary's per-turn state with its own `Agent` + store + history +
-//! [`RoundLifecycle`], so a side turn runs concurrently with the primary turn
+//! The primary round machinery is intentionally untouched here — a side session
+//! peers the primary's per-round state with its own `Agent` + store + history +
+//! [`RoundLifecycle`], so a side round runs concurrently with the primary round
 //! without disturbing the primary's round lifecycle.
 
 use neenee_agent::orchestration::{
-    ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput,
-    send_harness_state, start_interactive_round, turn,
+    ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput, round_response,
+    send_harness_state, start_interactive_round,
 };
 use neenee_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
 use neenee_core::{AgentResponse, LoopStatus, ParentStatus, Provider, RoundEvent, Tool};
@@ -27,12 +27,12 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use crate::agent_setup::active_context_window;
 
 /// A live `/btw` side conversation (ADR-0017). Peers the primary session's
-/// loose per-turn state with its own [`Agent`], [`SessionStore`], and
-/// [`RoundLifecycle`], so a side turn runs concurrently with the primary turn
+/// loose per-round state with its own [`Agent`], [`SessionStore`], and
+/// [`RoundLifecycle`], so a side round runs concurrently with the primary round
 /// without disturbing the primary's round lifecycle. The side store is the
 /// single source of truth for the side's message list (ADR-0048); it is pinned
 /// to a self-contained file written by [`SessionStore::fork_to_side`], and
-/// only that file is mutated by side turns.
+/// only that file is mutated by side rounds.
 pub struct SideSession {
     pub id: String,
     pub agent: Arc<Agent>,
@@ -43,7 +43,7 @@ pub struct SideSession {
 impl SideSession {
     /// Fork the primary into a self-contained side file and construct a fresh
     /// [`Agent`] + store bound to it. The primary's active pointer and
-    /// in-flight turn are left untouched. Returns [`None`] when the fork or
+    /// in-flight round are left untouched. Returns [`None`] when the fork or
     /// side-store open fails; the caller surfaces the error.
     pub async fn build(
         primary: &SessionStore,
@@ -100,10 +100,10 @@ pub async fn primary_status(primary_lifecycle: &Arc<RoundLifecycle>) -> ParentSt
     }
 }
 
-/// Watch the primary turn while a `/btw` side session is live and stream
+/// Watch the primary round while a `/btw` side session is live and stream
 /// coarse [`ParentStatus`] updates to the TUI's side banner (ADR-0017 §5).
 /// Self-terminates once the side session is torn down. Emits only on change
-/// so a long-running primary turn does not flood the channel.
+/// so a long-running primary round does not flood the channel.
 pub fn spawn_parent_status_watcher(
     side: Arc<AsyncRwLock<Option<SideSession>>>,
     primary_lifecycle: Arc<RoundLifecycle>,
@@ -125,7 +125,7 @@ pub fn spawn_parent_status_watcher(
     });
 }
 
-/// Start an interactive turn against whichever session the user is currently
+/// Start an interactive round against whichever session the user is currently
 /// composing into — the primary, or the live `/btw` side session when the
 /// active-view flag is set (ADR-0017). A stale flag (side torn down
 /// concurrently) falls back to the primary so the prompt is never silently
@@ -142,9 +142,9 @@ pub async fn start_active_turn(
     config: &Config,
     input: RoundInput,
 ) {
-    // Resolve which live session this turn belongs to, cloning the per-session
+    // Resolve which live session this round belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
-    // at the end of this statement, before the turn starts.
+    // at the end of this statement, before the round starts.
     let (agent, session, lifecycle, session_id) = if active_view_side.load(Ordering::SeqCst) {
         let guard = side.read().await;
         if let Some(s) = guard.as_ref() {
@@ -314,7 +314,7 @@ async fn start_resolved_turn(
 ///   immediate instead of busy-queueing it.
 ///
 /// Returns `true` when the refusal fired (caller returns early without
-/// starting a round); `false` when the turn should proceed normally.
+/// starting a round); `false` when the round should proceed normally.
 fn refuse_if_no_provider(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     agent: &Agent,
@@ -323,10 +323,11 @@ fn refuse_if_no_provider(
     if !NoProvider::is(agent.provider.as_ref()) {
         return false;
     }
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         session_id,
         RoundEvent::Error(
-            "No provider configured. Add one with /connections before sending a message.".to_string(),
+            "No provider configured. Add one with /connections before sending a message."
+                .to_string(),
         ),
     ));
     send_harness_state(tx, session_id, agent, LoopStatus::Idle);

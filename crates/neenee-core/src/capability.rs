@@ -210,9 +210,10 @@ pub trait Provider: Send + Sync {
     ///
     /// The contract is "consume once": a provider that supports usage stashes
     /// the most recent `usage` object internally and hands it out here, then
-    /// clears it. The harness calls this right after a turn completes so the
-    /// value is always fresh. Returns `None` for providers that don't report
-    /// usage (the default), in which case the harness estimates locally.
+    /// clears it. The harness calls this right after the provider request
+    /// completes so the value is always fresh. Returns `None` for providers
+    /// that don't report usage (the default), in which case the harness
+    /// estimates locally.
     fn take_last_usage(&self) -> Option<TokenUsage> {
         None
     }

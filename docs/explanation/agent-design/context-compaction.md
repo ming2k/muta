@@ -4,7 +4,7 @@ Compaction is the second context-projection layer (pruning →
 [compaction](context-compaction.md) → overflow recovery). Where
 [pruning](context-pruning.md) clears stale tool *bodies* cheaply and silently,
 compaction reclaims **conversation-level** space: it summarizes older complete
-turns into a durable checkpoint, archives the originals, and replaces them in
+rounds into a durable checkpoint, archives the originals, and replaces them in
 the model-visible window. It is lossy at the dialogue level and comparatively
 expensive (it usually calls the model), so it runs rarely but deeply — and,
 unlike pruning, it **surfaces a transcript notice**.
@@ -52,15 +52,12 @@ completion.
 
 ## What compaction does
 
-The entry point is `compact_turn_history`
-(`neenee-agent/src/orchestration.rs`), which delegates the heavy lifting to
-`run_compaction` (`neenee-persistence/src/session.rs`). The boundary is the **start of
-an older complete user round** — never mid-round — so the model-visible history
-always begins coherently.
+Compaction selects only at the **start of an older complete user round** —
+never mid-round — so the model-visible history always begins coherently.
 
 1. **Select.** `CompactionSelection` splits the history into an archived *head*
-   (older complete turns), a verbatim *tail* (the most recent
-   `compaction_preserve_turns` turns, default 6, kept provider-native), and the
+   (older complete rounds), a verbatim *tail* (the most recent
+   `compaction_preserve_rounds` rounds, default 6, kept provider-native), and the
    *previous summary* extracted from any prior checkpoint.
 2. **Summarize.** By default (`compaction_summarize = true`) the active model
    writes an anchored, structured summary of the head. The previous summary is
@@ -114,12 +111,9 @@ that notice knows a real summarization happened.
 
 ## Configuration
 
-| Key | Default | Effect |
-|-----|---------|--------|
-| `[compaction].utilization` | 0.85 | Window fraction that triggers compaction. |
-| `[compaction].target_utilization` | 0.25 | Active-window size compaction compresses toward. |
-| `compaction_preserve_turns` | 6 | Most recent turns kept verbatim after the checkpoint. |
-| `compaction_summarize` | `true` | Use the model for an anchored summary; `false` (or any failure) uses the deterministic excerpt fallback. |
+The exact thresholds, defaults, and the legacy
+`compaction_preserve_turns` compatibility key are listed in the
+[Configuration Reference](../../reference/configuration.md#compaction).
 
 ## References
 
@@ -131,5 +125,3 @@ that notice knows a real summarization happened.
   the transcript notice.
 - ADR-0040 — session state and model-context projection vocabulary.
 - [Context pruning](context-pruning.md) — the cheaper layer that runs first.
-- `neenee-persistence/src/session.rs` — `run_compaction`, `CompactionSelection`,
-  `CHECKPOINT_HEADER`, `CompactionHooks`.

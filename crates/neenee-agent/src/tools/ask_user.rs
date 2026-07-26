@@ -56,7 +56,8 @@ impl Tool for AskUserTool {
                                     },
                                     "required": ["label"]
                                 },
-                                "minItems": 1
+                                "minItems": 2,
+                                "maxItems": 4
                             },
                             "multi_select": {
                                 "type": "boolean",

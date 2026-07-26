@@ -107,12 +107,12 @@ impl SystemPromptSection for ProviderGuidance {
     }
 }
 
-/// Task-completion ethos: see the work through to a real result in one turn
+/// Task-completion ethos: see the work through to a real result in one round
 /// instead of stopping at analysis or a partial fix. Always active. Mirrors
 /// codex's "Autonomy and Persistence" section, condensed.
 struct PersistenceGuidance;
 
-const PERSISTENCE: &str = "\nSee the task through to a real result in this turn. Don't stop at \
+const PERSISTENCE: &str = "\nSee the task through to a real result in this round. Don't stop at \
                            analysis or a partial fix — carry the work through implementation and \
                            verification. If a tool call fails or you hit a blocker, try to resolve \
                            it yourself before yielding; only hand back to the user when the work \
@@ -138,7 +138,7 @@ impl SystemPromptSection for PersistenceGuidance {
 /// separates it from the paragraphs above.
 struct UnattendedGuidance;
 
-const UNATTENDED: &str = "\nYou are running unattended: no human is reachable this turn. The \
+const UNATTENDED: &str = "\nYou are running unattended: no human is reachable this round. The \
                           question tool has been reclaimed and every tool permission auto-approves, \
                           so nothing you do will pause for confirmation. Decide and act on your own \
                           authority: when faced with ambiguity, pick the most reasonable default \

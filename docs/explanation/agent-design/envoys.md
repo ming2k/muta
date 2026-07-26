@@ -177,7 +177,7 @@ The built-in profiles other than `INTERACTIVE` stay non-interactive, so in
 practice no nested request is surfaced today and the child's
 `set_unattended(true)` is a transitional gate rather than a load-bearing
 deadlock fix. The `INTERACTIVE` profile opts into `allow_user_interaction`, so
-its `ask_user` turn-trip works through the handle directly.
+its `ask_user` request/reply path works through the handle directly.
 
 ## Runtime
 
@@ -246,7 +246,7 @@ so it flows up to the active [pursuit](pursuits.md) if one is set.
 ## See also
 
 - [`envoy`](../../reference/tools/envoy.md) — parameter reference.
-- [Rounds and turns](rounds-and-turns.md) — the turn trip the envoy runs
+- [Rounds and turns](rounds-and-turns.md) — the request/response cycle the envoy runs
   internally.
 - [Pursuits](pursuits.md) — how envoy token cost flows up to a parent
   pursuit.

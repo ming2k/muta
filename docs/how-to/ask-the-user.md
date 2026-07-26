@@ -56,6 +56,11 @@ Follow these conventions:
 3. Keep labels short and stable; the label is what the model receives back.
 4. Use `description` for the one-line context that helps the user decide.
 
+The request may contain one to five questions. The modal presents them in
+order: `Enter` advances and submits only from the final page; `Shift+Tab`
+returns to the previous page without losing that page's selection or
+**Other** text.
+
 ## The automatic "Other" option
 
 The TUI appends an **Other** option to every question automatically. Selecting

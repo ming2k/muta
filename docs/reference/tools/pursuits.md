@@ -1,10 +1,12 @@
 # Pursuit interface
 
-A pursuit is a durable, per-session objective: `{ objective, is_complete }`
-persisted as a field on `SessionData` via `SessionStore` (ADR-0032) — not a
-separate database. There is no status machine, no token/time budget, and no
-checklist (ADR-0010). The lifecycle is driven by three mechanisms owned by
-three distinct roles — there are no model-facing pursuit tools (ADR-0031):
+A pursuit is a durable, per-session objective: `objective`, `is_complete`,
+optional budget, and optional terminal reason persisted on `SessionData` via
+`SessionStore` (ADR-0032) — not a separate database. One attempt also has a
+persisted armed flag and pass/token/time counters (ADR-0083). There is no
+single flattened status machine or checklist. The lifecycle is driven by
+three mechanisms owned by three distinct roles — there are no model-facing
+pursuit tools (ADR-0031):
 
 | Role | Responsibility | Mechanism |
 |------|----------------|-----------|
@@ -14,28 +16,28 @@ three distinct roles — there are no model-facing pursuit tools (ADR-0031):
 
 ## Entry: `/pursue <condition>`
 
-A slash command (`crates/neenee-cli/src/handlers/slash.rs`), not a tool. It
+A slash command (`crates/neenee-transport/src/handlers_slash.rs`), not a tool. It
 persists the condition via `SessionStore::set_pursuit`, arms the stop-gate on
 the agent, and drives one round via `orchestration::start_pursuit`. The model
 cannot start a pursuit on its own — by architecture, not by prompt constraint.
 
 ## Continuation: the stop-gate
 
-`/pursue` arms a stop-gate on the `Agent`. At each round-loop exit, if a pursuit
-is armed, an active (incomplete) pursuit exists, the latest response did not
-signal completion, and the 50-turn safety cap (`MAX_PURSUIT_ITERATIONS`) is not
-exhausted, the gate re-injects the condition as a hidden user message and forces
-another turn instead of returning. See
+`/pursue` arms a stop-gate on the `Agent`. At each candidate round exit, if a
+pursuit is armed, an active incomplete objective exists, the latest response
+did not signal completion, no budget is exhausted, and another pass fits
+within the 50-pass safety cap (`MAX_PURSUIT_ITERATIONS`), the gate re-injects
+the condition as a hidden user message and forces another turn. See
 [Pursuits and the pursue stop-gate](../../explanation/agent-design/pursuits.md).
 
 ## Exit: `[NEENEE_PURSUIT_COMPLETE]`
 
-The sole completion signal. The working model emits the
+The sole model-authored completion signal. The working model emits the
 `[NEENEE_PURSUIT_COMPLETE]` marker in an assistant message; the gate sees it and
 lets the round end; orchestration finalizes by calling
 `session.mark_pursuit_complete()`. The marker is always stripped from visible
 output — it is a control signal, not prose. There is no `complete_pursuit` tool;
-the marker is the single path. (`/pursue done` remains the user-driven
+the marker is the model path. (`/pursue done` remains the user-driven
 completion slash command.)
 
 ## See also
@@ -50,3 +52,7 @@ completion slash command.)
   model-facing pursuit tools
 - [ADR-0032](../../adr/0032-fold-pursuit-into-session-store.md) — folded
   pursuit persistence into `SessionStore`
+- [ADR-0069](../../adr/0069-pursuit-budgets-and-stats.md) — introduced
+  opt-in budgets and terminal reasons
+- [ADR-0083](../../adr/0083-crash-consistent-pursuit-attempt-accounting.md) —
+  persisted counters and aligned pursuit-pass semantics

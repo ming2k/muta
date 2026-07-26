@@ -16,11 +16,12 @@
 //!
 //! - **Single-select** is *live*: the highlight is the selection. Moving with
 //!   `↑`/`↓` or a digit jump immediately moves the selected index, so `Enter`
-//!   submits exactly what is highlighted — there is no separate "commit" step
-//!   and no radio-button marker is shown.
+//!   advances with exactly what is highlighted (or submits on the final page)
+//!   — there is no separate "commit" step and no radio-button marker is shown.
 //! - **Multi-select** keeps a separate toggle set: `↑`/`↓` only moves the
-//!   highlight, `Space` toggles a row on/off, and `Enter` submits the whole
-//!   set. The `[x]`/`[ ]` marker stays.
+//!   highlight, `Space` toggles a row on/off, and `Enter` advances to the next
+//!   question or submits the whole set on the final page. The `[x]`/`[ ]`
+//!   marker stays.
 //! - **View**: already pure and lives in `paint::draw_question_modal`, which
 //!   reads straight off the model via the [`QuestionModel`] accessors.
 //! - **Update** ([`QuestionModel::update`]): the pure state transition. It
@@ -82,9 +83,11 @@ pub enum QuestionAction {
     /// first by the caller so the field stays single-line, matching the
     /// inline-edit modal fields. No-op unless "Other" is highlighted.
     Paste(String),
-    /// Submit all answers (Enter). For single-select this submits the
-    /// highlighted option; for multi-select it submits the whole toggle set.
+    /// Advance to the next question, or submit all answers from the final
+    /// question (Enter).
     Submit,
+    /// Return to the previous question (Shift+Tab). No-op on the first page.
+    Previous,
     /// Cancel the modal (Esc).
     Cancel,
 }
@@ -102,6 +105,11 @@ pub enum QuestionEffect {
         request_id: String,
         answers: Vec<Vec<String>>,
     },
+    /// Resolve the parked agent request as cancelled. The event loop sends an
+    /// empty outer answers array, which is the transport-level cancellation
+    /// sentinel; legitimate multi-select answers retain one inner array per
+    /// question even when no options were chosen.
+    Cancelled { request_id: String },
     /// The modal closed (submit or cancel). The loop should drop the current
     /// request from the pending queue and, if the queue is now empty, clear
     /// the modal.
@@ -121,9 +129,10 @@ pub struct QuestionModel {
     /// Which question the user is currently answering (0-based). Multiple
     /// questions are presented one at a time; this is the page cursor.
     current: usize,
-    /// Which option row is highlighted for *the active question* (0-based,
-    /// where `options.len()` is the synthetic "Other" row).
-    highlight: usize,
+    /// Per-question highlighted option rows (0-based, where `options.len()` is
+    /// the synthetic "Other" row). Keeping one cursor per page makes backward
+    /// navigation lossless.
+    highlights: Vec<usize>,
     /// Per-question selected option indices. Parallels `request.questions`.
     /// Multi-select questions may hold several (and never include the
     /// highlight unless toggled); single-select questions always hold exactly
@@ -147,11 +156,12 @@ impl QuestionModel {
             .iter()
             .map(|q| if q.multi_select { Vec::new() } else { vec![0] })
             .collect();
+        let highlights = request.questions.iter().map(|_| 0).collect();
         let other_text = request.questions.iter().map(|_| String::new()).collect();
         Self {
             request,
             current: 0,
-            highlight: 0,
+            highlights,
             selected,
             other_text,
         }
@@ -166,7 +176,7 @@ impl QuestionModel {
         self.current
     }
     pub fn highlight(&self) -> usize {
-        self.highlight
+        self.highlights.get(self.current).copied().unwrap_or(0)
     }
     pub fn selected(&self) -> &[Vec<usize>] {
         &self.selected
@@ -183,7 +193,7 @@ impl QuestionModel {
     /// composition window to the field) or hide it (a plain option pick has no
     /// text surface). See [`QuestionModel::other_index_of`].
     pub fn is_other_highlighted(&self) -> bool {
-        self.highlight == self.other_index_of(self.current)
+        self.highlight() == self.other_index_of(self.current)
     }
 
     /// The active question, or `None` if the model is somehow empty. The
@@ -211,9 +221,10 @@ impl QuestionModel {
         if multi {
             return;
         }
+        let highlight = self.highlights.get(q).copied().unwrap_or(0);
         if let Some(sel) = self.selected.get_mut(q) {
             sel.clear();
-            sel.push(self.highlight);
+            sel.push(highlight);
         }
     }
 
@@ -269,6 +280,7 @@ impl QuestionModel {
         };
         let rows = option_rows(q);
         let q = self.current;
+        let highlight = self.highlights.get(q).copied().unwrap_or(0);
         let multi = self
             .request
             .questions
@@ -278,16 +290,17 @@ impl QuestionModel {
 
         let effects = match action {
             QuestionAction::Up => {
-                self.highlight = if self.highlight == 0 {
+                let next = if highlight == 0 {
                     rows.saturating_sub(1)
                 } else {
-                    self.highlight - 1
+                    highlight - 1
                 };
+                self.highlights[q] = next;
                 self.sync_selection(q, multi);
                 Vec::new()
             }
             QuestionAction::Down => {
-                self.highlight = (self.highlight + 1) % rows.max(1);
+                self.highlights[q] = (highlight + 1) % rows.max(1);
                 self.sync_selection(q, multi);
                 Vec::new()
             }
@@ -297,7 +310,7 @@ impl QuestionModel {
                 // already the selection, but syncing keeps the invariant
                 // bulletproof if anything ever leaves them out of step.
                 if multi {
-                    self.toggle(self.highlight, q, multi);
+                    self.toggle(highlight, q, multi);
                 } else {
                     self.sync_selection(q, multi);
                 }
@@ -305,7 +318,7 @@ impl QuestionModel {
             }
             QuestionAction::Select(n) => {
                 if n > 0 && n <= rows {
-                    self.highlight = n - 1;
+                    self.highlights[q] = n - 1;
                     self.toggle(n - 1, q, multi);
                     // single-select: `toggle` already replaced the selection
                     // with n-1 == highlight, so we are synced.
@@ -314,7 +327,7 @@ impl QuestionModel {
             }
             QuestionAction::InsertChar(c) => {
                 let other_idx = self.other_index_of(q);
-                if self.highlight == other_idx
+                if highlight == other_idx
                     && let Some(text) = self.other_text.get_mut(q)
                 {
                     text.push(c);
@@ -323,7 +336,7 @@ impl QuestionModel {
             }
             QuestionAction::Backspace => {
                 let other_idx = self.other_index_of(q);
-                if self.highlight == other_idx
+                if highlight == other_idx
                     && let Some(text) = self.other_text.get_mut(q)
                 {
                     text.pop();
@@ -335,7 +348,7 @@ impl QuestionModel {
                 // has a text surface. The caller (event loop) has already
                 // stripped newlines, so this is a plain append.
                 let other_idx = self.other_index_of(q);
-                if self.highlight == other_idx
+                if highlight == other_idx
                     && let Some(text) = self.other_text.get_mut(q)
                 {
                     text.push_str(&pasted);
@@ -343,22 +356,36 @@ impl QuestionModel {
                 Vec::new()
             }
             QuestionAction::Submit => {
-                // Selections are already committed (single-select is live, and
-                // multi-select was toggled explicitly), so submit just
-                // computes the reply from the current model state.
-                let request_id = self.request.id.clone();
-                let answers = self.compute_answers();
-                vec![
-                    QuestionEffect::Reply {
-                        request_id: request_id.clone(),
-                        answers,
-                    },
-                    QuestionEffect::Closed { request_id },
-                ]
+                if self.current + 1 < self.request.questions.len() {
+                    self.current += 1;
+                    Vec::new()
+                } else {
+                    // Selections are already committed (single-select is live,
+                    // and multi-select was toggled explicitly), so the final
+                    // page computes and submits the complete reply.
+                    let request_id = self.request.id.clone();
+                    let answers = self.compute_answers();
+                    vec![
+                        QuestionEffect::Reply {
+                            request_id: request_id.clone(),
+                            answers,
+                        },
+                        QuestionEffect::Closed { request_id },
+                    ]
+                }
+            }
+            QuestionAction::Previous => {
+                self.current = self.current.saturating_sub(1);
+                Vec::new()
             }
             QuestionAction::Cancel => {
                 let request_id = self.request.id.clone();
-                vec![QuestionEffect::Closed { request_id }]
+                vec![
+                    QuestionEffect::Cancelled {
+                        request_id: request_id.clone(),
+                    },
+                    QuestionEffect::Closed { request_id },
+                ]
             }
         };
 
@@ -759,14 +786,19 @@ mod tests {
     }
 
     #[test]
-    fn cancel_emits_only_closed_no_reply() {
+    fn cancel_emits_cancelled_then_closed() {
         let m = QuestionModel::open(single_select_req());
         let (_, eff) = m.update(QuestionAction::Cancel);
         assert_eq!(
             eff,
-            vec![QuestionEffect::Closed {
-                request_id: "q1".into()
-            }]
+            vec![
+                QuestionEffect::Cancelled {
+                    request_id: "q1".into()
+                },
+                QuestionEffect::Closed {
+                    request_id: "q1".into()
+                },
+            ]
         );
     }
 
@@ -957,10 +989,12 @@ mod tests {
 
     #[test]
     fn two_question_reply_carries_one_array_per_question() {
-        // Open a two-question request and submit without changing selections:
-        // both single-select questions keep their default first option.
-        // The reply carries one answer array per question, in question order.
+        // Enter on the first page advances without effects. Enter on the final
+        // page submits one answer array per question, in question order.
         let m = QuestionModel::open(two_question_req());
+        let (m, effects) = m.update(QuestionAction::Submit);
+        assert!(effects.is_empty());
+        assert_eq!(m.current(), 1);
         let (_, eff) = m.update(QuestionAction::Submit);
         // q0 single-select defaults [x]; q1 single-select defaults [y].
         assert_eq!(
@@ -979,8 +1013,8 @@ mod tests {
 
     #[test]
     fn cancel_discards_pending_selections() {
-        // Even after making selections, Cancel emits only Closed — no reply,
-        // so the agent sees the question was dismissed without an answer.
+        // Even after making selections, Cancel emits an explicit cancellation
+        // before closing, so the agent's parked request always resolves.
         let m = QuestionModel::open(multi_select_req());
         let m = m.update(QuestionAction::Select(1)).0;
         let m = m.update(QuestionAction::Select(2)).0;
@@ -988,10 +1022,33 @@ mod tests {
         let (_, eff) = m.update(QuestionAction::Cancel);
         assert_eq!(
             eff,
-            vec![QuestionEffect::Closed {
-                request_id: "q2".into()
-            }]
+            vec![
+                QuestionEffect::Cancelled {
+                    request_id: "q2".into()
+                },
+                QuestionEffect::Closed {
+                    request_id: "q2".into()
+                },
+            ]
         );
+    }
+
+    #[test]
+    fn paged_navigation_preserves_each_question_cursor_and_selection() {
+        let m = QuestionModel::open(two_question_req());
+        let m = m.update(QuestionAction::Submit).0;
+        assert_eq!(m.current(), 1);
+        let m = m.update(QuestionAction::Select(2)).0;
+        assert_eq!(m.highlight(), 1);
+        assert_eq!(m.selected(), &[vec![0], vec![1]]);
+
+        let m = m.update(QuestionAction::Previous).0;
+        assert_eq!(m.current(), 0);
+        assert_eq!(m.highlight(), 0);
+        let m = m.update(QuestionAction::Submit).0;
+        assert_eq!(m.current(), 1);
+        assert_eq!(m.highlight(), 1);
+        assert_eq!(m.selected(), &[vec![0], vec![1]]);
     }
 
     // ── Full interaction script (regression) ─────────────────────────────
@@ -1171,6 +1228,14 @@ mod tests {
         let m = QuestionModel::open(two_question_req());
         let mut film = String::new();
         film.push_str("=== open: Question 1/2 ===\n");
+        film.push_str(&render_question_grid(&m, 64, 16));
+
+        let m = m.update(QuestionAction::Submit).0;
+        film.push_str("\n\n=== Enter → Question 2/2 ===\n");
+        film.push_str(&render_question_grid(&m, 64, 16));
+
+        let m = m.update(QuestionAction::Previous).0;
+        film.push_str("\n\n=== Shift+Tab → Question 1/2 ===\n");
         film.push_str(&render_question_grid(&m, 64, 16));
 
         insta::assert_snapshot!(film);

@@ -55,12 +55,12 @@ define_builtin_commands! {
     Connections = "/connections"  : "Manage LLM provider connections",
     Tools       = "/tools"        : "Manage session tools (enable/disable)",
     Mcp         = "/mcp"          : "Manage MCP servers (enable/disable, reconnect)",
-    Compact     = "/compact"      : "Compact older complete turns now",
+    Compact     = "/compact"      : "Compact older complete rounds now",
     Clear       = "/clear"        : "Clear the conversation history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
     Config      = "/config"       : "Open user configuration",
     Unattended  = "/unattended"   : "Toggle unattended mode — agent runs without human intervention (on/off)",
-    Review      = "/review"       : "Run an on-demand session-review diagnostic of the current turn",
+    Review      = "/review"       : "Run an on-demand session-review diagnostic of the current round",
     Search      = "/search"       : "Semantic search over the project's session history",
     Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
     Sessions    = "/sessions"     : "Browse past sessions",
@@ -141,7 +141,12 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
 
     if let Some(id) = attach {
         if rest.is_empty() {
-            return (StartupMode::Attach(id), project, unattended, single_instance);
+            return (
+                StartupMode::Attach(id),
+                project,
+                unattended,
+                single_instance,
+            );
         }
         // `--attach` with a positional subcommand is ambiguous (the client
         // drives a remote session; local modes like resume/doctor do not
@@ -238,7 +243,6 @@ pub fn init_tracing() -> Option<WorkerGuard> {
     tracing::info!(log_dir = %dir.display(), level = %level, "neenee tracing initialised");
     Some(guard)
 }
-
 
 #[cfg(test)]
 mod tests {

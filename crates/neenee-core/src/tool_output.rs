@@ -218,7 +218,8 @@ pub enum ShellTermination {
     /// The wall-clock timeout ceiling was reached (the command was producing
     /// output but running too long). The child was killed.
     Timeout,
-    /// The turn was cancelled (operator interrupt). The child was killed.
+    /// The tool execution was cancelled by an operator interrupt. The child
+    /// was killed.
     Cancelled,
 }
 

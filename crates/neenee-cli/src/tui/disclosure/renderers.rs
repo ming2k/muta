@@ -1648,8 +1648,8 @@ pub fn draw_tool_step(
     };
     let expanded = msg.tool_step_expanded() == Some(true);
 
-    // Run state is conveyed by color alone: a steady `info` accent while
-    // running, red on failure, muted when cancelled, and neutral on success.
+    // Run state is conveyed by color alone: muted while running, red on
+    // failure, dim when cancelled, and weight-only on success.
     // There is no status glyph or per-tool icon in the summary. The summary
     // text color is resolved through the shared state machine: a non-completed
     // lifecycle supplies an accent that supplies the hue while the disclosure ×
@@ -1872,7 +1872,7 @@ pub fn draw_tool_step(
         }
 
         // No trailing bottom gap here: the layout resolves the semantic
-        // boundary to the next component. Same-round tool siblings use zero
+        // boundary to the next component. Same-turn tool siblings use zero
         // rows; every other segment uses one, independent of disclosure state.
     }
 
@@ -1997,12 +1997,11 @@ fn draw_reasoning_summary(
     let marker = marker_override.unwrap_or(if expanded { "-" } else { "+" });
     let summary_line_idx = *ctx.content_lines;
     // A reasoning trace's lifecycle is carried by the summary text (duration
-    // omitted while streaming) and the steady `info` hue — never by the
-    // marker, which is always the disclosure `+`/`-`. So no accent is
-    // supplied and the summary color is the pure disclosure × interaction
-    // weight from the shared state machine (three-tone, hover-priority):
-    // hovered/focused → intermediate hover tone (regardless of disclosure),
-    // expanded + idle → primary foreground, collapsed + idle → muted.
+    // omitted while streaming), never by the marker, which is always the
+    // disclosure `+`/`-`. So no accent is supplied and the summary color is
+    // the pure disclosure × interaction weight from the shared state machine:
+    // expanded → primary foreground; collapsed + hovered/focused →
+    // intermediate hover tone; collapsed + idle → muted.
     //
     // The marker shares that same color so the disclosure affordance reads as
     // one visual unit with the summary text — matching how tool steps render

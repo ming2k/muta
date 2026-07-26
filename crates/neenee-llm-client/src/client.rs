@@ -5,7 +5,7 @@
 //! and TLS session cache on every turn, so keep-alive and TLS resumption never
 //! carried across requests. One [`Client`] lives for the provider's lifetime
 //! (a provider is built once per session), so a single pool is reused across
-//! every chat, stream, and tool round.
+//! every chat, stream, and ReAct turn.
 //!
 //! A protocol builds a fully-formed [`reqwest::RequestBuilder`] — URL, auth
 //! headers, JSON body, all vendor-specific — and hands it to [`Client::send`]

@@ -6,7 +6,9 @@ use neenee_tui_engine::{
 
 use neenee_core::{PermissionRequest, UserQuestionRequest};
 
-use crate::tui::components::options::{ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled};
+use crate::tui::components::options::{
+    ChoiceMarker, ChoiceOptionRow, ChoiceTone, push_wrapped_styled,
+};
 use crate::tui::model::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::tui::primitives::{
     FixedModalSpec, FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame,
@@ -28,11 +30,12 @@ const PERMISSION_COLLAPSED_BODY_CAP: u16 = 2;
 /// Max body rows when "Details" is expanded; the rest is scrollable.
 const PERMISSION_MAX_BODY_ROWS: u16 = 14;
 
-/// options; the user navigates with ↑/↓, selects with Space or Enter, and
-/// submits with Enter. Multi-select questions use checkboxes; single-select
+/// options; the user navigates with ↑/↓, selects with Space, and advances with
+/// Enter. Multi-select questions use checkboxes; single-select
 /// shows no marker at all — the highlight *is* the selection (it moves live
-/// with ↑/↓ and a digit jump), so pressing Enter submits the highlighted row
-/// directly. A numbered digit key (1-9) jumps directly to an option.
+/// with ↑/↓ and a digit jump). Enter advances to the next question or submits
+/// all answers on the final page. A numbered digit key (1-9) jumps directly to
+/// an option; Shift+Tab returns to the previous question.
 const OTHER_OPTION_LABEL: &str = "Other";
 
 #[allow(clippy::too_many_arguments)] // modal draw fns thread many context args by nature
@@ -238,11 +241,19 @@ pub fn draw_question_modal(
         // Single-select is live (the highlight is the selection), so there is
         // no "select" action to advertise — Space is a no-op there. Only
         // multi-select offers the Space toggle.
+        let enter_label = if current_question + 1 < total {
+            "next"
+        } else {
+            "submit"
+        };
         let mut hints = vec![
             FooterHint::navigation("↑↓", "navigate"),
             FooterHint::navigation("wheel/Pg", "scroll"),
-            FooterHint::primary("Enter", "submit"),
+            FooterHint::primary("Enter", enter_label),
         ];
+        if current_question > 0 {
+            hints.push(FooterHint::secondary("⇧Tab", "back"));
+        }
         if question.is_some_and(|q| q.multi_select) {
             hints.push(FooterHint::secondary("Space", "select"));
         }

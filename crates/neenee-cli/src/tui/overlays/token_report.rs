@@ -1,9 +1,9 @@
 //! Context-usage modal: current AI-visible context plus request usage grouped
-//! by user turn. Opening a turn reveals the model rounds inside it; provider
+//! by user round. Opening a round reveals the model turns inside it; provider
 //! and model remain ledger metadata rather than the report's navigation axis.
 //!
 //! Opened by clicking the context meter in the hint bar. Up and down select a
-//! turn, Enter opens its rounds, and Esc backs out or closes. Token provenance
+//! round, Enter opens its turns, and Esc backs out or closes. Token provenance
 //! is encoded directly on values: provider-reported counts are bold, local
 //! estimates are underlined, and mixed totals use both styles.
 
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use neenee_core::{
     ContextTokenSnapshot, ContextTokenSource, RequestUsageRecord, RequestUsageSource,
-    RequestUsageStatus, TokenRound, TokenSourceReport,
+    RequestUsageStatus, TokenSourceReport, TokenTurn,
 };
 use neenee_tui_engine::{
     Frame, Modifier, Style, {Line, Span},
@@ -33,16 +33,16 @@ pub struct ContextUsageView {
     pub window_tokens: usize,
 }
 
-/// Number of user turns represented by a report.
+/// Number of user rounds represented by a report.
 ///
 /// Kept beside the renderer so shell navigation and rendered grouping always
-/// use the same definition of a turn.
-pub fn token_report_turn_count(report: &TokenSourceReport) -> usize {
-    usage_turns(report).len()
+/// use the same definition of a round.
+pub fn token_report_round_count(report: &TokenSourceReport) -> usize {
+    usage_rounds(report).len()
 }
 
-/// Draw the turn list or, when `detail` is set, the round breakdown for the
-/// selected turn. `scroll` drives the visible body and is clamped by the shared
+/// Draw the round list or, when `detail` is set, the turn breakdown for the
+/// selected round. `scroll` drives the visible body and is clamped by the shared
 /// modal renderer. Returns the painted panel rectangle.
 pub fn draw_token_report_modal(
     frame: &mut Frame,
@@ -59,20 +59,20 @@ pub fn draw_token_report_modal(
         .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
         .max(1);
 
-    let turn_count = token_report_turn_count(report);
-    let drill = detail && turn_count > 0;
-    let selected = selected.min(turn_count.saturating_sub(1));
+    let round_count = token_report_round_count(report);
+    let drill = detail && round_count > 0;
+    let selected = selected.min(round_count.saturating_sub(1));
 
     let (title, body, footer): (&str, Vec<Line>, Vec<FooterHint>) = if drill {
         (
-            "Turn Usage",
+            "Round Usage",
             detail_body(report, selected, body_width, theme),
             vec![
                 FooterHint::always("↑↓", "scroll"),
-                FooterHint::always("Esc", "turns"),
+                FooterHint::always("Esc", "rounds"),
             ],
         )
-    } else if turn_count == 0 {
+    } else if round_count == 0 {
         (
             "Context Usage",
             list_body(
@@ -98,7 +98,7 @@ pub fn draw_token_report_modal(
             ),
             vec![
                 FooterHint::always("↑↓", "select"),
-                FooterHint::always("Enter", "rounds"),
+                FooterHint::always("Enter", "turns"),
                 FooterHint::always("Esc", "close"),
             ],
         )
@@ -139,7 +139,7 @@ pub fn draw_token_report_modal(
     area
 }
 
-/// Top level: one selectable row per user turn.
+/// Top level: one selectable row per user round.
 fn list_body(
     report: &TokenSourceReport,
     current_context: Option<ContextTokenSnapshot>,
@@ -148,7 +148,7 @@ fn list_body(
     body_width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let turns = usage_turns(report);
+    let rounds = usage_rounds(report);
     let mut body = Vec::new();
 
     body.push(section_heading("Current AI-visible context", theme));
@@ -181,7 +181,7 @@ fn list_body(
     body.push(section_heading("Request usage", theme));
     body.extend(provenance_legend(body_width, theme));
 
-    if turns.is_empty() {
+    if rounds.is_empty() {
         body.push(placeholder(
             "No model request attempts recorded yet.",
             true,
@@ -191,12 +191,12 @@ fn list_body(
     }
 
     const TOKENS_W: usize = 12;
-    const ROUNDS_W: usize = 9;
-    let label_width = body_width.saturating_sub(TOKENS_W + ROUNDS_W + 3).max(10);
+    const TURNS_W: usize = 9;
+    let label_width = body_width.saturating_sub(TOKENS_W + TURNS_W + 3).max(10);
 
     body.push(Line::from(vec![
         Span::styled(
-            format!("  {:<width$}", "Turn", width = label_width),
+            format!("  {:<width$}", "Round", width = label_width),
             Style::default().fg(theme.muted()),
         ),
         Span::styled(
@@ -204,16 +204,16 @@ fn list_body(
             Style::default().fg(theme.muted()),
         ),
         Span::styled(
-            format!(" {:>width$}", "Rounds", width = ROUNDS_W),
+            format!(" {:>width$}", "Turns", width = TURNS_W),
             Style::default().fg(theme.muted()),
         ),
     ]));
     body.push(rule(body_width, theme));
 
-    for (index, turn) in turns.iter().enumerate() {
+    for (index, round) in rounds.iter().enumerate() {
         let is_selected = index == selected;
         let marker = if is_selected { "> " } else { "  " };
-        let label = truncate_str(&turn_label(turn.number), label_width);
+        let label = truncate_str(&round_label(round.number), label_width);
         let label_style = if is_selected {
             Style::default()
                 .fg(theme.brand())
@@ -221,15 +221,15 @@ fn list_body(
         } else {
             Style::default().fg(theme.fg())
         };
-        let token_text = if turn.totals.has_tokens() {
-            fmt_tokens(turn.totals.total())
+        let token_text = if round.totals.has_tokens() {
+            fmt_tokens(round.totals.total())
         } else {
             "—".to_string()
         };
-        let round_text = if turn.totals.pending {
-            format!("{} …", turn.rounds.len())
+        let turn_text = if round.totals.pending {
+            format!("{} …", round.turns.len())
         } else {
-            format!("{} ›", turn.rounds.len())
+            format!("{} ›", round.turns.len())
         };
 
         body.push(Line::from(vec![
@@ -239,11 +239,11 @@ fn list_body(
             ),
             Span::styled(
                 format!("{token_text:>width$}", width = TOKENS_W),
-                provenance_style(&turn.totals, theme),
+                provenance_style(&round.totals, theme),
             ),
             Span::styled(
-                format!(" {round_text:>width$}", width = ROUNDS_W),
-                if turn.totals.pending {
+                format!(" {turn_text:>width$}", width = TURNS_W),
+                if round.totals.pending {
                     Style::default().fg(theme.info())
                 } else {
                     Style::default().fg(theme.muted())
@@ -272,76 +272,76 @@ fn list_body(
             ),
         ),
         Span::styled(
-            format!(" {:>width$}", "", width = ROUNDS_W),
+            format!(" {:>width$}", "", width = TURNS_W),
             Style::default(),
         ),
     ]));
 
     body.push(Line::from(""));
     body.push(Line::from(Span::styled(
-        "Enter a turn to inspect its model rounds.",
+        "Enter a round to inspect its model turns.",
         Style::default().fg(theme.muted()),
     )));
     body
 }
 
-/// Second level: aggregate all request attempts into the model rounds of one
-/// selected user turn.
+/// Second level: aggregate all request attempts into the model turns of one
+/// selected user round.
 fn detail_body(
     report: &TokenSourceReport,
     selected: usize,
     body_width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let turns = usage_turns(report);
-    let turn = &turns[selected];
+    let rounds = usage_rounds(report);
+    let round = &rounds[selected];
     let mut body = Vec::new();
 
-    body.push(section_heading(&turn_label(turn.number), theme));
+    body.push(section_heading(&round_label(round.number), theme));
     body.push(Line::from(""));
     body.push(kv_styled(
         "Total",
-        &fmt_tokens(turn.totals.total()),
-        provenance_style(&turn.totals, theme),
+        &fmt_tokens(round.totals.total()),
+        provenance_style(&round.totals, theme),
         theme,
     ));
-    let attempt_count = turn
-        .rounds
+    let attempt_count = round
+        .turns
         .values()
-        .map(|round| round.attempt_count)
+        .map(|turn| turn.attempt_count)
         .sum::<usize>();
     body.push(kv_styled(
-        "Rounds / attempts",
-        &format!("{} / {attempt_count}", turn.rounds.len()),
+        "Turns / attempts",
+        &format!("{} / {attempt_count}", round.turns.len()),
         Style::default().fg(theme.fg()),
         theme,
     ));
-    if turn.totals.known_split {
+    if round.totals.known_split {
         body.push(kv_styled(
             "Input / output",
             &format!(
                 "{} / {}",
-                fmt_tokens(turn.totals.prompt_tokens),
-                fmt_tokens(turn.totals.completion_tokens)
+                fmt_tokens(round.totals.prompt_tokens),
+                fmt_tokens(round.totals.completion_tokens)
             ),
-            provenance_style(&turn.totals, theme),
+            provenance_style(&round.totals, theme),
             theme,
         ));
     }
 
-    if turn.totals.cache_read_tokens > 0 || turn.totals.cache_write_tokens > 0 {
-        let uncached = (turn.totals.reported_tokens
-            - turn.totals.cache_read_tokens
-            - turn.totals.cache_write_tokens)
+    if round.totals.cache_read_tokens > 0 || round.totals.cache_write_tokens > 0 {
+        let uncached = (round.totals.reported_tokens
+            - round.totals.cache_read_tokens
+            - round.totals.cache_write_tokens)
             .max(0);
-        let denominator = (turn.totals.cache_read_tokens + uncached).max(1) as f64;
-        let hit_rate = (turn.totals.cache_read_tokens as f64 / denominator * 100.0).round() as i64;
+        let denominator = (round.totals.cache_read_tokens + uncached).max(1) as f64;
+        let hit_rate = (round.totals.cache_read_tokens as f64 / denominator * 100.0).round() as i64;
         body.push(kv_styled(
             "Cache read / write",
             &format!(
                 "{} / {}",
-                fmt_tokens(turn.totals.cache_read_tokens),
-                fmt_tokens(turn.totals.cache_write_tokens)
+                fmt_tokens(round.totals.cache_read_tokens),
+                fmt_tokens(round.totals.cache_write_tokens)
             ),
             reported_style(theme),
             theme,
@@ -355,7 +355,7 @@ fn detail_body(
     }
 
     body.push(Line::from(""));
-    body.push(section_heading("Rounds", theme));
+    body.push(section_heading("Turns", theme));
     body.extend(provenance_legend(body_width, theme));
     body.push(rule(body_width, theme));
 
@@ -367,28 +367,28 @@ fn detail_body(
         body.push(Line::from(Span::styled(
             format!(
                 "{:<round_width$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
-                "Round", "State", "Input", "Output", "Total"
+                "Turn", "State", "Input", "Output", "Total"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for round in turn.rounds.values() {
-            let label = truncate_str(&round_label(round), round_width);
-            let (state, state_style) = round_state(round, theme);
-            let (input, output) = if round.totals.known_split {
+        for turn in round.turns.values() {
+            let label = truncate_str(&turn_label(turn), round_width);
+            let (state, state_style) = turn_state(turn, theme);
+            let (input, output) = if turn.totals.known_split {
                 (
-                    fmt_tokens(round.totals.prompt_tokens),
-                    fmt_tokens(round.totals.completion_tokens),
+                    fmt_tokens(turn.totals.prompt_tokens),
+                    fmt_tokens(turn.totals.completion_tokens),
                 )
             } else {
                 ("—".to_string(), "—".to_string())
             };
-            let total = if round.totals.has_tokens() {
-                fmt_tokens(round.totals.total())
+            let total = if turn.totals.has_tokens() {
+                fmt_tokens(turn.totals.total())
             } else {
                 "—".to_string()
             };
-            let value_style = provenance_style(&round.totals, theme);
+            let value_style = provenance_style(&turn.totals, theme);
             body.push(Line::from(vec![
                 Span::styled(
                     format!("{label:<round_width$}"),
@@ -407,16 +407,16 @@ fn detail_body(
         body.push(Line::from(Span::styled(
             format!(
                 "{:<round_width$}{:<STATE_W$}{:>TOTAL_W$}",
-                "Round", "State", "Tokens"
+                "Turn", "State", "Tokens"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for round in turn.rounds.values() {
-            let label = truncate_str(&round_label(round), round_width);
-            let (state, state_style) = round_state(round, theme);
-            let total = if round.totals.has_tokens() {
-                fmt_tokens(round.totals.total())
+        for turn in round.turns.values() {
+            let label = truncate_str(&turn_label(turn), round_width);
+            let (state, state_style) = turn_state(turn, theme);
+            let total = if turn.totals.has_tokens() {
+                fmt_tokens(turn.totals.total())
             } else {
                 "—".to_string()
             };
@@ -428,7 +428,7 @@ fn detail_body(
                 Span::styled(format!("{state:<STATE_W$}"), state_style),
                 Span::styled(
                     format!("{total:>TOTAL_W$}"),
-                    provenance_style(&round.totals, theme),
+                    provenance_style(&turn.totals, theme),
                 ),
             ]));
         }
@@ -462,19 +462,19 @@ impl UsageTotals {
         );
     }
 
-    fn add_legacy(&mut self, round: &TokenRound) {
+    fn add_legacy(&mut self, turn: &TokenTurn) {
         self.add(
-            if round.reported {
+            if turn.reported {
                 RequestUsageSource::Reported
             } else {
                 RequestUsageSource::Estimated
             },
-            round.prompt_tokens,
-            round.completion_tokens,
-            round.total_tokens,
-            round.cache_write_tokens,
-            round.cache_read_tokens,
-            round.prompt_tokens > 0 || round.completion_tokens > 0,
+            turn.prompt_tokens,
+            turn.completion_tokens,
+            turn.total_tokens,
+            turn.cache_write_tokens,
+            turn.cache_read_tokens,
+            turn.prompt_tokens > 0 || turn.completion_tokens > 0,
         );
     }
 
@@ -524,36 +524,36 @@ impl UsageTotals {
 }
 
 #[derive(Debug)]
-struct TurnUsage {
+struct RoundUsage {
     number: u64,
     totals: UsageTotals,
-    rounds: BTreeMap<(bool, String, u32), RoundUsage>,
+    turns: BTreeMap<(bool, String, u32), TurnUsage>,
 }
 
-impl TurnUsage {
+impl RoundUsage {
     fn new(number: u64) -> Self {
         Self {
             number,
             totals: UsageTotals::default(),
-            rounds: BTreeMap::new(),
+            turns: BTreeMap::new(),
         }
     }
 
     fn add_record(&mut self, record: &RequestUsageRecord) {
         let actor = record.key.actor_id.clone();
         let key = (actor != "principal", actor.clone(), record.key.turn);
-        let round = self.rounds.entry(key).or_insert_with(|| RoundUsage {
+        let turn = self.turns.entry(key).or_insert_with(|| TurnUsage {
             actor,
             number: record.key.turn,
             ..Default::default()
         });
-        round.add_record(record);
+        turn.add_record(record);
         self.totals.add_record(record);
     }
 
-    fn add_legacy(&mut self, round: &TokenRound) {
-        let number = if round.round == 0 {
-            self.rounds
+    fn add_legacy(&mut self, turn: &TokenTurn) {
+        let number = if turn.turn == 0 {
+            self.turns
                 .keys()
                 .filter(|(_, actor, _)| actor == "principal")
                 .map(|(_, _, number)| *number)
@@ -561,23 +561,23 @@ impl TurnUsage {
                 .unwrap_or(0)
                 .saturating_add(1)
         } else {
-            round.round
+            turn.turn
         };
         let item = self
-            .rounds
+            .turns
             .entry((false, "principal".to_string(), number))
-            .or_insert_with(|| RoundUsage {
+            .or_insert_with(|| TurnUsage {
                 actor: "principal".to_string(),
                 number,
                 ..Default::default()
             });
-        item.add_legacy(round);
-        self.totals.add_legacy(round);
+        item.add_legacy(turn);
+        self.totals.add_legacy(turn);
     }
 }
 
 #[derive(Debug)]
-struct RoundUsage {
+struct TurnUsage {
     actor: String,
     number: u32,
     totals: UsageTotals,
@@ -586,7 +586,7 @@ struct RoundUsage {
     latest_status: RequestUsageStatus,
 }
 
-impl Default for RoundUsage {
+impl Default for TurnUsage {
     fn default() -> Self {
         Self {
             actor: "principal".to_string(),
@@ -599,7 +599,7 @@ impl Default for RoundUsage {
     }
 }
 
-impl RoundUsage {
+impl TurnUsage {
     fn add_record(&mut self, record: &RequestUsageRecord) {
         self.attempt_count = self.attempt_count.saturating_add(1);
         if record.key.attempt >= self.latest_attempt {
@@ -609,37 +609,37 @@ impl RoundUsage {
         self.totals.add_record(record);
     }
 
-    fn add_legacy(&mut self, round: &TokenRound) {
+    fn add_legacy(&mut self, turn: &TokenTurn) {
         self.attempt_count = self.attempt_count.saturating_add(1);
         self.latest_attempt = self.latest_attempt.max(1);
         self.latest_status = RequestUsageStatus::Completed;
-        self.totals.add_legacy(round);
+        self.totals.add_legacy(turn);
     }
 }
 
-/// Regroup the provider/model ledger rows into the user-facing Turn -> Round
-/// hierarchy. Lifecycle records are authoritative when present; `rounds` is
+/// Regroup the provider/model ledger rows into the user-facing Round -> Turn
+/// hierarchy. Lifecycle records are authoritative when present; `turns` is
 /// retained as a fallback for legacy in-memory bookings.
-fn usage_turns(report: &TokenSourceReport) -> Vec<TurnUsage> {
-    let mut turns = BTreeMap::<u64, TurnUsage>::new();
+fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
+    let mut rounds = BTreeMap::<u64, RoundUsage>::new();
     for row in &report.rows {
         if row.requests.is_empty() {
-            for round in &row.rounds {
-                turns
-                    .entry(round.turn)
-                    .or_insert_with(|| TurnUsage::new(round.turn))
-                    .add_legacy(round);
+            for turn in &row.turns {
+                rounds
+                    .entry(turn.round)
+                    .or_insert_with(|| RoundUsage::new(turn.round))
+                    .add_legacy(turn);
             }
         } else {
             for record in &row.requests {
-                turns
+                rounds
                     .entry(record.key.round)
-                    .or_insert_with(|| TurnUsage::new(record.key.round))
+                    .or_insert_with(|| RoundUsage::new(record.key.round))
                     .add_record(record);
             }
         }
     }
-    turns.into_values().collect()
+    rounds.into_values().collect()
 }
 
 fn provenance_legend(body_width: usize, theme: &Theme) -> Vec<Line<'static>> {
@@ -673,29 +673,29 @@ fn section_heading(text: &str, theme: &Theme) -> Line<'static> {
     ))
 }
 
-fn turn_label(number: u64) -> String {
+fn round_label(number: u64) -> String {
     if number == 0 {
         "Earlier usage".to_string()
     } else {
-        format!("Turn {number}")
+        format!("Round {number}")
     }
 }
 
-fn round_label(round: &RoundUsage) -> String {
-    let base = if round.actor == "principal" {
-        format!("Round {}", round.number)
+fn turn_label(turn: &TurnUsage) -> String {
+    let base = if turn.actor == "principal" {
+        format!("Turn {}", turn.number)
     } else {
-        format!("Envoy · R{}", round.number)
+        format!("Envoy · T{}", turn.number)
     };
-    if round.attempt_count > 1 {
-        format!("{base} ×{}", round.attempt_count)
+    if turn.attempt_count > 1 {
+        format!("{base} ×{}", turn.attempt_count)
     } else {
         base
     }
 }
 
-fn round_state(round: &RoundUsage, theme: &Theme) -> (String, Style) {
-    let (state, color) = match round.latest_status {
+fn turn_state(turn: &TurnUsage, theme: &Theme) -> (String, Style) {
+    let (state, color) = match turn.latest_status {
         RequestUsageStatus::InFlight => ("in flight", theme.info()),
         RequestUsageStatus::Completed => ("completed", theme.ok()),
         RequestUsageStatus::Interrupted => ("interrupted", theme.warn()),
@@ -838,7 +838,7 @@ mod tests {
     }
 
     #[test]
-    fn request_usage_groups_provider_rows_by_turn_then_round() {
+    fn request_usage_groups_provider_rows_by_round_then_turn() {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
 
@@ -856,33 +856,33 @@ mod tests {
             }),
             0,
         );
-        let second_round =
+        let second_turn =
             ledger.begin_request("session", "another-provider", "model-b", 2, 2, 1_200);
-        ledger.settle_request(&second_round, RequestUsageStatus::Completed, None, 60);
-        let next_turn = ledger.begin_request("session", "relay", "model-a", 3, 1, 1_500);
-        ledger.settle_request(&next_turn, RequestUsageStatus::Completed, None, 75);
+        ledger.settle_request(&second_turn, RequestUsageStatus::Completed, None, 60);
+        let next_round = ledger.begin_request("session", "relay", "model-a", 3, 1, 1_500);
+        ledger.settle_request(&next_round, RequestUsageStatus::Completed, None, 75);
         let report = ledger.snapshot_for_session("session");
 
-        assert_eq!(token_report_turn_count(&report), 2);
+        assert_eq!(token_report_round_count(&report), 2);
         let list = body_text(&list_body(&report, None, 0, 0, 80, &theme));
-        assert!(list.contains("Turn 2"));
-        assert!(list.contains("Turn 3"));
+        assert!(list.contains("Round 2"));
+        assert!(list.contains("Round 3"));
         assert!(!list.contains("relay"));
         assert!(!list.contains("model-a"));
 
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
-        assert!(detail_text.contains("Round 1 ×2"));
-        assert!(detail_text.contains("Round 2"));
+        assert!(detail_text.contains("Turn 1 ×2"));
+        assert!(detail_text.contains("Turn 2"));
         assert!(detail_text.contains("2 / 3"));
         assert!(!detail_text.contains("another-provider"));
 
-        let turn_total = detail
+        let round_total = detail
             .iter()
             .flat_map(|line| &line.spans)
             .find(|span| span.content.trim() == "2.9k")
-            .expect("mixed turn total");
-        assert!(turn_total.style.add.contains(Modifier::BOLD));
-        assert!(turn_total.style.add.contains(Modifier::UNDERLINED));
+            .expect("mixed round total");
+        assert!(round_total.style.add.contains(Modifier::BOLD));
+        assert!(round_total.style.add.contains(Modifier::UNDERLINED));
     }
 }

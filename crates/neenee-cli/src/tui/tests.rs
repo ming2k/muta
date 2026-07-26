@@ -76,12 +76,12 @@ fn transcript_patch_updates_only_the_live_message() {
 }
 
 #[test]
-fn streamed_text_is_appended_only_to_the_current_round() {
+fn streamed_text_is_appended_only_to_the_current_turn() {
     let mut messages = vec![TranscriptMessage::new(Role::Assistant, "older").with_turn(1)];
     let older_id = messages[0].id;
 
     assert_eq!(
-        append_stream_text_delta(&mut messages, Some(2), "new"),
+        append_stream_text_delta(&mut messages, None, Some(2), "new"),
         None
     );
     assert_eq!(
@@ -94,7 +94,7 @@ fn streamed_text_is_appended_only_to_the_current_round() {
     messages.push(TranscriptMessage::new(Role::Assistant, "first").with_turn(2));
     let current_id = messages[1].id;
     assert_eq!(
-        append_stream_text_delta(&mut messages, Some(2), " second"),
+        append_stream_text_delta(&mut messages, None, Some(2), " second"),
         Some(current_id)
     );
     assert_eq!(messages[0].id, older_id);
@@ -107,7 +107,7 @@ fn hidden_reasoning_needs_no_assistant_placeholder() {
     // StreamStart is lifecycle-only. If a hidden-chain reasoning delta is
     // ignored, the transcript remains exactly as it was: no zero-height message
     // can introduce a second semantic separator before the next visible item.
-    let mut messages = vec![TranscriptMessage::new(Role::User, "question").with_turn(1)];
+    let mut messages = vec![TranscriptMessage::new(Role::User, "question").with_round(1)];
     let before = messages[0].id;
 
     begin_stream(&mut messages);
@@ -142,7 +142,7 @@ fn restored_user_message_uses_exact_or_legacy_timestamp() {
 }
 
 #[test]
-fn restored_assistant_tool_step_uses_message_timestamp_for_round_header() {
+fn restored_assistant_tool_step_uses_message_timestamp_for_turn_header() {
     let mut assistant = Message::new(Role::Assistant, "");
     assistant.timestamp = Some(1_700_000_002);
     assistant.tool_calls = Some(vec![ToolCall {
@@ -154,11 +154,12 @@ fn restored_assistant_tool_step_uses_message_timestamp_for_round_header() {
     let restored = transcript_messages_from_core(vec![assistant], &config::TuiConfig::default());
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].sent_at_ms, Some(1_700_000_002_000));
+    assert_eq!(restored[0].round, Some(1));
     assert_eq!(restored[0].turn, Some(1));
 }
 
 #[test]
-fn restored_assistant_components_share_their_model_round() {
+fn restored_assistant_components_share_their_round_and_turn() {
     let mut assistant = Message::new(Role::Assistant, "continue");
     assistant.reasoning_content = Some("inspect first".to_string());
     assistant.tool_calls = Some(vec![ToolCall {
@@ -172,6 +173,7 @@ fn restored_assistant_components_share_their_model_round() {
     assert!(restored[0].is_thinking());
     assert!(restored[1].is_tool_step());
     assert_eq!(restored[2].role, Role::Assistant);
+    assert!(restored.iter().all(|message| message.round == Some(1)));
     assert!(restored.iter().all(|message| message.turn == Some(1)));
 }
 
@@ -201,7 +203,7 @@ fn restored_user_message_origin_inferred_from_shape() {
 }
 
 #[test]
-fn restored_user_insert_keeps_mid_round_origin_and_next_turn_stamp() {
+fn restored_user_insert_keeps_mid_round_origin_without_opening_a_turn() {
     use crate::tui::model::document::UserMessageOrigin;
     let first = Message::new(Role::Assistant, "first answer");
     let inserted = Message::new(Role::User, "one more constraint").with_origin(
@@ -212,7 +214,10 @@ fn restored_user_insert_keeps_mid_round_origin_and_next_turn_stamp() {
     let restored =
         transcript_messages_from_core(vec![first, inserted, second], &config::TuiConfig::default());
     assert_eq!(restored[1].origin, UserMessageOrigin::Insert);
-    assert_eq!(restored[1].turn, Some(2));
+    assert_eq!(restored[1].round, Some(1));
+    assert_eq!(restored[1].turn, None);
+    assert_eq!(restored[2].round, Some(1));
+    assert_eq!(restored[2].turn, Some(2));
 }
 
 #[test]
@@ -222,7 +227,7 @@ fn restored_command_echo_origin_from_durable_provenance() {
     // `CommandEcho` provenance. On resume the stored origin is consulted
     // FIRST (ahead of the shape heuristic), so an echo whose text lacks the
     // `display_content` / `!` shape signals is still classified as a
-    // non-driving command, never as the turn's driving prompt.
+    // non-driving command, never as the round's driving prompt.
     use crate::tui::model::document::UserMessageOrigin;
 
     // A slash echo: content is the literal `/cmd`, no display_content. The
@@ -1018,7 +1023,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         round_count: 0,
         current_turn: 0,
         review_alert: String::new(),
-        turn_started_at: None,
+        round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
         help_scroll: 0,

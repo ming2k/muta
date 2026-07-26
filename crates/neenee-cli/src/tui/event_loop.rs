@@ -242,22 +242,21 @@ pub(super) struct UiRuntime {
     /// render loop copies it into `App::todos` each frame so the Activity
     /// modal stays in sync with the agent's state.
     pub todos: Arc<Mutex<Option<TodoList>>>,
-    /// Live harness turn counter, mirrored from the harness snapshot so the
-    /// task panel can reference the current turn.
-    /// event channel.
+    /// Live harness round counter, mirrored from the harness snapshot so the
+    /// task panel can reference the current round.
     pub round_count: Arc<Mutex<u64>>,
-    /// Current tool round within the active turn (1-indexed for display).
-    /// Set from `AgentResponse::TurnStarted`; reset to 0 at the turn
-    /// boundary so the pre-request phase does not show a stale round.
+    /// Current ReAct turn within the active round (1-indexed for display).
+    /// Set from `RoundEvent::TurnStarted`; reset to 0 at the round
+    /// boundary so the pre-request phase does not show a stale turn.
     pub current_turn: Arc<Mutex<u64>>,
     /// Session-review alert (ADR-0016), or empty when inactive. Mirrored into
     /// `App::review_alert` each frame; while non-empty the activity bar appends
     /// a `⚠ <alert>` segment.
     pub review_alert: Arc<Mutex<String>>,
-    /// Wall-clock instant the current turn started, or `None` between turns.
+    /// Wall-clock instant the current round started, or `None` between rounds.
     /// Set by the response listener on a "running" `HarnessState` and cleared
     /// on idle; drives the muted `<elapsed>` segment in the activity bar.
-    pub turn_started_at: Arc<Mutex<Option<std::time::Instant>>>,
+    pub round_started_at: Arc<Mutex<Option<std::time::Instant>>>,
     /// Pending "unsend" from a Phase-1 interrupt: the response listener sets
     /// this when the harness reports the user's message was unsent (interrupted
     /// before any model output arrived), and the event loop drains it each
@@ -322,7 +321,7 @@ pub(super) enum OauthAddSignal {
     },
 }
 
-/// A user message unsent by a Phase-1 interrupt (the turn was cancelled before
+/// A user message unsent by a Phase-1 interrupt (the round was cancelled before
 /// any model output reached the client). The event loop drains this to restore
 /// the prompt and images into the input box and pop the user message out of the
 /// transcript, mirroring `App::recall_queued`'s composer restore.
@@ -498,9 +497,9 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
             parent_call_id,
         });
         if decision == PermissionDecision::Reject {
-            // A rejection aborts the turn: resolve every other queued request
-            // too, otherwise their tool futures stay blocked and the batch
-            // deadlocks.
+            // A rejection settles the whole concurrent permission batch:
+            // resolve every other queued request too, otherwise their tool
+            // futures stay blocked and the batch deadlocks.
             let queued: Vec<PermissionRequest> =
                 runtime.pending_permission.lock().await.drain(..).collect();
             let mut parents = runtime.envoy_permission_parent.lock().await;
@@ -778,7 +777,7 @@ pub(super) async fn run_app_loop(
             app.round_count = *runtime.round_count.lock().await;
             app.current_turn = *runtime.current_turn.lock().await;
             app.review_alert = runtime.review_alert.lock().await.clone();
-            app.turn_started_at = *runtime.turn_started_at.lock().await;
+            app.round_started_at = *runtime.round_started_at.lock().await;
             app.pending_permission = runtime.pending_permission.lock().await.front().cloned();
             app.key_status = runtime.key_status.lock().await.clone();
             app.provider_picker = runtime.provider_picker.lock().await.clone();
@@ -1136,7 +1135,7 @@ pub(super) async fn run_app_loop(
         // runs (or a toast/armed timer is live) `animating` keeps the spinner
         // and timers advancing at the existing poll cadence.
         let animating = runtime.is_responding.load(Ordering::SeqCst)
-            || app.turn_started_at.is_some()
+            || app.round_started_at.is_some()
             || app.copy_toast_until.is_some()
             || app.ctrl_c_armed_ticks > 0
             || app.esc_armed_ticks > 0
@@ -1323,7 +1322,7 @@ pub(super) async fn run_app_loop(
                         pursuit: app.current_pursuit.as_ref(),
                         todos: app.todos.as_ref(),
                         review_alert: app.review_alert.clone(),
-                        turn_started_at: app.turn_started_at,
+                        round_started_at: app.round_started_at,
                         unattended: app.unattended,
                         hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
                         focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
@@ -1825,7 +1824,7 @@ pub(super) async fn run_app_loop(
                                 ),
                             },
                             app.modal_index
-                                .min(view::token_report_turn_count(&report).saturating_sub(1)),
+                                .min(view::token_report_round_count(&report).saturating_sub(1)),
                             app.token_report_detail,
                             &mut app.token_report_scroll,
                             &app.theme,
@@ -1907,7 +1906,7 @@ pub(super) async fn run_app_loop(
                             .focused_messages()
                             .iter()
                             .rev()
-                            // Only a genuine chat prompt is the turn's driving
+                            // Only a genuine chat prompt is the round's driving
                             // prompt. Slash commands (`/review …`) and shell
                             // passthroughs (`!ls`) are surfaced as `Role::User`
                             // in the transcript but are handled by the harness /
@@ -1930,7 +1929,7 @@ pub(super) async fn run_app_loop(
                                 current_turn: app.current_turn,
                                 review_alert: &app.review_alert,
                                 current_model: app.current_model.as_str(),
-                                turn_started_at: app.turn_started_at,
+                                round_started_at: app.round_started_at,
                                 activity: &status,
                             },
                             &mut app.activity_scroll,
@@ -2361,11 +2360,9 @@ pub(super) async fn run_app_loop(
                             app.idle_sessions.remove(&viewed_session_id);
                             app.running_sessions.insert(viewed_session_id.clone());
                             let sent_at_ms = now_epoch_ms();
-                            let round = runtime.round_count.lock().await.saturating_add(1);
-                            let mut sent = TranscriptMessage::new(Role::User, text.clone())
+                            let sent = TranscriptMessage::new(Role::User, text.clone())
                                 .with_sent_at_ms(sent_at_ms);
                             if !app.in_side_view {
-                                sent = sent.with_turn(round);
                                 runtime.messages.write().await.push(sent);
                             } else {
                                 runtime.side_messages.write().await.push(sent);
@@ -2419,11 +2416,11 @@ pub(super) async fn run_app_loop(
                         .messages
                         .write()
                         .await
-                        // A slash command is surfaced as a user turn in the
+                        // A slash command is surfaced as a user message in the
                         // transcript (so history recall shows the `/cmd`), but
                         // it is NOT the prompt driving the model — the harness
                         // handles it directly. Tag it so the Activity modal
-                        // does not mistake it for the turn's prompt.
+                        // does not mistake it for the round's prompt.
                         .push(
                             TranscriptMessage::new(Role::User, cmd.clone())
                                 .with_origin(UserMessageOrigin::Slash),
@@ -2562,7 +2559,7 @@ pub(super) async fn run_app_loop(
                         .await
                         // A `!command` shell passthrough runs directly through
                         // the bash tool, bypassing the model entirely — it is
-                        // not the turn's driving prompt. Tag it so the
+                        // not the round's driving prompt. Tag it so the
                         // Activity modal does not mistake it for one.
                         .push(
                             TranscriptMessage::new(Role::User, display.clone())
@@ -3525,7 +3522,7 @@ pub(super) async fn run_app_loop(
                 }
                 input::InputAction::CloseModal => {
                     if app.active_modal == Modal::TokenReport && app.token_report_detail {
-                        // First Esc returns from round detail to the turn list;
+                        // First Esc returns from the turn breakdown to the round list;
                         // a second Esc closes the modal.
                         app.token_report_detail = false;
                         app.token_report_scroll = 0;
@@ -3621,7 +3618,7 @@ pub(super) async fn run_app_loop(
                             .token_ledger
                             .as_ref()
                             .map(|ledger| {
-                                view::token_report_turn_count(
+                                view::token_report_round_count(
                                     &ledger.snapshot_for_session(&viewed_session_id),
                                 ) > 0
                             })
@@ -4272,7 +4269,7 @@ pub(super) async fn run_app_loop(
                                 .token_ledger
                                 .as_ref()
                                 .map(|ledger| {
-                                    view::token_report_turn_count(
+                                    view::token_report_round_count(
                                         &ledger.snapshot_for_session(&viewed_session_id),
                                     )
                                 })
@@ -4348,7 +4345,7 @@ pub(super) async fn run_app_loop(
                                 .token_ledger
                                 .as_ref()
                                 .map(|ledger| {
-                                    view::token_report_turn_count(
+                                    view::token_report_round_count(
                                         &ledger.snapshot_for_session(&viewed_session_id),
                                     )
                                 })
@@ -4425,6 +4422,20 @@ pub(super) async fn run_app_loop(
                         // it; the Closed effect drives the channel reply + drain.
                         app.question = Some(qm);
                         question_effects::apply(&effects, app, &runtime).await;
+                        app.question_scroll = 0;
+                        app.question_modal_follow = true;
+                    }
+                }
+                input::InputAction::QuestionPrevious => {
+                    if app.active_modal == Modal::Question
+                        && let Some(qm) = app.question.take()
+                    {
+                        app.question = Some(
+                            qm.update(crate::tui::question_model::QuestionAction::Previous)
+                                .0,
+                        );
+                        app.question_scroll = 0;
+                        app.question_modal_follow = true;
                     }
                 }
                 input::InputAction::QuestionCancel => {
@@ -4507,8 +4518,8 @@ pub(super) async fn run_app_loop(
                     handle_permission_submit(app, &runtime).await;
                 }
                 input::InputAction::PermissionReject => {
-                    // Rejecting aborts the turn; resolve every queued request
-                    // so the concurrent tool batch can finish.
+                    // Rejecting settles the whole concurrent permission batch;
+                    // resolve every queued request so its tool futures finish.
                     let queued: Vec<PermissionRequest> =
                         runtime.pending_permission.lock().await.drain(..).collect();
                     app.pending_permission = None;
@@ -4649,12 +4660,14 @@ pub(super) async fn run_app_loop(
                             app.token_report_scroll = 0;
                             app.token_report_detail = false;
                         } else {
-                            runtime.messages.write().await.push(
-                                TranscriptMessage::notice(
+                            runtime
+                                .messages
+                                .write()
+                                .await
+                                .push(TranscriptMessage::notice(
                                     NoticeSeverity::Info,
                                     "Token-source report unavailable in attached mode.",
-                                ),
-                            );
+                                ));
                         }
                         app.selection = SelectionState::None;
                         app.focused_target = None;
@@ -5055,9 +5068,9 @@ pub(super) fn display_status(
 /// the agent channel, the pending-request queue, or the modal/queue sync. The
 /// `Reply` effect looks up the envoy parent routing key (so an envoy's
 /// answer routes back down to it), sends the reply, and removes the request
-/// from the queue; `Closed` does the same minus the reply (empty answers). In
-/// both cases the per-frame queue sync (above) picks up the new queue front on
-/// the next iteration and opens the next queued question or closes the modal.
+/// from the queue; `Cancelled` sends the cancellation sentinel; `Closed`
+/// removes the settled request from the TUI queue. The per-frame queue sync
+/// then opens the next queued question or closes the modal.
 mod question_effects {
     use super::{AgentRequest, App, Modal, UiRuntime};
 
@@ -5080,6 +5093,18 @@ mod question_effects {
                     let _ = app.tx.send(AgentRequest::UserQuestionReply {
                         request_id: request_id.clone(),
                         answers: answers.clone(),
+                        parent_call_id,
+                    });
+                }
+                crate::tui::question_model::QuestionEffect::Cancelled { request_id } => {
+                    let parent_call_id = runtime
+                        .envoy_question_parent
+                        .lock()
+                        .await
+                        .remove(request_id);
+                    let _ = app.tx.send(AgentRequest::UserQuestionReply {
+                        request_id: request_id.clone(),
+                        answers: Vec::new(),
                         parent_call_id,
                     });
                 }

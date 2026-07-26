@@ -1,6 +1,6 @@
 # ADR-0069: Pursuit budgets and runtime stats
 
-- Status: Accepted
+- Status: Superseded by ADR-0083
 - Date: 2026-07-17
 
 ## Context

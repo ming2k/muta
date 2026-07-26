@@ -66,8 +66,8 @@ pub mod pressure;
 pub mod principal;
 pub mod token_ledger;
 pub use token_ledger::{
-    RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenRound,
-    TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
+    RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenSourceLedger,
+    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn,
 };
 pub mod doomguardconfig;
 pub mod secret;
@@ -100,8 +100,9 @@ pub use hooks::{
 pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint, RemoteModelMetadata,
-    WireFormat, baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
+    BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
+    RemoteModelMetadata, WireFormat, baseline_models, model_by_id, register_fitted_models,
+    resolve as resolve_model,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

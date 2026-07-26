@@ -1,12 +1,12 @@
 //! Lifecycle event hooks (ADR-0025): user-configurable interception at
-//! session, turn, and tool-call points.
+//! session, round, turn, and tool-call points.
 //!
-//! neenee keeps a single event axis — the context-threshold, round-count, and
+//! neenee keeps a single event axis — the context-threshold, turn-count, and
 //! clock concerns are already owned by `CompactionPolicy`, `/pursue`, and
 //! `/repeat` and are deliberately **not** re-exposed here. The capability a
 //! hook has (block / inject / observe) is implicit in the event it fires on,
 //! matching Claude Code's model: a `PreToolUse` hook may deny, a `Stop` hook
-//! may force another round, the rest only observe or inject context.
+//! may force another turn, the rest only observe or inject context.
 //!
 //! v1 ships a single command-handler implementation (see `neenee`); the
 //! [`Hook`] trait lives here so the registry and insertion points in
@@ -38,20 +38,21 @@ pub enum HookEventKind {
     Stop,
     PreCompact,
     PostCompact,
-    /// Fires once per tool turn (ADR-0030). Constrained: only `Inject` is
-    /// honoured — `Deny` is ignored so a turn-count hook cannot become a
-    /// de-facto turn cap (the ADR-0009 concern). The harness declares no
-    /// built-in threshold on this axis; it only provides the trigger point.
+    /// Fires after each non-terminal ReAct turn, before the next model request
+    /// (ADR-0030). Constrained: only `Inject` is honoured — `Deny` is ignored
+    /// so a turn-count hook cannot become a de-facto turn cap (the ADR-0009
+    /// concern). The harness declares no built-in threshold on this axis.
     Turn,
-    /// Fires at the *start* of each tool round — after tools are prepared but
-    /// before the model is asked for its next completion. The symmetric partner
-    /// of [`HookEventKind::Turn`] (which fires at round end). Lets a hook
-    /// re-inject context at the round boundary so it lands at the top of the
-    /// model's attention, e.g. to re-anchor the principal's role after a run of
-    /// read-only delegations (anti "role bleed"). Constrained the same way as
-    /// `Turn`: only `Inject` is honoured — `Deny` is ignored so a round-start
-    /// hook cannot gate or cap the turn.
-    RoundStart,
+    /// Fires at the start of each ReAct turn —
+    /// after tools are prepared but before the model is asked for its next
+    /// completion. The symmetric partner of [`HookEventKind::Turn`] (which
+    /// fires at turn end). Lets a hook re-inject context at the turn boundary
+    /// so it lands at the top of the model's attention, e.g. to re-anchor the
+    /// principal's role after read-only delegations (anti "role bleed").
+    /// Constrained the same way as `Turn`: only `Inject` is honoured — `Deny`
+    /// is ignored so the hook cannot gate or cap the round.
+    #[serde(alias = "RoundStart")]
+    TurnStart,
     /// Fires when the agent is about to block on a permission request (a tool
     /// with a real `ScopeTarget` needs user approval before it runs). Honours a
     /// tool-name matcher (so a hook can target e.g. only `bash` requests).
@@ -121,20 +122,24 @@ pub enum HookEvent {
     },
     PreCompact,
     PostCompact,
-    /// Fires once per tool round (ADR-0030). `consecutive_readonly` carries the
-    /// read-only-turn streak so a hook can act on "exploration without
-    /// progress" without re-deriving it. Only `Inject` is honoured (see
-    /// [`HookEventKind::Turn`]).
+    /// Fires after each non-terminal ReAct turn (ADR-0030).
+    /// `round` and `turn` identify the canonical nested position;
+    /// `consecutive_readonly` carries the read-only-turn streak so a hook can
+    /// act on "exploration without progress" without re-deriving it. Only
+    /// `Inject` is honoured (see [`HookEventKind::Turn`]).
     Turn {
+        round: u64,
         turn: usize,
         consecutive_readonly: u32,
     },
-    /// Fires at the start of each tool round. `round` is the zero-based index of
-    /// the round about to run (so the first round is `0`); `consecutive_readonly`
-    /// is the read-only streak carried in from the previous turn. Only `Inject`
-    /// is honoured (see [`HookEventKind::RoundStart`]).
-    RoundStart {
-        round: usize,
+    /// Fires at the start of each ReAct turn. `round` is the one-based
+    /// enclosing user round; `turn` is the zero-based index of the turn about
+    /// to run (so the first is `0`);
+    /// `consecutive_readonly` is the read-only streak carried from the previous
+    /// turn. Only `Inject` is honoured (see [`HookEventKind::TurnStart`]).
+    TurnStart {
+        round: u64,
+        turn: usize,
         consecutive_readonly: u32,
     },
     /// The agent is about to block waiting for a permission decision. Observe-
@@ -163,7 +168,7 @@ impl HookEvent {
             Self::PreCompact => HookEventKind::PreCompact,
             Self::PostCompact => HookEventKind::PostCompact,
             Self::Turn { .. } => HookEventKind::Turn,
-            Self::RoundStart { .. } => HookEventKind::RoundStart,
+            Self::TurnStart { .. } => HookEventKind::TurnStart,
             Self::PermissionRequest { .. } => HookEventKind::PermissionRequest,
             Self::UserQuestion { .. } => HookEventKind::UserQuestion,
         }
@@ -192,25 +197,25 @@ pub enum HookOutcome {
     #[default]
     Pass,
     /// `PreToolUse`: the call is blocked; `reason` becomes the tool error the
-    /// model sees. `Stop`: the turn continues for another round with `reason`
+    /// model sees. `Stop`: the round continues for another turn with `reason`
     /// fed back as a hidden user message. Ignored on other events, including
     /// `Turn` (ADR-0030: a turn-count hook may not become a de-facto cap).
     Deny { reason: String },
     /// Inject `context` as a hidden user message the model sees on its next
-    /// round. Honoured on `UserPromptSubmit` (prepended), `Stop`,
+    /// turn. Honoured on `UserPromptSubmit` (prepended), `Stop`,
     /// `PostToolUse`, and `Turn`. Ignored elsewhere.
     Inject { context: String },
     /// Temporarily hide the named tools from the model (their schemas are
     /// dropped and dispatch rejects them) until the [`RestorePoint`] fires,
     /// where they are re-enabled automatically. Honoured on `PreToolUse`,
-    /// `RoundStart`, and `Turn`. **Not persisted**: scoped disables live only
+    /// `TurnStart`, and `Turn`. **Not persisted**: scoped disables live only
     /// in memory and never reach the session store, so they never survive a
     /// restart and never collide with a user's manual `/tools` toggles (which
     /// use a separate, persisted mask).
     ///
     /// This lets a hook scope the agent's toolset to a scenario — e.g. a
     /// `PreToolUse` policy hook can drop `bash` for a read-only sub-task and
-    /// have it come back at the round boundary — without the user having to
+    /// have it come back at the turn boundary — without the user having to
     /// manage `/tools` manually.
     ScopeTools {
         disable: Vec<String>,
@@ -221,15 +226,18 @@ pub enum HookOutcome {
 /// When a [`HookOutcome::ScopeTools`] disable is automatically undone. The
 /// harness clears every scoped disable whose restore point has fired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RestorePoint {
-    /// Undo at the end of the current tool round (the next `Turn` boundary).
-    /// Good for "narrow the toolset for just this round" policies.
-    RoundEnd,
-    /// Undo when the whole turn ends (the model emits a text reply with no
-    /// tool calls, or the turn otherwise terminates). Good for "narrow the
-    /// toolset for the rest of this user request" policies.
+    /// Undo at the end of the current ReAct turn
+    /// (the next `Turn` hook boundary). Good for "narrow the toolset for just
+    /// this turn" policies. `round_end` is accepted as a legacy alias.
+    #[serde(rename = "react_turn_end", alias = "round_end")]
     TurnEnd,
+    /// Undo when the whole user round ends (the model
+    /// emits a text reply with no tool calls, or the round otherwise
+    /// terminates). Good for "narrow the toolset for the rest of this user
+    /// request" policies. `turn_end` is accepted as a legacy alias.
+    #[serde(rename = "user_round_end", alias = "turn_end")]
+    RoundEnd,
 }
 
 /// One user-configurable lifecycle hook (ADR-0025). A hook declares the
@@ -248,4 +256,36 @@ pub trait Hook: Send + Sync {
         None
     }
     async fn fire(&self, ctx: &HookContext) -> HookOutcome;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HookEventKind, RestorePoint};
+
+    #[test]
+    fn turn_start_accepts_the_legacy_event_name() {
+        let kind: HookEventKind = serde_json::from_str("\"RoundStart\"").unwrap();
+        assert_eq!(kind, HookEventKind::TurnStart);
+        assert_eq!(serde_json::to_string(&kind).unwrap(), "\"TurnStart\"");
+    }
+
+    #[test]
+    fn restore_points_write_canonical_names_and_read_legacy_names() {
+        assert_eq!(
+            serde_json::to_string(&RestorePoint::TurnEnd).unwrap(),
+            "\"react_turn_end\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RestorePoint::RoundEnd).unwrap(),
+            "\"user_round_end\""
+        );
+        assert_eq!(
+            serde_json::from_str::<RestorePoint>("\"round_end\"").unwrap(),
+            RestorePoint::TurnEnd
+        );
+        assert_eq!(
+            serde_json::from_str::<RestorePoint>("\"turn_end\"").unwrap(),
+            RestorePoint::RoundEnd
+        );
+    }
 }

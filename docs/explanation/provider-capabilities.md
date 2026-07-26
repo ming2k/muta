@@ -7,7 +7,7 @@ explains where each capability actually lives and why providers differ.
 
 For the per-provider capability matrix, see
 [Providers](../reference/providers.md). For the wire-level protocol neenee
-uses to call tools, see [Tool rounds](agent-design/rounds-and-turns.md).
+uses to call tools, see [Rounds and turns](agent-design/rounds-and-turns.md).
 
 ## Three layers
 
@@ -120,7 +120,7 @@ can use native structured tool calls. On any provider that omits native tool
 support, the model must emit
 `{"tool": "<name>", "arguments": {…}}` as ordinary assistant text, which the
 client parses back into a tool call after the fact. See
-[Tool rounds](agent-design/rounds-and-turns.md) for the fallback mechanics.
+[Rounds and turns](agent-design/rounds-and-turns.md) for the fallback mechanics.
 
 ## Capability negotiation summary
 
@@ -136,7 +136,7 @@ client parses back into a tool call after the fact. See
 ## See also
 
 - [Providers](../reference/providers.md) — per-provider capability matrix
-- [Tool rounds](agent-design/rounds-and-turns.md) — schema injection, streaming, fallback
+- [Rounds and turns](agent-design/rounds-and-turns.md) — schema injection, streaming, fallback
 - [Built-in tools](../reference/tools/index.md) — what schemas get declared
 - [Harness architecture](agent-design/harness.md) — how the harness consumes these
   capabilities per round

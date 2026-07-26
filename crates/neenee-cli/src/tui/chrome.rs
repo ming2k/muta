@@ -126,18 +126,18 @@ pub struct ActivityBarHit {
 /// `unattended` deliberately do not live here: they have their own state bar
 /// ([`draw_state_bar`]) so this row stays a pure activity surface.
 ///
-/// The bar surfaces what the user most wants to know mid-turn — the live
-/// status, whether a pursuit/plan is in flight, and how long the turn has
+/// The bar surfaces what the user most wants to know mid-round — the live
+/// status, whether a pursuit/plan is in flight, and how long the round has
 /// run — and is the click target that opens the Activity modal for the full
 /// detail. Each segment is independently clickable: a click on the `todos`
 /// badge opens the Todos section directly, while a click anywhere else opens
-/// the Activity section. The structural counters (`turn N · round M ·
+/// the Activity section. The structural counters (`round N · turn M ·
 /// <model>`) live in the modal: they change rarely and take space, while the
 /// bar is a glance surface. Segments are omitted when there is nothing to
 /// report:
 /// - pursuit badge only when a pursuit is armed (`⟴ <truncated objective>`);
-/// - elapsed only while the turn timer is running;
-/// - the whole left half only while a turn is active.
+/// - elapsed only while the round timer is running;
+/// - the whole left half only while a round is active.
 ///
 /// When the status string already carries a reason (e.g.
 /// `retry 1/4 in 3s · <message>`), it flows through unchanged as the lead.
@@ -152,7 +152,7 @@ pub fn draw_activity_bar(
     pursuit: Option<&neenee_core::Pursuit>,
     todos: Option<&neenee_core::TodoList>,
     review_alert: &str,
-    turn_started_at: Option<Instant>,
+    round_started_at: Option<Instant>,
     status: &str,
     spinner_phase: usize,
     theme: &Theme,
@@ -197,7 +197,7 @@ pub fn draw_activity_bar(
         // transient text at all.
         let persistent_reserve = persistent_width + usize::from(persistent_width > 0) * 2;
         let available_width = row_width.saturating_sub(persistent_reserve);
-        let elapsed = turn_started_at.map(|started| format_elapsed(started.elapsed()));
+        let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
         let full_hint_width = elapsed
             .as_ref()
             .map(|value| {
@@ -237,7 +237,7 @@ pub fn draw_activity_bar(
 
         // Lead segment: the live status — the thing that changes frame to
         // frame, so it receives the left-to-right shimmer. The structural
-        // counters (turn/round/model) are deliberately absent; they live in
+        // counters (round/turn/model) are deliberately absent; they live in
         // the Activity modal that this bar opens on click. Truncate this
         // segment first so the interrupt affordance survives narrow widths.
         spans.push(Span::raw(" "));
@@ -867,7 +867,7 @@ pub fn draw_hint_bar(
     // a nearly full window is unmissable.
     //
     // The harness owns projection semantics. Never infer AI context from the
-    // rendered transcript: it contains durable command echoes, archived turns,
+    // rendered transcript: it contains durable command echoes, archived rounds,
     // and UI-only children while omitting system/tool-schema input.
     let mut context_spans: Vec<Span<'static>> = Vec::new();
     if context_max > 0 {

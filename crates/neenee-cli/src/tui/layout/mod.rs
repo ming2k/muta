@@ -15,13 +15,13 @@
 //!
 //! These three helpers are the *only* sanctioned mutations of `current_y` /
 //! `skip_rows` / `content_lines`, so every layout agrees on scroll accounting
-//! and height-cache semantics. A layout is free to add its own chrome (round
+//! and height-cache semantics. A layout is free to add its own chrome (turn
 //! headers, background bands, …) via the raw paint primitives, but the message
 //! body itself always flows through `dispatch`.
 //!
 //! # Strategies
-//! - [`layout_default::Default`] — each tool round is grouped under a labelled
-//!   header (`◆ round N · model`) and uses semantic boundary spacing. The
+//! - [`layout_default::Default`] — each tool-bearing ReAct turn is grouped
+//!   under a labelled header (`◆ turn N · model`) and uses semantic boundary spacing. The
 //!   default.
 //! - [`legacy::Legacy`] — the original flush-stack behavior, preserved
 //!   verbatim.
@@ -41,12 +41,12 @@ use crate::tui::model::selection::{CellDragInfo, SelectionState};
 use super::HeightCache;
 use super::disclosure::StickyStep;
 use super::theme::Theme;
-use crate::tui::design::{MESSAGE_GAP_ROWS, ROUND_HEADER_BODY_GAP_ROWS};
+use crate::tui::design::{MESSAGE_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS};
 
 /// Which layout strategy to use for the transcript message stream.
 ///
 /// Selectable via `[tui] transcript_layout` in `config.toml`; the default is
-/// [`Strategy::Default`], which groups stamped model-request rounds.
+/// [`Strategy::Default`], which groups stamped ReAct turns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Strategy {
     #[default]
@@ -177,7 +177,7 @@ pub fn build_virtual_index(
                 let message = &messages[index];
                 let mut height = default_gap_before(messages, index);
                 if let Some(end) = default_group_end(messages, index) {
-                    height += 1 + ROUND_HEADER_BODY_GAP_ROWS;
+                    height += 1 + TURN_HEADER_BODY_GAP_ROWS;
                     for (offset, message) in messages[index..end].iter().enumerate() {
                         if offset > 0 {
                             height += default_boundary_gap(&messages[index + offset - 1], message);
@@ -215,9 +215,9 @@ fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usi
 }
 
 /// Whether a message participates in an assistant model-request group. A group
-/// is only promoted to a visible round band when its run contains a tool-like
+/// is only promoted to a visible turn band when its run contains a tool-like
 /// step; final prose-only responses retain the ordinary transcript shape.
-fn is_round_component(message: &TranscriptMessage) -> bool {
+fn is_turn_component(message: &TranscriptMessage) -> bool {
     message.is_tool_step()
         || message.is_envoy_task()
         || message.is_thinking()
@@ -230,17 +230,17 @@ fn is_tool_like(message: &TranscriptMessage) -> bool {
 
 fn default_group_start(messages: &[TranscriptMessage], index: usize) -> bool {
     let message = &messages[index];
-    if message.turn.is_none() || !is_round_component(message) {
+    if message.turn.is_none() || !is_turn_component(message) {
         return false;
     }
     if index == 0 {
         return true;
     }
     let previous = &messages[index - 1];
-    !is_round_component(previous) || previous.turn != message.turn
+    !is_turn_component(previous) || previous.round != message.round || previous.turn != message.turn
 }
 
-/// Return the exclusive end of the round group beginning at `start`.
+/// Return the exclusive end of the turn group beginning at `start`.
 ///
 /// Thinking can be the first component in a tool-producing model request, so
 /// group discovery starts from any stamped assistant component and looks
@@ -250,11 +250,11 @@ pub(super) fn default_group_end(messages: &[TranscriptMessage], start: usize) ->
     if !default_group_start(messages, start) {
         return None;
     }
-    let turn = messages[start].turn;
+    let position = (messages[start].round, messages[start].turn);
     let mut end = start;
     while end < messages.len() {
         let message = &messages[end];
-        if message.turn != turn || !is_round_component(message) {
+        if (message.round, message.turn) != position || !is_turn_component(message) {
             break;
         }
         end += 1;
@@ -263,7 +263,7 @@ pub(super) fn default_group_end(messages: &[TranscriptMessage], start: usize) ->
 }
 
 /// Resolve exactly one blank-row decision for a pair of adjacent transcript
-/// components. A same-round tool batch is the only zero-gap relationship;
+/// components. A same-turn tool batch is the only zero-gap relationship;
 /// thinking, prose, and tool batches remain distinct visual segments. Tool
 /// disclosure state never changes the boundary. Unknown legacy tool steps
 /// retain the former collapsed-stack fallback because old sessions have no
@@ -275,6 +275,7 @@ pub(super) fn default_boundary_gap(
     let known_same_tool_batch = is_tool_like(previous)
         && is_tool_like(next)
         && previous.turn.is_some()
+        && previous.round == next.round
         && previous.turn == next.turn;
     let legacy_collapsed_tool_batch = previous.turn.is_none()
         && next.turn.is_none()
@@ -345,7 +346,7 @@ pub struct Stream<'a, 'f> {
 
 impl<'a, 'f> Stream<'a, 'f> {
     /// No-op. The per-turn model attribution badge (`provider · model`) was
-    /// removed — the round-band header already labels the producing model and
+    /// removed — the turn-band header already labels the producing model and
     /// the compact layout needs no per-turn heading. Layouts still call this
     /// unconditionally at the top of each message; keeping the call site means
     /// a future per-turn label can be reintroduced in one place.
@@ -504,7 +505,7 @@ impl<'a, 'f> Stream<'a, 'f> {
     }
 
     /// The viewport's bottom y (exclusive). Layouts use it to decide whether a
-    /// chrome row (round header) is on-screen before painting it.
+    /// chrome row (turn header) is on-screen before painting it.
     pub fn viewport_bottom(&self) -> u16 {
         self.band.y + self.band.height
     }
@@ -531,7 +532,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_spacing_compacts_only_same_round_tool_batches() {
+    fn default_spacing_compacts_only_same_turn_tool_batches() {
         let thinking = TranscriptMessage::thinking("reasoning").with_turn(4);
         let mut tool = TranscriptMessage::tool_step("call", "read_text", "{}").with_turn(4);
         tool.set_tool_step_expanded(true);

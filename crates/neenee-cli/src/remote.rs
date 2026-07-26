@@ -160,7 +160,8 @@ fn spawn_server(project_root: &Path, session_id: Option<&str>) -> Result<(), Str
 /// channel pair the TUI drives. Returns the request sender, the response
 /// receiver, the id of the session the server actually hosts (learned from
 /// the `History` frame — it may differ from a requested id that failed to
-/// resume), and the transcript replayed at handshake.
+/// resume), its authoritative round counter, and the transcript replayed at
+/// handshake.
 ///
 /// When the socket closes (server shutdown, network loss), the response
 /// receiver ends after a final [`AgentResponse::Exit`] so the TUI winds down
@@ -174,6 +175,7 @@ pub async fn connect(
         mpsc::UnboundedSender<AgentRequest>,
         mpsc::UnboundedReceiver<AgentResponse>,
         String,
+        u64,
         Vec<Message>,
     ),
     String,
@@ -197,14 +199,15 @@ pub async fn connect(
 
     // The server replays the transcript exactly once, immediately after the
     // upgrade. Read until it arrives; anything else before it is ignored.
-    let (session_id, history) = tokio::time::timeout(HISTORY_TIMEOUT, async {
+    let (session_id, round_counter, history) = tokio::time::timeout(HISTORY_TIMEOUT, async {
         loop {
             match ws_source.next().await {
                 Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
                     Ok(Wire::History {
                         session_id,
+                        round_counter,
                         messages,
-                    }) => break Ok((session_id, messages)),
+                    }) => break Ok((session_id, round_counter, messages)),
                     Ok(_) => {}
                     Err(error) => {
                         tracing::warn!(%error, "attach: bad frame while waiting for history")
@@ -278,7 +281,7 @@ pub async fn connect(
         let _ = resp_in_tx.send(AgentResponse::Exit);
     });
 
-    Ok((req_out_tx, resp_in_rx, session_id, history))
+    Ok((req_out_tx, resp_in_rx, session_id, round_counter, history))
 }
 
 #[cfg(test)]
@@ -388,13 +391,15 @@ mod tests {
             ])
             .await
             .unwrap();
+        session.set_round_counter(12).await.unwrap();
         let session_id = session.id().await;
 
         let info = record(port, None);
-        let (tx, mut rx, attached_id, history) = connect(&info).await.unwrap();
+        let (tx, mut rx, attached_id, round_counter, history) = connect(&info).await.unwrap();
 
         // The handshake teaches the client the hosted session id + transcript.
         assert_eq!(attached_id, session_id);
+        assert_eq!(round_counter, 12);
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].role, Role::User);
         assert_eq!(history[0].content, "earlier question");
@@ -442,7 +447,7 @@ mod tests {
         // Wrong token → same.
         assert!(connect(&record(port, Some("nope".to_string()))).await.is_err());
         // The record's token → connects and replays the handshake.
-        let (_tx, _rx, attached_id, _history) =
+        let (_tx, _rx, attached_id, _round_counter, _history) =
             connect(&record(port, Some("sekret".to_string()))).await.unwrap();
         assert_eq!(attached_id, session_id);
     }

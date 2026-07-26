@@ -14,7 +14,7 @@ Project and user-defined commands are covered under
 | `/models` | Switch the active model |
 | `/connections` | Manage LLM provider connections |
 | `/mcp` | Manage MCP servers (enable/disable, reconnect) |
-| `/compact` | Compact older complete turns now |
+| `/compact` | Compact older complete rounds now |
 | `/clear` | Clear the conversation history |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/unattended [on\|off]` | Toggle unattended mode (agent runs without human intervention) |
@@ -66,7 +66,8 @@ all share the same agent request queue.
 |------|--------|
 | `/pursue <condition>` | Set the condition as the active pursuit, arm the stop-gate, and drive the round until it is met |
 | `/pursue` | Re-arm and drive a pursuit on the existing active pursuit |
-| `/pursue status` | Show the current pursuit, armed state, and gate iteration |
+| `/pursue status` | Show the current pursuit, armed state, one-based pursuit pass, and budget counters |
+| `/pursue budget [passes=N] [tokens=N] [time=N]` | Replace the optional positive pursuit-pass, token, and millisecond budgets; no axes clears the budget. The former `turns=N` axis is accepted as a compatibility alias for `passes=N` |
 | `/pursue edit <condition>` | Rewrite the condition of the current pursuit |
 | `/pursue done` | Mark the pursuit completed (disarms the gate) |
 | `/pursue stop` | Stop the active pursuit |
@@ -74,9 +75,10 @@ all share the same agent request queue.
 
 `/pursue` arms a **stop-gate**: each time the model would end the round, the
 harness re-injects the condition and forces another turn until the model
-signals completion (`[NEENEE_PURSUIT_COMPLETE]`), the 50-turn safety cap is hit,
+signals completion (`[NEENEE_PURSUIT_COMPLETE]`), the 50-pass safety cap is hit,
 or the user interrupts (`/pursue stop` / `Esc`). Pursuit state is persisted per
-session in SQLite, so it survives restarts and is restored on `/resume`. See
+session in its event log and snapshot, so it survives restarts and is restored
+on `/resume`. See
 [Pursuits and the pursue stop-gate](../explanation/agent-design/pursuits.md).
 
 ### `/repeat`

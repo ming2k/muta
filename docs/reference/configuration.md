@@ -35,7 +35,7 @@ files. Performance limits are not part of context-capacity safety policy.
 | `compaction.target_utilization` | `0.25` | After a full compaction, compress the model window down to this fraction |
 | `compaction.prune_utilization` | `0.65` | Trigger cheap tool-result pruning at this fraction (below `utilization`) |
 | `compaction.fallback_window_tokens` | `32000` | Assumed window (tokens) when the model's context window is unknown |
-| `compaction_preserve_turns` | `6` | Number of recent complete user turns kept verbatim after a full compaction |
+| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is accepted when loading old files |
 | `compaction_summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
 | `compaction_prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
 | `compaction_prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
@@ -57,7 +57,7 @@ target_utilization = 0.25
 prune_utilization = 0.65
 fallback_window_tokens = 32000
 
-compaction_preserve_turns = 6
+compaction_preserve_rounds = 6
 compaction_summarize = true
 compaction_prune = true
 compaction_prune_protect_tokens = 6000
@@ -69,9 +69,9 @@ The optional `[principal]` table.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `principal.hard_stop_turns` | `0` | Hard-stop a turn after this many total tool turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
+| `principal.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
 | `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for unattended/automatic flows where no human is reachable |
-| `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same turn. Forced off for envoys and `/review` |
+| `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same round. Forced off for envoys and `/review` |
 | `principal.nudge.window` | `8` | Number of recent watched tool signatures retained for repeat detection |
 
 ```toml
@@ -196,7 +196,7 @@ interactively with `/config`.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (round bands) or `legacy` |
+| `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (turn bands) or `legacy` |
 | `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
 | `tui.default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
 | `tui.custom_color_scheme.background` | `"#070808"` | Terminal canvas |
@@ -246,9 +246,13 @@ which event honours which.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `hooks[].event` | — | The lifecycle event: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `PostCompact`, `Turn` (ADR-0030, round end), `RoundStart` (round start), `PermissionRequest` (agent blocked on an approval prompt), `UserQuestion` (agent blocked on an `ask_user` question). `Turn`/`RoundStart` are `Deny`-forbidden (inject or observe only); `PermissionRequest`/`UserQuestion` are observe-only (fire-and-forget, ideal for desktop notifications). `PermissionRequest` honours a tool-name matcher |
+| `hooks[].event` | — | The lifecycle event: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `PostCompact`, `Turn` (ADR-0030, turn end), `TurnStart` (turn start), `PermissionRequest` (agent blocked on an approval prompt), `UserQuestion` (agent blocked on an `ask_user` question). `Turn`/`TurnStart` are `Deny`-forbidden (inject or observe only); `PermissionRequest`/`UserQuestion` are observe-only (fire-and-forget, ideal for desktop notifications). `PermissionRequest` honours a tool-name matcher. `RoundStart` is accepted only as the legacy alias for `TurnStart` |
 | `hooks[].matcher` | `*` | Tool-name filter. A `|`-separated list of exact names (`Write|Edit`) when only letters/digits/`_`/`|`; otherwise a regular expression. Only the tool events honour it |
 | `hooks[].command` | — | Shell command run when the event matches. Receives the event JSON on stdin; replies via exit code / stdout JSON |
+
+The flat JSON for `Turn` and `TurnStart` includes `round` (one-based),
+`turn` (zero-based within that round), and `consecutive_readonly`. A provider
+retry remains the same turn.
 
 ```toml
 [[hooks]]
@@ -265,21 +269,21 @@ command = ".neenee/hooks/guard-rm.sh"
 event   = "Stop"
 command = ".neenee/hooks/ci-gate.sh"
 
-# ADR-0030: fires once per tool round, at round end. Deny is ignored (no
-# de-facto round cap); inject context or observe. Carries the read-only-round
+# ADR-0030: fires once per ReAct turn, at turn end. Deny is ignored (no
+# de-facto turn cap); inject context or observe. Carries the read-only-turn
 # streak.
 [[hooks]]
 event   = "Turn"
 command = ".neenee/hooks/turn-watch.sh"
 
-# Symmetric partner: fires at the *start* of each tool round, after tools are
+# Symmetric partner: fires at the start of each ReAct turn, after tools are
 # prepared but before the next model completion. Use it to (re)inject context at
-# the top of the model's attention for the round — e.g. to re-anchor the
+# the top of the model's attention for the turn — e.g. to re-anchor the
 # principal's role after a run of read-only delegations. Deny is ignored here
 # too.
 [[hooks]]
-event   = "RoundStart"
-command = ".neenee/hooks/round-open.sh"
+event   = "TurnStart"
+command = ".neenee/hooks/turn-open.sh"
 
 # Interrupt notifications (observe-only): fire-and-forget when the agent blocks
 # waiting for you. The canonical use is a desktop/bell notification so a

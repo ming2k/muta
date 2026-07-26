@@ -1,4 +1,4 @@
-//! Activity modal: section-specific overview of the current turn, pursuit, or todos.
+//! Activity modal: section-specific overview of the current round, pursuit, or todos.
 //!
 //! Each section is opened independently by clicking the corresponding segment
 //! on the activity bar — there is no tab strip or Left/Right cycling.
@@ -29,7 +29,7 @@ pub struct ActivityModalView<'a> {
     /// Live unified task list, if any. Shown as a header (done/total) plus
     /// one row per item with a status glyph.
     pub todos: Option<&'a neenee_core::TodoList>,
-    /// The current turn's user prompt, if any. Shown in the Activity tab.
+    /// The current round's user prompt, if any. Shown in the Activity tab.
     pub user_prompt: Option<&'a str>,
     /// Harness round counter (`round N`).
     pub round_count: u64,
@@ -40,8 +40,8 @@ pub struct ActivityModalView<'a> {
     pub review_alert: &'a str,
     /// Display id of the currently active model.
     pub current_model: &'a str,
-    /// Wall-clock instant the current turn started, or `None` between turns.
-    pub turn_started_at: Option<std::time::Instant>,
+    /// Wall-clock instant the current round started, or `None` between rounds.
+    pub round_started_at: Option<std::time::Instant>,
 
     pub activity: &'a str,
 }
@@ -64,7 +64,7 @@ pub fn draw_activity_modal(
         current_turn,
         review_alert,
         current_model,
-        turn_started_at,
+        round_started_at,
         activity,
     } = view;
 
@@ -128,7 +128,7 @@ pub fn draw_activity_modal(
                 ));
             }
 
-            // ── Prompt (current turn's user message) ──
+            // ── Prompt (current round's user message) ──
             if let Some(prompt) = user_prompt.filter(|p| !p.is_empty()) {
                 if have_section {
                     lines.push(Line::from(""));
@@ -182,7 +182,7 @@ pub fn draw_activity_modal(
                     detail.push_str(" · ");
                     detail.push_str(&crate::tui::providers::model_display_name(current_model));
                 }
-                if let Some(started) = turn_started_at {
+                if let Some(started) = round_started_at {
                     detail.push_str(" · ");
                     detail.push_str(&crate::tui::chrome::format_elapsed(started.elapsed()));
                 }

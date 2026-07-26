@@ -71,7 +71,7 @@ pub enum HarnessError {
     },
     /// The request exceeded the model's context window.
     ContextOverflow(String),
-    /// The turn was cancelled by the user.
+    /// The active round was cancelled by the user.
     Interrupted,
     /// Any other terminal failure; the message is user-facing.
     Other(String),

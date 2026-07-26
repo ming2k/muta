@@ -32,9 +32,9 @@ pub const THINKING_KEY: &str = "thinking";
 ///
 /// ```toml
 /// [principal]
-/// # Hard-stop a turn after this many total tool rounds. 0 (the default)
+/// # Hard-stop a round after this many total ReAct turns. 0 (the default)
 /// # means no hard stop — an opt-in execution budget only. This is the sole
-/// # turn cap; the loop otherwise runs until the model stops, the user
+/// # per-round turn cap; the loop otherwise runs until the model stops, the user
 /// # interrupts, or context compaction cannot relieve pressure (ADR-0009).
 /// # hard_stop_turns = 0
 ///
@@ -47,8 +47,8 @@ pub const THINKING_KEY: &str = "thinking";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrincipalConfig {
-    /// Opt-in hard-stop budget: abort a turn after this many total tool
-    /// rounds. `0` (the default) means uncapped. Mutated at runtime via
+    /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
+    /// `0` (the default) means uncapped. Mutated at runtime via
     /// `Agent::set_hard_stop_turns`.
     pub hard_stop_turns: usize,
     /// Whether the model may supply stdin bytes for a `bash` command it emits
@@ -95,7 +95,7 @@ pub struct TuiConfig {
     /// ```
     pub default_expanded: HashMap<String, bool>,
     /// How the transcript message stream is arranged. Recognized values
-    /// (case-insensitive): `"default"` (default — each tool round is grouped
+    /// (case-insensitive): `"default"` (default — each tool-bearing ReAct turn is grouped
     /// into a labelled band with a header row) and `"legacy"` (the original
     /// flush-stack layout). Unknown / empty values fall back to default.
     ///
@@ -638,7 +638,11 @@ pub struct Config {
     /// model's context window, plus a fallback window for unknown models. See
     /// [`CompactionPolicy`] for the per-field semantics.
     pub compaction: CompactionPolicy,
-    pub compaction_preserve_turns: usize,
+    /// Number of recent complete user rounds preserved verbatim by full
+    /// compaction. `compaction_preserve_turns` is the pre-ADR-0047 key and is
+    /// accepted when loading older configuration files.
+    #[serde(alias = "compaction_preserve_turns")]
+    pub compaction_preserve_rounds: usize,
     /// Use the active model to produce an anchored, structured summary when
     /// compacting. When `false` (or when the summarization call fails) compaction
     /// falls back to the deterministic message-excerpt summary.
@@ -649,7 +653,7 @@ pub struct Config {
     pub compaction_prune: bool,
     /// Token budget of the most recent tool results protected from pruning.
     pub compaction_prune_protect_tokens: usize,
-    /// Maximum number of attempts for a single round when the provider returns a
+    /// Maximum number of attempts for a single model request when the provider returns a
     /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
     /// counts as the first attempt, so this is the *total* attempts, not extra
     /// retries. Clamped to `[1, 10]` at the call site.
@@ -905,7 +909,7 @@ impl Default for Config {
             default_provider: String::new(),
             mcp: HashMap::new(),
             compaction: CompactionPolicy::default(),
-            compaction_preserve_turns: 6,
+            compaction_preserve_rounds: 6,
             compaction_summarize: true,
             compaction_prune: true,
             compaction_prune_protect_tokens: 6_000,
@@ -1231,6 +1235,16 @@ mod tests {
         let serialised = toml::to_string(&cfg).unwrap();
         let parsed: Config = toml::from_str(&serialised).unwrap();
         assert_eq!(parsed.principal.hard_stop_turns, 99);
+    }
+
+    #[test]
+    fn compaction_round_count_writes_canonical_key_and_reads_legacy_key() {
+        let legacy: Config = toml::from_str("compaction_preserve_turns = 9").unwrap();
+        assert_eq!(legacy.compaction_preserve_rounds, 9);
+
+        let serialized = toml::to_string(&legacy).unwrap();
+        assert!(serialized.contains("compaction_preserve_rounds = 9"));
+        assert!(!serialized.contains("compaction_preserve_turns ="));
     }
 
     #[test]

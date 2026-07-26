@@ -183,6 +183,7 @@ pub fn run() -> io::Result<()> {
                 KeyCode::Char(' ') => QuestionAction::Toggle,
                 KeyCode::Char(c @ '1'..='9') => QuestionAction::Select(c as usize - '0' as usize),
                 KeyCode::Backspace => QuestionAction::Backspace,
+                KeyCode::BackTab => QuestionAction::Previous,
                 KeyCode::Enter => QuestionAction::Submit,
                 KeyCode::Esc => QuestionAction::Cancel,
                 KeyCode::Char(c) => QuestionAction::InsertChar(c),
@@ -190,9 +191,14 @@ pub fn run() -> io::Result<()> {
             };
             if matches!(
                 action,
-                QuestionAction::Up | QuestionAction::Down | QuestionAction::Select(_)
+                QuestionAction::Up
+                    | QuestionAction::Down
+                    | QuestionAction::Select(_)
+                    | QuestionAction::Submit
+                    | QuestionAction::Previous
             ) {
                 s.follow_highlight.set(true);
+                s.scroll.set(0);
             }
             let effects = s.model.update_mut(action);
             if apply_effects(s, &effects) {
@@ -215,11 +221,16 @@ fn apply_effects(s: &mut State, effects: &[QuestionEffect]) -> bool {
                     .join(" ");
                 s.last_result = Some(format!("submitted → {text}"));
             }
+            QuestionEffect::Cancelled { .. } => {
+                s.last_result = Some("cancelled".into());
+            }
             QuestionEffect::Closed { .. } => {
-                if !effects
-                    .iter()
-                    .any(|e| matches!(e, QuestionEffect::Reply { .. }))
-                {
+                if !effects.iter().any(|e| {
+                    matches!(
+                        e,
+                        QuestionEffect::Reply { .. } | QuestionEffect::Cancelled { .. }
+                    )
+                }) {
                     s.last_result = Some("cancelled".into());
                 }
                 should_exit = true;

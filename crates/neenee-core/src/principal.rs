@@ -39,7 +39,7 @@ use crate::{AgentIdentity, OperationScope, ToolSelection};
 /// trivially so) — a profile can be read and re-seeded cheaply.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PrincipalRuntimeConfig {
-    /// Opt-in hard-stop budget: abort a turn after this many total tool rounds.
+    /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
     /// `0` (the default) means uncapped. Mirrors `[principal] hard_stop_turns`
     /// and `Agent::set_hard_stop_turns`.
     pub hard_stop_turns: usize,

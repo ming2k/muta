@@ -15,11 +15,12 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::side::SideSession;
 
-/// `AgentRequest::Interrupt` — reject every pending permission / question,
-/// flip the harness to idle eagerly (before the in-flight turn's own terminal
+/// `AgentRequest::Interrupt` — reject every pending permission, question, and
+/// interactive-input waiter; flip the harness to idle eagerly (before the
+/// in-flight round's own terminal
 /// idle snapshot, which is gated behind persistence fsyncs), then cancel the
 /// live token. The generation is deliberately NOT bumped
-/// ([`RoundLifecycle::cancel_current`], not `supersede`) so the stale turn
+/// ([`RoundLifecycle::cancel_current`], not `supersede`) so the stale round
 /// still emits its own "... \[Interrupted\]" cleanup.
 pub async fn interrupt(
     agent: &Agent,
@@ -29,11 +30,12 @@ pub async fn interrupt(
 ) {
     agent.reject_pending_permissions();
     agent.reject_pending_user_questions();
+    agent.reject_pending_inputs();
     let _ = resp_tx.send(AgentResponse::PermissionsCleared);
 
     // Flip the harness to idle the instant interrupt is requested — BEFORE
     // the in-flight turn unwinds. The work itself stops the moment the token
-    // is cancelled below, but the turn task's own terminal "idle" snapshot is
+    // is cancelled below, but the round task's own terminal "idle" snapshot is
     // only sent at the very end of its cleanup, which is gated behind
     // persistence fsyncs (`session.replace_messages` inside `execute_round`,
     // then `set_checkpoint` in `start_pursuit`). Without this eager snapshot
@@ -42,7 +44,7 @@ pub async fn interrupt(
     // reads as "still working" when the work is already stopped.
     //
     // This is idempotent with the stale task's later idle send: if no new
-    // turn starts, both snapshots are "idle"; if one does, it bumps
+    // round starts, both snapshots are "idle"; if one does, it bumps
     // generation itself and its "running" snapshot supersedes, while the
     // stale task's generation-guarded idle send is skipped
     // (`orchestration.rs` start_pursuit / start_interactive_round /

@@ -59,7 +59,7 @@ async fn inject_user_message_lands_in_transcript() {
     // An agent with an installed inbox is steerable: submitting an
     // `InjectUserMessage` before the turn starts causes the driver's
     // round-top drain to append it to the live transcript, so the model sees
-    // it on round 0. A non-steerable agent (no `install_inbox`) would have no
+    // it on turn 0. A non-steerable agent (no `install_inbox`) would have no
     // inbox receiver and the op would be dropped — covered by the `submit`
     // returning `false` when no inbox exists.
     let agent = Arc::new(Agent::new(
@@ -75,7 +75,7 @@ async fn inject_user_message_lands_in_transcript() {
     let _ = agent
         .run_with_events(&mut messages, &CancellationToken::new(), |_| {})
         .await
-        .expect("turn completes");
+        .expect("round completes");
 
     assert!(
         messages
@@ -220,7 +220,7 @@ async fn handle_reply_is_noop_after_agent_dropped() {
     );
 }
 
-/// Streaming provider: round 0 emits a tool-call for `gated_write`; round 1
+/// Streaming provider: turn 0 emits a tool-call for `gated_write`; turn 1
 /// emits plain text "done". Drives the EnvoyTool end-to-end path (which runs
 /// the child via `run_streaming_with_events`).
 struct StreamWriteCallProvider(AtomicUsize);

@@ -3,7 +3,8 @@
 This guide walks through implementing a new tool that the agent can call. It
 assumes familiarity with the `Tool` trait. For the existing tool catalog,
 see [Built-in tools](../reference/tools/index.md). For the protocol the model uses
-to call tools, see [Tool rounds](../explanation/agent-design/rounds-and-turns.md).
+to call tools, see
+[Rounds and turns](../explanation/agent-design/rounds-and-turns.md).
 
 Most built-in tools live in `neenee-agent`'s `tools` module. Pick the module that
 matches the tool's domain: filesystem and web tools go in
@@ -261,7 +262,7 @@ Update these surfaces in the same change:
 ## See also
 
 - [Built-in tools](../reference/tools/index.md) — existing tool catalog
-- [Tool rounds](../explanation/agent-design/rounds-and-turns.md) — schema injection and
+- [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) — schema injection and
   fallback mechanics
 - [Provider capabilities](../explanation/provider-capabilities.md) — why
   tool support varies across providers

@@ -5,11 +5,11 @@
 //! picks it up unchanged.
 
 use neenee_agent::Agent;
-use neenee_agent::orchestration::{send_harness_state, turn};
+use neenee_agent::orchestration::{round_response, send_harness_state, stop_superseded_pursuit};
+use neenee_agent::tools::BashTool;
 use neenee_agent::{RoundBegin, RoundLifecycle};
 use neenee_core::{AgentResponse, LoopStatus, Message, RoundEvent, Tool, ToolOutput, ToolStream};
 use neenee_persistence::session::SessionStore;
-use neenee_agent::tools::BashTool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -20,9 +20,9 @@ use tokio::sync::mpsc;
 ///
 /// Cancellation mirrors `start_interactive_round`: the round lifecycle's
 /// `begin` installs a fresh token (any previous round is cancelled through
-/// the returned predecessor) and bumps the generation so a later turn
+/// the returned predecessor) and bumps the generation so a later round
 /// supersedes a still-running shell command and its tail-end events do not
-/// race with the new turn.
+/// race with the new round.
 pub async fn run_shell_command(
     command: String,
     tx: mpsc::UnboundedSender<AgentResponse>,
@@ -48,8 +48,8 @@ pub async fn run_shell_command(
 
     // Mirror start_interactive_round: begin a new round, cancelling any
     // in-flight predecessor, so we can tell on exit whether we are still the
-    // active turn. The `!` path rejects pending permissions only (not pending
-    // inputs) — a deliberate difference from the interactive round.
+    // active round. Every parked request owned by the predecessor is settled
+    // before its cancellation token is released.
     let RoundBegin {
         token,
         generation,
@@ -57,14 +57,24 @@ pub async fn run_shell_command(
     } = lifecycle.begin().await;
     if let Some(previous) = previous {
         agent.reject_pending_permissions();
+        agent.reject_pending_user_questions();
+        agent.reject_pending_inputs();
         let _ = tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
+    stop_superseded_pursuit(
+        &agent,
+        &session,
+        &tx,
+        &session_id,
+        "superseded by a direct shell command",
+    )
+    .await;
     let is_current = || lifecycle.is_current(generation);
 
     // Surface the synthetic tool step starting. The response listener maps
     // `name: "bash"` to the "running command" activity status.
-    let _ = tx.send(turn(
+    let _ = tx.send(round_response(
         &session_id,
         RoundEvent::ToolCall {
             id: call_id.clone(),
@@ -81,7 +91,7 @@ pub async fn run_shell_command(
         if !is_current() {
             return;
         }
-        let _ = tx_for_stream.send(turn(
+        let _ = tx_for_stream.send(round_response(
             &session_id_for_stream,
             RoundEvent::ToolStream {
                 id: call_id_for_stream.clone(),
@@ -106,12 +116,12 @@ pub async fn run_shell_command(
     tokio::select! {
         biased;
         _ = token.cancelled() => {
-            // Ctrl+C (or a newer turn replacing us): dropping `run` kills
+            // Ctrl+C (or a newer round replacing us): dropping `run` kills
             // the child via `kill_on_drop`. Only emit the cancellation
-            // event if we are still the active turn — a newer turn's
+            // event if we are still the active round — a newer round's
             // ToolCall events must not be flattened by our exit.
             if is_current() {
-                let _ = tx.send(turn(
+                let _ = tx.send(round_response(
                     &session_id,
                     RoundEvent::ToolCancelled {
                         id: call_id,
@@ -124,7 +134,7 @@ pub async fn run_shell_command(
             match result {
                 Ok(structured) => {
                     let output = structured.to_text();
-                    let _ = tx.send(turn(
+                    let _ = tx.send(round_response(
                         &session_id,
                         RoundEvent::ToolResult {
                             id: call_id,
@@ -137,7 +147,7 @@ pub async fn run_shell_command(
                 }
                 Err(error) => {
                     let structured = ToolOutput::Text(error.clone());
-                    let _ = tx.send(turn(
+                    let _ = tx.send(round_response(
                         &session_id,
                         RoundEvent::ToolResult {
                             id: call_id,
@@ -154,10 +164,13 @@ pub async fn run_shell_command(
 
     // Release the round and flip the harness to idle, matching
     // start_interactive_round's cleanup. Guarded by the generation check
-    // (`finish` returns false for a superseded round) so a newer turn is not
+    // (`finish` returns false for a superseded round) so a newer round is not
     // reset by our exit.
     if lifecycle.finish(generation).await {
         send_harness_state(&tx, &session_id, &agent, LoopStatus::Idle);
-        let _ = tx.send(turn(&session_id, RoundEvent::Activity(String::new())));
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::Activity(String::new()),
+        ));
     }
 }

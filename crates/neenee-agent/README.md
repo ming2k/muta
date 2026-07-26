@@ -8,7 +8,7 @@ other.
 
 - **The `Agent` struct** (`agent.rs`) — holds the provider, tool set, mode,
   pursuit, and optional skill registry; runs the streaming ReAct loop.
-- **The turn/round loop** — tool-call parsing, permission brokering, context
+- **The round/turn loop** — tool-call parsing, permission brokering, context
   pressure (summarisation / context projection per ADR-0029), and the steering
   inbox.
 - **Conversation and model-request policy** — durable lifecycle-driven context

@@ -10,7 +10,8 @@ loop.
 
 This page is the design deep dive. For where hooks sit in the control plane
 see [Harness architecture](harness.md); for the events they share with other
-mechanisms see [Tool rounds](rounds-and-turns.md), [Pursuits](pursuits.md), and
+mechanisms see [Rounds and turns](rounds-and-turns.md),
+[Pursuits](pursuits.md), and
 [Context compaction](context-compaction.md). For the configuration fields see
 [Configuration Reference](../../reference/configuration.md#hooks); for the
 decision history see [ADR-0025](../../adr/0025-lifecycle-event-hooks.md).
@@ -42,9 +43,10 @@ expose the lifecycle events those engines fire on.
 Hooks fire on **lifecycle events**, grouped by cadence into four families:
 
 - **per session** — `SessionStart`, `SessionEnd`;
-- **per turn** — `UserPromptSubmit`, `Stop`;
+- **per round** — `UserPromptSubmit`;
+- **per attempted round stop** — `Stop`;
+- **per ReAct turn** — `TurnStart`, `Turn`;
 - **per tool call** — `PreToolUse`, `PostToolUse`, `PostToolUseFailure`;
-- **per round** — `Round` (ADR-0030);
 - plus the compaction pair `PreCompact` / `PostCompact`.
 
 What a hook is *allowed to do* is not a knob the user picks — it is implied by
@@ -73,8 +75,8 @@ event." neenee keeps the first internal and exposes only the second.
 | `Stop` | The model tries to end the round | Deny (force another turn, feeding the reason back) or inject |
 | `PreCompact` | Before a summarizing compaction | Inject (folded into the summary prompt) |
 | `PostCompact` | After a compaction completes | Observe |
-| `Turn` | Once per tool round, at round **end** (ADR-0030) | Inject only — **`Deny` is ignored**, so a round-count hook cannot become a de-facto round cap. Carries the read-only-round streak so a hook can target exploration-without-progress. The harness declares no built-in threshold here; users opt in. |
-| `RoundStart` | Once per tool round, at round **start** — after tools are prepared, before the next model completion | Inject only — **`Deny` is ignored** (same constraint as `Turn`). The symmetric partner of `Turn`: use it to (re)inject context at the top of the model's attention for the upcoming round, e.g. to re-anchor the principal's role after a run of read-only delegations. |
+| `Turn` | After each non-terminal ReAct turn, before the next model request (ADR-0030) | Inject only — **`Deny` is ignored**, so a turn-count hook cannot become a de-facto turn cap. Carries the read-only-turn streak so a hook can target exploration-without-progress. The harness declares no built-in threshold here; users opt in. |
+| `TurnStart` | Once per ReAct turn, at turn **start** — after tools are prepared, before the next model completion | Inject only — **`Deny` is ignored** (same constraint as `Turn`). It is the symmetric partner of `Turn`; use it to (re)inject context for the upcoming turn, for example to re-anchor the principal's role after read-only delegations. The former event name `RoundStart` remains a read-only compatibility alias. |
 | `PermissionRequest` | The agent is about to **block** waiting for your approval (a tool with a side effect needs permission) | Observe-only — **`Pass` only**, fire-and-forget. The canonical use is a desktop/bell notification so you notice a long-running task is parked on you. Honours a tool-name matcher (e.g. only `bash`). Cannot grant or deny. |
 | `UserQuestion` | The agent is about to **block** on an `ask_user` question | Observe-only — same fire-and-forget contract as `PermissionRequest`. No matcher (`ask_user` is a single tool). |
 
@@ -84,7 +86,7 @@ deny.
 
 ## Scoped tool disabling (`ScopeTools`)
 
-A `PreToolUse`, `RoundStart`, or `Turn` hook may return `ScopeTools` to
+A `PreToolUse`, `TurnStart`, or `Turn` hook may return `ScopeTools` to
 **temporarily** hide tools from the model — their schemas are dropped and
 dispatch rejects them — and have them come back automatically at a restore
 point. This lets a policy hook scope the toolset to a scenario (e.g. drop `bash`
@@ -92,8 +94,12 @@ for a read-only sub-task) without you toggling `/tools` by hand.
 
 | Restore point | When the disable is undone |
 |---------------|---------------------------|
-| `round_end` | At the end of the current tool round (next `Turn` boundary) |
-| `turn_end` | When the whole turn ends (the model replies with no tool calls, or the turn terminates) |
+| `react_turn_end` | At the end of the current ReAct turn (next `Turn` hook boundary) |
+| `user_round_end` | When the whole user round ends (the model replies with no tool calls, or the round terminates) |
+
+New output always uses the explicit canonical strings above. The pre-ADR-0047
+values remain load-compatible only: legacy `round_end` is interpreted as
+`react_turn_end`, and legacy `turn_end` as `user_round_end`.
 
 Scoped disables are **never persisted**: they live in memory only, never reach
 the session store, and never collide with your manual `/tools` toggles (which
@@ -142,6 +148,9 @@ wedge the agent loop. Hard rules belong to the
 The JSON object is flat and `jq`-friendly: one level with `event`,
 `session_id`, `cwd`, and the event-specific fields (`tool_name`,
 `tool_input`, `tool_output`, `prompt`, `last_message`, …).
+`Turn` and `TurnStart` also carry the one-based enclosing `round`, the
+zero-based ReAct `turn`, and `consecutive_readonly`; retrying a provider
+request does not change either position.
 
 ## Composition with the loop
 
@@ -174,18 +183,18 @@ influence what the model summarizes), and `PostCompact` observes the result.
 
 ## What hooks are not
 
-- **Not a threshold or time axis, and only a constrained round axis.** Context
-  pressure and the clock stay internal (`CompactionPolicy`, `/repeat`). Round
-  counting is exposed as a single `Round` event (ADR-0030) but **`Deny`-forbidden**
-  — it lets a hook inject context at a round boundary (e.g. to react to a
-  read-only streak) without being able to abort the turn, which would recreate
-  the blanket round cap ADR-0009 removed. The harness sets no built-in
+- **Not a threshold or time axis, and only a constrained turn axis.** Context
+  pressure and the clock stay internal (`CompactionPolicy`, `/repeat`). Turn
+  counting is exposed as the `Turn` event (ADR-0030) but **`Deny`-forbidden**
+  — it lets a hook inject context at a turn boundary (e.g. to react to a
+  read-only streak) without being able to abort the round, which would recreate
+  the blanket turn cap ADR-0009 removed. The harness sets no built-in
   threshold on it; only the user does, at their own risk.
 - **Not a substitute for permissions.** A hook deny is best-effort and
   non-fatal on failure; the permission broker is the hard enforcement
   surface. Enforce mandatory policy with permissions, use hooks for
   project-specific practice.
-- **Not synchronous with the model.** A hook runs between rounds or before a
+- **Not synchronous with the model.** A hook runs between turns or before a
   call; it does not pause generation. Long work should be offloaded (a hook
   can itself spawn detached processes); the 60-second bound keeps the loop
   responsive.
@@ -194,8 +203,8 @@ influence what the model summarizes), and `PostCompact` observes the result.
 
 - [Harness architecture](harness.md) — the control plane the hooks attach to,
   and the permission broker a `PreToolUse` hook precedes
-- [Tool rounds](rounds-and-turns.md) — the tool-call turn trip the per-tool events
-  bracket
+- [Rounds and turns](rounds-and-turns.md) — the model/tool turn the per-tool
+  events bracket
 - [Pursuits](pursuits.md) — the `/pursue` stop-gate a `Stop` hook composes
   with at round end
 - [Context compaction](context-compaction.md) — the summarization the
@@ -206,7 +215,8 @@ influence what the model summarizes), and `PostCompact` observes the result.
   adopt a single event axis with implicit capability, and the multi-axis
   design rejected along the way
 - [ADR-0030](../../adr/0030-early-loop-intervention-and-round-hook.md) — the
-  `Deny`-forbidden `Round` event (called `Turn` when the ADR was written) that
-  partially supersedes ADR-0025's exclusion of loop-count (the in-loop review
-  nudge it also added was later reworked into the deterministic guard of
+  `Deny`-forbidden event now exposed as `Turn`; the ADR retains its historical
+  `Round` vocabulary. It partially supersedes ADR-0025's exclusion of
+  loop-count (the in-loop review nudge it also added was later reworked into
+  the deterministic guard of
   [ADR-0034](../../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md))

@@ -91,7 +91,7 @@ reversible* at the conversation layer. An interrupt here is treated as an
 The mechanism (`execute_round` in `orchestration.rs`): on the error path, if
 the result is `Err(Interrupted)` **and** the round's `streamed_text` flag is
 still `false` **and** no tool has run (`tool_activity` still `false`), the
-harness pops the user message back out of `turn_history`, reverts the session
+harness pops the user message back out of `round_history`, reverts the session
 store with `replace_messages`, emits a `RoundEvent::UnsentInput { prompt,
 images }`, and returns `Ok(false)` instead of propagating the error. The
 `streamed_text` / `tool_activity` guards are what distinguish Phase 1 from
@@ -145,7 +145,7 @@ consequences are precise and important:
 - The accumulated `content`, `reasoning_content`, and `tool_calls` strings
   are **dropped on the floor**. They live only in local stack variables and
   are never converted into a `Message`.
-- No assistant message enters `messages`, so it never enters `turn_history`,
+- No assistant message enters `messages`, so it never enters `round_history`,
   so it is never persisted and never sent in any future request's context.
 - No terminal provider usage is normally available. The request attempt is
   retained as `interrupted`, using the pre-wire prompt estimate plus observed
@@ -279,7 +279,7 @@ The trade-off is accepted consciously: if a future use case needs the model
 to be aware of a partial answer (for example, to explicitly resume it), the
 clean insertion point is in `execute_round` (`orchestration.rs`) just after
 the Phase-1 unsend check, where a marker message could be pushed into
-`turn_history` before the write-back. The current design leaves that hook
+`round_history` before the write-back. The current design leaves that hook
 unused.
 
 ## Summary

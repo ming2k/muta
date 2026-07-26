@@ -92,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The advisory process lock (ADR-0018, `--single-instance`) releases on
     // drop — hold the guard in `main`'s scope for the process lifetime.
     let _process_lock = process_lock;
+    let initial_round_count = session.round_counter().await;
 
     tokio::spawn(driver.run());
 
@@ -103,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_model_name,
         input_history,
         restored_messages,
+        initial_round_count,
         custom_command_suggestions,
         tui_config,
         crate::tui::SessionSource::Local(session),
@@ -134,7 +136,7 @@ async fn run_attached(
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
     let info = remote::ensure_server(&project_root, session_id.as_deref()).await?;
-    let (tx, rx, hosted_session_id, transcript) = remote::connect(&info).await?;
+    let (tx, rx, hosted_session_id, round_counter, transcript) = remote::connect(&info).await?;
     // Input history and `[tui]` presentation prefs are client-side concerns —
     // the server knows nothing of them — so they load from the LOCAL config
     // exactly as the standalone path does.
@@ -152,6 +154,7 @@ async fn run_attached(
         String::new(),
         input_history,
         transcript,
+        round_counter,
         // Server-side custom commands are unknown to the client in v1 — the
         // handshake carries no command list — so there are no suggestions.
         vec![],

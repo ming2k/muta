@@ -54,7 +54,7 @@ const TRUNCATE_KEEP_EACH_SIDE: usize = 400;
 #[serde(default)]
 pub struct CompactionPolicy {
     /// Trigger a full summarizing compaction once pressure reaches this fraction
-    /// of the window. The remaining headroom absorbs finishing the current turn
+    /// of the window. The remaining headroom absorbs finishing the current round
     /// and the summarization call itself, so a value near `1.0` risks overflow.
     pub utilization: f64,
     /// After a full compaction, compress the model window down to this fraction

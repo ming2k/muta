@@ -90,7 +90,7 @@ smaller provider-visible window:
 
 - pruning may remove large stale tool-result bodies while keeping the call/result
   structure,
-- compaction may replace older complete turns with a checkpoint summary,
+- compaction may replace older complete rounds with a checkpoint summary,
 - both operations retain originals in the durable session,
 - the next provider request sends the projected window, not the archived
   originals.

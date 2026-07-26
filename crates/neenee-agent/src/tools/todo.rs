@@ -24,14 +24,14 @@ const TODO_DESCRIPTION: &str = "Maintain the task list for the current work. Rep
 #[derive(Clone)]
 pub struct TodoToolContext {
     todos: Arc<Mutex<TodoList>>,
-    turn_counter: Arc<Mutex<u64>>,
+    round_counter: Arc<Mutex<u64>>,
 }
 
 impl TodoToolContext {
-    pub fn new(todos: Arc<Mutex<TodoList>>, turn_counter: Arc<Mutex<u64>>) -> Self {
+    pub fn new(todos: Arc<Mutex<TodoList>>, round_counter: Arc<Mutex<u64>>) -> Self {
         Self {
             todos,
-            turn_counter,
+            round_counter,
         }
     }
 
@@ -44,8 +44,8 @@ impl TodoToolContext {
         *guard = list;
     }
 
-    pub fn current_turn(&self) -> u64 {
-        *self.turn_counter.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn current_round(&self) -> u64 {
+        *self.round_counter.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -154,7 +154,7 @@ impl Tool for TodoWriteTool {
         }
 
         let now = neenee_core::todos::unix_now();
-        let turn = self.context.current_turn();
+        let turn = self.context.current_round();
         let mut list = self.context.todos();
         let prev_ids: HashSet<u64> = list.items.iter().map(|i| i.id.0).collect();
         let prev_contents: HashSet<String> = list.items.iter().map(|i| i.content.clone()).collect();
@@ -268,7 +268,7 @@ impl Tool for TodoUpdateTool {
         })?;
 
         let now = neenee_core::todos::unix_now();
-        let turn = self.context.current_turn();
+        let turn = self.context.current_round();
         let mut list = self.context.todos();
         if list.is_empty() {
             return Ok(
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(guard.items[0].id, first_id);
         assert_eq!(guard.items[0].status, TodoStatus::Completed);
         assert_eq!(guard.items[1].content, "implement");
-        assert_eq!(guard.updated_at_turn, 5);
+        assert_eq!(guard.updated_at_round, 5);
     }
 
     #[tokio::test]

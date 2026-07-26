@@ -9,7 +9,7 @@ This page is about the *design intent* and how that intent maps onto the
 mechanisms that actually enforce it. For the operational surfaces — the slash
 command, the CLI flag, the toggle's wire behaviour — see
 [Slash commands](../../reference/commands.md); for the one-line definition, see
-the [Glossary](../../reference/glossary.md#unattended).
+the [Glossary](../../reference/glossary.md#tools-and-capabilities).
 
 ## Intent vs. enforcement
 
@@ -141,8 +141,8 @@ The elevated state is always visible; it never needs to interrupt.
 
 Unattended removes the *interactive* backstop, not the *automatic* ones. A round
 running unattended is still subject to every execution bound the harness enforces
-on its own — the repeated-read guard, the session-review diagnostic, the
-optional `hard_stop_turns` budget, and the user's `Esc` interrupt. The agent is
+on its own — the repeated-read guard, the optional `hard_stop_turns` budget,
+and the user's `Esc` interrupt. The agent is
 freer to act without asking, not freed from the guards that keep an uncapped
 autonomous loop honest. See [Harness architecture → Safety bounds](harness.md).
 

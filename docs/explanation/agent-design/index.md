@@ -89,7 +89,7 @@ deep-dive references, read as a pair:
     clearing stale tool-result bodies while preserving the `tool_call_id`
     chain, gated at ~65% of the window, surfaced only as a `debug` trace.
 14. [Context compaction](context-compaction.md) — the heavier second layer:
-    summarizing older complete turns into a durable checkpoint at ~85%, with
+    summarizing older complete rounds into a durable checkpoint at ~85%, with
     a model-written anchored summary, deterministic fallback, and the visible
     `Compacted` notice.
 15. [Token accounting](token-accounting.md) — how the token count that drives
@@ -118,7 +118,7 @@ user message
        └─ [Pursuits]  active pursuit injected into the prompt
        └─ [Hooks]     UserPromptSubmit: deny? / prepend context
        └─ [Provider] stream tokens; reconstruct native tool-call deltas
-            └─ fallback? [Tool rounds] parse tool call from text
+            └─ fallback? [Rounds and turns] parse tool call from text
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
             ├─ [Harness] permission broker (Write tools only) — unattended? → skip

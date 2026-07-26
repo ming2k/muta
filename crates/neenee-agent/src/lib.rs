@@ -90,17 +90,17 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-/// Safety cap on the number of rounds the `/pursue` stop-gate will drive
-/// within a single turn. Prevents a pursuit that never signals completion
+/// Safety cap on the number of forced continuation passes the `/pursue`
+/// stop-gate will drive within a single round. Prevents a pursuit that never signals completion
 /// from looping forever; the user can also interrupt with `Esc`. Generous by
 /// design — a well-behaved pursuit completes by signalling the marker well
 /// before this.
 ///
-/// This is **not** the per-turn round cap ADR-0009 removed: an ordinary turn
-/// (no pursuit armed) stays uncapped and ends when the model stops calling
-/// tools. This cap only bounds the *forced re-injection* of an opt-in stop-gate
-/// the user explicitly armed — see ADR-0015.
-const MAX_PURSUIT_ITERATIONS: u32 = 50;
+/// This is **not** a default per-round turn cap: an ordinary round (no pursuit
+/// armed) stays uncapped and ends when the model stops calling tools. This cap
+/// only bounds the forced re-injection of an opt-in stop-gate the user
+/// explicitly armed — see ADR-0015/0083.
+pub const MAX_PURSUIT_ITERATIONS: u32 = 50;
 
 /// Maximum interval between consecutive stream events (text/reasoning/tool-call
 /// deltas) before the stream is considered stalled. All LLM providers use

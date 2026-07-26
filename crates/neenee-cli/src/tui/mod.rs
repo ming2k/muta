@@ -112,7 +112,9 @@ use crate::tui::model::document::{
 };
 use crate::tui::model::layout::LayoutMap;
 use crate::tui::model::selection::{SelectionDrag, SelectionState};
-use crate::tui::transcript::{finalize_streaming_reasoning, transcript_messages_from_core};
+use crate::tui::transcript::{
+    finalize_streaming_reasoning, rebase_transcript_rounds, transcript_messages_from_core,
+};
 use crate::tui::view::Theme;
 
 use neenee_persistence::session::SessionStore;
@@ -184,6 +186,7 @@ pub async fn run_tui(
     initial_model: String,
     input_history: Vec<String>,
     initial_messages: Vec<Message>,
+    initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
     tui_config: config::TuiConfig,
     session: SessionSource,
@@ -214,7 +217,8 @@ pub async fn run_tui(
     // so any later SIGTERM/SIGINT/SIGHUP restores it instead of stranding it.
     terminal::spawn_signal_guard();
     let tui_config = Arc::new(tui_config);
-    let restored = transcript_messages_from_core(initial_messages, &tui_config);
+    let mut restored = transcript_messages_from_core(initial_messages, &tui_config);
+    rebase_transcript_rounds(&mut restored, initial_round_count);
     let messages = Arc::new(versioned::Versioned::new(restored));
     let messages_clone = messages.clone();
     // Stage 3 redraw signal: the listener flips this on every handled response
@@ -246,6 +250,7 @@ pub async fn run_tui(
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
         pursuit: None,
         loop_status: LoopStatus::Idle,
+        round_counter: initial_round_count,
         unattended: false,
     }));
     let harness_clone = harness.clone();
@@ -253,24 +258,22 @@ pub async fn run_tui(
     // (`None`) hides the panel.
     let todos: Arc<Mutex<Option<TodoList>>> = Arc::new(Mutex::new(None));
     let todos_clone = todos.clone();
-    let round_count: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+    let round_count: Arc<Mutex<u64>> = Arc::new(Mutex::new(initial_round_count));
     let round_count_clone = round_count.clone();
-    // Current tool round within the active turn. Reset to 0 at each turn
-    // boundary and bumped from `AgentResponse::TurnStarted`. The activity bar
-    // renders it as `round M` alongside the turn number.
+    // Current ReAct turn within the active round. Reset to 0 at each round
+    // boundary and bumped from `RoundEvent::TurnStarted`. The Activity
+    // modal renders it as `turn M` alongside the round number.
     let current_turn: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     let current_turn_clone = current_turn.clone();
-    // Stall alert level (consecutive read-only rounds). Bumped by future stall-
-    // detection logic; reset at each turn boundary. Dormant until that logic
     // Session-review alert (ADR-0016). Updated when a `SessionReview`
-    // response lands; cleared (empty) on turn reset so the activity bar's
-    // `⚠ <alert>` segment clears between turns.
+    // response lands; cleared (empty) on round reset so the activity bar's
+    // `⚠ <alert>` segment clears between rounds.
     let review_alert: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let review_alert_clone = review_alert.clone();
-    // Wall-clock instant the current turn started. Stamped on a "running"
+    // Wall-clock instant the current round started. Stamped on a "running"
     // HarnessState so the activity bar can render a live `<elapsed>` segment.
-    let turn_started_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
-    let turn_started_at_clone = turn_started_at.clone();
+    let round_started_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
+    let round_started_at_clone = round_started_at.clone();
     let activity_status = Arc::new(Mutex::new(String::new()));
     let activity_clone = activity_status.clone();
     let pending_permission = Arc::new(Mutex::new(VecDeque::<PermissionRequest>::new()));
@@ -349,10 +352,14 @@ pub async fn run_tui(
         // listener routes per-turn events; the loop reads the already-routed
         // `side_messages` buffer.
         let mut listener_side_id: Option<String> = None;
-        // Per-session model-request round. The primary and `/btw` side
+        // Per-session `(round, turn)` position. The primary and `/btw` side
         // sessions can stream concurrently, so a single global counter cannot
         // reliably stamp transcript components for semantic spacing.
-        let mut turns_by_session = HashMap::<String, u64>::new();
+        let mut positions_by_session = HashMap::<String, (u64, u64)>::new();
+        // A session switch replaces the transcript before its authoritative
+        // idle HarnessState arrives. Rebase the reconstructed tail exactly
+        // once when that snapshot supplies the persisted round counter.
+        let mut needs_round_rebase = false;
         while let Some(resp) = rx.recv().await {
             // Stage 3/4: any handled response can change shared state the loop
             // renders from, so signal a redraw. High-frequency stream deltas
@@ -387,7 +394,7 @@ pub async fn run_tui(
                     // the side buffer when the event's `session_id` matches the
                     // live side session, the primary buffer otherwise. Global
                     // responding/activity/harness state below is gated on
-                    // `!routes_to_side` so a concurrent side turn never
+                    // `!routes_to_side` so a concurrent side round never
                     // clobbers the primary view's chrome; the side view reads
                     // its own buffer + the parent-status banner instead.
                     // Permission and user-question requests stay global
@@ -410,10 +417,10 @@ pub async fn run_tui(
                             let mut message = TranscriptMessage::new(Role::User, visible)
                                 .with_origin(UserMessageOrigin::Insert);
                             message.sent_at_ms = input.sent_at_ms;
-                            message.turn = turns_by_session
+                            message.round = positions_by_session
                                 .get(&session_id)
                                 .copied()
-                                .map(|turn| turn.saturating_add(1));
+                                .map(|(round, _)| round);
                             buf.write().await.push(message);
                             outbox_signals_clone.lock().await.push_back(
                                 event_loop::OutboxSignal::Inserted {
@@ -482,7 +489,12 @@ pub async fn run_tui(
                             clear_provider_retry(&mut msgs);
                             let mut message = TranscriptMessage::new(Role::Assistant, t)
                                 .with_attribution(provider, model);
-                            message.turn = turns_by_session.get(&session_id).copied();
+                            if let Some((round, turn)) =
+                                positions_by_session.get(&session_id).copied()
+                            {
+                                message.round = Some(round);
+                                message.turn = Some(turn);
+                            }
                             msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
@@ -495,12 +507,26 @@ pub async fn run_tui(
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
-                        RoundEvent::TurnStarted { turn } => {
+                        RoundEvent::TurnStarted { round, turn } => {
                             let turn = turn as u64 + 1;
-                            turns_by_session.insert(session_id.clone(), turn);
+                            positions_by_session.insert(session_id.clone(), (round, turn));
+                            {
+                                // The composer cannot know the authoritative
+                                // round until admission. Stamp its latest
+                                // unpositioned driving prompt at this event.
+                                let mut msgs = buf.write().await;
+                                if let Some(prompt) = msgs.iter_mut().rev().find(|message| {
+                                    message.role == Role::User
+                                        && message.origin == UserMessageOrigin::Chat
+                                        && message.round.is_none()
+                                }) {
+                                    prompt.round = Some(round);
+                                }
+                            }
                             if !routes_to_side {
-                                // 1-indexed for display: tool_round 0 is the turn
-                                // first model request, shown as `round 1`.
+                                *round_count_clone.lock().await = round;
+                                // 1-indexed for display: turn 0 is the first
+                                // model request, shown as `turn 1`.
                                 *current_turn_clone.lock().await = turn;
                             }
                         }
@@ -523,13 +549,17 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::StreamDelta(delta) => {
-                            let turn = turns_by_session.get(&session_id).copied();
+                            let position = positions_by_session.get(&session_id).copied();
+                            let round = position.map(|(round, _)| round);
+                            let turn = position.map(|(_, turn)| turn);
                             let mut msgs = buf.write_streaming().await;
-                            if let Some(id) = append_stream_text_delta(&mut msgs, turn, &delta) {
+                            if let Some(id) =
+                                append_stream_text_delta(&mut msgs, round, turn, &delta)
+                            {
                                 msgs.invalidate_message_height(id);
                                 msgs.record_text_delta(id, delta);
                             } else {
-                                // This is the first visible text in the model-request round.
+                                // This is the first visible text in the ReAct turn.
                                 // Upgrade to a structural write and create the transcript item
                                 // from real content, never from a transport-level start signal.
                                 drop(msgs);
@@ -539,7 +569,10 @@ pub async fn run_tui(
                                 clear_provider_retry(&mut msgs);
                                 let mut message = TranscriptMessage::new(Role::Assistant, delta)
                                     .with_attribution(provider, model);
-                                message.turn = turn;
+                                if let Some((round, turn)) = position {
+                                    message.round = Some(round);
+                                    message.turn = Some(turn);
+                                }
                                 msgs.push(message);
                             }
                         }
@@ -548,12 +581,15 @@ pub async fn run_tui(
                                 ir_clone.store(true, Ordering::SeqCst);
                                 *activity_clone.lock().await = "finalizing response".to_string();
                             }
-                            let turn = turns_by_session.get(&session_id).copied();
+                            let position = positions_by_session.get(&session_id).copied();
+                            let round = position.map(|(round, _)| round);
+                            let turn = position.map(|(_, turn)| turn);
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
                             if let Some(message) = msgs.last_mut().filter(|message| {
                                 message.role == Role::Assistant
                                     && matches!(&message.kind, MessageKind::Text)
+                                    && message.round == round
                                     && message.turn == turn
                             }) {
                                 message.raw = final_content;
@@ -566,18 +602,25 @@ pub async fn run_tui(
                                 let mut message =
                                     TranscriptMessage::new(Role::Assistant, final_content)
                                         .with_attribution(provider, model);
-                                message.turn = turn;
+                                if let Some((round, turn)) = position {
+                                    message.round = Some(round);
+                                    message.turn = Some(turn);
+                                }
                                 msgs.push(message);
                             }
                         }
                         RoundEvent::StreamDiscard => {
-                            let turn = turns_by_session.get(&session_id).copied();
+                            let position = positions_by_session.get(&session_id).copied();
+                            let round = position.map(|(round, _)| round);
+                            let turn = position.map(|(_, turn)| turn);
                             let mut msgs = buf.write().await;
                             // With lazy stream-item creation, a hidden reasoning stream may
                             // have no visible message to discard. Never pop an assistant item
                             // from an earlier round merely because it happens to be last.
                             if msgs.last().is_some_and(|message| {
-                                message.role == Role::Assistant && message.turn == turn
+                                message.role == Role::Assistant
+                                    && message.round == round
+                                    && message.turn == turn
                             }) {
                                 msgs.pop();
                             }
@@ -597,13 +640,13 @@ pub async fn run_tui(
                                 }
                             }
                             if !routes_to_side {
-                                // The turn counter was bumped optimistically at
+                                // The round counter was bumped optimistically at
                                 // send time (and again on the "running"
                                 // HarnessState). Since nothing committed to the
                                 // transcript, roll the counter back so the
-                                // re-send reuses the same turn number instead of
+                                // re-send reuses the same round number instead of
                                 // skipping ahead. Matches the harness, which only
-                                // `bump_turn`s a number that actually ran.
+                                // `bump_round`s a number that actually ran.
                                 let mut rc = round_count_clone.lock().await;
                                 *rc = rc.saturating_sub(1);
                                 *unsent_input_signal_clone.lock().await =
@@ -643,11 +686,14 @@ pub async fn run_tui(
                             // entry, so their high-frequency deltas can retain
                             // the ordinary text-message entries unchanged.
                             let mut msgs = buf.write_streaming().await;
-                            let turn = turns_by_session.get(&session_id).copied();
-                            let changed = if let Some(last) = msgs
-                                .last_mut()
-                                .filter(|message| message.is_thinking() && message.turn == turn)
-                            {
+                            let position = positions_by_session.get(&session_id).copied();
+                            let round = position.map(|(round, _)| round);
+                            let turn = position.map(|(_, turn)| turn);
+                            let changed = if let Some(last) = msgs.last_mut().filter(|message| {
+                                message.is_thinking()
+                                    && message.round == round
+                                    && message.turn == turn
+                            }) {
                                 last.push_stream(&delta);
                                 if let MessageKind::Thinking { content, .. } = &mut last.kind {
                                     content.push_str(&delta);
@@ -662,7 +708,10 @@ pub async fn run_tui(
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
                                 let mut thinking = TranscriptMessage::thinking(delta.clone())
                                     .with_attribution(provider, model);
-                                thinking.turn = turn;
+                                if let Some((round, turn)) = position {
+                                    thinking.round = Some(round);
+                                    thinking.turn = Some(turn);
+                                }
                                 // A reasoning trace's default disclosure honors the
                                 // `[tui.default_expanded] thinking` config (collapsed by
                                 // default). On completion the transition leaves it as-is
@@ -687,7 +736,7 @@ pub async fn run_tui(
                                 .map(|started| started.elapsed().as_millis() as u64);
                             let mut msgs = buf.write().await;
                             // The round closes with `AssistantEnd` *before* `ReasoningEnd`
-                            // (see golden_reasoning_precedes_text_in_the_same_round), so by
+                            // (see golden_reasoning_precedes_text_in_the_same_turn), so by
                             // the time this arrives the assistant's text message is usually
                             // the literal last message. Scan backward for the most recent
                             // Thinking message that is still streaming (`duration_ms: None`)
@@ -729,11 +778,11 @@ pub async fn run_tui(
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
-                            // Stamp the current model-request round so this step
+                            // Stamp the current ReAct turn so this step
                             // joins its compact sibling tool batch;
                             // `TurnStarted` has already populated the session
-                            // map for this round.
-                            let turn = turns_by_session.get(&session_id).copied();
+                            // position map.
+                            let position = positions_by_session.get(&session_id).copied();
                             let sent_at_ms = event_loop::now_epoch_ms();
                             let mut msgs = buf.write().await;
                             clear_provider_retry(&mut msgs);
@@ -744,7 +793,9 @@ pub async fn run_tui(
                             let mut message = TranscriptMessage::tool_step(id, name, arguments)
                                 .with_attribution(provider, model)
                                 .with_sent_at_ms(sent_at_ms);
-                            message.turn = turn;
+                            if let Some((round, turn)) = position {
+                                message = message.with_round(round).with_turn(turn);
+                            }
                             msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
@@ -796,7 +847,12 @@ pub async fn run_tui(
                                 let mut message =
                                     TranscriptMessage::tool_step(id.clone(), name.clone(), "{}")
                                         .with_attribution(provider, model);
-                                message.turn = turns_by_session.get(&session_id).copied();
+                                if let Some((round, turn)) =
+                                    positions_by_session.get(&session_id).copied()
+                                {
+                                    message.round = Some(round);
+                                    message.turn = Some(turn);
+                                }
                                 message.finish_tool_step(&id, output, structured, duration_ms);
                                 if let Some(status) = message.tool_step_status() {
                                     let default = step_interaction::default_tool_expanded(
@@ -831,7 +887,12 @@ pub async fn run_tui(
                                 // the user still sees the call was abandoned.
                                 let mut message =
                                     TranscriptMessage::tool_step(id.clone(), "tool", "{}");
-                                message.turn = turns_by_session.get(&session_id).copied();
+                                if let Some((round, turn)) =
+                                    positions_by_session.get(&session_id).copied()
+                                {
+                                    message.round = Some(round);
+                                    message.turn = Some(turn);
+                                }
                                 message.cancel_tool_step(&id);
                                 message.set_tool_step_expanded(false);
                                 msgs.push(message);
@@ -964,23 +1025,24 @@ pub async fn run_tui(
                                 },
                             );
                             if !routes_to_side {
+                                let round_counter = snapshot.round_counter;
+                                if !running && needs_round_rebase {
+                                    rebase_transcript_rounds(
+                                        &mut messages_clone.write().await,
+                                        round_counter,
+                                    );
+                                    needs_round_rebase = false;
+                                }
+                                *round_count_clone.lock().await = round_counter;
                                 *harness_clone.lock().await = snapshot;
-                                // Each "running" HarnessState marks the start of a new
-                                // turn; bump the local turn counter mirror so the plan
-                                // panel's stale detector has a frame-current value
-                                // without needing a dedicated event channel. This is
-                                // approximate (one bump per turn start) which matches
-                                // `Agent::bump_turn`'s semantics in the harness.
                                 if running {
-                                    let mut tc = round_count_clone.lock().await;
-                                    *tc = tc.saturating_add(1);
-                                    // A new turn resets the round counter; it stays 0
-                                    // until the first `TurnStarted` of the turn lands.
+                                    // A new round resets the turn counter; it stays 0
+                                    // until the first `TurnStarted` of the round lands.
                                     *current_turn_clone.lock().await = 0;
-                                    // Reset the review alert and stamp the turn timer so the
+                                    // Reset the review alert and stamp the round timer so the
                                     // activity bar can render a live `<elapsed>` segment.
                                     *review_alert_clone.lock().await = String::new();
-                                    *turn_started_at_clone.lock().await =
+                                    *round_started_at_clone.lock().await =
                                         Some(std::time::Instant::now());
                                 }
                                 ir_clone.store(running, Ordering::SeqCst);
@@ -988,12 +1050,12 @@ pub async fn run_tui(
                                     activity_clone.lock().await.clear();
                                     *current_turn_clone.lock().await = 0;
                                     *review_alert_clone.lock().await = String::new();
-                                    *turn_started_at_clone.lock().await = None;
+                                    *round_started_at_clone.lock().await = None;
                                 }
                             }
-                            // A harness state change is always a turn boundary
-                            // (idle at the end of a turn, "running"/"loop N/M" at the
-                            // start of a new one). If the previous turn ended mid-
+                            // A harness state change is always a round boundary
+                            // (idle at the end of a round, "running"/"loop N/M" at the
+                            // start of a new one). If the previous round ended mid-
                             // reasoning — e.g. the user interrupted, the provider
                             // errored, or a fresh turn superseded a still-streaming
                             // one — `StreamReasoningEnd` never arrives, so the
@@ -1123,11 +1185,14 @@ pub async fn run_tui(
                 }
                 AgentResponse::ConversationCleared => {
                     messages_clone.write().await.clear();
+                    *round_count_clone.lock().await = 0;
+                    needs_round_rebase = false;
                     context_tokens_clone.lock().await.clear();
                 }
                 AgentResponse::ConversationReplaced(messages) => {
                     *messages_clone.write().await =
                         transcript_messages_from_core(messages, &tui_config_clone);
+                    needs_round_rebase = true;
                     // The model-window revision changed; do not reuse an API
                     // anchor from the previous session/projection.
                     context_tokens_clone.lock().await.clear();
@@ -1313,7 +1378,7 @@ pub async fn run_tui(
         round_count: 0,
         current_turn: 0,
         review_alert: String::new(),
-        turn_started_at: None,
+        round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
         help_scroll: 0,
@@ -1435,7 +1500,7 @@ pub async fn run_tui(
             round_count,
             current_turn,
             review_alert,
-            turn_started_at,
+            round_started_at,
             unsent_input_signal,
             outbox_signals,
         },
@@ -1468,6 +1533,7 @@ pub async fn start_tui(
     initial_model: String,
     input_history: Vec<String>,
     initial_messages: Vec<Message>,
+    initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
     tui_config: config::TuiConfig,
     session: SessionSource,
@@ -1480,6 +1546,7 @@ pub async fn start_tui(
         initial_model,
         input_history,
         initial_messages,
+        initial_round_count,
         custom_commands,
         tui_config,
         session,
@@ -1533,18 +1600,20 @@ fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
     clear_provider_retry(messages);
 }
 
-/// Append a streamed assistant-text delta to the current round, creating the
+/// Append a streamed assistant-text delta to the current turn, creating the
 /// message only when the first visible text arrives. Returning `None` means the
 /// caller must perform the structural insertion (and request a full transcript
 /// snapshot); returning an id permits the cheap per-message patch path.
 fn append_stream_text_delta(
     messages: &mut [TranscriptMessage],
+    round: Option<u64>,
     turn: Option<u64>,
     delta: &str,
 ) -> Option<u64> {
     let message = messages.last_mut().filter(|message| {
         message.role == Role::Assistant
             && matches!(&message.kind, MessageKind::Text)
+            && message.round == round
             && message.turn == turn
     })?;
     message.push_stream(delta);

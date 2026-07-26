@@ -1,8 +1,8 @@
 # Token accounting
 
 neenee measures context pressure in **tokens** because that is the unit every
-model's context window is denominated in. A round's token count drives the three
-context-projection layers — [pruning](context-pruning.md) →
+model's context window is denominated in. The projected request size at each
+turn boundary drives the three context-projection layers — [pruning](context-pruning.md) →
 [compaction](context-compaction.md) → overflow recovery — and the live meter in
 the TUI's hint bar. Getting that number *approximately* right is what keeps the
 agent from silently overflowing the window or, conversely, compacting far too
@@ -28,7 +28,7 @@ get in the way of "just use the provider's number":
    pressure estimate *during* a round (between tool turns) to decide whether to
    prune, and at that point the current request's usage is not back yet.
 3. **The number is for one request, not the running total.** Each `usage` object
-   describes one turn-trip's `prompt_tokens` + `completion_tokens`; the
+   describes one turn's `prompt_tokens` + `completion_tokens`; the
    context pressure is roughly the *next* request's `prompt_tokens`, which is the
    size of the accumulated window.
 
@@ -39,8 +39,7 @@ guesses.
 
 ## The priority chain
 
-At the single booking point (`Agent::book_turn_usage`,
-`crates/neenee-agent/src/agent.rs`), each round's usage is resolved through this
+At the single booking boundary, each turn's usage is resolved through this
 chain, in order:
 
 ```text

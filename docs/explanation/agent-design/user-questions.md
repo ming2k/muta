@@ -21,7 +21,7 @@ A dedicated tool gives three advantages:
 2. **Non-blocking architecture** — the tool uses the same oneshot-channel
    pattern as the permission broker, so the agent round suspends cleanly and the
    UI remains responsive.
-3. **Observable lifecycle** — every step (call, render, answer, result) flows
+3. **Observable protocol** — every step (call, render, answer, result) flows
    through the normal `AgentEvent` stream, so the transcript records what was
    asked and what was chosen.
 
@@ -64,15 +64,15 @@ prompt to remember to include an escape hatch.
 ```
 
 The blocking primitive is a oneshot channel. When the agent receives the tool
-call, it stores the sender in a pending-question slot, emits the event, and
-awaits the receiver. The TUI keeps the receiver alive by holding the request
-in a queue; once the user answers, the TUI sends the reply, the agent resolves
-the sender, and the tool future completes.
+call, it stores the sender under the request id, emits the event, and awaits
+the receiver. The TUI independently queues the request for presentation. Once
+the user answers or cancels, the reply resolves the matching sender and the
+tool future completes.
 
 This design intentionally mirrors the permission broker
 because that broker already solves the same problem: suspend a tool future,
 queue the request, render a modal, and resume on user input. The key
-difference is that questions are independent—cancelling or rejecting one
+difference is that requests are independent—cancelling one
 question does not cascade to other pending questions, unlike a permission
 rejection which aborts the whole round.
 
@@ -87,6 +87,10 @@ The question modal is a centered overlay. It shows one question at a time:
 - Multi-select questions use checkboxes (`[ ]` / `[x]`) and a separate toggle
   set: `↑`/`↓` only moves the highlight, and `Space` toggles a row on/off.
 - Options are numbered 1–9 for direct keyboard access.
+- `Enter` advances to the next question and submits the complete answer set
+  only from the final page. `Shift+Tab` returns to the previous page.
+- Each page retains its own highlight, selection, and **Other** text when the
+  user moves backward or forward.
 - The footer lists the available shortcuts (the `Space` hint is shown only for
   multi-select, since it is a no-op for single-select).
 
@@ -97,13 +101,18 @@ the user submits.
 
 ## Cancellation and interruption
 
-If the user presses `Esc`, the TUI sends an empty answer. The agent returns a
-text result explaining that no answer was provided, and the model decides how
-to proceed.
+If the user presses `Esc`, the modal emits a cancellation effect and closes.
+The transport represents cancellation as an empty outer answers array. That
+cannot be confused with a valid answer: a submitted request always carries
+one inner array per question, even when a multi-select page has no choices.
+The agent resolves the parked sender as cancelled, returns a text result
+explaining that no answer was provided, and lets the model decide how to
+proceed.
 
-If the user interrupts the round (double `Esc`), the harness
-rejects every pending question sender with `None`. Each blocked `ask_user`
-future then resolves to the cancelled result.
+If the whole round is interrupted or superseded, the harness rejects every
+pending question sender. Each blocked `ask_user` future resolves to the same
+cancelled result, so neither an invisible modal nor an abandoned waiter can
+leave the round parked.
 
 ## Planning
 
@@ -114,7 +123,7 @@ profile's `allow_user_interaction` flag and the full-duplex channel
 `EXPLORE` profile is non-interactive, so a read-only research envoy that
 needs clarification surfaces the request up to the main agent rather than
 calling `ask_user` directly; the `INTERACTIVE` profile opts in and the
-turn-trip works through the handle.
+request/reply path works through the handle.
 
 ## Envoys
 
@@ -135,4 +144,4 @@ envoy that hits ambiguity returns it in its written answer instead. See
   same flag rather than left to the model's discretion.
 - [How to ask the user a question](../../how-to/ask-the-user.md)
 - [Built-in tools](../../reference/tools/index.md)
-- [Tool rounds](rounds-and-turns.md)
+- [Rounds and turns](rounds-and-turns.md)

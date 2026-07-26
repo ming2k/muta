@@ -1,4 +1,4 @@
-//! Chat-turn and `!`-prefix shell-command handlers, extracted verbatim from
+//! Chat-round and `!`-prefix shell-command handlers, extracted verbatim from
 //! the agent background task's `match req { … }` dispatch.
 //!
 //! Each handler is one match arm, lifted unchanged. Parameters are named to
@@ -6,7 +6,7 @@
 //! `history`, `session`, `lifecycle`, `resp_tx`, `pursuit_service`, `config`,
 //! …) so the body reads exactly as it did inline.
 
-use neenee_agent::orchestration::{RoundInput, turn};
+use neenee_agent::orchestration::{RoundInput, round_response};
 use neenee_agent::{Agent, NoProvider, RoundLifecycle};
 use neenee_core::{AgentResponse, QueuedUserInput, RoundEvent};
 use neenee_persistence::{config::Config, session::SessionStore};
@@ -17,7 +17,7 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use crate::shell::run_shell_command;
 use crate::side::{SideSession, start_active_turn, start_session_turn, target_agent};
 
-/// `AgentRequest::Chat` — start an interactive turn against whichever session
+/// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
 #[allow(clippy::too_many_arguments)]
 pub async fn chat(
@@ -39,7 +39,8 @@ pub async fn chat(
     // instead of letting the request reach a non-functional provider.
     if NoProvider::is(agent.provider.as_ref()) {
         let _ = resp_tx.send(AgentResponse::Error(
-            "No provider configured. Add one with /connections before sending a message.".to_string(),
+            "No provider configured. Add one with /connections before sending a message."
+                .to_string(),
         ));
         return;
     }
@@ -78,7 +79,7 @@ pub async fn insert_user_input(
         None => false,
     };
     if !accepted {
-        let _ = resp_tx.send(turn(
+        let _ = resp_tx.send(round_response(
             &session_id,
             RoundEvent::UserInputUnavailable { input_id: input.id },
         ));
@@ -104,7 +105,7 @@ pub async fn cancel_inserted_input(
     } else {
         RoundEvent::UserInputCancelFailed { input_id }
     };
-    let _ = resp_tx.send(turn(&session_id, event));
+    let _ = resp_tx.send(round_response(&session_id, event));
 }
 
 /// Dispatch a paused outbox item into a fresh round without consulting the
@@ -139,12 +140,15 @@ pub async fn chat_to_session(
     )
     .await;
     if !started {
-        let _ = resp_tx.send(turn(
+        let _ = resp_tx.send(round_response(
             &session_id,
             RoundEvent::UserInputUnavailable { input_id: input.id },
         ));
     } else {
-        let _ = resp_tx.send(turn(&session_id, RoundEvent::NextRoundStarted(input)));
+        let _ = resp_tx.send(round_response(
+            &session_id,
+            RoundEvent::NextRoundStarted(input),
+        ));
     }
 }
 

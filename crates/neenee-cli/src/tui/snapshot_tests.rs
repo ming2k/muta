@@ -491,9 +491,9 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
 
 // ── Tool-step batch spacing (ADR-0001, layout-owned boundaries) ──
 //
-// Known same-round tool steps stack flush regardless of disclosure state. The
+// Known same-turn tool steps stack flush regardless of disclosure state. The
 // first tests also lock the compatibility behavior for legacy messages whose
-// round is unknown: adjacent collapsed headers remain compact, while an
+// turn is unknown: adjacent collapsed headers remain compact, while an
 // expanded legacy body keeps one separator before the next header. These tests
 // render the full transcript (`draw_transcript`, which owns the boundary) so
 // the single-step `render_grid` helper cannot mask layout behavior.
@@ -530,7 +530,7 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 pursuit: None,
                 todos: None,
                 review_alert: String::new(),
-                turn_started_at: None,
+                round_started_at: None,
                 unattended: false,
                 hovered_step: None,
                 focused_target: None,
@@ -623,7 +623,7 @@ fn collapsed_tool_steps_stack_flush() {
     );
 }
 
-/// For legacy messages without round stamps, an expanded body sits flush
+/// For legacy messages without turn stamps, an expanded body sits flush
 /// against its own header but retains one compatibility separator before the
 /// next header; collapsed neighbors remain flush.
 #[test]
@@ -672,7 +672,7 @@ fn expanded_body_flush_to_header_neighbours_stay_flush() {
 #[test]
 fn user_message_before_tool_step_has_single_separator_row() {
     let messages = vec![
-        TranscriptMessage::new(Role::User, "inspect files").with_turn(1),
+        TranscriptMessage::new(Role::User, "inspect files").with_round(1),
         tool_step_structured(
             "read_text",
             r#"{"path":"src/lib.rs"}"#,
@@ -711,23 +711,23 @@ fn user_message_before_tool_step_has_single_separator_row() {
 }
 
 /// The metadata component owns separators, so a sent user header with both a
-/// turn and timestamp renders exactly one separator between the two chips.
+/// round and timestamp renders exactly one separator between the two chips.
 #[test]
 fn sent_user_header_has_one_metadata_separator() {
     let message = TranscriptMessage::new(Role::User, "inspect files")
-        .with_turn(5)
+        .with_round(5)
         .with_sent_at_ms(1_700_000_000_000);
 
     let grid = render_transcript_grid(&[message], 60, 14);
     let header = grid
         .lines()
-        .find(|row| row.contains("turn 5"))
+        .find(|row| row.contains("round 5"))
         .expect("sent user header must render");
 
     assert_eq!(
         header.matches('·').count(),
         1,
-        "turn and timestamp should have one separator:\n{grid}"
+        "round and timestamp should have one separator:\n{grid}"
     );
 }
 
@@ -777,10 +777,10 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
     );
 }
 
-/// The round header labels the group and keeps one row before its first
+/// The turn header labels the group and keeps one row before its first
 /// component.
 #[test]
-fn default_round_header_has_one_gap_before_first_tool() {
+fn default_turn_header_has_one_gap_before_first_tool() {
     let step = tool_step_structured(
         "read_text",
         r#"{"path":"a.rs"}"#,
@@ -798,30 +798,30 @@ fn default_round_header_has_one_gap_before_first_tool() {
 
     let grid = render_transcript_grid(&[step], 72, 14);
     let rows: Vec<&str> = grid.lines().collect();
-    let round_idx = rows
+    let turn_idx = rows
         .iter()
-        .position(|row| row.contains("◆ round 7"))
-        .expect("round header must render");
+        .position(|row| row.contains("◆ turn 7"))
+        .expect("turn header must render");
     let tool_idx = rows
         .iter()
         .position(|row| row.contains("Read ") && row.contains('+'))
         .expect("tool header must render");
 
     assert_eq!(
-        round_idx, 1,
-        "round header should only inherit the viewport's one top-margin row:\n{grid}"
+        turn_idx, 1,
+        "turn header should only inherit the viewport's one top-margin row:\n{grid}"
     );
     assert_eq!(
-        tool_idx - round_idx,
+        tool_idx - turn_idx,
         2,
-        "round header and first tool should have one blank row:\n{grid}"
+        "turn header and first tool should have one blank row:\n{grid}"
     );
 }
 
 /// Thinking and the tool batch are separate visual segments, while parallel
 /// tools inside the batch stay flush.
 #[test]
-fn same_round_segments_have_gaps_but_parallel_tools_stay_flush() {
+fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
     let mut thinking = TranscriptMessage::thinking("inspect the files").with_turn(7);
     thinking.set_thinking_duration(10);
     let first = tool_step_structured(
@@ -853,10 +853,10 @@ fn same_round_segments_have_gaps_but_parallel_tools_stay_flush() {
 
     let grid = render_transcript_grid(&[thinking, first, second], 72, 14);
     let rows: Vec<&str> = grid.lines().collect();
-    let round_idx = rows
+    let turn_idx = rows
         .iter()
-        .position(|row| row.contains("◆ round 7"))
-        .expect("round header must render");
+        .position(|row| row.contains("◆ turn 7"))
+        .expect("turn header must render");
     let thinking_idx = rows
         .iter()
         .position(|row| row.contains("Thinking ·"))
@@ -870,7 +870,7 @@ fn same_round_segments_have_gaps_but_parallel_tools_stay_flush() {
 
     assert_eq!(
         thinking_idx,
-        round_idx + 2,
+        turn_idx + 2,
         "header → thinking needs one blank row:\n{grid}"
     );
     assert_eq!(
@@ -880,10 +880,10 @@ fn same_round_segments_have_gaps_but_parallel_tools_stay_flush() {
     );
 }
 
-/// A round boundary, unlike a component boundary inside a round, keeps the
+/// A turn boundary, unlike a component boundary inside a turn, keeps the
 /// standard single separator row.
 #[test]
-fn different_tool_rounds_have_one_vertical_gap() {
+fn different_tool_turns_have_one_vertical_gap() {
     let make_step = |turn: u64| {
         tool_step_structured(
             "read_text",
@@ -901,10 +901,10 @@ fn different_tool_rounds_have_one_vertical_gap() {
     };
     let grid = render_transcript_grid(&[make_step(1), make_step(2)], 72, 14);
     let rows: Vec<&str> = grid.lines().collect();
-    let round_rows: Vec<usize> = rows
+    let turn_rows: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("◆ round"))
+        .filter(|(_, row)| row.contains("◆ turn"))
         .map(|(index, _)| index)
         .collect();
     let tool_rows: Vec<usize> = rows
@@ -914,17 +914,17 @@ fn different_tool_rounds_have_one_vertical_gap() {
         .map(|(index, _)| index)
         .collect();
 
-    assert_eq!(round_rows.len(), 2, "expected two round headers:\n{grid}");
+    assert_eq!(turn_rows.len(), 2, "expected two turn headers:\n{grid}");
     assert_eq!(tool_rows.len(), 2, "expected two tool headers:\n{grid}");
     assert_eq!(
-        round_rows[1] - tool_rows[0],
+        turn_rows[1] - tool_rows[0],
         2,
-        "rounds need exactly one blank separator row:\n{grid}"
+        "turns need exactly one blank separator row:\n{grid}"
     );
     assert_eq!(
-        tool_rows[1] - round_rows[1],
+        tool_rows[1] - turn_rows[1],
         2,
-        "round header → tool needs one blank row:\n{grid}"
+        "turn header → tool needs one blank row:\n{grid}"
     );
 }
 

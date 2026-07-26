@@ -1,96 +1,94 @@
 # Rounds and turns
 
-neenee executes a request in two nested layers. A **turn** is the unit the
-user perceives: one submitted message, one final reply. A **round** is the
-unit the ReAct loop iterates on inside that turn: one model request, plus
-the tool work that follows when the model asks for it. One turn is one or
-many turns; one round never spans rounds.
+neenee executes a request in two nested layers. A **round** is the unit the
+user perceives: one admitted message, one final reply. A **turn** is one
+iteration of the ReAct loop inside that round: one model request, plus the tool
+work that follows when the model asks for it. One round contains one or many
+turns; one turn never spans rounds.
 
 The split is not decorative. Different concerns attach to each layer, and
 keeping them straight is the key to reading the rest of the canon. For the
-control plane that drives a turn, see [Harness architecture](harness.md).
+control plane that drives a round, see [Harness architecture](harness.md).
 
 ## The two layers
 
 ```text
-turn ────────────────────────────────────────────────┐
+round ───────────────────────────────────────────────┐
   │                                                   │
-  ├── round 1: model request → tool call → result ──┐ │
-  ├── round 2: model request → tool call → result ──┤ │
-  ├── round 3: model request → tool call → result ──┤ │
-  └── round N: model request → final text (no call) │ │
+  ├── turn 1: model request → tool call → result ───┐ │
+  ├── turn 2: model request → tool call → result ───┤ │
+  ├── turn 3: model request → tool call → result ───┤ │
+  └── turn N: model request → final text (no call)  │ │
                                                     │ │
-  turn ends ──────────────────────────────────────┘ │
+  round ends ─────────────────────────────────────┘ │
                                                      │
-next turn ──────────────────────────────────────────┘
+next round ─────────────────────────────────────────┘
 ```
 
-A **turn** opens when the user submits a message and closes when the agent
-produces a final assistant message that carries no tool call. Everything
-between — every model request, every tool execution, every result folded
-back into the transcript — belongs to that one turn.
+A **round** opens after the `UserPromptSubmit` admission hook accepts a
+submitted message and closes when the agent produces a final assistant
+message that carries no tool call. A denied prompt opens no round. Everything
+between — every model request, every tool execution, every result folded back
+into the transcript — belongs to that one round.
 
-A **round** is one pass through that loop: send the conversation to the
+A **turn** is one pass through that loop: send the conversation to the
 model, let the response commit, and either execute the tool calls it
-carries (then loop) or treat it as the turn's answer (then stop). A
-trivial turn that needs no tools is a single round. A turn that reads,
+carries (then loop) or treat it as the round's answer (then stop). A
+trivial round that needs no tools is a single turn. A round that reads,
 edits, and verifies may run several.
 
-The round counter resets at the start of every turn. A separate,
-monotonic **turn counter** persists across rounds for the concerns that
-need to measure passage between rounds — plan staleness, pursuit accounting.
+The turn counter resets at the start of every round. A separate, monotonic
+**round counter** persists across rounds for concerns that measure
+user-visible exchanges — plan staleness and transcript provenance.
 
 ## Terminology note
 
-Earlier revisions of this project and most LLM-agent tooling name the
-user-perceived unit a *round* and the loop iteration a *turn*. neenee
-adopted the inverse convention after the decision in
-[ADR-0047](../../adr/0047-round-contains-turn-vocabulary.md): a *turn*
-is the conversational exchange (analogous to a turn in a game or a
-voting turn — one full back-and-forth), and a *round* is one speaker's
-move inside it. The concepts are unchanged; only the two words trade
-which concept they label. The control-plane functions (`execute_round`,
-`RoundEvent`, `AgentResponse::Turn`) and the activity-modal detail line
-(`turn N · round M · <model>`) all follow this convention.
+Earlier revisions used the opposite labels. [ADR-0047](../../adr/0047-round-contains-turn-vocabulary.md)
+established the current convention: **round** is the complete conversational
+exchange and **turn** is one model/tool move inside it. Current control-plane
+symbols (`execute_round`, `RoundEvent`, `TurnStarted`) and the activity detail
+line (`round N · turn M · <model>`) follow that mapping. Historical ADRs retain
+the vocabulary they used when written.
 
-## What ends a turn
+## What ends a round
 
-A turn stops on the first of these conditions:
+A round stops on the first of these conditions:
 
 | Condition | Kind | What the user sees |
 |-----------|------|--------------------|
 | Final assistant message with no tool call | Natural completion | The reply |
 | Repeated-call guard trips | Stuck loop | An error |
-| User interrupt | Cancellation | The turn stops where it is |
-| Permission denied | Abort | The denied call's result ends the loop |
+| User interrupt or supersession | Cancellation | The round stops where it is |
+| Terminal harness error | Abort | An error or denied/cancelled result |
 
-There is **no per-turn round cap**: distinct tool calls are allowed to run
+There is **no default per-round turn cap**: distinct tool calls are allowed to
+run
 uncapped, matching the codex / claude-code agentic-loop model (ADR-0009).
-Context compaction is the backstop that keeps long rounds bounded; the user
-can interrupt at any time. The repeated-call guard is the only in-loop
-guardrail: three identical calls in a row mean the loop is stuck, so the
-fourth is rejected as an error rather than silently swallowed.
+Context projection is the backstop that keeps long rounds within the model
+window; the user can interrupt at any time. An optional doom-loop guard can
+block repeated watched signatures, and an explicit `hard_stop_turns` setting
+can impose a user-chosen bound.
 
 For the rest of the safety surface, see [Harness architecture](harness.md).
 
-## What ends a round
+## What ends a turn
 
-A round ends when the model's response commits — when the stream
-terminates and the assistant message is final. Up to that boundary,
-nothing with side effects has run; the round is still retryable. Once the
-response commits, the turn either executes the tool calls it carries and
-starts a new round, or treats the message as the answer and ends the turn.
+A turn's provider phase commits when the stream terminates and the assistant
+message is final. Up to that boundary, nothing with side effects has run and
+the provider request is still retryable. After commit, the harness executes
+and records any carried tool calls; that completes the turn and starts the
+next one. A committed message with no call ends both the turn and the round.
 
-The sections below open up the lifecycle inside a single round:
+The sections below open up the lifecycle inside a single turn:
 declaration, gating, execution, and how the outcome re-enters the
 transcript.
 
-## The round, as a concept
+## The turn, as a concept
 
 A tool call is a round trip between a stateless model and an agent that
 owns the conversation. The model proposes a call; the agent shapes it,
 gates it, runs it, and folds the outcome back into the conversation so
-the next round can see it.
+the next turn can see it.
 
 ```mermaid
 flowchart TD
@@ -102,12 +100,12 @@ flowchart TD
     Record["Record — fold the outcome into the conversation"]
     Feed["Feed back — resend history so the model can see it"]
     Declare --> Elicit --> Commit
-    Elicit -- "no call" --> Stop["Turn ends"]
+    Elicit -- "no call" --> Stop["Round ends"]
     Commit --> Gate --> Run --> Record --> Feed --> Elicit
 ```
 
 The loop closes on the transcript. Every stage either reads from it or
-appends to it, and the model's only view of a prior round is what the
+appends to it, and the model's only view of a prior turn is what the
 transcript says. The sections below are about why each stage behaves the
 way it does. For the wire-level mechanics — HTTP transaction shape, SSE
 delta reassembly, the ReAct loop — see [Request flow](../request-flow.md).
@@ -116,13 +114,13 @@ For why providers differ, see [Provider capabilities](../provider-capabilities.m
 ## The transcript is the only memory
 
 The model has no state between requests. Everything it "knows" about a
-prior tool call is the message history it receives each round, so the
+prior tool call is the message history it receives each turn, so the
 agent resends the full history on every request and treats the
 transcript as append-mostly. It is never edited to change meaning.
 
 The catalog is just as ephemeral to the runtime. The tool list is
-republished on every request — including the round that carries results
-back — because the serving runtime keeps no tool state across rounds.
+republished on every request — including the turn that carries results
+back — because the serving runtime keeps no tool state across turns.
 Selection stays automatic: the agent never forces a call; the model
 chooses whether and which.
 
@@ -169,7 +167,7 @@ whole string. It does not trim code fences or scan prose for embedded
 calls. The model is *told* to emit the raw object; heuristic rescue
 would risk false positives on ordinary text and mask the real failure —
 a model that ignored the instruction. A malformed call simply fails to
-parse, and the turn ends without an invocation.
+parse, and the round ends without an invocation.
 
 Because a fallback call is rendered live as assistant text while it
 streams, the agent withdraws it from the visible buffer once it parses,
@@ -180,7 +178,7 @@ its call deltas never enter the visible text buffer at all.
 
 Tool side effects are irreversible; provider requests are retryable.
 That asymmetry is the whole reason execution is deferred: nothing fires
-until the round is *committed* — meaning the model's response has fully
+until the turn is *committed* — meaning the model's response has fully
 arrived. A stream that errors before completion can be retried without
 leaving partial tool state behind.
 
@@ -198,7 +196,7 @@ paths — and any future tool source — pass through identical checks:
 
 1. **Lookup.** An unknown name returns an error *result*, not an abort.
    The model sees the error and can recover; a typo is not a
-   turn-ending failure.
+   round-ending failure.
 2. **Write-scope gate.** A per-agent `WriteScope` boundary blocks write tools
    whose target is outside the agent's granted paths — the main agent is
    unrestricted, an envoy is scoped by its profile. See
@@ -221,7 +219,7 @@ deliberately split into two faces:
 - a **typed payload**, forwarded to the UI so it can render a shell
   transcript, a code block, a file listing, or a patch faithfully; and
 - a **flattened text string**, appended to the transcript, which is all
-  the model will see on the next round.
+  the model will see on the next turn.
 
 Splitting the two keeps the UI rich without lying to the model: the
 transcript carries exactly the text a tool chose to expose, and the UI
@@ -240,68 +238,58 @@ keeps the display stable.
 
 ## Why two layers
 
-The layers exist because the concerns that govern an agent run attach to
-different granularities. Measuring everything at the turn level is too
-coarse: a single turn can burn the whole context budget if nothing watches
-the loop body. Measuring everything at the round level is too fine: the
-user does not perceive turns, and durability that changed mid-loop would
-be incoherent.
+The layers exist because concerns attach to different boundaries. A round is
+the right scope for user intent, cancellation ownership, and the durable
+conversation. A turn is the right scope for provider retry safety, tool
+dispatch, context pressure, and loop diagnostics.
 
 | Concern | Layer | Why it lives there |
 |---------|-------|--------------------|
-| Repeated-call guard | Round | A stuck loop is unbounded by default; the guardrail watches each iteration for the one signature of "stuck" (same name + args) |
-| Mid-turn context projection | Round | Pruning old tool results between turns produces a smaller model window before the next request, inside one turn |
-| Pre-tool retry safety | Round | A round is retryable until its first side effect; after that, retry is terminal |
-| Pursuit token and time accounting | Turn | Cost is booked once the turn's outcome is final, not partway through |
-| Plan staleness | Turn | "Rounds since the plan was last updated" is the signal that the model has drifted |
-| Session durability | Turn | The transcript commits at the turn boundary, never mid-loop |
-| Autonomous loop budget | Turn | A pursuit (driven by `/pursue`'s stop-gate) counts stop-gate iterations for status display and durable resume — bounded by the 50-round safety cap, see ADR-0009 and ADR-0015 |
+| Admission and cancellation ownership | Round | One submitted request owns one cancellable execution |
+| Provider retry safety | Turn | A provider attempt is retryable only before a committed side effect |
+| Context projection | Turn boundary | Tool results may be pruned or compacted before the next model request |
+| Session review / optional hard stop | Turn sequence within a round | These policies observe progress through the ReAct loop |
+| Pursuit continuation and budget accounting | Turn boundary within one round | The stop-gate decides whether to inject another model turn |
+| Transcript durability | Both | Admission persists the round input; tool and continuation boundaries are mid-round save points; terminal commit closes the round |
 
-The rule of thumb: if a concern watches the loop body, it is round-scoped;
-if it books a result or measures passage of work, it is turn-scoped.
+The rule of thumb: if a concern belongs to the user's request, it is
+round-scoped; if it watches one model/tool pass, it is turn-scoped.
 
 ## How the layers show up
 
-The round layer is visible to the user only as live progress. While a turn
-runs, the activity bar reports both layers as a structural prefix —
-`turn N · round M · <status>` — so the user can see at a glance how far into
-the turn the loop has gone. Each tool call renders as a step. When the turn
-ends, the round detail collapses into the single user-visible exchange.
+While a round runs, the activity surface reports both layers as
+`round N · turn M · <status>`. Each tool call renders as a step. When the
+round ends, the live turn detail collapses into the user-visible exchange.
+Durable mid-round save points mean a resumed session may recover committed
+tool work without pretending the interrupted round reached a normal answer.
 
-The turn layer is the durable shape of the conversation. The transcript is
-a sequence of rounds; pursuit accounting, plan progress, and the persisted
-session all advance at turn boundaries. A resumed session restores whole
-rounds, never partial turns.
+An envoy runs its own round with its own independent turn sequence; the
+parent's turn is parked while the child works. See [Envoys](envoys.md).
 
-An envoy runs its own turn with its own independent round budget — the
-parent's round counter does not move while the child works. See
-[Envoys](envoys.md).
+## A round of several turns
 
-## A turn of several turns
-
-A user asks: *fix the bug in `parser.rs` and explain the fix*. One turn,
+A user asks: *fix the bug in `parser.rs` and explain the fix*. One round,
 four turns:
 
 ```text
-turn opens
-  round 1  read_file(parser.rs)   ← model inspects
-  round 2  edit_file(parser.rs)   ← model applies the fix
-  round 3  read_file(parser.rs)   ← model verifies the result
-  round 4  "The bug was …"        ← final text, no tool call
-turn ends
+round opens
+  turn 1  read_file(parser.rs)   ← model inspects
+  turn 2  edit_file(parser.rs)   ← model applies the fix
+  turn 3  read_file(parser.rs)   ← model verifies the result
+  turn 4  "The bug was …"        ← final text, no tool call
+round ends
 ```
 
-Each round sends the full, growing transcript back to the model; the
+Each turn sends the full, growing transcript back to the model; the
 conversational memory is the transcript the agent resends, not anything
 the model remembers. If the transcript grows past the context budget
-mid-turn, relief prunes old tool results between turns — the turn does
-not have to end to reclaim space. When round 4 produces plain text with no
-tool call, the turn closes, pursuit accounting books the combined token cost
-of all four turns, and the plan's staleness counter advances by one turn.
+mid-round, relief prunes old tool results between turns — the round does not
+have to end to reclaim space. When turn 4 produces plain text with no tool
+call, the round closes.
 
 ## See also
 
-- [Harness architecture](harness.md) — turn execution, retry, and the
+- [Harness architecture](harness.md) — round execution, retry, and the
   full table of safety bounds
 - [Request flow](../request-flow.md) — HTTP shape, SSE reassembly, the
   ReAct loop
@@ -311,7 +299,7 @@ of all four turns, and the plan's staleness counter advances by one turn.
   splits in two (native vs fallback)
 - [Guided decoding](../guided-decoding.md) — the constrained-decoding
   layer that produces valid native calls
-- [Pursuits](pursuits.md) — turn-scoped token and time accounting
-- [Envoys](envoys.md) — independent rounds and round budgets
+- [Pursuits](pursuits.md) — stop-gate continuation and pursuit-pass accounting
+- [Envoys](envoys.md) — independent child rounds and turn sequences
   for child agents
 - [How to add a tool](../../how-to/add-a-tool.md) — adding a new tool

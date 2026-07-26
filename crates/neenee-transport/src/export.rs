@@ -126,7 +126,7 @@ pub fn format_export_markdown(ctx: ExportContext<'_>, messages: &[Message]) -> S
     }
 
     if !emitted_any {
-        out.push_str("_(No user-visible turns in this session yet.)_\n");
+        out.push_str("_(No user-visible rounds in this session yet.)_\n");
     }
 
     out
@@ -425,6 +425,6 @@ mod tests {
             },
             &[],
         );
-        assert!(out.contains("No user-visible turns"));
+        assert!(out.contains("No user-visible rounds"));
     }
 }

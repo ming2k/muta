@@ -136,5 +136,5 @@ Skills are an **extension surface** of the harness, alongside MCP servers (which
 add tools, not instructions). Skill discovery and explicit loading use the tool
 surface; implicit loading enters through model-context preparation. See
 [Prompt and message assembly](prompt-assembly.md). Skill invocation is a
-special case of a tool turn, so [Tool rounds](rounds-and-turns.md) describes the
+special case of a tool turn, so [Rounds and turns](rounds-and-turns.md) describes the
 execution path an explicit `use_skill` call takes.

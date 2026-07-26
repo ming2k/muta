@@ -61,6 +61,10 @@ pub enum Wire {
     /// a second round-trip.
     History {
         session_id: String,
+        /// Authoritative monotonic round counter for the hosted session.
+        /// Defaults to zero when reading a frame from an older server.
+        #[serde(default)]
+        round_counter: u64,
         messages: Vec<Message>,
     },
 }
@@ -263,8 +267,10 @@ async fn handle_connection(
     //    started a fresh one).
     let messages = session.full_transcript().await;
     let session_id = session.id().await;
+    let round_counter = session.round_counter().await;
     let history = serde_json::to_string(&Wire::History {
         session_id,
+        round_counter,
         messages,
     })
     .map_err(|e| format!("serialize history: {e}"))?;

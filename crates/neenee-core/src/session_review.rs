@@ -3,15 +3,15 @@
 //!
 //! ## Why this exists
 //!
-//! ADR-0009 uncapped the agentic loop on purpose: a finite per-turn round cap
+//! ADR-0009 uncapped the agentic loop on purpose: a finite per-round turn cap
 //! is an arbitrary budget that trips legitimate long refactors just as readily
 //! as a genuinely stuck model. The stall detector that came later walked that
 //! back; ADR-0016 replaced it with a periodic diagnostic that fired on a fixed
-//! round cadence (every `review_interval_turns` past `review_start_turn`).
+//! turn cadence (every `review_interval_turns` past `review_start_turn`).
 //!
 //! ADR-0018 drops the automatic cadence entirely. The periodic trigger cost a
-//! diagnostic envoy call on *every* long turn — including legitimate ones
-//! — and, because ADR-0016 kept the turn uncapped by default, the auto-trigger's
+//! diagnostic envoy call on *every* long round — including legitimate ones
+//! — and, because ADR-0016 kept the round uncapped by default, the auto-trigger's
 //! value during truly unattended runs was already muted: it could only nudge,
 //! never abort, and an alert no one is watching does no good. The user is the
 //! best judge of "this feels stuck", so review is now **on-demand**: the
@@ -20,7 +20,7 @@
 //! no cadence knobs.
 //!
 //! The diagnostic stays advisory: it surfaces a visible verdict the user can
-//! act on (interrupt with `Esc`) but does **not** abort the turn. A hard stop
+//! act on (interrupt with `Esc`) but does **not** abort the round. A hard stop
 //! remains opt-in via `[agent] hard_stop_turns` (default `0` = off), the only
 //! execution cap, preserving ADR-0009's uncapped default posture.
 //!

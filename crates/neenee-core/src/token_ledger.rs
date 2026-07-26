@@ -42,7 +42,7 @@ pub enum RequestUsageSource {
     Estimated,
 }
 
-/// Stable identity of a concrete network attempt. A model round may have
+/// Stable identity of a concrete network attempt. A ReAct turn may have
 /// multiple attempts when the transport retries; those attempts can each be
 /// billed and therefore must never overwrite one another.
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -99,10 +99,10 @@ impl RequestUsageRecord {
         }
     }
 
-    fn as_round(&self) -> TokenRound {
-        TokenRound {
-            turn: self.key.round,
-            round: self.key.turn,
+    fn as_turn(&self) -> TokenTurn {
+        TokenTurn {
+            round: self.key.round,
+            turn: self.key.turn,
             reported: self.source == RequestUsageSource::Reported,
             prompt_tokens: self.prompt_tokens,
             completion_tokens: self.completion_tokens,
@@ -122,9 +122,9 @@ pub struct TokenSourceTotals {
     /// no usage for those turns).
     pub estimated_tokens: i64,
     /// Reported input tokens (Anthropic: includes cache write+read). `0` for
-    /// estimated rounds, which carry no input/output split.
+    /// estimated turns, which carry no input/output split.
     pub prompt_tokens: i64,
-    /// Reported output tokens. `0` for estimated rounds.
+    /// Reported output tokens. `0` for estimated turns.
     pub completion_tokens: i64,
     /// Tokens written to a prompt cache (Anthropic `cache_creation_input_tokens`
     /// — billed at a premium). A subset of `reported_tokens`, broken out so the
@@ -154,28 +154,28 @@ impl TokenSourceTotals {
     }
 }
 
-/// One turn's token counts, kept per `(provider, model)` as the "line items"
-/// of the bill so the report can show a per-round breakdown.
+/// One ReAct turn's token counts, kept per `(provider, model)` as a bill line
+/// item. `round` identifies the enclosing user exchange; `turn` identifies the
+/// model request within it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenRound {
-    /// 1-based harness turn index this round belongs to. `0` for legacy/bookings
-    /// made before the field existed (rendered as a fallback index).
+pub struct TokenTurn {
+    /// 1-based user-round index. `0` means unknown/legacy.
     #[serde(default)]
-    pub turn: u64,
-    /// 1-based model-request index within the turn. `0` = unknown/legacy.
+    pub round: u64,
+    /// 1-based model-request index within the round. `0` means unknown/legacy.
     #[serde(default)]
-    pub round: u32,
+    pub turn: u32,
     /// `true` = authoritative provider usage; `false` = local char-class estimate.
     pub reported: bool,
     /// Reported input tokens (includes cache write+read for Anthropic).
     pub prompt_tokens: i64,
     /// Reported output tokens.
     pub completion_tokens: i64,
-    /// Total tokens booked this round.
+    /// Total tokens booked this turn.
     pub total_tokens: i64,
-    /// Anthropic `cache_creation_input_tokens` for this round.
+    /// Anthropic `cache_creation_input_tokens` for this turn.
     pub cache_write_tokens: i64,
-    /// Anthropic `cache_read_input_tokens` for this round.
+    /// Anthropic `cache_read_input_tokens` for this turn.
     pub cache_read_tokens: i64,
 }
 
@@ -183,7 +183,7 @@ pub struct TokenRound {
 #[derive(Debug, Default)]
 struct Entry {
     totals: TokenSourceTotals,
-    rounds: Vec<TokenRound>,
+    turns: Vec<TokenTurn>,
 }
 
 /// The key under which a provider+model's totals are accumulated: a
@@ -200,7 +200,7 @@ fn key(provider: &str, model: &str) -> (String, String) {
 /// writer — books each turn) and the TUI (the reader — renders the report).
 #[derive(Debug, Default)]
 pub struct TokenSourceLedger {
-    /// `(provider, model)` → accumulator (totals + per-round line items). A
+    /// `(provider, model)` → accumulator (totals + per-turn line items). A
     /// [`BTreeMap`] so the report iterates in a stable order.
     entries: Mutex<BTreeMap<(String, String), Entry>>,
     /// Lifecycle-aware request records. Legacy `record*` callers continue to
@@ -378,42 +378,42 @@ impl TokenSourceLedger {
     }
 
     /// Book one turn as a line item — the single entry point all the public
-    /// recorders funnel through. It appends the round and folds it into the
+    /// recorders funnel through. It appends the turn and folds it into the
     /// running totals. Non-positive totals are ignored; negative io/cache
     /// counts are clamped to zero.
-    pub fn record_round(&self, provider: &str, model: &str, round: TokenRound) {
-        if round.total_tokens <= 0 {
+    pub fn record_turn(&self, provider: &str, model: &str, turn: TokenTurn) {
+        if turn.total_tokens <= 0 {
             return;
         }
-        let round = TokenRound {
-            prompt_tokens: round.prompt_tokens.max(0),
-            completion_tokens: round.completion_tokens.max(0),
-            cache_write_tokens: round.cache_write_tokens.max(0),
-            cache_read_tokens: round.cache_read_tokens.max(0),
-            ..round
+        let turn = TokenTurn {
+            prompt_tokens: turn.prompt_tokens.max(0),
+            completion_tokens: turn.completion_tokens.max(0),
+            cache_write_tokens: turn.cache_write_tokens.max(0),
+            cache_read_tokens: turn.cache_read_tokens.max(0),
+            ..turn
         };
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.entry(key(provider, model)).or_default();
-        if round.reported {
-            entry.totals.reported_tokens += round.total_tokens;
-            entry.totals.prompt_tokens += round.prompt_tokens;
-            entry.totals.completion_tokens += round.completion_tokens;
-            entry.totals.cache_write_tokens += round.cache_write_tokens;
-            entry.totals.cache_read_tokens += round.cache_read_tokens;
+        if turn.reported {
+            entry.totals.reported_tokens += turn.total_tokens;
+            entry.totals.prompt_tokens += turn.prompt_tokens;
+            entry.totals.completion_tokens += turn.completion_tokens;
+            entry.totals.cache_write_tokens += turn.cache_write_tokens;
+            entry.totals.cache_read_tokens += turn.cache_read_tokens;
         } else {
-            entry.totals.estimated_tokens += round.total_tokens;
+            entry.totals.estimated_tokens += turn.total_tokens;
         }
-        entry.rounds.push(round);
+        entry.turns.push(turn);
     }
 
     /// Book one turn's token usage. When `reported` is `true`, the provider
     /// reported authoritative usage and `tokens` are real counts; when `false`,
     /// `tokens` are a local estimate.
     pub fn record(&self, provider: &str, model: &str, tokens: i64, reported: bool) {
-        self.record_round(
+        self.record_turn(
             provider,
             model,
-            TokenRound {
+            TokenTurn {
                 reported,
                 total_tokens: tokens,
                 ..Default::default()
@@ -433,10 +433,10 @@ impl TokenSourceLedger {
         cache_write: i64,
         cache_read: i64,
     ) {
-        self.record_round(
+        self.record_turn(
             provider,
             model,
-            TokenRound {
+            TokenTurn {
                 reported: true,
                 total_tokens: tokens,
                 cache_write_tokens: cache_write,
@@ -446,7 +446,7 @@ impl TokenSourceLedger {
         );
     }
 
-    /// The most recent *reported* round for a `(provider, model)`, if any.
+    /// The most recent *reported* turn for a `(provider, model)`, if any.
     ///
     /// Used by the TUI context meter as the authoritative anchor: the
     /// provider-reported `prompt_tokens` already measures the serialized
@@ -454,15 +454,10 @@ impl TokenSourceLedger {
     /// message template overhead), which is more accurate than any local
     /// estimate of the transcript. `completion_tokens` is included because the
     /// assistant's last reply is now part of history.
-    pub fn last_reported_round(&self, provider: &str, model: &str) -> Option<TokenRound> {
+    pub fn last_reported_turn(&self, provider: &str, model: &str) -> Option<TokenTurn> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.get(&key(provider, model))?;
-        entry
-            .rounds
-            .iter()
-            .rev()
-            .copied()
-            .find(|round| round.reported)
+        entry.turns.iter().rev().copied().find(|turn| turn.reported)
     }
 
     /// A snapshot of the ledger suitable for rendering (owned, no lock held).
@@ -483,7 +478,7 @@ impl TokenSourceLedger {
                 provider: provider.to_string(),
                 model: model.to_string(),
                 totals: entry.totals,
-                rounds: entry.rounds.clone(),
+                turns: entry.turns.clone(),
                 requests: Vec::new(),
             })
             .collect();
@@ -504,7 +499,7 @@ impl TokenSourceLedger {
                     provider: record.provider.clone(),
                     model: record.model.clone(),
                     totals: TokenSourceTotals::default(),
-                    rounds: Vec::new(),
+                    turns: Vec::new(),
                     requests: Vec::new(),
                 });
                 &mut rows[index]
@@ -512,7 +507,7 @@ impl TokenSourceLedger {
             row.requests.push(record.clone());
             if record.status.is_terminal() {
                 row.totals.add(record.totals());
-                row.rounds.push(record.as_round());
+                row.turns.push(record.as_turn());
             }
         }
         rows.sort_by(|a, b| (&a.provider, &a.model).cmp(&(&b.provider, &b.model)));
@@ -548,7 +543,7 @@ pub struct TokenSourceRow {
     pub model: String,
     pub totals: TokenSourceTotals,
     /// The ordered per-turn line items behind `totals`.
-    pub rounds: Vec<TokenRound>,
+    pub turns: Vec<TokenTurn>,
     /// Lifecycle-aware attempts behind this provider/model row.
     pub requests: Vec<RequestUsageRecord>,
 }
@@ -753,12 +748,12 @@ mod tests {
     #[test]
     fn record_keeps_per_round_line_items() {
         // Each booking appends an ordered line item and splits input/output for
-        // reported rounds, powering the detail drill-in.
+        // reported turns, powering the detail drill-in.
         let ledger = TokenSourceLedger::new();
-        ledger.record_round(
+        ledger.record_turn(
             "anthropic",
             "claude",
-            TokenRound {
+            TokenTurn {
                 turn: 0,
                 round: 0,
                 reported: true,
@@ -771,12 +766,12 @@ mod tests {
         );
         ledger.record("anthropic", "claude", 50, false);
         let row = &ledger.snapshot().rows[0];
-        assert_eq!(row.rounds.len(), 2);
-        assert!(row.rounds[0].reported);
-        assert_eq!(row.rounds[0].prompt_tokens, 1000);
-        assert_eq!(row.rounds[0].completion_tokens, 200);
-        assert!(!row.rounds[1].reported);
-        assert_eq!(row.rounds[1].total_tokens, 50);
+        assert_eq!(row.turns.len(), 2);
+        assert!(row.turns[0].reported);
+        assert_eq!(row.turns[0].prompt_tokens, 1000);
+        assert_eq!(row.turns[0].completion_tokens, 200);
+        assert!(!row.turns[1].reported);
+        assert_eq!(row.turns[1].total_tokens, 50);
         assert_eq!(row.totals.prompt_tokens, 1000);
         assert_eq!(row.totals.completion_tokens, 200);
         assert_eq!(row.totals.reported_tokens, 1200);
@@ -784,16 +779,16 @@ mod tests {
     }
 
     #[test]
-    fn last_reported_round_returns_most_recent_reported_for_key() {
-        // The context meter anchors on the newest reported round for the
-        // active (provider, model). Estimated rounds are skipped, other keys
-        // are ignored, and the most-recent reported round wins.
+    fn last_reported_turn_returns_most_recent_reported_for_key() {
+        // The context meter anchors on the newest reported turn for the
+        // active (provider, model). Estimated turns are skipped, other keys
+        // are ignored, and the most-recent reported turn wins.
         let ledger = TokenSourceLedger::new();
-        // Older reported round for the active key.
-        ledger.record_round(
+        // Older reported turn for the active key.
+        ledger.record_turn(
             "openai",
             "gpt-4o",
-            TokenRound {
+            TokenTurn {
                 reported: true,
                 prompt_tokens: 500,
                 completion_tokens: 50,
@@ -801,16 +796,16 @@ mod tests {
                 ..Default::default()
             },
         );
-        // A stray estimated round for the active key must not be returned.
+        // A stray estimated turn for the active key must not be returned.
         ledger.record("openai", "gpt-4o", 40, false);
         // Noise in a different key.
         ledger.record_reported("anthropic", "claude", 9999, 0, 0);
 
-        // Newest reported round for the active key.
-        ledger.record_round(
+        // Newest reported turn for the active key.
+        ledger.record_turn(
             "openai",
             "gpt-4o",
-            TokenRound {
+            TokenTurn {
                 reported: true,
                 prompt_tokens: 4000,
                 completion_tokens: 300,
@@ -820,14 +815,14 @@ mod tests {
         );
 
         let last = ledger
-            .last_reported_round("openai", "gpt-4o")
-            .expect("a reported round exists for the key");
+            .last_reported_turn("openai", "gpt-4o")
+            .expect("a reported turn exists for the key");
         assert_eq!(last.prompt_tokens, 4000);
         assert_eq!(last.completion_tokens, 300);
         assert_eq!(last.total_tokens, 4300);
 
         // Missing key / never-reported key -> None.
-        assert!(ledger.last_reported_round("openai", "gpt-5").is_none());
-        assert!(ledger.last_reported_round("mistral", "large").is_none());
+        assert!(ledger.last_reported_turn("openai", "gpt-5").is_none());
+        assert!(ledger.last_reported_turn("mistral", "large").is_none());
     }
 }

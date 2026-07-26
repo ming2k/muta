@@ -320,19 +320,19 @@ pub enum DeliveryStatus {
 }
 
 /// A structured transcript message.
-/// What kind of user turn this `Role::User` message originates from. Only
+/// What kind of user message this `Role::User` message originates from. Only
 /// meaningful for user messages; the other roles carry the default
 /// ([`UserMessageOrigin::Chat`]) and it is never consulted for them.
 ///
 /// The Activity modal uses this to decide whether a `Role::User` message is
-/// the genuine prompt that drove the current turn: slash commands
+/// the genuine prompt that drove the current round: slash commands
 /// (`/review …`) and shell passthroughs (`!ls`) are surfaced as user messages
 /// in the transcript but are *not* the LLM prompt, so they must not be shown
-/// as the turn's "Prompt".
+/// as the round's "Prompt".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UserMessageOrigin {
     /// A normal chat prompt the user composed and sent to the model. This is
-    /// the only origin the Activity modal treats as the turn's prompt.
+    /// the only origin the Activity modal treats as the round's prompt.
     #[default]
     Chat,
     /// Human input admitted at an inner boundary of an already-running round.
@@ -367,9 +367,9 @@ pub struct TranscriptMessage {
     /// The original raw markdown/text, preserved for exact copy.
     pub raw: String,
     pub kind: MessageKind,
-    /// What kind of user turn this `Role::User` message is. Defaults to
+    /// What kind of user message this `Role::User` message is. Defaults to
     /// [`UserMessageOrigin::Chat`]; slash commands and shell passthroughs mark
-    /// themselves so they are not mistaken for the turn's driving prompt.
+    /// themselves so they are not mistaken for the round's driving prompt.
     pub origin: UserMessageOrigin,
     /// Lifecycle of this message from the send queue's point of view. Only
     /// `Role::User` messages ever carry [`DeliveryStatus::Queued`]; everything
@@ -382,13 +382,13 @@ pub struct TranscriptMessage {
     pub provider: Option<String>,
     /// Model id that produced this message, companion to [`TranscriptMessage::provider`].
     pub model: Option<String>,
-    /// The model-request round this assistant-side message belongs to (1-indexed,
-    /// stamped from the harness's `TurnStarted` counter). User messages may
-    /// also carry the visible chat-round number stamped at send time. The
-    /// renderer uses assistant-side stamps to identify compact tool batches
-    /// and insert separators between the other semantic component segments.
-    /// `None` (the default, and for restored sessions that predate the stamp)
-    /// means "round unknown"; collapsed tool batches retain a compatibility
+    /// The user-visible round this message belongs to (1-indexed). Driving
+    /// user messages open a round; assistant-side messages inherit it.
+    pub round: Option<u64>,
+    /// The ReAct turn this assistant-side message belongs to within its round
+    /// (1-indexed, stamped from `TurnStarted`). The renderer uses the
+    /// `(round, turn)` position to identify compact tool batches. `None`
+    /// means the position is unknown; legacy tool batches retain a compatible
     /// flush-stack fallback.
     pub turn: Option<u64>,
     /// Wall-clock send time for transcript headers, in Unix epoch milliseconds.
@@ -420,6 +420,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            round: None,
             turn: None,
             sent_at_ms: None,
         }
@@ -453,10 +454,15 @@ impl TranscriptMessage {
         self
     }
 
-    /// Stamp the model-request round this message belongs to (see
-    /// [`TranscriptMessage::turn`]).
-    pub fn with_turn(mut self, round: u64) -> Self {
-        self.turn = Some(round);
+    /// Stamp the enclosing user round.
+    pub fn with_round(mut self, round: u64) -> Self {
+        self.round = Some(round);
+        self
+    }
+
+    /// Stamp the ReAct turn within the enclosing round.
+    pub fn with_turn(mut self, turn: u64) -> Self {
+        self.turn = Some(turn);
         self
     }
 
@@ -505,6 +511,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            round: None,
             turn: None,
             sent_at_ms: None,
         };
@@ -988,6 +995,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            round: None,
             turn: None,
             sent_at_ms: None,
         };
@@ -1032,6 +1040,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            round: None,
             turn: None,
             sent_at_ms: None,
         }
@@ -1112,6 +1121,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            round: None,
             turn: None,
             sent_at_ms: None,
         }

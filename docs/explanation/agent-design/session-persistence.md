@@ -71,7 +71,7 @@ Context pressure changes what the model sees, but it must not erase the
 recoverable scene. neenee uses **model-context projection** for that boundary:
 
 - pruning clears stale tool-result bodies while preserving the tool-call chain,
-- compaction replaces older complete turns with a checkpoint summary,
+- compaction replaces older complete rounds with a checkpoint summary,
 - both operations retain the originals in the archived transcript,
 - both operations record which projection operation happened.
 
@@ -125,4 +125,3 @@ If those conditions hold, a resumed session does not need to re-prune or
 re-compact just to rediscover the state it already had. It may project again
 later if new messages create new pressure, but the prior projection remains a
 durable fact.
-

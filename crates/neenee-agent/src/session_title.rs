@@ -69,7 +69,7 @@ impl Agent {
                 format!("Generate a title for this conversation:\n\n{excerpt}"),
             ),
         ];
-        // The title task is pure text-in/text-out. The primary turn has
+        // The title task is pure text-in/text-out. The primary round has
         // already finished when this runs (auto-trigger is post-turn; `/title`
         // is on-demand at idle), so the shared provider is not mid-request.
         // The atomic request deliberately carries no tools, independent of

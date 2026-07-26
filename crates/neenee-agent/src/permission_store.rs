@@ -84,10 +84,10 @@ impl PermissionStore {
         receiver
     }
 
-    /// Resolve a pending permission request. Rejecting one aborts the turn,
-    /// so every other pending request in the same batch is also resolved with
-    /// `Reject` to avoid deadlocking the `join_all`. Returns whether a sender
-    /// was found.
+    /// Resolve a pending permission request. Rejecting one settles the whole
+    /// concurrent permission batch, so every other pending request is also
+    /// resolved with `Reject` to avoid deadlocking the `join_all`. Returns
+    /// whether a sender was found.
     pub fn reply(&self, request_id: &str, decision: PermissionDecision) -> bool {
         let mut perms = lock(&self.state);
         let sender = perms.pending.remove(request_id);

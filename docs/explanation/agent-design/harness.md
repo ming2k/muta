@@ -32,7 +32,7 @@ The harness distinguishes two model capability surfaces. Tools are declared
 to the provider on every request; reasoning is observed from the provider
 when the model emits it. For the capability model and wire-level protocol,
 see [Provider capabilities](../provider-capabilities.md) and
-[Tool rounds](rounds-and-turns.md).
+[Rounds and turns](rounds-and-turns.md).
 
 ### Declared: tools
 
@@ -41,9 +41,9 @@ round snapshots the admitted tools together with the provider-visible
 messages before any network work. The adapter translates that same snapshot
 into its protocol's declaration field.
 
-Tool schemas are request-scoped. Every ReAct round, including the round that
+Tool schemas are request-scoped. Every ReAct turn, including the turn that
 carries tool results back upstream, sends the same complete schema set
-alongside the full message history. The provider is stateless across turns.
+alongside the full message history. The provider is stateless across requests.
 
 The OpenAI-compatible providers declare schemas natively: the registry
 presets (`kimi-code`, `zai-code`) and the catalog-built `openai`/`deepseek`
@@ -72,7 +72,7 @@ Both execution paths feed one shared registry:
 
 | Path | Transport | Tool calls |
 |------|-----------|-----------|
-| Non-streaming | Single HTTP turn trip | `choices[0].message.tool_calls` complete |
+| Non-streaming | Single HTTP request/response cycle | `choices[0].message.tool_calls` complete |
 | Streaming | SSE stream | `delta.tool_calls` fragments accumulated by `index` |
 
 The streaming path accumulates `id`, `name`, and `arguments` per index while
@@ -97,11 +97,13 @@ broker, and result-message format apply to native and fallback calls.
 
 `/pursue <condition>` creates a durable, per-session objective persisted as a
 field on `SessionData` (`Option<Pursuit>` via `SessionStore`, ADR-0032), so it
-survives restarts and `/resume`. A pursuit is a slim primitive: an objective
-and a single `is_complete` flag (no status machine, no token or time budget,
-no checklist — all removed; see
+survives restarts and `/resume`. The durable objective holds its objective,
+completion bit, optional user budget, and the latest terminal reason; an
+orthogonal runtime record holds the armed flag, continuation count, and budget
+counters. This is intentionally not one flattened status machine and has no
+checklist. See
 [ADR-0010](../../adr/0010-slim-goal-primitive.md) and
-[ADR-0015](../../adr/0015-pursue-stop-gate-and-repeat-cron.md)). There are no
+[ADR-0015](../../adr/0015-pursue-stop-gate-and-repeat-cron.md). There are no
 model-facing pursuit tools: the user sets the condition via `/pursue`, the
 harness drives continuation via the stop-gate, and the model signals completion
 with `[NEENEE_PURSUIT_COMPLETE]` (ADR-0031). See
@@ -112,7 +114,7 @@ with `[NEENEE_PURSUIT_COMPLETE]` (ADR-0031). See
 `/pursue` arms a **stop-gate** on the agent and drives one round. Each time the
 model would end the round, the gate re-injects the condition as a hidden user
 message and forces another turn instead of returning. The round therefore runs
-to completion across many rounds.
+across many turns.
 
 | Form | Effect |
 |------|--------|
@@ -122,12 +124,12 @@ to completion across many rounds.
 The pursuit stops when:
 
 - the model emits `[NEENEE_PURSUIT_COMPLETE]`;
-- the 50-turn safety cap is hit (the gate disarms);
+- the 50-pass safety cap is hit (the gate disarms);
 - the user presses `Esc` or runs `/pursue stop`;
 - a newer request supersedes it;
 - the provider or tool pipeline returns an error.
 
-This replaces the old outer multi-round `/loop` (ADR-0009's uncapped loop) with
+This replaces the old outer multi-round `/loop` with
 within-round continuation — one driver, no outer loop. The clock-driven
 counterpart is `/repeat`, a cron scheduler; see
 [Pursuits](pursuits.md) for the comparison.
@@ -145,9 +147,9 @@ bounded exponential backoff using `provider_retry_base_ms` and
 
 The TUI shows the next attempt and countdown without adding transcript noise.
 `Esc`, `/pursue stop`, session switching, or a newer request cancels the wait.
-Partial streamed assistant text is withdrawn before retry. A completed tool
-round is a checkpoint: its results stay in history while only the pending
-provider request is retried. Request preparation, round-start hooks, and tools
+Partial streamed assistant text is withdrawn before retry. A completed
+tool-bearing turn is a checkpoint: its results stay in history while only the
+pending provider request is retried. Request preparation, turn-start hooks, and tools
 that produced the checkpoint are not replayed. If a replacement completion
 nevertheless repeats an exact pre-retry tool call, the checkpoint result remains
 authoritative and the duplicate call is not executed.
@@ -159,14 +161,18 @@ authoritative and the duplicate call is not executed.
   signatures before execution.
 - 8 seconds to initialize an MCP server.
 
-Distinct tool calls and autonomous loop iterations are both **uncapped**,
-matching the codex / claude-code agentic-loop model. Context compaction
-(thresholds derived from the active model's context window, plus mid-round
-pruning) is the backstop that keeps unbounded loops from exhausting the
-context window; the user can interrupt at any time with `Esc` or
-`/pursue stop`. See ADR-0009 for the rationale and the prior caps (32 tool
-rounds per round, 50 autonomous iterations per `/loop`) that this decision
-removed.
+Distinct ordinary tool turns are **uncapped by default**, matching the codex /
+claude-code agentic-loop model. Context compaction (thresholds derived from
+the active model's context window, plus mid-round pruning) is the backstop that
+keeps them within the model window; the user can interrupt at any time. An
+explicit `hard_stop_turns` remains available as an opt-in bound.
+
+The pursuit stop-gate is deliberately different: an explicitly armed
+autonomous attempt has a 50-pursuit-pass safety cap, in addition to any
+user-set pass/token/time budget. A pursuit pass is one natural-stop decision,
+not every tool-calling model turn. This does not reintroduce a default cap on
+ordinary rounds; it bounds only the opt-in mechanism that keeps overriding the
+model's natural stop.
 
 ### Advanced doom-loop guard
 
@@ -174,7 +180,7 @@ The optional doom-loop guard detects repeated normalized signatures for common
 read, search, command, fetch, and file-mutation tools. When a watched signature
 would recur within the configured window, the guard blocks it before execution
 and injects a hidden explanation that directs the model to change approach.
-The block lasts only for the current turn and does not terminate other work.
+The block lasts only for the current round and does not terminate other work.
 
 The guard is deterministic bookkeeping with no model call, but signature
 normalization is intentionally conservative: operations on the same target may
@@ -185,32 +191,17 @@ preference. Envoys and `/review` force it off. See the
 
 ### Session review (ADR-0016)
 
-Because an uncapped loop can still *appear* stuck (distinct-but-unproductive
-tool calls that loop without converging), the harness runs a periodic
-**session-review** diagnostic on long turns — a smarter, non-terminating
-replacement for the old read-only "stall detector" that ADR-0009's uncapping
-made redundant:
+Because an uncapped loop can still *appear* stuck, `/review` runs an
+**on-demand session-review** diagnostic over the current round. It spawns a
+bounded read-only `REVIEW` envoy, returns one verdict per registered dimension,
+and never aborts or automatically steers the live round. There is no periodic
+review cadence and legacy `[agent.review]` settings are ignored.
 
-- After `[agent.review] review_start_turn` (default **64**) tool turns in a
-  round, and every `review_interval_turns` (default **16**) thereafter, the
-  harness spawns a bounded read-only diagnostic envoy (the `REVIEW`
-  profile) that reads a compact snapshot of the live transcript and returns a
-  verdict per registered review dimension.
-- The worst verdict is surfaced as a visible activity-bar alert (empty verdict
-  = clear). An explicit **stuck** verdict also pushes a one-shot hidden
-  reflection nudge so the model gets a chance to recover.
-- Review **never aborts the round**. The only execution cap is an explicit,
-  opt-in `hard_stop_turns` (default **0** = off); a finite value is a
-  user-declared budget and the sole thing that hard-stops a round.
-- "Is the agent looping?" is the first dimension (`LoopingReview`); adding more
-  (context bloat, tool-error storms, …) is a `SessionReview` trait impl, no
-  dispatch changes and no extra model call per dimension.
-- Envoys (`envoy`) run with review **disabled**, so a short-lived
-  read-only research envoy never pays for a diagnostic and review cannot
-  recurse.
+The only execution cap is an explicit, opt-in `hard_stop_turns` (default **0**
+= off); a finite value is a user-declared budget and the sole thing that
+hard-stops a round. Envoys do not expose their own `/review` path.
 
-Configure or inspect live via the `/review` slash command
-(`/review off`, `/review N [M]`, `/review default`).
+Invoke it with the no-argument `/review` slash command.
 
 These are execution bounds, not a security sandbox. Tool permission policy is
 a separate future layer.
@@ -269,11 +260,13 @@ branch snapshots under `sessions/<id>.json`:
 - Each round records its admission session id and refuses a late commit after a
   session switch.
 
-Loop checkpoints record pursuit, current iteration, and final status (the
-iteration budget is uncapped — `usize::MAX` on the wire, see ADR-0009).
-`/session status` exposes the checkpoint, `/resume` continues an
-unfinished checkpoint, and `/session new` cancels old work and creates a
-fresh session id.
+Pursuit checkpoints project the one-based pursuit pass, the 50-pass maximum, and
+a typed attempt status (`running`, `completed`, `interrupted`, or `error`).
+`/session status` exposes that projection. The objective record and pursuit
+runtime — not the display checkpoint — restore an unfinished attempt's armed
+flag, continuation count, and budget counters; running `/pursue` on that
+restored attempt preserves those counters. `/session new` cancels old work and
+creates a fresh session id.
 
 ## Context projection
 

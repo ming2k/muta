@@ -31,8 +31,8 @@ pub fn format_pursuit_status(pursuit: &Pursuit) -> String {
     out
 }
 
-/// Render a [`PursuitBudget`] as a compact `turns=N tokens=N time=Ms` string, or
-/// "uncapped" when `None` or empty.
+/// Render a [`PursuitBudget`] with canonical
+/// `passes=N tokens=N time=Ms` spellings, or "cleared" when `None` or empty.
 pub fn format_pursuit_budget(budget: Option<PursuitBudget>) -> String {
     let Some(b) = budget else {
         return "cleared".to_string();
@@ -41,8 +41,8 @@ pub fn format_pursuit_budget(budget: Option<PursuitBudget>) -> String {
         return "cleared".to_string();
     }
     let mut parts = Vec::new();
-    if let Some(t) = b.max_turns {
-        parts.push(format!("turns={t}"));
+    if let Some(passes) = b.max_passes {
+        parts.push(format!("passes={passes}"));
     }
     if let Some(t) = b.max_tokens {
         parts.push(format!("tokens={t}"));
@@ -56,10 +56,11 @@ pub fn format_pursuit_budget(budget: Option<PursuitBudget>) -> String {
 /// Parse a `/pursue budget` argument string into a [`PursuitBudget`].
 ///
 /// Grammar: a whitespace-separated list of `axis=value` tokens, where `axis` is
-/// one of `turns` / `tokens` / `time` (case-insensitive, `time` in milliseconds)
-/// and `value` is a positive integer. Any subset may be given; omitted axes stay
-/// uncapped. An empty string clears the budget (`Ok(None)`). Unknown axes or
-/// non-positive / non-integer values are rejected with a message.
+/// one of `passes` / `tokens` / `time` (case-insensitive, `time` in
+/// milliseconds) and `value` is a positive integer. The former `turns` axis
+/// remains a read-compatible alias for `passes`. Any subset may be given;
+/// omitted axes stay uncapped. An empty string clears the budget (`Ok(None)`).
+/// Unknown axes or non-positive / non-integer values are rejected.
 pub fn parse_pursuit_budget(args: &str) -> Result<Option<PursuitBudget>, String> {
     let args = args.trim();
     if args.is_empty() {
@@ -69,7 +70,7 @@ pub fn parse_pursuit_budget(args: &str) -> Result<Option<PursuitBudget>, String>
     for token in args.split_whitespace() {
         let Some((axis, value)) = token.split_once('=') else {
             return Err(format!(
-                "invalid budget token '{token}': expected axis=value (e.g. turns=20)"
+                "invalid budget token '{token}': expected axis=value (e.g. passes=20)"
             ));
         };
         let n: u64 = value
@@ -79,17 +80,17 @@ pub fn parse_pursuit_budget(args: &str) -> Result<Option<PursuitBudget>, String>
             return Err(format!("budget value for {axis} must be positive, got 0"));
         }
         match axis.to_ascii_lowercase().as_str() {
-            "turns" => {
+            "passes" | "turns" => {
                 if n > u32::MAX as u64 {
-                    return Err("turns budget too large".to_string());
+                    return Err("passes budget too large".to_string());
                 }
-                budget.max_turns = Some(n as u32);
+                budget.max_passes = Some(n as u32);
             }
             "tokens" => budget.max_tokens = Some(n),
             "time" => budget.max_wall_clock_ms = Some(n),
             other => {
                 return Err(format!(
-                    "unknown budget axis '{other}': use turns, tokens, or time"
+                    "unknown budget axis '{other}': use passes, tokens, or time"
                 ));
             }
         }
@@ -121,5 +122,23 @@ mod tests {
         };
         let status = format_pursuit_status(&pursuit);
         assert!(status.contains("Pursuit [complete]: ship"));
+    }
+
+    #[test]
+    fn budget_parser_accepts_legacy_turns_but_formatter_emits_passes() {
+        let budget = parse_pursuit_budget("turns=7 tokens=100")
+            .unwrap()
+            .expect("non-empty budget");
+        assert_eq!(budget.max_passes, Some(7));
+        assert_eq!(format_pursuit_budget(Some(budget)), "passes=7 tokens=100");
+    }
+
+    #[test]
+    fn budget_parser_uses_passes_as_the_canonical_axis() {
+        let budget = parse_pursuit_budget("passes=3 time=5000")
+            .unwrap()
+            .expect("non-empty budget");
+        assert_eq!(budget.max_passes, Some(3));
+        assert_eq!(format_pursuit_budget(Some(budget)), "passes=3 time=5000ms");
     }
 }

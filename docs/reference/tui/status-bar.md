@@ -24,12 +24,12 @@ reads simply:
  ● making edits (3s · Esc Esc to interrupt)
 ```
 
-The structural counters — `turn N · round M · <model>` — no longer live on
+The structural counters — `round N · turn M · <model>` — no longer live on
 the bar. They take space and change rarely, so they moved into the
 **Activity modal** that this bar opens on click. The whole bar is a click
 target (and `Tab`/`Enter` opens the modal): one glance answers "what's
 happening, are there todos, how long?", one click shows the full breakdown
-(Activity tab: pursuit, current prompt, turn/round/model/elapsed; Tasks tab:
+(Activity tab: pursuit, current prompt, round/turn/model/elapsed; Tasks tab:
 the todo list).
 
 | Attribute | Value |
@@ -61,19 +61,19 @@ disappears when the harness returns to idle. This keeps the breathing dot
 in peripheral vision for the entire active round and avoids a layout shift
 at the streaming boundary.
 
-## Turn and round
+## Round and turn
 
-The bar no longer shows the turn/round counters; they live in the Activity
-modal (click the bar) as a detail line `turn N · round M · <model> ·
+The bar no longer shows the round/turn counters; they live in the Activity
+modal (click the bar) as a detail line `round N · turn M · <model> ·
 <elapsed>`. See [Rounds and turns](../../explanation/agent-design/rounds-and-turns.md)
 for the full concept; in short:
 
 | Counter | Meaning |
 |---------|---------|
-| `turn N` | The user-perceived turn number (1-indexed). Bumped once per submitted message. |
-| `round M` | The model-request index within the current turn (1-indexed). A round spans one model request plus the tool work that follows. |
+| `round N` | The user-perceived round number (1-indexed). Bumped once per submitted message. |
+| `turn M` | The model-request index within the current round (1-indexed). A turn spans one model request plus the tool work that follows. |
 
-The round number resets each turn; the turn number resets only on a new
+The turn number resets each round; the round number resets only on a new
 session.
 
 ## Activity labels
@@ -88,13 +88,12 @@ session.
 | `bash` | `running command` |
 | MCP tools (`mcp__*`) | `using MCP` |
 | Finalizing stream | `finalizing response` |
-| Autonomous loop | `loop 2/8` prefix ahead of the activity |
 | Provider retry | `retry 1/4 in 3s · <reason>` — the reason tail is the truncated error message |
 
 ## Source
 
 `draw_activity_bar` in `render/chrome.rs`. Glyph from `spinner_glyph`;
 luminance sweep from `breathing_color` in the same module. Spinner phase
-driven by `app.spinner_tick` incremented once per frame. Round and turn
-values are mirrored from `AgentResponse::RoundStarted` and the harness round
-counter by the response listener in `tui/mod.rs`.
+driven by `app.spinner_tick` incremented once per frame. Round and turn values
+are mirrored from the round-admission and turn-start events by the response
+listener.

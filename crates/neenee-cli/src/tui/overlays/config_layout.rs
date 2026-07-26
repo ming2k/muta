@@ -37,8 +37,8 @@ fn options() -> [LayoutOption; 2] {
     [
         LayoutOption {
             config_value: "default",
-            label: "Round-band",
-            description: "Each tool round grouped under a labelled header",
+            label: "Turn-band",
+            description: "Each tool-bearing ReAct turn grouped under a labelled header",
         },
         LayoutOption {
             config_value: "legacy",
@@ -79,7 +79,7 @@ pub fn draw_config_layout_modal(
     // One-line description of the sub-page, rendered before the option list.
     // Muted, not selectable.
     body.push(Line::from(Span::styled(
-        "How the transcript arranges tool rounds. Round-band groups each \
+        "How the transcript arranges ReAct turns. Turn-band groups each \
          model request under a header so the history reads as discrete steps.",
         Style::default().fg(theme.muted()),
     )));

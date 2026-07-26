@@ -47,7 +47,7 @@ fn categories(color_scheme: &str, layout: Strategy) -> Vec<ConfigCategory> {
             label: "Layout",
             description: "Transcript grouping and vertical rhythm",
             value: match layout {
-                Strategy::Default => "Round-band",
+                Strategy::Default => "Turn-band",
                 Strategy::Legacy => "Legacy",
             }
             .to_string(),

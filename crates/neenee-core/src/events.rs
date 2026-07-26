@@ -1,5 +1,5 @@
 //! Wire types for the harness ↔ driver protocol: requests ([`AgentRequest`]),
-//! responses ([`AgentResponse`]), live turn events ([`AgentEvent`]), and the
+//! responses ([`AgentResponse`]), live agent events ([`AgentEvent`]), and the
 //! small data records they carry.
 
 use crate::{ImagePart, Message, Pursuit, ToolOutput, ToolStream};
@@ -239,7 +239,7 @@ pub enum AgentRequest {
         command: String,
     },
     /// Leave the active `/btw` side conversation and return to the primary
-    /// view (ADR-0017). The harness cancels any in-flight side turn, drops
+    /// view (ADR-0017). The harness cancels any in-flight side round, drops
     /// the live side session (the side file stays on disk, recoverable via
     /// `/sessions`), and emits [`AgentResponse::SideViewClosed`]. Sent by
     /// the TUI when the user presses `Esc` / `Ctrl+C` inside the side view.
@@ -281,9 +281,9 @@ pub struct QueuedUserInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentResponse {
-    /// A per-turn event tagged with the session it belongs to (ADR-0017). The
+    /// A per-round event tagged with the session it belongs to (ADR-0017). The
     /// TUI keys its transcript buffers by `session_id` and routes `event` to
-    /// the matching one, so a primary turn and a live `/btw` side turn can
+    /// the matching one, so a primary round and a live `/btw` side round can
     /// stream concurrently over the single harness↔TUI channel without
     /// clobbering each other's transcript.
     ///
@@ -296,12 +296,12 @@ pub enum AgentResponse {
     },
     /// Coarse status of the primary session, surfaced to a side view's banner
     /// while the user is inside a `/btw`. Emitted by the session registry's
-    /// parent-status watcher; the primary turn is deliberately left running, so
+    /// parent-status watcher; the primary round is deliberately left running, so
     /// this is how the user learns the main session hit an approval/input wall.
     ParentStatus(ParentStatus),
     /// The user entered a `/btw` side conversation (ADR-0017). The TUI seeds
     /// an empty side transcript buffer keyed by `side_id`, switches to the
-    /// side view, and records `primary_id` so per-turn events route by
+    /// side view, and records `primary_id` so per-round events route by
     /// `session_id` (primary → primary buffer, side → side buffer). Emitted
     /// by the harness after `SessionStore::fork_to_side` + side `Agent`
     /// construction succeed.
@@ -445,12 +445,11 @@ pub enum NoticeSource {
     Harness,
 }
 
-/// The session-scoped shapes a single turn/stream emits, carried under an
+/// Session-scoped events emitted while a user round runs, carried under an
 /// [`AgentResponse::Round`] envelope (ADR-0017). Splitting these off
 /// `AgentResponse` makes "which session does this belong to" a first-class
-/// question: every turn event — whether from the primary or a `/btw` side —
-/// arrives tagged with its `session_id`, and global/command responses stay
-/// top-level.
+/// question: every event — whether from the primary or a `/btw` side — arrives
+/// tagged with its `session_id`, and global/command responses stay top-level.
 /// Origin of the current model-context token count shown by frontends.
 ///
 /// This describes the AI-visible request context, never the durable session or
@@ -506,10 +505,10 @@ pub enum RoundEvent {
     Text(String),
     /// Turn-level error (e.g. a provider failure mid-turn). Distinct from the
     /// global [`AgentResponse::Error`] only in that it belongs to a specific
-    /// session's transcript and is therefore carried under the [`Turn`]
+    /// session's transcript and is therefore carried under the [`Round`]
     /// envelope.
     ///
-    /// [`Turn`]: AgentResponse::Round
+    /// [`Round`]: AgentResponse::Round
     Error(String),
     ToolCall {
         id: String,
@@ -546,7 +545,7 @@ pub enum RoundEvent {
     PursuitUpdated(Pursuit),
     /// The active pursuit was cleared (`/pursue clear`, or a session switch
     /// that drops it). A non-gated mirror event: unlike `HarnessState`,
-    /// clearing the pursuit is *not* a turn lifecycle transition, so it must
+    /// clearing the pursuit is *not* a round lifecycle transition, so it must
     /// not touch the activity bar. The TUI uses it to null out the snapshot's
     /// `pursuit` field without flushing the live activity cell.
     PursuitCleared,
@@ -571,13 +570,16 @@ pub enum RoundEvent {
         message: String,
     },
     Activity(String),
-    /// A new tool round started within the current turn. `round` is the
-    /// 0-indexed model-request index within the turn (0 = the first request).
+    /// A new ReAct turn started within the current user round. `turn` is the
+    /// 0-indexed model-request index within the round (0 = the first request).
     /// Surfaced as structured data so the activity bar can render
-    /// `turn N · round M · <status>` without parsing the round back out of the
+    /// `round N · turn M · <status>` without parsing the turn back out of the
     /// `Activity` status string. Emitted just before the matching
     /// `Activity("waiting for model")`.
     TurnStarted {
+        /// 1-indexed enclosing user round.
+        round: u64,
+        /// 0-indexed model-request position within `round`.
         turn: usize,
     },
     StreamStart,
@@ -586,8 +588,8 @@ pub enum RoundEvent {
     StreamReasoningEnd(String),
     StreamEnd(String),
     StreamDiscard,
-    /// The user interrupted the turn before any model output reached the
-    /// client (Phase 1: request in-flight, no response bytes yet). The turn's
+    /// The user interrupted the round before any model output reached the
+    /// client (Phase 1: request in-flight, no response bytes yet). The round's
     /// user message has been removed from the conversation context and session
     /// store, and the TUI should restore `prompt` (and any `images`) into the
     /// input box for re-editing — the conversation is back to its pre-send
@@ -607,7 +609,7 @@ pub enum RoundEvent {
 
 /// Coarse status of the primary session, reported to a `/btw` side view's
 /// banner (ADR-0017). This is the codex `SideParentStatus` equivalent: the
-/// whole reason the parent turn is left running instead of cancelled is so the
+/// whole reason the parent round is left running instead of cancelled is so the
 /// user can see the main session hit an approval or input wall and jump back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParentStatus {
@@ -663,6 +665,12 @@ impl std::fmt::Display for LoopStatus {
 pub struct HarnessSnapshot {
     pub pursuit: Option<Pursuit>,
     pub loop_status: LoopStatus,
+    /// Monotonic session round counter. For a running snapshot this is the
+    /// admitted active round; for an idle snapshot it is the most recently
+    /// admitted round. Frontends must use this instead of counting visible
+    /// transcript messages, which may have been compacted.
+    #[serde(default)]
+    pub round_counter: u64,
     /// Whether write-tool permission prompts are bypassed this session
     /// (`--unattended` / `/unattended on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
@@ -844,11 +852,11 @@ pub enum EnvoyEvent {
 /// `reply_user_question`) and therefore do **not** flow through this queue: a
 /// reply must unblock a tool that is parked mid-turn, so it cannot wait for
 /// the driver loop to drain. This enum covers only the "new input / control"
-/// class that is safe to apply at the next tool-round boundary.
+/// class that is safe to apply at the next ReAct-turn boundary.
 ///
 /// Modeled on codex's `Op` (`codex-rs/protocol/src/protocol.rs`), trimmed to
 /// neenee's driver shape: the agent owns an `mpsc` inbox whose receiver is
-/// drained at the top of every tool round (and, for `Interrupt`, raced against
+/// drained at the top of every ReAct turn (and, for `Interrupt`, raced against
 /// the live stream). The top-level agent and spawned envoys share the same
 /// `Op` vocabulary — an envoy is just an agent whose inbox sender the
 /// parent holds.
@@ -856,7 +864,7 @@ pub enum EnvoyEvent {
 pub enum AgentOp {
     /// Append a visible user message to the live transcript before the next
     /// model request, as if the user typed it. Lets a parent (or, for a
-    /// envoy, the orchestrating agent) steer a running turn with new
+    /// envoy, the orchestrating agent) steer a running round with new
     /// information without restarting it. codex `inject_if_running` analogue.
     InjectUserMessage(String),
     /// Append a hidden (system-level) steering note — like
@@ -864,7 +872,7 @@ pub enum AgentOp {
     /// it informs the model without polluting the visible transcript. codex
     /// `InterAgentCommunication` analogue.
     InterAgentMessage { msg: String },
-    /// Abort the current turn at the next boundary. Coarser than the parent's
+    /// Abort the current round at the next boundary. Coarser than the parent's
     /// `CancellationToken` (which cancels instantly): this is the
     /// handle-addressable path for a caller that owns the inbox but not the
     /// cancel token. codex `Op::Interrupt` analogue.
@@ -878,8 +886,11 @@ pub enum AgentOp {
 pub enum AgentEvent {
     Notice(AgentNotice),
     ModelRequestStarted {
-        tool_round: usize,
-        /// Semantic estimate of the exact request projection after round-start
+        /// 1-indexed enclosing user round.
+        round: u64,
+        /// 0-indexed model-request position within `round`.
+        turn: usize,
+        /// Semantic estimate of the exact request projection after turn-start
         /// hooks and immediately before it is sent to the provider.
         context_tokens: usize,
     },
@@ -929,9 +940,9 @@ pub enum AgentEvent {
     /// An on-demand session-review diagnostic ran (ADR-0018, superseding the
     /// periodic ADR-0016 design). `alert` is a pre-rendered, human-facing
     /// summary of the worst verdict across all review dimensions (empty string
-    /// when the turn is healthy — the TUI treats empty as "clear any prior
+    /// when the reviewed round is healthy — the TUI treats empty as "clear any prior
     /// alert"). Surfaced as a non-modal banner so the user can decide whether
-    /// to interrupt; it does not abort the turn unless an opt-in
+    /// to interrupt; it does not abort the round unless an opt-in
     /// `hard_stop_turns` budget is configured.
     SessionReview {
         alert: String,
