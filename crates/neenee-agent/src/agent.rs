@@ -73,7 +73,7 @@ impl ScopedToolDisable {
 
     /// Whether `tool` is currently scoped-disabled (hidden from the model and
     /// rejected at dispatch) under any restore point.
-    fn contains(&self, tool: &str) -> bool {
+    pub(crate) fn contains(&self, tool: &str) -> bool {
         self.round_end.contains_key(tool) || self.turn_end.contains_key(tool)
     }
 

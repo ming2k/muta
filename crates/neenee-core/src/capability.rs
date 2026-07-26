@@ -4,6 +4,7 @@
 
 use crate::usage::TokenUsage;
 use crate::tool_output::StdinPolicy;
+use crate::tool_access::ToolAccesses;
 use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
@@ -319,6 +320,34 @@ pub trait Tool: Send + Sync {
     /// the model.
     fn scope_target(&self, _arguments: &str) -> ScopeTarget {
         ScopeTarget::Unspecified
+    }
+
+    /// What this call touches, so the scheduler can decide whether it may run
+    /// concurrently with the other calls in its batch. Returns a declarative
+    /// [`ToolAccesses`] list consumed by the harness's concurrency scheduler.
+    ///
+    /// The **default** derives a *conservative* declaration from
+    /// [`scope_target`](Self::scope_target), so existing tools get correct
+    /// (if coarse) concurrency without override:
+    ///
+    /// | `scope_target` | derived `accesses` | concurrency effect |
+    /// |---|---|---|
+    /// | `Unspecified` | `none()` | freely parallelizable |
+    /// | `Path(p)` | `read_write_file(p)` | serializes with any access to `p` |
+    /// | `Command(_)` | `all()` | serializes with everything in the batch |
+    ///
+    /// Tools override this to declare a **precise** access (e.g. `read_file`
+    /// for read-only tools, `search_tree` for grep, `read_tree` for a
+    /// directory listing). Like [`scope_target`](Self::scope_target), this
+    /// never reaches the model.
+    fn accesses(&self, arguments: &str) -> ToolAccesses {
+        match self.scope_target(arguments) {
+            ScopeTarget::Unspecified => ToolAccesses::none(),
+            ScopeTarget::Path(path) => {
+                ToolAccesses::read_write_file(path.to_string_lossy().into_owned())
+            }
+            ScopeTarget::Command(_) => ToolAccesses::all(),
+        }
     }
 
     /// Short, human-friendly label shown as the title of the permission

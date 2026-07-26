@@ -155,6 +155,8 @@ mod shell_input;
 use neenee_skills as skills;
 mod tool_call;
 mod tool_integration;
+mod tool_manager;
+mod tool_scheduler;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;

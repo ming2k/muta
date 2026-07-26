@@ -42,6 +42,9 @@ pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, Tool
 pub mod tool_output;
 pub use tool_output::{PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream};
 
+pub mod tool_access;
+pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
+
 pub mod tool_validation;
 
 pub mod capability;
