@@ -170,6 +170,8 @@ mod tool_manager;
 #[allow(dead_code)] // machinery: ToolScheduler is tested but not yet the dispatch driver
                     // (execute_tools_concurrent uses group_by_conflict batching instead).
 mod tool_scheduler;
+/// MCP connector (formerly the standalone neenee-mcp crate).
+pub mod mcp;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;

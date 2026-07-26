@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use neenee_core::DynamicCatalog;
 
-use crate::McpRuntime;
+use super::McpRuntime;
 
 /// A [`DynamicCatalog`] driving the shared [`McpRuntime`]. The runtime owns the
 /// server handles and publication sink; the catalog just ticks its

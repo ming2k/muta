@@ -36,7 +36,7 @@ use neenee_core::Tool;
 use crate::dynamic_tools::DynamicToolRegistry;
 
 /// Which bucket a tool lives in. The classification is *runtime*, not a crate
-/// boundary: an MCP tool's transport lives in `neenee-mcp`, but once published
+/// boundary: an MCP tool's transport lives in `neenee-agent::mcp`, but once published
 /// through the sink it is an `mcp` tool *here* in the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSource {

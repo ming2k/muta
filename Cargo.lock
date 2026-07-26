@@ -1543,18 +1543,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-mcp"
-version = "0.20.3"
-dependencies = [
- "async-trait",
- "futures",
- "neenee-core",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "neenee-persistence"
 version = "0.20.3"
 dependencies = [
@@ -1650,7 +1638,6 @@ dependencies = [
  "futures",
  "neenee-agent",
  "neenee-core",
- "neenee-mcp",
  "neenee-persistence",
  "neenee-providers",
  "neenee-skills",

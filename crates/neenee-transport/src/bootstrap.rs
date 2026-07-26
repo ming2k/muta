@@ -29,7 +29,7 @@ use neenee_core::{
     AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider, RoundEvent,
     ToolContextBuilder, ToolSet, collect_toolset,
 };
-use neenee_mcp::{McpCatalog, McpRuntime};
+use neenee_agent::mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
     RepeatStore,
     config::{Config, TuiConfig},

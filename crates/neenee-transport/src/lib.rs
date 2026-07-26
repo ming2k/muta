@@ -31,7 +31,7 @@
 //!
 //! `neenee-transport` depends on `neenee-agent` (orchestration and the
 //! built-in tools), `neenee-persistence` (persistence), `neenee-providers`,
-//! `neenee-skills`, `neenee-mcp`, and `neenee-core` (vocabulary). Slash-command
+//! `neenee-skills`, `neenee-agent` (which owns MCP), and `neenee-core` (vocabulary). Slash-command
 //! discovery and project scaffolding live here as the `commands` and `project`
 //! modules. It owns each live MCP runtime while the protocol remains in
 //! its dedicated crate. Agent-owned stateful tools are assembled inside

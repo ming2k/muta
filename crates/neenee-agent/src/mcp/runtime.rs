@@ -9,7 +9,7 @@
 //!   disconnect one server for the session (config.toml is not rewritten).
 //! - [`McpRuntime::reconnect`] — the modal's `r` action: re-establish one
 //!   server's connection on demand.
-//! - [`McpRuntime::refresh_all`] — the periodic [`crate::McpCatalog`]
+//! - [`McpRuntime::refresh_all`] — the periodic [`super::McpCatalog`]
 //!   loop: reconnect every server.
 //!
 //! Every mutation publishes a complete snapshot for each server and updates a
@@ -23,7 +23,7 @@ use neenee_core::mcp::{McpConnectionStatus, McpServerConfig};
 use neenee_core::{DynamicToolSink, Tool};
 use tokio::sync::Mutex;
 
-use crate::{McpServer, connect_server, reconnect_server};
+use super::{McpServer, connect_server, reconnect_server};
 
 /// One configured server's live state. `server` is `None` while disabled or
 /// when the last connect failed; `tools` is the server's current adapters

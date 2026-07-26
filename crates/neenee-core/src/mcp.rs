@@ -1,7 +1,7 @@
 //! Shared configuration schema for MCP servers.
 //!
 //! Lives in `neenee-core` for the same reason `WebSearchConfig` does: both the
-//! app-layer `Config` (which owns the `[mcp]` table), `neenee-mcp`, and the
+//! app-layer `Config` (which owns the `[mcp]` table), `neenee-agent` (which owns the MCP connector), and the
 //! session/frontend layers exchange these values without depending on one
 //! another's implementation details.
 
@@ -29,7 +29,7 @@ impl Default for McpServerConfig {
     }
 }
 
-/// Runtime status reported by `neenee-mcp` for each configured server.
+/// Runtime status reported by `neenee-agent` (MCP connector) for each configured server.
 ///
 /// Lives in `neenee-core` (alongside [`McpServerConfig`]) so the TUI can
 /// consume it without depending on the connector implementation.

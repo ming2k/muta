@@ -45,7 +45,7 @@ pub trait DynamicToolSink: Send + Sync {
 ///
 /// Implementations:
 /// - `neenee_skills::SkillCatalog` — skills from local and remote sources.
-/// - `neenee_mcp::McpCatalog` — tools from connected MCP servers.
+/// - `neenee_agent::mcp::McpCatalog` — tools from connected MCP servers.
 ///
 /// The trait is intentionally minimal: `refresh` + cadence. Each implementation
 /// manages its own `load` / fallback internally, because the

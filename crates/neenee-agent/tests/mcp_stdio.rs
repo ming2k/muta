@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use neenee_core::mcp::{McpConnectionStatus, McpServerConfig};
-use neenee_mcp::load_mcp_tools;
+use neenee_agent::mcp::load_mcp_tools;
 
 fn python3() -> Option<String> {
     let probe = std::process::Command::new("python3")

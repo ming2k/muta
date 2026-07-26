@@ -7,7 +7,7 @@
 
 use neenee_agent::Agent;
 use neenee_core::AgentResponse;
-use neenee_mcp::McpRuntime;
+use neenee_agent::mcp::McpRuntime;
 use neenee_persistence::{config::Config, session::SessionStore};
 use neenee_skills::SkillRegistry;
 use std::sync::Arc;
