@@ -1,122 +1,139 @@
-//! Policy-chain permission model (stage 2 of the kimi-code tool-system adoption).
+//! Policy-chain permission model (full async chain).
 //!
 //! Replaces the harness's hand-coded sequence of "gates" inside
-//! [`execute_tool`](crate::Agent) (hook-deny → disabled → schema → scope-gate
-//! → bash-policy → ask-user-shortcut → broker → stdin-policy) with a single
-//! ordered chain of [`PermissionPolicy`] implementations. Each gate becomes a
-//! policy; the chain is evaluated first-match-wins, exactly mirroring
-//! kimi-code's `PermissionManager` + `policies/` design.
+//! [`execute_tool`](crate::Agent) with a single ordered chain of
+//! [`PermissionPolicy`] implementations — every gate, sync and async alike,
+//! becomes a policy. The chain evaluates first-non-`Pass`-wins, exactly
+//! mirroring kimi-code's `PermissionManager` + `policies/` design.
 //!
 //! ### Why a chain
 //!
-//! The previous model hard-coded eight `if`/`match` arms in sequence inside a
+//! The previous model hard-coded `if`/`match` arms in sequence inside a
 //! 250-line function. Adding a rule meant editing that function; the order was
-//! implicit; and every arm had to be reasoned about together. A policy chain
-//! makes each rule an isolated, unit-testable type whose position in the chain
-//! is explicit, and lets new rules slot in without touching the others.
+//! implicit. A policy chain makes each rule an isolated, unit-testable type
+//! whose position in the chain is explicit, and lets new rules slot in
+//! without touching the others.
 //!
-//! ### What stays identical (behavior invariants, verified against the old path)
+//! ### Async policies
 //!
-//! 1. **Order is load-bearing.** The old sequence is preserved verbatim as the
-//!    default chain order (see [`default_chain`]): schema validation comes
-//!    *after* the hook (so hooks observe every call, including malformed
-//!    ones), and the scope gate precedes the broker (a hard capability limit
-//!    outranks a user prompt).
+//! Several gates are inherently async — PreToolUse hooks (they run an external
+//! process), the bash command policy (may confirm), the permission broker
+//! (parks for a live user decision). So [`PermissionPolicy::evaluate`] is
+//! `async`. Policies that need agent machinery (hooks, bash policy, the
+//! permission store) reach it through a [`PermissionContext`] trait that
+//! `Agent` implements — this keeps the module free of a direct `&Agent`
+//! dependency (and its cycle), while letting policies call back into the
+//! agent's async methods.
+//!
+//! ### Behavior invariants (preserved verbatim from the old path)
+//!
+//! 1. **Order is load-bearing** (see [`default_chain`]): schema validation
+//!    comes *after* the hook (so hooks observe every call, including malformed
+//!    ones); the scope gate precedes the broker.
 //! 2. **`ScopeTarget` is the shared switch** for scope-gate / bash-policy /
-//!    broker: `Unspecified` skips all three; `Path`/`Command` enter them.
-//! 3. **`Reject` is collective.** One reject rejects the whole pending batch
-//!    (the broker's join-all deadlock guard).
+//!    broker: `Unspecified` skips all three.
+//! 3. **`Reject` is collective** — one reject rejects the whole pending batch.
 //! 4. **`unattended` bypasses interactive policies only** (broker, bash-confirm,
 //!    ask-user), never the hook or scope gate.
-//! 5. **`ToolOutput::PermissionDenied` vs `Error`** distinguish user-aborts
-//!    (signal the round should stop) from hard failures.
-//!
-//! ### Phase-in
-//!
-//! This module lands the *machinery* (trait, context, decision types, chain).
-//! Wiring `execute_tool` onto it is a separate change so the behavior can be
-//! diffed gate-by-gate against the old path.
+//! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
+//!    failures.
 
 use std::sync::Arc;
 
-use neenee_core::{ScopeTarget, Tool, ToolOutput};
+use async_trait::async_trait;
+use neenee_core::{RestorePoint, ScopeTarget, Tool, ToolOutput};
 
 use crate::agent::ScopedToolDisable;
+use crate::hooks::PreToolUseVerdict;
 use crate::permission_store::{PermissionRule, PermissionStore};
 
-/// The outcome a policy returns for one tool call.
-///
-/// Mirrors kimi-code's `PermissionPolicyResult` (approve/deny/ask) plus a
-/// `Pass` ("this policy has no opinion; ask the next one") that lets a policy
-/// opt out cleanly. `Pass` is the chain's continuation signal.
+/// The outcome a policy returns for one tool call. `Pass` is the chain's
+/// continuation signal; the first non-`Pass` wins.
 #[derive(Debug)]
 pub enum PolicyDecision {
-    /// No opinion — evaluate the next policy in the chain.
+    /// No opinion — evaluate the next policy.
     Pass,
-    /// Admit the call. No further policies are consulted.
+    /// Admit the call; no further policies consulted.
     Approve,
-    /// Reject the call with a typed output. `PermissionDenied` signals a
-    /// user-initiated stop (round should end); `Error` is a hard failure.
+    /// Reject the call with a typed output. `collective` flags whether this
+    /// deny should also reject sibling pending calls (true for broker rejects).
     Deny {
         output: ToolOutput,
-        /// Whether this deny is a "collective" reject (rejects all sibling
-        /// pending calls in the batch). True only for the broker's user-reject
-        /// path; false for hook/scope/schema denies.
         collective: bool,
     },
-    /// Defer to the user: park the call and await a [`neenee_core::PermissionDecision`].
-    /// The caller (the dispatcher) is responsible for the parking + event
-    /// emission + await; a policy that returns `Ask` only contributes the
-    /// request payload and the rule to remember on `Always`.
+    /// Defer to the user: park and await a [`neenee_core::PermissionDecision`].
+    /// The chain caller parks, emits the request, awaits; the policy only
+    /// contributes the request payload + the rule to remember on `Always`.
     Ask {
         request: neenee_core::PermissionRequest,
         rule: PermissionRule,
     },
 }
 
-/// Everything a policy needs to decide one call. Built once per call by the
-/// dispatcher and passed down the chain.
+/// Agent capabilities a policy may need to invoke. Implemented by `Agent`; the
+/// trait keeps this module decoupled from the concrete agent type (no cycle,
+/// and policies are testable with a stub context).
+#[async_trait]
+pub trait PermissionContext: Send + Sync {
+    /// Run PreToolUse hooks for this call, returning the verdict (deny +
+    /// scoped-disable side effects).
+    async fn check_pre_tool_use(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> PreToolUseVerdict;
+
+    /// Apply scoped-disable side effects from a hook verdict.
+    fn apply_scoped_disables(&self, disables: &[(String, RestorePoint)]);
+
+    /// The bash command policy for `command`. Returns `Some(output)` to
+    /// short-circuit (Deny/Confirm→Reject under unattended), `None` to allow.
+    async fn check_bash_policy(
+        &self,
+        command: &str,
+        arguments: &str,
+    ) -> Option<ToolOutput>;
+
+    /// The permission store, for synchronous `is_always_allowed` checks.
+    fn permissions(&self) -> &PermissionStore;
+
+    /// Whether the session is running unattended.
+    fn unattended(&self) -> bool;
+}
+
+/// Everything a policy needs to decide one call.
+///
+/// Owns its disable-mask snapshots (cloned before the chain runs) so no
+/// `MutexGuard` is held across the chain's `.await` points — the chain is
+/// async and guards are not `Send`.
 pub struct PolicyContext<'a> {
-    /// The tool being invoked.
     pub tool: &'a Arc<dyn Tool>,
-    /// The call's raw arguments (JSON string).
+    pub call_name: &'a str,
     pub arguments: &'a str,
-    /// The tool's resolved scope target (Path / Command / Unspecified).
     pub scope_target: ScopeTarget,
-    /// Whether the session is running unattended (no human reachable).
     pub unattended: bool,
-    /// The current operation scope (granted path prefixes / command allowlist).
-    pub operation_scope: &'a neenee_core::OperationScope,
-    /// The persistent + scoped disable masks, as names.
-    pub disabled: &'a std::collections::HashSet<String>,
-    pub scoped_disabled: &'a ScopedToolDisable,
-    /// The permission store (for `is_always_allowed`).
-    pub permissions: &'a PermissionStore,
+    pub operation_scope: neenee_core::OperationScope,
+    pub disabled: std::collections::HashSet<String>,
+    pub scoped_disabled: ScopedToolDisable,
+    /// Agent capabilities (hooks, bash policy, permission parking). Sync
+    /// policies ignore this; async policies call through it.
+    pub ctx: &'a dyn PermissionContext,
 }
 
 impl<'a> PolicyContext<'a> {
-    /// Convenience: is this tool's name disabled by either mask?
     pub fn is_name_disabled(&self) -> bool {
-        self.disabled.contains(self.tool.name()) || self.scoped_disabled.contains(self.tool.name())
+        self.disabled.contains(self.call_name) || self.scoped_disabled.contains(self.call_name)
     }
-
-    /// Disabled by the *user* (persisted) mask specifically? Used to word the
-    /// rejection distinctly from a hook-scoped (transient) disable.
     pub fn is_user_disabled(&self) -> bool {
-        self.disabled.contains(self.tool.name())
+        self.disabled.contains(self.call_name)
     }
 }
 
-/// One rule in the permission chain. Implementations are unit-testable in
-/// isolation; the chain composes them in a fixed order.
+/// One rule in the permission chain. Async because some gates await.
+#[async_trait]
 pub trait PermissionPolicy: Send + Sync {
-    /// A short, stable name for telemetry / debugging.
     fn name(&self) -> &'static str;
-
-    /// Decide for this call. Return [`PolicyDecision::Pass`] to defer to the
-    /// next policy. The first non-`Pass` result wins (short-circuit), matching
-    /// kimi-code's `for policy in policies { if let Some(r) = ... return }`.
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision;
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision;
 }
 
 /// The ordered chain. Evaluate by walking until the first non-`Pass`.
@@ -128,13 +145,10 @@ impl PermissionChain {
     pub fn new(policies: Vec<Box<dyn PermissionPolicy>>) -> Self {
         Self { policies }
     }
-
-    /// Evaluate the chain for one call. Returns the first non-`Pass` decision,
-    /// or [`PolicyDecision::Approve`] if every policy passed (the implicit
-    /// fallback — a call nothing objects to is admitted).
-    pub fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+    /// Evaluate the chain. First non-`Pass` wins; if all pass, `Approve`.
+    pub async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
         for policy in &self.policies {
-            let decision = policy.evaluate(ctx);
+            let decision = policy.evaluate(ctx).await;
             match decision {
                 PolicyDecision::Pass => continue,
                 other => return other,
@@ -142,82 +156,77 @@ impl PermissionChain {
         }
         PolicyDecision::Approve
     }
-
-    /// Iterate policy names (for telemetry / the Tools modal).
     pub fn policy_names(&self) -> Vec<&'static str> {
         self.policies.iter().map(|p| p.name()).collect()
     }
 }
 
-/// Build the default chain in the canonical gate order (see module docs).
-///
-/// This is the single source of truth for policy ordering. Each entry is one
-/// of the historical gates; reordering here changes load-bearing behavior.
-///
-/// The chain holds the **synchronous** gates — those that can decide from the
-/// [`PolicyContext`] alone, with no `.await`. The asynchronous gates
-/// (PreToolUse hook execution, bash-policy confirmation, ask_user parking,
-/// broker park/await) stay in `execute_tool` because they call back into the
-/// agent's async machinery; the chain runs *before* them as a fast filter,
-/// short-circuiting the calls that need no async work. See the switchover
-/// notes in `execute_tool`.
+/// The canonical chain order. Each entry is one historical gate; reordering
+/// here changes load-bearing behavior.
 pub fn default_chain() -> Vec<Box<dyn PermissionPolicy>> {
     vec![
+        Box::new(HookPolicy),
         Box::new(DisabledPolicy),
         Box::new(SchemaPolicy),
         Box::new(ScopeGatePolicy),
-        // BrokerPolicy does only the synchronous "already always-allowed?"
-        // fast path here; the interactive park/await stays in execute_tool.
+        Box::new(BashPolicy),
+        Box::new(AskUserPolicy),
         Box::new(BrokerPolicy),
     ]
 }
 
 // ---------------------------------------------------------------------------
-// Concrete policies. Each is a zero-sized type; all state is read from the
-// PolicyContext. They are deliberately thin so the historical gate logic is
-// visible in one place each.
+// Concrete policies. Hook/Bash/Broker are async; the rest decide from the
+// context alone.
 // ---------------------------------------------------------------------------
 
-/// Gate 1: PreToolUse hook. A hook's `Deny` rejects the call.
-///
-/// NOTE: hook execution is async and lives on the `HookRegistry`; this policy
-/// is a placeholder that assumes the hook verdict has been pre-computed and
-/// threaded in (the dispatcher runs hooks once, before the chain, because the
-/// chain itself is sync). Full wiring arrives with the execute_tool rewrite.
+/// Gate 1: PreToolUse hook. Runs the (async) hook verdict and honours a deny.
 pub struct HookPolicy;
+#[async_trait]
 impl PermissionPolicy for HookPolicy {
     fn name(&self) -> &'static str {
         "hook"
     }
-    fn evaluate(&self, _ctx: &PolicyContext<'_>) -> PolicyDecision {
-        // Hook verdict is computed by the dispatcher (async) and consulted
-        // before the chain runs; this policy is a no-op marker for now.
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+        let tool_input = serde_json::from_str::<serde_json::Value>(ctx.arguments)
+            .unwrap_or(serde_json::Value::Null);
+        let verdict = ctx.ctx.check_pre_tool_use(ctx.call_name, &tool_input).await;
+        // Apply scoped disables from hooks first (narrows the toolset for
+        // subsequent calls this round), then honour the deny.
+        ctx.ctx.apply_scoped_disables(&verdict.side.scoped_disables);
+        if let Some(reason) = verdict.deny {
+            return PolicyDecision::Deny {
+                output: ToolOutput::Error {
+                    message: format!("Blocked by hook: {}", reason),
+                    detail: None,
+                },
+                collective: false,
+            };
+        }
         PolicyDecision::Pass
     }
 }
 
-/// Gate: user + scoped disable masks. The rejection wording distinguishes a
-/// persisted user disable ("re-enable in /tools") from a transient hook-scoped
-/// disable ("temporarily out of scope"), matching the historical execute_tool
-/// messages so the model's remedy guidance is unchanged.
+/// Gate 2: user + scoped disable masks.
 pub struct DisabledPolicy;
+#[async_trait]
 impl PermissionPolicy for DisabledPolicy {
     fn name(&self) -> &'static str {
         "disabled"
     }
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
         if !ctx.is_name_disabled() {
             return PolicyDecision::Pass;
         }
         let message = if ctx.is_user_disabled() {
             format!(
                 "Tool '{}' is disabled for this session. Re-enable it in the Tools modal (/tools).",
-                ctx.tool.name()
+                ctx.call_name
             )
         } else {
             format!(
                 "Tool '{}' is temporarily out of scope for this task. Use a different tool.",
-                ctx.tool.name()
+                ctx.call_name
             )
         };
         PolicyDecision::Deny {
@@ -227,19 +236,22 @@ impl PermissionPolicy for DisabledPolicy {
     }
 }
 
-/// Gate 3: argument schema validation. Reads the tool's `parameters()` and
-/// validates the raw arguments against it.
+/// Gate 3: argument schema validation.
 pub struct SchemaPolicy;
+#[async_trait]
 impl PermissionPolicy for SchemaPolicy {
     fn name(&self) -> &'static str {
         "schema"
     }
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        match neenee_core::tool_validation::validate_tool_arguments(&ctx.tool.parameters(), ctx.arguments) {
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+        match neenee_core::tool_validation::validate_tool_arguments(
+            &ctx.tool.parameters(),
+            ctx.arguments,
+        ) {
             Ok(()) => PolicyDecision::Pass,
             Err(message) => PolicyDecision::Deny {
                 output: ToolOutput::Error {
-                    message: format!("Error executing {}: {}", ctx.tool.name(), message),
+                    message: format!("Error executing {}: {}", ctx.call_name, message),
                     detail: None,
                 },
                 collective: false,
@@ -248,15 +260,14 @@ impl PermissionPolicy for SchemaPolicy {
     }
 }
 
-/// Gate 4: operation-scope gate (ADR-0028). A non-`Unspecified` target outside
-/// the granted scope is blocked. This is a *hard* capability limit, so it runs
-/// before the broker.
+/// Gate 4: operation-scope gate (ADR-0028). Hard capability limit before broker.
 pub struct ScopeGatePolicy;
+#[async_trait]
 impl PermissionPolicy for ScopeGatePolicy {
     fn name(&self) -> &'static str {
         "scope-gate"
     }
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
         if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
@@ -266,7 +277,7 @@ impl PermissionPolicy for ScopeGatePolicy {
             PolicyDecision::Deny {
                 output: ToolOutput::Text(format!(
                     "[operation scope] Tool '{}' is blocked outside its granted scope.",
-                    ctx.tool.name()
+                    ctx.call_name
                 )),
                 collective: false,
             }
@@ -274,36 +285,56 @@ impl PermissionPolicy for ScopeGatePolicy {
     }
 }
 
-/// Gate 5: bash command policy. Only fires for `bash` with a `Command` target;
-/// consults the bash policy (Allow/Confirm/Deny). Confirm under unattended
-/// follows `unattended_confirm_action`.
-///
-/// NOTE: like the hook, the bash policy is computed by the dispatcher (it
-/// reads config). This policy is a marker until full wiring; the historical
-/// bash-policy logic stays in `check_bash_policy` and is invoked by the
-/// dispatcher alongside the chain.
+/// Gate 5: bash command policy (Deny / unattended-Confirm only). The
+/// interactive Confirm path (non-unattended) stays in `execute_tool` because it
+/// needs an event channel to park for user approval — a mini-broker that
+/// doesn't fit the event-less policy signature. Here we only short-circuit the
+/// cases that need no interaction: an outright `Deny`, or a `Confirm` while
+/// unattended (resolved per `unattended_confirm_action`).
 pub struct BashPolicy;
+#[async_trait]
 impl PermissionPolicy for BashPolicy {
     fn name(&self) -> &'static str {
         "bash-policy"
     }
-    fn evaluate(&self, _ctx: &PolicyContext<'_>) -> PolicyDecision {
-        PolicyDecision::Pass
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+        if ctx.call_name != "bash" {
+            return PolicyDecision::Pass;
+        }
+        let command = match &ctx.scope_target {
+            ScopeTarget::Command(c) => c.clone(),
+            _ => return PolicyDecision::Pass,
+        };
+        // Delegate to the context's bash-policy check, but only the
+        // non-interactive resolution matters here. A `Some(output)` means the
+        // policy produced a terminal decision (Deny, or unattended-Confirm →
+        // Deny); a `None` means either Allow or "needs interactive Confirm"
+        // (the latter falls through to execute_tool's full check_bash_policy).
+        match ctx.ctx.check_bash_policy(&command, ctx.arguments).await {
+            Some(output) => {
+                let collective = matches!(output, ToolOutput::PermissionDenied { .. });
+                PolicyDecision::Deny { output, collective }
+            }
+            None => PolicyDecision::Pass,
+        }
     }
 }
 
-/// Gate 6: ask_user shortcut. Under unattended there is no human to answer, so
-/// the call is refused outright (no parking, else it would deadlock).
+/// Gate 6: ask_user shortcut. Under unattended, refuse (no human to answer).
 pub struct AskUserPolicy;
+#[async_trait]
 impl PermissionPolicy for AskUserPolicy {
     fn name(&self) -> &'static str {
         "ask-user"
     }
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.tool.name() == "ask_user" && ctx.unattended {
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+        if ctx.call_name == "ask_user" && ctx.unattended {
             return PolicyDecision::Deny {
                 output: ToolOutput::Text(
-                    "ask_user is unavailable while running unattended.".to_string(),
+                    "ask_user is unavailable: this session is running unattended and no human \
+                     is reachable to answer. Resolve the ambiguity yourself — pick the most \
+                     reasonable default and proceed."
+                        .to_string(),
                 ),
                 collective: false,
             };
@@ -312,33 +343,29 @@ impl PermissionPolicy for AskUserPolicy {
     }
 }
 
-/// Gate 7: the permission broker. A non-`Unspecified` target that is not
-/// already `always`-allowed is parked for a user decision. Under unattended,
-/// everything is admitted (bypasses the allowlist wholesale).
+/// Gate 7: the permission broker. A non-`Unspecified` target not already
+/// always-allowed (and not unattended) yields `Ask`; the chain caller parks.
 pub struct BrokerPolicy;
+#[async_trait]
 impl PermissionPolicy for BrokerPolicy {
     fn name(&self) -> &'static str {
         "broker"
     }
-    fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        // Unspecified targets never broker (read-only tools like grep/list).
+    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
         if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
-        // Unattended bypasses the whole allowlist.
         if ctx.unattended {
             return PolicyDecision::Approve;
         }
-        let rule = scope_target_to_rule(ctx.tool.name(), &ctx.scope_target);
-        if ctx.permissions.is_always_allowed(&rule) {
+        let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
+        if ctx.ctx.permissions().is_always_allowed(&rule) {
             return PolicyDecision::Approve;
         }
-        // Otherwise ask. The dispatcher owns parking + event + await; we only
-        // contribute the payload + the rule to remember on `Always`.
         PolicyDecision::Ask {
             request: neenee_core::PermissionRequest {
-                id: String::new(), // dispatcher fills the generated id
-                tool: ctx.tool.name().to_string(),
+                id: String::new(), // caller fills the generated id
+                tool: ctx.call_name.to_string(),
                 label: ctx.tool.permission_label(),
                 description: ctx.tool.permission_description(),
                 arguments: ctx.arguments.to_string(),
@@ -349,9 +376,6 @@ impl PermissionPolicy for BrokerPolicy {
     }
 }
 
-/// Map a `ScopeTarget` to the stable scope-string key used by the allowlist.
-/// Mirrors the historical `scope_target_to_rule`. `Unspecified` → `"*"`
-/// (though the broker never reaches here for Unspecified).
 fn scope_target_to_rule(tool: &str, target: &ScopeTarget) -> PermissionRule {
     let scope = match target {
         ScopeTarget::Unspecified => "*".to_string(),
@@ -372,13 +396,10 @@ mod tests {
     use neenee_core::ToolAccesses;
     use std::collections::HashSet;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
 
-    /// A configurable stub tool for policy tests.
     struct StubTool {
         name: String,
-        scope_target: ScopeTarget,
-        params_valid: bool,
+        target: ScopeTarget,
     }
     #[async_trait]
     impl Tool for StubTool {
@@ -389,196 +410,222 @@ mod tests {
             ""
         }
         fn parameters(&self) -> serde_json::Value {
-            if self.params_valid {
-                serde_json::json!({"type": "object"})
-            } else {
-                serde_json::json!({"type": "object", "required": ["x"], "properties": {"x": {"type": "string"}}})
-            }
+            serde_json::json!({"type": "object"})
         }
         async fn call(&self, _a: &str) -> Result<String, String> {
             Ok("ok".into())
         }
         fn scope_target(&self, _a: &str) -> ScopeTarget {
-            self.scope_target.clone()
+            self.target.clone()
         }
         fn accesses(&self, _a: &str) -> ToolAccesses {
             ToolAccesses::none()
         }
     }
 
-    fn ctx<'a>(
-        tool: &'a Arc<dyn Tool>,
-        arguments: &'a str,
-        scope_target: ScopeTarget,
+    /// A stub PermissionContext for policy tests: all hooks/bash/park are no-ops.
+    struct StubCtx {
         unattended: bool,
-        operation_scope: &'a neenee_core::OperationScope,
-        disabled: &'a HashSet<String>,
-        scoped_disabled: &'a ScopedToolDisable,
-        permissions: &'a PermissionStore,
-    ) -> PolicyContext<'a> {
-        PolicyContext {
-            tool,
-            arguments,
-            scope_target,
-            unattended,
-            operation_scope,
-            disabled,
-            scoped_disabled,
-            permissions,
+        perms: PermissionStore,
+    }
+    #[async_trait]
+    impl PermissionContext for StubCtx {
+        async fn check_pre_tool_use(
+            &self,
+            _n: &str,
+            _i: &serde_json::Value,
+        ) -> PreToolUseVerdict {
+            PreToolUseVerdict::default()
+        }
+        fn apply_scoped_disables(&self, _d: &[(String, RestorePoint)]) {}
+        async fn check_bash_policy(&self, _c: &str, _a: &str) -> Option<ToolOutput> {
+            None
+        }
+        fn permissions(&self) -> &PermissionStore {
+            &self.perms
+        }
+        fn unattended(&self) -> bool {
+            self.unattended
         }
     }
 
-    fn make_ctx(
-        _tool: Arc<dyn Tool>,
-        _target: ScopeTarget,
-    ) {
-        // Per-test contexts are built inline via `ctx(...)`; no shared helper.
+    fn pctx<'a>(
+        tool: &'a Arc<dyn Tool>,
+        name: &'a str,
+        args: &'a str,
+        target: ScopeTarget,
+        unattended: bool,
+        op: neenee_core::OperationScope,
+        disabled: std::collections::HashSet<String>,
+        scoped: ScopedToolDisable,
+        ctxr: &'a dyn PermissionContext,
+    ) -> PolicyContext<'a> {
+        PolicyContext {
+            tool,
+            call_name: name,
+            arguments: args,
+            scope_target: target,
+            unattended,
+            operation_scope: op,
+            disabled,
+            scoped_disabled: scoped,
+            ctx: ctxr,
+        }
     }
 
-    #[test]
-    fn disabled_policy_denies_disabled_name() {
+    #[tokio::test]
+    async fn disabled_policy_denies() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "bash".into(),
-            scope_target: ScopeTarget::Command("ls".into()),
-            params_valid: true,
+            target: ScopeTarget::Command("ls".into()),
         });
         let disabled: HashSet<String> = ["bash".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
         let op = neenee_core::OperationScope::unrestricted();
-        let c = ctx(&tool, "{}", ScopeTarget::Unspecified, false, &op, &disabled, &scoped, &perms);
-        assert!(matches!(DisabledPolicy.evaluate(&c), PolicyDecision::Deny { .. }));
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(&tool, "bash", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
+        assert!(matches!(
+            DisabledPolicy.evaluate(&c).await,
+            PolicyDecision::Deny { .. }
+        ));
     }
 
-    #[test]
-    fn scope_gate_blocks_path_outside_granted() {
+    #[tokio::test]
+    async fn scope_gate_blocks() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            scope_target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            params_valid: true,
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        // Granted scope = only /home/user.
         let op = neenee_core::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
-        let c = ctx(
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
             &tool,
+            "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/etc/passwd")),
             false,
-            &op,
-            &disabled,
-            &scoped,
-            &perms,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
         );
-        let d = ScopeGatePolicy.evaluate(&c);
-        assert!(matches!(d, PolicyDecision::Deny { collective: false, .. }));
+        assert!(matches!(
+            ScopeGatePolicy.evaluate(&c).await,
+            PolicyDecision::Deny { collective: false, .. }
+        ));
     }
 
-    #[test]
-    fn broker_unattended_approves_everything() {
+    #[tokio::test]
+    async fn broker_unattended_approves() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            scope_target: ScopeTarget::Path(PathBuf::from("/anywhere")),
-            params_valid: true,
+            target: ScopeTarget::Path(PathBuf::from("/anywhere")),
         });
         let op = neenee_core::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
-        let c = ctx(
+        let ctxr = StubCtx {
+            unattended: true,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
             &tool,
+            "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/anywhere")),
-            true, // unattended
-            &op,
-            &disabled,
-            &scoped,
-            &perms,
+            true,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
         );
-        assert!(matches!(BrokerPolicy.evaluate(&c), PolicyDecision::Approve));
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Approve));
     }
 
-    #[test]
-    fn broker_asks_when_not_always_allowed() {
+    #[tokio::test]
+    async fn broker_asks_when_not_allowed() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            scope_target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            params_valid: true,
+            target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
         let op = neenee_core::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
-        let c = ctx(
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
             &tool,
+            "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/tmp/x")),
             false,
-            &op,
-            &disabled,
-            &scoped,
-            &perms,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
         );
-        assert!(matches!(BrokerPolicy.evaluate(&c), PolicyDecision::Ask { .. }));
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Ask { .. }));
     }
 
-    #[test]
-    fn chain_short_circuits_on_first_non_pass() {
-        // Disabled beats broker: a disabled tool is denied before brokering.
+    #[tokio::test]
+    async fn chain_short_circuits() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            scope_target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            params_valid: true,
+            target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
         let op = neenee_core::OperationScope::unrestricted();
         let disabled: HashSet<String> = ["write_file".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
-        let c = ctx(
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
             &tool,
+            "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/tmp/x")),
             false,
-            &op,
-            &disabled,
-            &scoped,
-            &perms,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
         );
-        let chain = PermissionChain::new(vec![
-            Box::new(DisabledPolicy),
-            Box::new(BrokerPolicy),
-        ]);
-        let d = chain.evaluate(&c);
-        assert!(matches!(d, PolicyDecision::Deny { collective: false, .. }));
+        let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(BrokerPolicy)]);
+        assert!(matches!(
+            chain.evaluate(&c).await,
+            PolicyDecision::Deny { collective: false, .. }
+        ));
     }
 
-    #[test]
-    fn chain_falls_back_to_approve_when_all_pass() {
+    #[tokio::test]
+    async fn chain_falls_back_to_approve() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "read_text".into(),
-            scope_target: ScopeTarget::Unspecified,
-            params_valid: true,
+            target: ScopeTarget::Unspecified,
         });
         let op = neenee_core::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
-        let perms = PermissionStore::new();
-        let c = ctx(
-            &tool,
-            "{}",
-            ScopeTarget::Unspecified,
-            false,
-            &op,
-            &disabled,
-            &scoped,
-            &perms,
-        );
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(&tool, "read_text", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(ScopeGatePolicy)]);
-        assert!(matches!(chain.evaluate(&c), PolicyDecision::Approve));
+        assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 }

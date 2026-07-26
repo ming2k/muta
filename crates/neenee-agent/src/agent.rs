@@ -1,6 +1,5 @@
 use super::*;
 
-use crate::permission_store::PermissionRule;
 use futures::future::BoxFuture;
 
 /// Role-reanchoring note appended to a successful envoy's tool-result text in
@@ -54,7 +53,7 @@ pub(crate) fn envoy_result_text(name: &str, summary: &str, failed: bool) -> Stri
 /// hooks disabling the same tool at different restore points don't fight: the
 /// earlier restore only decrements, the tool stays hidden until its last
 /// refcount reaches zero.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct ScopedToolDisable {
     round_end: HashMap<String, u32>,
     turn_end: HashMap<String, u32>,
@@ -901,6 +900,7 @@ impl Agent {
 
     /// The unified tool manager (kimi-code port). Exposed so the dispatcher /
     /// model-request assembly can call its authoritative methods directly.
+    #[allow(dead_code)]
     pub(crate) fn tool_manager(&self) -> &crate::tool_manager::ToolManager {
         &self.tool_manager
     }
@@ -3864,72 +3864,86 @@ impl Agent {
             }
         };
 
-        // PreToolUse hooks (ADR-0025): a hook may deny the call before it runs.
-        // Arguments are parsed best-effort; an unparseable string still fires
-        // the hook with a null input so a guard is never bypassed by bad JSON.
-        let tool_input = serde_json::from_str::<serde_json::Value>(&call.arguments)
-            .unwrap_or(serde_json::Value::Null);
-        let verdict = self
-            .hooks()
-            .check_pre_tool_use(
-                call.name.as_str(),
-                &tool_input,
-                &self.hook_session_id(),
-                self.hook_cwd().as_deref(),
-            )
-            .await;
-        // Apply any scoped disables from PreToolUse hooks first (so a policy
-        // hook can narrow the toolset for subsequent calls this round), then
-        // honour the deny if present.
-        self.apply_scoped_disables(&verdict.side.scoped_disables);
-        if let Some(reason) = verdict.deny {
-            tracing::info!(tool = %call.name, "tool blocked by PreToolUse hook");
-            return ToolOutput::Error {
-                message: format!("Blocked by hook: {}", reason),
-                detail: None,
-            };
-        }
-
-        // ── Permission policy chain (synchronous gates, stage-2 switchover) ──
-        // The synchronous permission gates — disabled mask, schema
-        // pre-validation, and operation-scope gate — run as one chain
-        // evaluation (see `permission_policy`). Order within the chain is
-        // load-bearing and matches the historical sequence. A `Deny` from any
-        // of them short-circuits immediately. The chain's BrokerPolicy also
-        // runs but only contributes its `Approve` (already-allowed /
-        // unattended) fast path; its `Ask` is *not* acted on here — the
-        // interactive broker park below re-checks `always_allowed` itself, so
-        // we ignore `Ask` and let it fall through. The remaining async gates
-        // (bash-policy confirm, ask_user, broker park) stay in their original
-        // positions below.
+        // ── Permission policy chain (full async chain) ──
+        // Every permission gate — PreToolUse hook, disabled mask, schema
+        // validation, operation-scope gate, bash policy (Deny/unattended),
+        // ask_user shortcut, and the broker's always-allowed fast path — runs
+        // as one chain evaluation (see `permission_policy`). The chain is
+        // async because some gates await (hooks, bash policy). Outcomes:
+        //   • Deny    → short-circuit with the policy's output.
+        //   • Approve → proceed (already-allowed, or unattended bypass).
+        //   • Ask     → the broker wants a live user decision: park, emit the
+        //               request, fire observe hooks, await.
+        //   • Pass    → (chain fallback) proceed.
         let target = tool.scope_target(&call.arguments);
-        {
+        // Snapshot the disable masks and scope *before* the chain runs, then
+        // drop the guards — the chain is async and MutexGuards are not Send, so
+        // they must not live across the `.await`.
+        let (disabled_snapshot, scoped_snapshot, operation_scope) = {
             let disabled = self
                 .disabled_tools
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let scoped_disabled = self
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let scoped = self
                 .scoped_disabled_tools
                 .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let operation_scope = self.operation_scope();
-            let pctx = crate::permission_policy::PolicyContext {
-                tool: &tool,
-                arguments: &call.arguments,
-                scope_target: target.clone(),
-                unattended: self.get_unattended(),
-                operation_scope: &operation_scope,
-                disabled: &disabled,
-                scoped_disabled: &scoped_disabled,
-                permissions: &self.permissions,
-            };
-            if let crate::permission_policy::PolicyDecision::Deny { output, .. } =
-                self.permission_chain().evaluate(&pctx)
-            {
-                return output;
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let scope = self.operation_scope();
+            (disabled, scoped, scope)
+        };
+        let pctx = crate::permission_policy::PolicyContext {
+            tool: &tool,
+            call_name: call.name.as_str(),
+            arguments: &call.arguments,
+            scope_target: target.clone(),
+            unattended: self.get_unattended(),
+            operation_scope,
+            disabled: disabled_snapshot,
+            scoped_disabled: scoped_snapshot,
+            ctx: self, // Agent: PermissionContext
+        };
+        match self.permission_chain().evaluate(&pctx).await {
+                crate::permission_policy::PolicyDecision::Pass
+                | crate::permission_policy::PolicyDecision::Approve => {}
+                crate::permission_policy::PolicyDecision::Deny { output, .. } => {
+                    return output;
+                }
+                crate::permission_policy::PolicyDecision::Ask { request, rule } => {
+                    // The broker's interactive park. Fill the request id, emit,
+                    // fire observe hooks, await the user's decision.
+                    let request = neenee_core::PermissionRequest {
+                        id: format!("permission_{}", uuid::Uuid::new_v4()),
+                        ..request
+                    };
+                    let receiver = self.permissions.park_request(request.id.clone());
+                    tracing::info!(tool = %request.tool, scope = %request.scope, "permission requested");
+                    let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
+                    self.fire_permission_request_hooks(&request).await;
+                    match receiver.await.unwrap_or(PermissionDecision::Reject) {
+                        PermissionDecision::Once => {
+                            tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
+                        }
+                        PermissionDecision::Always => {
+                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
+                            self.permissions.add_always(rule);
+                        }
+                        PermissionDecision::Reject => {
+                            tracing::warn!(tool = %tool.name(), "permission denied");
+                            return ToolOutput::PermissionDenied {
+                                tool: tool.name().to_string(),
+                            };
+                        }
+                    }
+                }
             }
-        }
 
+            // Bash interactive Confirm: the chain's BashPolicy handled Deny and
+        // unattended-Confirm, but a non-unattended Confirm needs the event
+        // channel to park for one-off approval. Re-run the full check here —
+        // it's idempotent for Deny (already short-circuited) and a no-op for
+        // Allow; only Confirm reaches the park.
         if call.name == "bash"
             && let neenee_core::ScopeTarget::Command(command) = &target
             && let Some(output) = self
@@ -3939,70 +3953,10 @@ impl Agent {
             return output;
         }
 
+        // ask_user: the chain's AskUserPolicy refused under unattended; here we
+        // execute the interactive path (park for a user answer).
         if call.name == "ask_user" {
-            // Defense in depth alongside `visible_tools` reclaiming the tool:
-            // a name carried over from an earlier turn's tool list (still in
-            // context) must not reach the parking path and deadlock the round.
-            // Under unattended there is no human to answer, so short-circuit
-            // with a refusal the model can act on.
-            if self.get_unattended() {
-                tracing::info!("ask_user short-circuited under unattended");
-                return ToolOutput::Text(
-                    "ask_user is unavailable: this session is running unattended and no human \
-                     is reachable to answer. Resolve the ambiguity yourself — pick the most \
-                     reasonable default and proceed."
-                        .to_string(),
-                );
-            }
             return self.execute_ask_user(call, call_id, event_tx).await;
-        }
-
-        // Permission broker: a tool with a real [`ScopeTarget`] (Path/Command)
-        // has a side effect the user should approve. Tools with
-        // [`ScopeTarget::Unspecified`] (pure reads/searches) skip the broker.
-        if !matches!(target, neenee_core::ScopeTarget::Unspecified) {
-            let scope = scope_target_to_rule(&target);
-            let rule = PermissionRule {
-                tool: tool.name().to_string(),
-                scope: scope.clone(),
-            };
-            let unattended = self.get_unattended();
-            let always_allowed = unattended || self.permissions.is_always_allowed(&rule);
-            if !always_allowed {
-                let request = PermissionRequest {
-                    id: format!("permission_{}", uuid::Uuid::new_v4()),
-                    tool: tool.name().to_string(),
-                    label: tool.permission_label(),
-                    description: tool.permission_description(),
-                    arguments: call.arguments.clone(),
-                    scope,
-                };
-                let receiver = self.permissions.park_request(request.id.clone());
-                tracing::info!(tool = %request.tool, scope = %request.scope, "permission requested");
-                let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
-                // Observe-only interrupt hook: fire notifications so the user
-                // notices the agent is blocked awaiting approval. No-op without
-                // `[hooks]`. Outcomes are ignored — this never grants/denies.
-                self.fire_permission_request_hooks(&request).await;
-
-                match receiver.await.unwrap_or(PermissionDecision::Reject) {
-                    PermissionDecision::Once => {
-                        tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
-                    }
-                    PermissionDecision::Always => {
-                        tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
-                        self.permissions.add_always(rule);
-                    }
-                    PermissionDecision::Reject => {
-                        tracing::warn!(tool = %tool.name(), "permission denied");
-                        return ToolOutput::PermissionDenied {
-                            tool: tool.name().to_string(),
-                        };
-                    }
-                }
-            } else if unattended {
-                tracing::info!(tool = %tool.name(), scope = %scope, "ran unattended");
-            }
         }
 
         // ── Stdin policy decision (L3 + L3.5) ──
@@ -4262,6 +4216,7 @@ impl Agent {
 /// "any scope" sentinel), so tools without a locatable target are ruled as
 /// before. This string is purely a dedup key + UI label — the actual scope
 /// admission decision is made by [`neenee_core::OperationScope::allows`].
+#[allow(dead_code)]
 fn scope_target_to_rule(target: &neenee_core::ScopeTarget) -> String {
     match target {
         neenee_core::ScopeTarget::Path(p) => p.to_string_lossy().into_owned(),
@@ -4464,5 +4419,95 @@ mod tests {
         );
         scoped.restore_round_end();
         assert!(!scoped.contains("bash"), "bash back after round end");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PermissionContext: the agent's implementation of the policy-chain capability
+// trait. Policies reach the agent's async machinery (hooks, bash policy,
+// permission store) through this, keeping permission_policy.rs decoupled from
+// the concrete Agent type.
+// ---------------------------------------------------------------------------
+
+#[async_trait::async_trait]
+impl crate::permission_policy::PermissionContext for Agent {
+    async fn check_pre_tool_use(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> crate::hooks::PreToolUseVerdict {
+        self.hooks()
+            .check_pre_tool_use(
+                tool_name,
+                tool_input,
+                &self.hook_session_id(),
+                self.hook_cwd().as_deref(),
+            )
+            .await
+    }
+
+    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
+        // Delegate to the existing agent method (same signature).
+        Agent::apply_scoped_disables(self, disables);
+    }
+
+    async fn check_bash_policy(
+        &self,
+        command: &str,
+        _arguments: &str,
+    ) -> Option<neenee_core::ToolOutput> {
+        // Non-interactive resolution only: Deny outright, or a Confirm that
+        // resolves under unattended. The interactive Confirm path (with its
+        // event-channel park) stays in execute_tool's full check_bash_policy.
+        let policy = self
+            .bash_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let decision = policy.evaluate(command)?;
+        match decision.action {
+            crate::bash_policy::BashPolicyAction::Deny => Some(neenee_core::ToolOutput::Error {
+                message: format!("[bash policy] Blocked dangerous command: {command}"),
+                detail: Some(format!(
+                    "Rule: {}{}\nReason: {}\nThis command was not executed.",
+                    decision.name,
+                    if decision.builtin { " (built-in)" } else { "" },
+                    decision.reason,
+                )),
+            }),
+            crate::bash_policy::BashPolicyAction::Confirm => {
+                // Only the unattended resolution belongs here; non-unattended
+                // Confirm needs the event channel, handled in execute_tool.
+                if self.get_unattended() {
+                    match policy.unattended_confirm_action() {
+                        crate::bash_policy::BashPolicyAction::Allow => None,
+                        _ => Some(neenee_core::ToolOutput::Error {
+                            message: format!(
+                                "[bash policy] Dangerous command requires confirmation but session is unattended: {command}"
+                            ),
+                            detail: Some(format!(
+                                "Rule: {}{}\nReason: {}\nThis command was not executed.",
+                                decision.name,
+                                if decision.builtin { " (built-in)" } else { "" },
+                                decision.reason,
+                            )),
+                        }),
+                    }
+                } else {
+                    // Needs interactive confirm: signal "no decision here" so
+                    // execute_tool runs the full check_bash_policy.
+                    None
+                }
+            }
+            crate::bash_policy::BashPolicyAction::Allow => None,
+        }
+    }
+
+    fn permissions(&self) -> &crate::permission_store::PermissionStore {
+        &self.permissions
+    }
+
+    fn unattended(&self) -> bool {
+        self.get_unattended()
     }
 }
