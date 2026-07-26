@@ -922,6 +922,16 @@ impl Agent {
             .push(tool);
     }
 
+    /// The permission policy chain for this agent. Built fresh per call (cheap:
+    /// the policies are zero-sized types; only the `Vec` allocation matters).
+    /// The chain holds the synchronous permission gates; the asynchronous
+    /// gates (hook, bash-policy, ask_user, broker park) stay in `execute_tool`.
+    pub(crate) fn permission_chain(&self) -> crate::permission_policy::PermissionChain {
+        crate::permission_policy::PermissionChain::new(
+            crate::permission_policy::default_chain(),
+        )
+    }
+
     /// Snapshot the live state available to declarative system-prompt policy.
     fn system_prompt_context(&self, tools: &[Arc<dyn Tool>]) -> crate::SystemPromptContext {
         let tool_names = tools.iter().map(|tool| tool.name().to_string()).collect();
@@ -3906,68 +3916,43 @@ impl Agent {
             };
         }
 
-        // Defense in depth: even though disabled tools are dropped from the
-        // schema build, a model that still names one (e.g. from an older
-        // turn's tool list still in context) is rejected here rather than
-        // silently executed. Both the user mask and the hook-scoped mask gate
-        // dispatch; the message distinguishes them so the model understands
-        // whether re-enabling is its business (it isn't — both are
-        // out-of-band to the model).
-        if self.is_name_disabled(call.name.as_str()) {
-            let user_disabled = self.is_tool_enabled(call.name.as_str());
-            tracing::warn!(tool = %call.name, user_disabled, "tool disabled (user or scoped mask)");
-            return ToolOutput::Text(if user_disabled {
-                format!(
-                    "Tool '{}' is disabled for this session. Re-enable it in the Tools modal (/tools).",
-                    call.name
-                )
-            } else {
-                // Scoped by a hook: transient, will auto-restore; the model
-                // should pick a different tool rather than wait.
-                format!(
-                    "Tool '{}' is temporarily out of scope for this task. Use a different tool.",
-                    call.name
-                )
-            });
-        }
-
-        // Schema pre-validation (ported from praxion): reject calls whose
-        // top-level argument shape violates the tool's declared `parameters`
-        // before any permission prompt or policy check, so a malformed call
-        // never reaches the Tool impl. Failure produces exactly the error
-        // shape a failing Tool impl returns below, keeping the UI and logs
-        // indistinguishable from a tool-internal error. Placed after the
-        // PreToolUse hook so hooks still observe (and may deny) every
-        // attempted call, even a malformed one.
-        if let Err(message) = neenee_core::tool_validation::validate_tool_arguments(
-            &tool.parameters(),
-            &call.arguments,
-        ) {
-            tracing::warn!(tool = %call.name, %message, "tool call rejected by argument pre-validation");
-            return ToolOutput::Error {
-                message: format!("Error executing {}: {}", call.name, message),
-                detail: None,
-            };
-        }
-
-        // Operation-scope gate (ADR-0028). The main agent's scope is
-        // unrestricted (no-op here); an envoy carries a scope resolved from
-        // its profile's `write_paths` / `command_allowlist` grants. Any tool
-        // whose [`ScopeTarget`] is a real target (Path/Command) and falls
-        // outside the granted scope is blocked outright — a hard capability
-        // limit, not a prompt. Sits before the broker, which is the interactive
-        // layer inside an unrestricted scope. Tools with
-        // [`ScopeTarget::Unspecified`] (`read`, `grep`) skip this gate.
+        // ── Permission policy chain (synchronous gates, stage-2 switchover) ──
+        // The synchronous permission gates — disabled mask, schema
+        // pre-validation, and operation-scope gate — run as one chain
+        // evaluation (see `permission_policy`). Order within the chain is
+        // load-bearing and matches the historical sequence. A `Deny` from any
+        // of them short-circuits immediately. The chain's BrokerPolicy also
+        // runs but only contributes its `Approve` (already-allowed /
+        // unattended) fast path; its `Ask` is *not* acted on here — the
+        // interactive broker park below re-checks `always_allowed` itself, so
+        // we ignore `Ask` and let it fall through. The remaining async gates
+        // (bash-policy confirm, ask_user, broker park) stay in their original
+        // positions below.
         let target = tool.scope_target(&call.arguments);
-        if !matches!(target, neenee_core::ScopeTarget::Unspecified) {
-            let scope = self.operation_scope();
-            if !scope.allows(&target) {
-                tracing::warn!(tool = %call.name, ?scope, "tool blocked by operation scope");
-                return ToolOutput::Text(format!(
-                    "[operation scope] Tool '{}' is blocked: its target ({:?}) is outside this \
-                     agent's permitted scope (granted write paths or command allowlist).",
-                    call.name, target
-                ));
+        {
+            let disabled = self
+                .disabled_tools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let scoped_disabled = self
+                .scoped_disabled_tools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let operation_scope = self.operation_scope();
+            let pctx = crate::permission_policy::PolicyContext {
+                tool: &tool,
+                arguments: &call.arguments,
+                scope_target: target.clone(),
+                unattended: self.get_unattended(),
+                operation_scope: &operation_scope,
+                disabled: &disabled,
+                scoped_disabled: &scoped_disabled,
+                permissions: &self.permissions,
+            };
+            if let crate::permission_policy::PolicyDecision::Deny { output, .. } =
+                self.permission_chain().evaluate(&pctx)
+            {
+                return output;
             }
         }
 

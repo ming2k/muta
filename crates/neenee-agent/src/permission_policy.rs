@@ -99,6 +99,12 @@ impl<'a> PolicyContext<'a> {
     pub fn is_name_disabled(&self) -> bool {
         self.disabled.contains(self.tool.name()) || self.scoped_disabled.contains(self.tool.name())
     }
+
+    /// Disabled by the *user* (persisted) mask specifically? Used to word the
+    /// rejection distinctly from a hook-scoped (transient) disable.
+    pub fn is_user_disabled(&self) -> bool {
+        self.disabled.contains(self.tool.name())
+    }
 }
 
 /// One rule in the permission chain. Implementations are unit-testable in
@@ -147,15 +153,21 @@ impl PermissionChain {
 ///
 /// This is the single source of truth for policy ordering. Each entry is one
 /// of the historical gates; reordering here changes load-bearing behavior.
-#[allow(dead_code)] // wired in a follow-up; landed now so the order is reviewable.
+///
+/// The chain holds the **synchronous** gates — those that can decide from the
+/// [`PolicyContext`] alone, with no `.await`. The asynchronous gates
+/// (PreToolUse hook execution, bash-policy confirmation, ask_user parking,
+/// broker park/await) stay in `execute_tool` because they call back into the
+/// agent's async machinery; the chain runs *before* them as a fast filter,
+/// short-circuiting the calls that need no async work. See the switchover
+/// notes in `execute_tool`.
 pub fn default_chain() -> Vec<Box<dyn PermissionPolicy>> {
     vec![
-        Box::new(HookPolicy),
         Box::new(DisabledPolicy),
         Box::new(SchemaPolicy),
         Box::new(ScopeGatePolicy),
-        Box::new(BashPolicy),
-        Box::new(AskUserPolicy),
+        // BrokerPolicy does only the synchronous "already always-allowed?"
+        // fast path here; the interactive park/await stays in execute_tool.
         Box::new(BrokerPolicy),
     ]
 }
@@ -184,22 +196,34 @@ impl PermissionPolicy for HookPolicy {
     }
 }
 
-/// Gate 2: user + scoped disable masks.
+/// Gate: user + scoped disable masks. The rejection wording distinguishes a
+/// persisted user disable ("re-enable in /tools") from a transient hook-scoped
+/// disable ("temporarily out of scope"), matching the historical execute_tool
+/// messages so the model's remedy guidance is unchanged.
 pub struct DisabledPolicy;
 impl PermissionPolicy for DisabledPolicy {
     fn name(&self) -> &'static str {
         "disabled"
     }
     fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.is_name_disabled() {
-            return PolicyDecision::Deny {
-                output: ToolOutput::Text(
-                    "This tool is disabled for this session.".to_string(),
-                ),
-                collective: false,
-            };
+        if !ctx.is_name_disabled() {
+            return PolicyDecision::Pass;
         }
-        PolicyDecision::Pass
+        let message = if ctx.is_user_disabled() {
+            format!(
+                "Tool '{}' is disabled for this session. Re-enable it in the Tools modal (/tools).",
+                ctx.tool.name()
+            )
+        } else {
+            format!(
+                "Tool '{}' is temporarily out of scope for this task. Use a different tool.",
+                ctx.tool.name()
+            )
+        };
+        PolicyDecision::Deny {
+            output: ToolOutput::Text(message),
+            collective: false,
+        }
     }
 }
 
