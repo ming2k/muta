@@ -144,6 +144,7 @@ mod model_request;
 pub mod no_provider;
 pub mod orchestration;
 mod permission_store;
+mod permission_policy;
 mod pursuit_prompts;
 pub mod pursuit_state;
 pub use pursuit_state::PursuitStats;
