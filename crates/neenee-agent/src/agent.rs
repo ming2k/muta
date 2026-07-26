@@ -4101,67 +4101,135 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let (tx, mut rx) = mpsc::unbounded_channel();
-
-        let futs: Vec<_> = calls
+        // Stage-2 switchover: partition the batch into conflict-free sub-batches
+        // via declarative ToolAccesses (kimi-code model). Calls in the same
+        // sub-batch run concurrently (historical join_all behavior); sub-batches
+        // run strictly in order, so two writes to the same file — or a read and
+        // a write of the same path — never race. Non-conflicting reads still
+        // parallelize. This replaces the previous "join_all everything" which
+        // could let two edits of the same file clobber each other.
+        //
+        // accesses are computed up front from each call's resolved tool (a few
+        // HashMap lookups; negligible vs. the tool call itself). A tool that
+        // can't be resolved gets `none()` (freely parallel) — it will still
+        // produce its "not found" error inside `execute_tool`.
+        let accesses: Vec<neenee_core::ToolAccesses> = calls
             .iter()
-            .zip(call_ids.iter())
-            .map(|(call, call_id)| {
-                let tx = tx.clone();
-                let name = call.name.clone();
-                let call_id = call_id.to_string();
-                async move {
-                    let started = std::time::Instant::now();
-                    let result = self.execute_tool(call, &call_id, &tx).await;
-                    let duration_ms = started.elapsed().as_millis() as u64;
-                    // Emit ToolResult immediately through the channel so the TUI
-                    // transitions this step from Running to Completed without
-                    // waiting for sibling tools to finish. Without this, a
-                    // finished envoy task stays "Running" until the slowest
-                    // sibling in the batch completes.
-                    let output = result.to_text();
-                    let _ = tx.send(AgentEvent::ToolResult {
-                        id: call_id.clone(),
-                        name: name.clone(),
-                        output,
-                        structured: result.clone(),
-                        duration_ms,
-                    });
-                    (result, duration_ms)
-                }
-            })
+            .map(|call| self.accesses_for_call(call))
             .collect();
+        let assignment = neenee_core::tool_access::group_by_conflict(&accesses);
+        let batch_count = assignment.iter().copied().max().map(|m| m + 1).unwrap_or(0);
 
-        let all = join_all(futs);
-        tokio::pin!(all);
+        let mut results: Vec<(ToolOutput, u64)> = Vec::with_capacity(calls.len());
+        // Per-input result slots, filled as batches complete, then flattened in
+        // input order at the end (preserving the dispatcher's order invariant).
+        let mut slots: Vec<Option<(ToolOutput, u64)>> = vec![None; calls.len()];
 
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    while let Ok(event) = rx.try_recv() {
-                        on_event(event);
-                    }
-                    for (id, call) in call_ids.iter().zip(calls) {
-                        on_event(AgentEvent::ToolCancelled {
-                            id: id.clone(),
-                            name: call.name.clone(),
+        for batch in 0..batch_count {
+            // Collect this batch's (call_index) members, in input order.
+            let members: Vec<usize> = (0..calls.len()).filter(|&i| assignment[i] == batch).collect();
+            if members.is_empty() {
+                continue;
+            }
+
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let futs: Vec<_> = members
+                .iter()
+                .map(|&i| {
+                    let tx = tx.clone();
+                    let name = calls[i].name.clone();
+                    let call_id = call_ids[i].clone();
+                    let call = calls[i].clone();
+                    async move {
+                        let started = std::time::Instant::now();
+                        let result = self.execute_tool(&call, &call_id, &tx).await;
+                        let duration_ms = started.elapsed().as_millis() as u64;
+                        // Emit ToolResult immediately so the TUI transitions
+                        // this step Running→Completed without waiting for
+                        // siblings in the same batch.
+                        let output = result.to_text();
+                        let _ = tx.send(AgentEvent::ToolResult {
+                            id: call_id.clone(),
+                            name: name.clone(),
+                            output,
+                            structured: result.clone(),
+                            duration_ms,
                         });
+                        (i, result, duration_ms)
                     }
-                    return Err(HarnessError::Interrupted);
-                }
-                event = rx.recv() => {
-                    if let Some(event) = event {
-                        on_event(event);
+                })
+                .collect();
+
+            let batch_fut = join_all(futs);
+            tokio::pin!(batch_fut);
+
+            // Same event loop as before, but bounded to this one batch.
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        while let Ok(event) = rx.try_recv() {
+                            on_event(event);
+                        }
+                        // Cancel abandons the whole batch (and round): emit
+                        // ToolCancelled for every dispatched id, not just this
+                        // batch's, matching the historical whole-batch abort.
+                        for (id, call) in call_ids.iter().zip(calls) {
+                            on_event(AgentEvent::ToolCancelled {
+                                id: id.clone(),
+                                name: call.name.clone(),
+                            });
+                        }
+                        return Err(HarnessError::Interrupted);
                     }
-                }
-                results = &mut all => {
-                    while let Ok(event) = rx.try_recv() {
-                        on_event(event);
+                    event = rx.recv() => {
+                        if let Some(event) = event {
+                            on_event(event);
+                        }
                     }
-                    return Ok(results);
+                    batch_results = &mut batch_fut => {
+                        while let Ok(event) = rx.try_recv() {
+                            on_event(event);
+                        }
+                        for (i, result, duration_ms) in batch_results {
+                            slots[i] = Some((result, duration_ms));
+                        }
+                        break;
+                    }
                 }
             }
+        }
+
+        // Flatten in input order. Any slot still None means its batch was
+        // never reached (shouldn't happen outside cancel); synthesize a
+        // loop-guard placeholder to keep the contract non-panicking.
+        for slot in slots {
+            results.push(slot.unwrap_or((
+                ToolOutput::Text("[loop guard] blocked".to_string()),
+                0,
+            )));
+        }
+        Ok(results)
+    }
+
+    /// Resolve `call`'s tool (resolved → dynamic fallback) and return its
+    /// declared [`ToolAccesses`]. Used by the dispatcher to group calls into
+    /// conflict-free batches. A tool that can't be resolved yields
+    /// [`ToolAccesses::none`] (freely parallel) — it will report its own
+    /// "not found" error inside `execute_tool`; there's no point serializing
+    /// an error.
+    fn accesses_for_call(&self, call: &ToolCall) -> neenee_core::ToolAccesses {
+        let tool: Option<Arc<dyn Tool>> = self
+            .resolved_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|t| t.name() == call.name)
+            .cloned()
+            .or_else(|| self.dynamic_tools.find(&call.name));
+        match tool {
+            Some(tool) => tool.accesses(&call.arguments),
+            None => neenee_core::ToolAccesses::none(),
         }
     }
 }
