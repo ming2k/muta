@@ -56,7 +56,7 @@ pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
-    pub tool_specs: Option<&'a [Value]>,
+    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
@@ -190,11 +190,14 @@ pub fn body_with_capabilities(
             specs
                 .iter()
                 .map(|spec| {
-                    let mut spec = spec.clone();
-                    if let Some(obj) = spec.as_object_mut() {
-                        obj.insert("type".to_string(), Value::String("function".to_string()));
-                    }
-                    spec
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": spec.name,
+                            "description": spec.description,
+                            "parameters": spec.parameters,
+                        }
+                    })
                 })
                 .collect::<Vec<_>>()
         )

@@ -37,7 +37,7 @@ pub struct BodyInput<'a> {
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     /// Converted to Anthropic's `{name, description, input_schema}` shape.
-    pub tool_specs: Option<&'a [Value]>,
+    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
 }
@@ -69,18 +69,13 @@ pub fn body_with_capabilities(
             specs
                 .iter()
                 .map(|spec| {
-                    // The harness produces OpenAI-shaped function specs
-                    // ({type:"function", function:{name,description,parameters}}).
-                    // Anthropic wants {name, description, input_schema}. The
-                    // `parameters` object is already a JSON-Schema fragment
-                    // and maps verbatim.
-                    let function = &spec["function"];
+                    // The harness carries provider-neutral ToolSpecs; Anthropic
+                    // wants {name, description, input_schema}. The `parameters`
+                    // object is already a JSON-Schema fragment and maps verbatim.
                     json!({
-                        "name": function["name"],
-                        "description": function["description"],
-                        "input_schema": function.get("parameters")
-                            .cloned()
-                            .unwrap_or(json!({"type":"object","properties":{}})),
+                        "name": spec.name,
+                        "description": spec.description,
+                        "input_schema": spec.parameters.clone(),
                     })
                 })
                 .collect::<Vec<_>>()

@@ -25,7 +25,7 @@ use super::response::{TEXT_THOUGHT_SIGNATURE_META_KEY, THOUGHT_SIGNATURES_META_K
 /// Inputs to [`body`]: the prepared tool schemas in OpenAI function-spec
 /// shape, if any.
 pub struct BodyInput<'a> {
-    pub tool_specs: Option<&'a [Value]>,
+    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
     /// Stamp `generationConfig.thinkingConfig.includeThoughts`. The Google API
     /// only returns reasoning *text* when the request asks for it, and rejects
     /// the flag with HTTP 400 on models that do not think — so this MUST be
@@ -253,7 +253,7 @@ fn text_and_image_parts(
     parts
 }
 
-fn gemini_tools(tool_specs: Option<&[Value]>) -> Option<Value> {
+fn gemini_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
     let specs = tool_specs?;
     if specs.is_empty() {
         return None;
@@ -261,13 +261,10 @@ fn gemini_tools(tool_specs: Option<&[Value]>) -> Option<Value> {
     let declarations = specs
         .iter()
         .map(|spec| {
-            let function = &spec["function"];
             json!({
-                "name": function["name"],
-                "description": function["description"],
-                "parameters": function.get("parameters")
-                    .cloned()
-                    .unwrap_or(json!({"type":"object","properties":{}})),
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters.clone(),
             })
         })
         .collect::<Vec<_>>();
@@ -349,18 +346,15 @@ mod tests {
         let body = body(
             vec![Message::new(Role::User, "list files")],
             BodyInput {
-                tool_specs: Some(&[json!({
-                    "type": "function",
-                    "function": {
-                        "name": "list_dir",
-                        "description": "List files",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"path": {"type": "string"}},
-                            "required": ["path"]
-                        }
-                    }
-                })]),
+                tool_specs: Some(&[neenee_core::ToolSpec {
+                    name: "list_dir".to_string(),
+                    description: "List files".to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"]
+                    }),
+                }]),
                 include_thoughts: false,
             },
         );

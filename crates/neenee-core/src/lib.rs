@@ -80,8 +80,9 @@ pub mod skillsconfig;
 pub mod tool_registry;
 pub mod webconfig;
 pub use capability::{
-    CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints, ProviderStreamEvent,
-    ScopeTarget, Tool, VariantSelection, empty_variant_selection,
+    CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints,
+    ProviderStreamEvent, ScopeTarget, Tool, ToolSpec, VariantSelection,
+    empty_variant_selection,
 };
 pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channelauth::{ChannelAuth, LoginMethod};

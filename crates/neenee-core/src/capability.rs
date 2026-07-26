@@ -41,6 +41,33 @@ pub struct ProviderPromptHints {
 
 /// One immutable, provider-agnostic model request.
 ///
+/// A provider-neutral tool declaration. This is the canonical, vendor-agnostic
+/// shape the harness carries: adapters translate it into each provider's wire
+/// format (OpenAI `{type:"function", function:{...}}`, Anthropic
+/// `{name, description, input_schema}`, Google `functionDeclarations`, etc.).
+///
+/// Replacing the previous OpenAI-shape `serde_json::Value` canonical form
+/// removes the coupling where every adapter had to reverse-engineer the OpenAI
+/// nesting (`spec["function"]["name"]`) — adapters now read typed fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    /// The JSON Schema for the tool's parameters (a draft-07 object schema).
+    pub parameters: serde_json::Value,
+}
+
+impl ToolSpec {
+    /// Build a neutral spec from a [`Tool`]'s name/description/parameters.
+    pub fn from_tool(tool: &dyn Tool) -> Self {
+        Self {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            parameters: tool.parameters(),
+        }
+    }
+}
+
 /// Messages and tool declarations travel together so a provider never has to
 /// retain request inputs in mutable side state. This is the contract exchanged
 /// by the agent (which assembles model context) and provider adapters (which
@@ -48,11 +75,10 @@ pub struct ProviderPromptHints {
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelRequest {
     pub messages: Vec<Message>,
-    /// Tool declarations in the canonical function-spec shape produced by
-    /// [`Tool::to_openai_function`]. Provider adapters translate this neutral
-    /// harness representation into their own wire format when necessary.
+    /// Tool declarations in the provider-neutral [`ToolSpec`] shape. Provider
+    /// adapters translate these into their own wire format.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tool_specs: Vec<serde_json::Value>,
+    pub tool_specs: Vec<ToolSpec>,
 }
 
 impl ModelRequest {
@@ -68,16 +94,16 @@ impl ModelRequest {
     pub fn with_tools(messages: Vec<Message>, tools: &[Arc<dyn Tool>]) -> Self {
         Self {
             messages,
-            tool_specs: tools.iter().map(|tool| tool.to_openai_function()).collect(),
+            tool_specs: tools.iter().map(|t| ToolSpec::from_tool(t.as_ref())).collect(),
         }
     }
 
     /// Borrow tool declarations in the optional form used by request builders.
-    pub fn tool_specs(&self) -> Option<&[serde_json::Value]> {
+    pub fn tool_specs(&self) -> Option<&[ToolSpec]> {
         (!self.tool_specs.is_empty()).then_some(self.tool_specs.as_slice())
     }
 
-    pub fn into_parts(self) -> (Vec<Message>, Vec<serde_json::Value>) {
+    pub fn into_parts(self) -> (Vec<Message>, Vec<ToolSpec>) {
         (self.messages, self.tool_specs)
     }
 }

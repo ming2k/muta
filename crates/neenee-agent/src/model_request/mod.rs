@@ -113,6 +113,6 @@ mod tests {
                 .all(|message| !message.is_command_echo())
         );
         assert_eq!(request.tool_specs.len(), 1);
-        assert_eq!(request.tool_specs[0]["function"]["name"], "inspect");
+        assert_eq!(request.tool_specs[0].name, "inspect");
     }
 }

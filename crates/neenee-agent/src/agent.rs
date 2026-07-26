@@ -964,7 +964,12 @@ impl Agent {
         let tool_schema_tokens = request
             .tool_specs
             .iter()
-            .map(|spec| neenee_core::estimate_semantic_json_tokens(spec).max(0) as usize)
+            .map(|spec| {
+                // Estimate over the full spec (name + description + the JSON
+                // Schema parameters), matching the old whole-Value estimate.
+                let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
+                neenee_core::estimate_semantic_json_tokens(&val).max(0) as usize
+            })
             .sum::<usize>();
         let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
 

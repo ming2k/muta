@@ -175,7 +175,7 @@ mod tests {
     struct CannedProvider {
         reply: String,
         last_messages: Mutex<Vec<Message>>,
-        last_tool_specs: Mutex<Vec<serde_json::Value>>,
+        last_tool_specs: Mutex<Vec<neenee_core::ToolSpec>>,
     }
 
     #[async_trait]

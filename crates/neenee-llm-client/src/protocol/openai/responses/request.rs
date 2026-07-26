@@ -21,7 +21,7 @@ pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
-    pub tool_specs: Option<&'a [Value]>,
+    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
     pub reasoning_effort: Option<Effort>,
 }
 
@@ -222,31 +222,20 @@ fn message_item(role: &str, m: &Message, text_part: &str) -> Value {
 }
 
 /// Flatten the OpenAI function-spec tool shape (`{type:"function",
-/// function:{name,description,parameters}}`) into the Responses tool shape
-/// (`{type:"function", name, description, parameters, strict:false}`). Tolerant
-/// of either nesting so the shared `to_openai_function()` output works as-is.
-fn flatten_tools(tool_specs: Option<&[Value]>) -> Option<Value> {
+/// Translate provider-neutral [`ToolSpec`]s into the OpenAI Responses tool
+/// shape (`{type:"function", name, description, parameters, strict:false}`).
+fn flatten_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
     let specs = tool_specs?;
     let out: Vec<Value> = specs
         .iter()
-        .filter_map(|spec| {
-            let func = spec.get("function").unwrap_or(spec);
-            let name = func.get("name")?.as_str()?;
-            let description = func
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let parameters = func
-                .get("parameters")
-                .cloned()
-                .unwrap_or(json!({"type":"object"}));
-            Some(json!({
+        .map(|spec| {
+            json!({
                 "type": "function",
-                "name": name,
-                "description": description,
-                "parameters": parameters,
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": spec.parameters.clone(),
                 "strict": false,
-            }))
+            })
         })
         .collect();
     if out.is_empty() {
