@@ -33,6 +33,10 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 tracing = "0.1"
 inventory = "0.3"
+# Proc-macro support for the tool-schema derive (neenee-tool-derive).
+syn = { version = "2", features = ["derive"] }
+quote = "1"
+proc-macro2 = "1"
 rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

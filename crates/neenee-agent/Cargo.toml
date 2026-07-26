@@ -11,6 +11,7 @@ neenee-llm-client = { path = "../neenee-llm-client" }
 neenee-persistence = { path = "../neenee-persistence" }
 neenee-providers = { path = "../neenee-providers" }
 neenee-skills = { path = "../neenee-skills" }
+neenee-tool-derive = { path = "../neenee-tool-derive" }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }

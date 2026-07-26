@@ -1465,6 +1465,7 @@ dependencies = [
  "neenee-persistence",
  "neenee-providers",
  "neenee-skills",
+ "neenee-tool-derive",
  "regex",
  "reqwest",
  "serde",
@@ -1628,6 +1629,16 @@ dependencies = [
  "uuid",
  "walkdir",
  "yaml_serde",
+]
+
+[[package]]
+name = "neenee-tool-derive"
+version = "0.20.3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn",
 ]
 
 [[package]]

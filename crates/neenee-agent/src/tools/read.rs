@@ -1,6 +1,21 @@
 use async_trait::async_trait;
 use neenee_core::Tool;
+use neenee_tool_derive::ToolSchema;
 use serde_json::json;
+
+/// Typed parameters for [`ReadTextTool`]. Deriving `ToolSchema` generates the
+/// JSON Schema the model sees, eliminating hand-written-schema drift: the
+/// schema and this struct can never disagree.
+#[allow(dead_code)] // fields drive the derived schema; call parsing migrates next
+#[derive(ToolSchema)]
+struct ReadArgs {
+    #[tool(desc = "Absolute or relative path to the file")]
+    path: String,
+    #[tool(desc = "1-based line to start reading from (default 1)")]
+    offset: Option<i64>,
+    #[tool(desc = "Maximum number of lines to read (default: to EOF / until the byte budget is hit)")]
+    limit: Option<i64>,
+}
 
 /// Read a text file from disk.
 pub struct ReadTextTool;
@@ -21,15 +36,9 @@ impl Tool for ReadTextTool {
          - Do not use this tool for directories (use `list_dir`) or binary files."
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Absolute or relative path to the file" },
-                "offset": { "type": "integer", "description": "1-based line to start reading from (default 1)" },
-                "limit": { "type": "integer", "description": "Maximum number of lines to read (default: to EOF / until the byte budget is hit)" }
-            },
-            "required": ["path"]
-        })
+        // Schema derived from the typed `ReadArgs` struct — no hand-written
+        // JSON to drift. See `ReadArgs` / `neenee_tool_derive::ToolSchema`.
+        ReadArgs::parameters_schema()
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
