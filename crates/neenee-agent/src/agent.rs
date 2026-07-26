@@ -153,7 +153,7 @@ pub struct Agent {
     /// read this, so re-resolving it on a model/selection switch makes *both* the
     /// schema and the executed implementation track the chosen variant. Held
     /// behind a `RwLock` because it is swapped wholesale on selection change.
-    resolved_tools: std::sync::RwLock<Vec<Arc<dyn Tool>>>,
+    resolved_tools: Arc<std::sync::RwLock<Vec<Arc<dyn Tool>>>>,
     /// Tools published by dynamically changing external sources. MCP and
     /// future connectors replace their own named snapshots through the core
     /// [`DynamicToolSink`] port; the agent owns synchronization, provenance,
@@ -175,6 +175,11 @@ pub struct Agent {
     /// name-clash policy (builtin > user > mcp) are wired now. See
     /// [`crate::tool_manager`].
     user_tools: Arc<std::sync::RwLock<Vec<Arc<dyn neenee_core::Tool>>>>,
+    /// The unified three-bucket tool manager (kimi-code port). The single
+    /// authority for classification, per-turn schema (`loop_tools`), and
+    /// dispatch lookup. Shares storage Arcs with the agent's own fields so
+    /// both see the same live state. See [`crate::tool_manager`].
+    tool_manager: crate::tool_manager::ToolManager,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
     /// with the concrete `todo` / `todo_update` tools installed by
@@ -752,20 +757,37 @@ impl Agent {
         // the model's `[tool_variants]` selection is known and on every switch.
         let agent_selection = neenee_core::ToolSelection::unrestricted();
         let seed_model = neenee_core::resolve_model(&provider.model());
-        let resolved_tools = std::sync::RwLock::new(toolset.resolve_for(
+        let resolved_tools = Arc::new(std::sync::RwLock::new(toolset.resolve_for(
             &seed_model,
             &agent_selection,
             &neenee_core::ToolSelection::unrestricted(),
-        ));
+        )));
+        let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
+        let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        let scoped_disabled_tools =
+            Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
+        let user_tools = Arc::new(std::sync::RwLock::new(Vec::new()));
+        // The unified ToolManager view (kimi-code port) owns the single
+        // authority for classification, per-turn schema, and dispatch lookup.
+        // It shares the storage Arcs with the agent so both reach the same
+        // live state. See `tool_manager`.
+        let tool_manager = crate::tool_manager::ToolManager::new(
+            Arc::clone(&resolved_tools),
+            Arc::clone(&dynamic_tools),
+            Arc::clone(&user_tools),
+            Arc::clone(&disabled_tools),
+            Arc::clone(&scoped_disabled_tools),
+        );
 
         Self {
             provider,
             toolset,
             resolved_tools,
-            dynamic_tools: Arc::new(crate::dynamic_tools::DynamicToolRegistry::default()),
-            disabled_tools: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            scoped_disabled_tools: Arc::new(std::sync::Mutex::new(ScopedToolDisable::default())),
-            user_tools: Arc::new(std::sync::RwLock::new(Vec::new())),
+            dynamic_tools,
+            disabled_tools,
+            scoped_disabled_tools,
+            user_tools,
+            tool_manager,
             todos,
             round_counter,
             pursuit_state,
@@ -868,64 +890,24 @@ impl Agent {
     /// Every currently installed tool, including dynamic sources. Static
     /// capabilities win name collisions; dynamic source order is deterministic.
     pub fn installed_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // Three-bucket classification (kimi-code ToolManager port): builtin
-        // (resolved static) > user (SDK/RPC) > mcp (dynamic), with name-clash
-        // priority in that order. A static tool named `x` shadows a user/mcp
-        // tool named `x`; a user tool shadows an mcp one.
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
-
-        // 1. builtin (resolved static).
-        for tool in self
-            .resolved_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-        {
-            if seen.insert(tool.name().to_string()) {
-                tools.push(tool);
-            }
-        }
-
-        // 2. user (SDK/RPC-injected).
-        for tool in self
-            .user_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-        {
-            if seen.insert(tool.name().to_string()) {
-                tools.push(tool);
-            }
-        }
-
-        // 3. mcp (dynamic snapshot).
-        for entry in self.dynamic_tools.snapshot() {
-            if seen.insert(entry.tool.name().to_string()) {
-                tools.push(entry.tool);
-            }
-        }
-
-        tools
+        // Delegate to the unified ToolManager — the single authority for the
+        // three-bucket classification (builtin/user/mcp) and name-clash priority.
+        self.tool_manager
+            .installed()
+            .into_iter()
+            .map(|s| s.tool)
+            .collect()
     }
 
-    /// Register an SDK/RPC-injected tool into the `user` bucket. Future
-    /// capability: nothing populates this yet, but the registration path is
-    /// stable so the three-way classification holds from day one.
-    #[allow(dead_code)]
-    pub(crate) fn register_user_tool(&self, tool: Arc<dyn neenee_core::Tool>) {
-        self.user_tools
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(tool);
+    /// The unified tool manager (kimi-code port). Exposed so the dispatcher /
+    /// model-request assembly can call its authoritative methods directly.
+    pub(crate) fn tool_manager(&self) -> &crate::tool_manager::ToolManager {
+        &self.tool_manager
     }
 
-    /// The permission policy chain for this agent. Built fresh per call (cheap:
-    /// the policies are zero-sized types; only the `Vec` allocation matters).
-    /// The chain holds the synchronous permission gates; the asynchronous
-    /// gates (hook, bash-policy, ask_user, broker park) stay in `execute_tool`.
+    /// The permission policy chain for this agent. Built fresh per call.
+    /// Holds the synchronous permission gates; the asynchronous gates (hook,
+    /// bash-policy, ask_user, broker park) stay in `execute_tool`.
     pub(crate) fn permission_chain(&self) -> crate::permission_policy::PermissionChain {
         crate::permission_policy::PermissionChain::new(
             crate::permission_policy::default_chain(),
@@ -3872,16 +3854,8 @@ impl Agent {
         call_id: &str,
         event_tx: &mpsc::UnboundedSender<AgentEvent>,
     ) -> ToolOutput {
-        let tool: Arc<dyn Tool> = match self
-            .resolved_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|t| t.name() == call.name)
-            .cloned()
-            .or_else(|| self.dynamic_tools.find(&call.name))
-        {
-            Some(t) => t,
+        let tool: Arc<dyn Tool> = match self.tool_manager.find(&call.name) {
+            Some(sourced) => sourced.tool,
             None => {
                 return ToolOutput::Error {
                     message: format!("Tool '{}' not found", call.name),
