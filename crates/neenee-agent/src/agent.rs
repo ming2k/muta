@@ -170,6 +170,11 @@ pub struct Agent {
     /// reaches the session store. Auto-restored at the configured
     /// [`neenee_core::RestorePoint`]. See [`ScopedToolDisable`].
     scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
+    /// SDK/RPC-injected tools (the `user` bucket). Empty today; the bucket
+    /// exists so the three-way classification (builtin/user/mcp) and the
+    /// name-clash policy (builtin > user > mcp) are wired now. See
+    /// [`crate::tool_manager`].
+    user_tools: Arc<std::sync::RwLock<Vec<Arc<dyn neenee_core::Tool>>>>,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
     /// with the concrete `todo` / `todo_update` tools installed by
@@ -760,6 +765,7 @@ impl Agent {
             dynamic_tools: Arc::new(crate::dynamic_tools::DynamicToolRegistry::default()),
             disabled_tools: Arc::new(std::sync::Mutex::new(HashSet::new())),
             scoped_disabled_tools: Arc::new(std::sync::Mutex::new(ScopedToolDisable::default())),
+            user_tools: Arc::new(std::sync::RwLock::new(Vec::new())),
             todos,
             round_counter,
             pursuit_state,
@@ -862,20 +868,58 @@ impl Agent {
     /// Every currently installed tool, including dynamic sources. Static
     /// capabilities win name collisions; dynamic source order is deterministic.
     pub fn installed_tools(&self) -> Vec<Arc<dyn Tool>> {
-        let mut tools = self
+        // Three-bucket classification (kimi-code ToolManager port): builtin
+        // (resolved static) > user (SDK/RPC) > mcp (dynamic), with name-clash
+        // priority in that order. A static tool named `x` shadows a user/mcp
+        // tool named `x`; a user tool shadows an mcp one.
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+
+        // 1. builtin (resolved static).
+        for tool in self
             .resolved_tools
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let mut seen: HashSet<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
-        tools.extend(
-            self.dynamic_tools
-                .snapshot()
-                .into_iter()
-                .filter(|entry| seen.insert(entry.tool.name().to_string()))
-                .map(|entry| entry.tool),
-        );
+            .iter()
+            .cloned()
+        {
+            if seen.insert(tool.name().to_string()) {
+                tools.push(tool);
+            }
+        }
+
+        // 2. user (SDK/RPC-injected).
+        for tool in self
+            .user_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+        {
+            if seen.insert(tool.name().to_string()) {
+                tools.push(tool);
+            }
+        }
+
+        // 3. mcp (dynamic snapshot).
+        for entry in self.dynamic_tools.snapshot() {
+            if seen.insert(entry.tool.name().to_string()) {
+                tools.push(entry.tool);
+            }
+        }
+
         tools
+    }
+
+    /// Register an SDK/RPC-injected tool into the `user` bucket. Future
+    /// capability: nothing populates this yet, but the registration path is
+    /// stable so the three-way classification holds from day one.
+    #[allow(dead_code)]
+    pub(crate) fn register_user_tool(&self, tool: Arc<dyn neenee_core::Tool>) {
+        self.user_tools
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(tool);
     }
 
     /// Snapshot the live state available to declarative system-prompt policy.
@@ -2074,38 +2118,57 @@ impl Agent {
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
     /// (`builtin`, `envoy`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<neenee_core::ToolInfo> {
+        // Classification mirrors installed_tools()'s three buckets, with the
+        // extra UI affordance that `envoy` is labeled distinctly from other
+        // builtins. The source label is display-only; dispatch treats all
+        // three buckets uniformly via name-clash priority (builtin > user > mcp).
         let disabled = self
             .disabled_tools
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let envoy = ["envoy"];
-        let static_tools: Vec<Arc<dyn Tool>> = self
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = Vec::new();
+
+        // 1. builtin (resolved static), with envoy broken out for display.
+        for tool in self
             .resolved_tools
             .read()
             .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let mut seen: HashSet<String> = static_tools
             .iter()
-            .map(|tool| tool.name().to_string())
-            .collect();
-        let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = static_tools
-            .into_iter()
-            .map(|tool| {
+            .cloned()
+        {
+            if seen.insert(tool.name().to_string()) {
                 let source = if envoy.contains(&tool.name()) {
                     "envoy".to_string()
                 } else {
                     "builtin".to_string()
                 };
-                (source, tool)
-            })
-            .collect();
-        sourced_tools.extend(
-            self.dynamic_tools
-                .snapshot()
-                .into_iter()
-                .filter(|entry| seen.insert(entry.tool.name().to_string()))
-                .map(|entry| (entry.source, entry.tool)),
-        );
+                sourced_tools.push((source, tool));
+            }
+        }
+
+        // 2. user (SDK/RPC-injected).
+        for tool in self
+            .user_tools
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+        {
+            if seen.insert(tool.name().to_string()) {
+                sourced_tools.push(("user".to_string(), tool));
+            }
+        }
+
+        // 3. mcp (dynamic snapshot).
+        for entry in self.dynamic_tools.snapshot() {
+            if seen.insert(entry.tool.name().to_string()) {
+                sourced_tools.push((entry.source, entry.tool));
+            }
+        }
+
         let mut infos: Vec<neenee_core::ToolInfo> = sourced_tools
             .into_iter()
             .map(|(source, tool)| {

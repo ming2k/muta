@@ -220,7 +220,7 @@ pub fn decision_to_prepare(
     call_id: String,
     call: ToolCall,
     tool: Arc<dyn neenee_core::Tool>,
-    scope_target: ScopeTarget,
+    _scope_target: ScopeTarget,
     arguments: &str,
 ) -> PreparedCall {
     match decision {
