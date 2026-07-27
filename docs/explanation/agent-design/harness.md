@@ -174,9 +174,11 @@ These are execution bounds, not a security sandbox. Tool permission policy is
 a separate future layer.
 
 Write capability is enforced per-agent through a `WriteScope` boundary
-(ADR-0028): the main agent is unrestricted (the permission broker is still the
-interactive layer inside it); an envoy carries a scope resolved from its
-profile, and a write tool whose target is outside that scope is blocked. All
+(ADR-0028, softened by ADR-0084): the main agent is unrestricted (the
+permission broker is still the interactive layer inside it); an envoy carries
+a scope resolved from its profile. A write tool whose target is outside that
+scope is *routed to the broker* for the user to decide when attended, and
+hard-blocked only under unattended, where no human can answer the prompt. All
 built-in envoy profiles carry a `Read` ceiling today, so this gate is
 inactive in practice but available to future scoped-write roles. MCP servers
 with `read_only = false` declare `Write` and are subject to the same gate when

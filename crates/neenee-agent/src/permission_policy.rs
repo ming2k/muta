@@ -35,7 +35,9 @@
 //! 3. **`Reject` is collective** — one reject rejects the whole pending batch
 //!    (owned by the permission store's `reply`, keyed on a reject decision).
 //! 4. **`unattended` bypasses interactive policies only** (broker, bash-confirm,
-//!    ask-user), never the hook or scope gate.
+//!    ask-user), never the hook. The scope gate *reads* `unattended` (to decide
+//!    whether an out-of-scope call can be elevated by the user or must be
+//!    blocked), but it never opens an interactive modal of its own.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
 //!    failures.
 
@@ -257,7 +259,23 @@ impl PermissionPolicy for SchemaPolicy {
     }
 }
 
-/// Gate 4: operation-scope gate (ADR-0028). Hard capability limit before broker.
+/// Gate 4: operation-scope gate (ADR-0028). A *soft* capability limit before
+/// the broker: the right to decide out-of-scope calls is handed to the user.
+///
+/// A call whose [`ScopeTarget`] falls outside the agent's granted
+/// [`OperationScope`] is not hard-blocked. Instead:
+/// - **Attended** (a human is reachable, `ctx.unattended == false`) → `Pass`, so
+///   the call falls through to the next gate — the [`BrokerPolicy`], which
+///   surfaces the standard approve / always-allow / reject prompt. The user, not
+///   a builtin limit, decides whether the elevation is granted.
+/// - **Unattended** (no human reachable, `ctx.unattended == true`) → hard `Deny`.
+///   With no user to answer a prompt, blocking outright is the only safe
+///   resolution; auto-allowing would remove the safety floor entirely. The
+///   message is a `ToolOutput::Text` (not `PermissionDenied`) so the model can
+///   retry with a different path, preserving the pre-softening retry semantics.
+///
+/// A target that *is* inside scope, or a tool with `ScopeTarget::Unspecified`
+/// (no locatable target), always `Pass`es — the broker then applies as usual.
 pub struct ScopeGatePolicy;
 #[async_trait]
 impl PermissionPolicy for ScopeGatePolicy {
@@ -269,14 +287,36 @@ impl PermissionPolicy for ScopeGatePolicy {
             return PolicyDecision::Pass;
         }
         if ctx.operation_scope.allows(&ctx.scope_target) {
-            PolicyDecision::Pass
-        } else {
+            return PolicyDecision::Pass;
+        }
+        // Out of scope. Attended → hand the decision to the user (the broker);
+        // unattended → block outright, since no human can answer an elevation.
+        if ctx.unattended {
             PolicyDecision::Deny {
                 output: ToolOutput::Text(format!(
-                    "[operation scope] Tool '{}' is blocked outside its granted scope.",
-                    ctx.call_name
+                    "[operation scope] Tool '{}' targets '{}' outside its granted scope, and no \
+                     user is reachable to approve the elevation. Use a path or command inside the \
+                     granted scope.",
+                    ctx.call_name,
+                    ScopeTargetDisplay(&ctx.scope_target)
                 )),
             }
+        } else {
+            PolicyDecision::Pass
+        }
+    }
+}
+
+/// Tiny helper to render a [`ScopeTarget`] for denial messages without forcing
+/// a `Display` impl onto the core type.
+struct ScopeTargetDisplay<'a>(&'a ScopeTarget);
+
+impl std::fmt::Display for ScopeTargetDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            ScopeTarget::Path(p) => write!(f, "path {}", p.display()),
+            ScopeTarget::Command(c) => write!(f, "command {:?}", c),
+            ScopeTarget::Unspecified => f.write_str("no target"),
         }
     }
 }
@@ -492,7 +532,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_blocks() {
+    async fn scope_gate_unattended_blocks_out_of_scope() {
+        // No user reachable → an out-of-scope call is hard-denied (safety floor).
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: true,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            true, // unattended
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        assert!(matches!(
+            ScopeGatePolicy.evaluate(&c).await,
+            PolicyDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn scope_gate_attended_hands_out_of_scope_to_user() {
+        // A human is reachable → the gate passes; the broker (next gate) asks.
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -512,7 +587,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            false,
+            false, // attended
             op.clone(),
             disabled.clone(),
             scoped.clone(),
@@ -520,7 +595,41 @@ mod tests {
         );
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Deny { .. }
+            PolicyDecision::Pass
+        ));
+    }
+
+    #[tokio::test]
+    async fn scope_gate_in_scope_passes_regardless_of_unattended() {
+        // Inside the granted scope → always passes (broker applies as usual).
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/home/user/notes.md")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: true,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/home/user/notes.md")),
+            true,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        assert!(matches!(
+            ScopeGatePolicy.evaluate(&c).await,
+            PolicyDecision::Pass
         ));
     }
 
@@ -625,5 +734,78 @@ mod tests {
         let c = pctx(&tool, "read_text", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(ScopeGatePolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
+    }
+
+    #[tokio::test]
+    async fn chain_out_of_scope_attended_reaches_broker() {
+        // The behaviour the soft gate exists for: an attended out-of-scope call
+        // is not hard-blocked — it flows scope-gate (Pass) → broker (Ask), so the
+        // user, not a builtin limit, decides the elevation.
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            false, // attended
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        assert!(matches!(
+            chain.evaluate(&c).await,
+            PolicyDecision::Ask { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn chain_out_of_scope_unattended_blocks() {
+        // No human → the soft gate must still block out-of-scope calls; it never
+        // reaches a broker that would silently auto-approve under unattended.
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: true,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            true, // unattended
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        assert!(matches!(
+            chain.evaluate(&c).await,
+            PolicyDecision::Deny { .. }
+        ));
     }
 }

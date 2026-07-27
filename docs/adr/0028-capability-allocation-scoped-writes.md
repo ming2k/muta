@@ -1,6 +1,6 @@
 # 0028. Capability allocation: scoped filesystem writes (`WriteScope`)
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0084
 - **Date:** 2026-06-25
 
 ## Context

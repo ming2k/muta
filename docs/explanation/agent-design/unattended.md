@@ -64,6 +64,10 @@ Two things follow from where this check sits:
   is simply irrelevant. Unattended is the broader dial; `/permissions` is the
   narrow, per-tool one.
 
+Under unattended the write-scope gate is also load-bearing in a second way: an
+out-of-scope write cannot be elevated (there is no human to answer the broker's
+prompt), so the gate blocks it outright before the broker ever sees it.
+
 ## Reclaiming ask_user and interactive stdin
 
 The broker gate covers side-effecting tools, but two more surfaces can also stop
@@ -100,9 +104,10 @@ Three neighbouring ideas that are easy to mistake for unattended:
   every side-effecting tool at once, off again with a single toggle. A session
   that wants a permanent "always allow `bash`" uses the allowlist; one that
   wants "don't bother me for the rest of this task" uses unattended.
-- **The `WriteScope` boundary** is a *hard capability limit*, not a prompt. A
-  write tool outside the agent's scope is blocked outright — there is no modal
-  to suppress, so unattended does not touch it. See
+- **The `WriteScope` boundary** is a *soft* capability limit. A write tool
+  outside the agent's scope is routed to the permission broker so an attended
+  user can approve the elevation (or reject it); it is blocked outright only
+  under unattended, where no human can answer the prompt. See
   [Rounds and turns](rounds-and-turns.md).
 - **Headless rejection** is the opposite posture. The headless entry point
   *automatically rejects* write permissions rather than suppressing the prompt.

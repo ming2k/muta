@@ -197,9 +197,11 @@ paths — and any future tool source — pass through identical checks:
 1. **Lookup.** An unknown name returns an error *result*, not an abort.
    The model sees the error and can recover; a typo is not a
    round-ending failure.
-2. **Write-scope gate.** A per-agent `WriteScope` boundary blocks write tools
+2. **Write-scope gate.** A per-agent `WriteScope` boundary filters write tools
    whose target is outside the agent's granted paths — the main agent is
-   unrestricted, an envoy is scoped by its profile. See
+   unrestricted, an envoy is scoped by its profile. In-scope calls pass; an
+   out-of-scope call is routed to the broker for the user to approve (or block
+   outright under unattended, where no human can answer). See
    [ADR-0028](../../adr/0028-capability-allocation-scoped-writes.md).
 3. **Permission broker.** Write-capable calls are authorized against a
    scoped rule set. A cached *always* rule skips the prompt; otherwise

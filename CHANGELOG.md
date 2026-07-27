@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Write/operation-scope gate is soft when attended.** An out-of-scope tool
+  call is no longer blocked outright when a user is reachable; it falls
+  through to the permission broker for the operator to approve / always-allow /
+  reject — handing the right to decide back to the user. It still hard-denies
+  under unattended (no human to answer), preserving the safety floor for
+  autonomous runs. See [ADR-0084](docs/adr/0084-soft-write-scope-gate.md)
+  (supersedes ADR-0028). Changed in `crates/neenee-agent/src/permission_policy.rs`
+  (`ScopeGatePolicy`); docs updated in
+  `docs/explanation/agent-design/{unattended,rounds-and-turns,harness}.md` and
+  `docs/reference/glossary.md`.
+
 ### Removed
 
 ## [0.21.1] - 2026-07-27
