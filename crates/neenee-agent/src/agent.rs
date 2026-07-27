@@ -3605,15 +3605,7 @@ impl Agent {
             crate::bash_policy::BashPolicyAction::Allow => None,
             crate::bash_policy::BashPolicyAction::Deny => {
                 tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
-                Some(ToolOutput::Error {
-                    message: format!("[bash policy] Blocked dangerous command: {command}"),
-                    detail: Some(format!(
-                        "Rule: {}{}\nReason: {}\nThis command was not executed.",
-                        decision.name,
-                        if decision.builtin { " (built-in)" } else { "" },
-                        decision.reason,
-                    )),
-                })
+                Some(decision.blocked_output(command))
             }
             crate::bash_policy::BashPolicyAction::Confirm => {
                 if self.get_unattended() {
@@ -3626,17 +3618,7 @@ impl Agent {
                             );
                             None
                         }
-                        _ => Some(ToolOutput::Error {
-                            message: format!(
-                                "[bash policy] Dangerous command requires confirmation but session is unattended: {command}"
-                            ),
-                            detail: Some(format!(
-                                "Rule: {}{}\nReason: {}\nThis command was not executed.",
-                                decision.name,
-                                if decision.builtin { " (built-in)" } else { "" },
-                                decision.reason,
-                            )),
-                        }),
+                        _ => Some(decision.unattended_confirm_output(command)),
                     };
                 }
 
@@ -4359,32 +4341,14 @@ impl crate::permission_policy::PermissionContext for Agent {
             .clone();
         let decision = policy.evaluate(command)?;
         match decision.action {
-            crate::bash_policy::BashPolicyAction::Deny => Some(neenee_core::ToolOutput::Error {
-                message: format!("[bash policy] Blocked dangerous command: {command}"),
-                detail: Some(format!(
-                    "Rule: {}{}\nReason: {}\nThis command was not executed.",
-                    decision.name,
-                    if decision.builtin { " (built-in)" } else { "" },
-                    decision.reason,
-                )),
-            }),
+            crate::bash_policy::BashPolicyAction::Deny => Some(decision.blocked_output(command)),
             crate::bash_policy::BashPolicyAction::Confirm => {
                 // Only the unattended resolution belongs here; non-unattended
                 // Confirm needs the event channel, handled in execute_tool.
                 if self.get_unattended() {
                     match policy.unattended_confirm_action() {
                         crate::bash_policy::BashPolicyAction::Allow => None,
-                        _ => Some(neenee_core::ToolOutput::Error {
-                            message: format!(
-                                "[bash policy] Dangerous command requires confirmation but session is unattended: {command}"
-                            ),
-                            detail: Some(format!(
-                                "Rule: {}{}\nReason: {}\nThis command was not executed.",
-                                decision.name,
-                                if decision.builtin { " (built-in)" } else { "" },
-                                decision.reason,
-                            )),
-                        }),
+                        _ => Some(decision.unattended_confirm_output(command)),
                     }
                 } else {
                     // Needs interactive confirm: signal "no decision here" so
@@ -4398,9 +4362,5 @@ impl crate::permission_policy::PermissionContext for Agent {
 
     fn permissions(&self) -> &crate::permission_store::PermissionStore {
         &self.permissions
-    }
-
-    fn unattended(&self) -> bool {
-        self.get_unattended()
     }
 }

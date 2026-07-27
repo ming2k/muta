@@ -5,6 +5,41 @@
 //! must not silently authorize destructive commands like `git reset --hard`.
 //! Built-in dangerous-command rules live in code; configuration only supplies
 //! user overrides/additions.
+//!
+//! ## `rm` philosophy
+//!
+//! Recursive deletion is allowed *inside the current working directory* and
+//! refused only where it can escape it. The built-in rules therefore split
+//! into three tiers:
+//!
+//! - **Deny (hard floor):** recursive `rm` of `/`, the home directory, or a
+//!   system directory (`/etc`, `/usr`, ...). These are catastrophic and a user
+//!   `allow` rule cannot unlock them unless `allow_user_override_builtin_deny`
+//!   is set.
+//! - **Confirm:** recursive `rm` of any other absolute path (e.g. `/var/db/x`)
+//!   or a parent-traversal target (e.g. `../sibling`). The command must leave
+//!   the project, so a human should glance at it. This still degrades to a deny
+//!   when unattended.
+//! - **Allow (fall through to the normal permission broker):** everything
+//!   else, i.e. recursive `rm` of a relative path inside the cwd such as
+//!   `rm -rf target/` or `rm -f build.log`, plus the OS scratch directory
+//!   `/tmp` (cleaning it needs no confirmation, but a built-in deny still
+//!   wins over it).
+//!
+//! The matchers require a real path token after the flags, so a quoted
+//! substring like `"rm -rf"` inside another command (e.g. an `rg` pattern or a
+//! heredoc body) does not trip the rules.
+//!
+//! ## Scope: a safety net, not a sandbox
+//!
+//! These rules pattern-match the raw command string. A determined actor can
+//! bypass them through indirection the regex cannot see: command substitution
+//! `$(...)`, interpreters (`python -c "os.system('...')"`), env-var tricks, or
+//! any tool that itself shells out. The gate catches *routine* destructive
+//! commands a model reaches for directly (`rm -rf /`, `git reset --hard`); it
+//! is **not** a capability boundary. The real filesystem/network boundary is
+//! the envoy `OperationScope` (scope-gate, gate 4), applied per-call
+//! independently of command text. Treat the bash policy as a lint, not a wall.
 
 use neenee_persistence::config::{
     BashPolicyActionConfig, BashPolicyConfig, BashPolicyMatcherConfig, BashPolicyRuleConfig,
@@ -47,6 +82,42 @@ pub(crate) struct BashPolicyMatch {
     pub(crate) name: String,
     pub(crate) reason: String,
     pub(crate) builtin: bool,
+}
+
+impl BashPolicyMatch {
+    /// The shared `Rule: … / Reason: … / This command was not executed.`
+    /// detail block appended to every policy refusal. One source of truth so
+    /// the interactive and non-interactive call paths cannot drift.
+    fn detail(&self) -> String {
+        format!(
+            "Rule: {}{}\nReason: {}\nThis command was not executed.",
+            self.name,
+            if self.builtin { " (built-in)" } else { "" },
+            self.reason,
+        )
+    }
+
+    /// A hard refusal (built-in/user `Deny`). Same wording in the interactive
+    /// full check and the chain's non-interactive check.
+    pub(crate) fn blocked_output(&self, command: &str) -> neenee_core::ToolOutput {
+        neenee_core::ToolOutput::Error {
+            message: format!("[bash policy] Blocked dangerous command: {command}"),
+            detail: Some(self.detail()),
+        }
+    }
+
+    /// A `Confirm` that could not reach a human because the session is
+    /// unattended (and `unattended_confirm` resolves to deny). Distinct
+    /// headline from [`Self::blocked_output`]; shared detail.
+    pub(crate) fn unattended_confirm_output(&self, command: &str) -> neenee_core::ToolOutput {
+        neenee_core::ToolOutput::Error {
+            message: format!(
+                "[bash policy] Dangerous command requires confirmation but session is \
+                 unattended: {command}"
+            ),
+            detail: Some(self.detail()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +177,7 @@ impl BashPolicy {
         let user_match = first_match(&self.user_rules, command);
         let builtin_deny = first_match(&builtin_deny_rules(), command);
         let builtin_confirm = first_match(&builtin_confirm_rules(), command);
+        let builtin_allow = first_match(&builtin_allow_rules(), command);
 
         if let Some(user) = user_match {
             if matches!(
@@ -121,9 +193,18 @@ impl BashPolicy {
             }
         }
 
-        builtin_deny
-            .or(builtin_confirm)
-            .map(CompiledRule::into_match)
+        // Built-in deny is the hard floor and wins over every allow.
+        if let Some(deny) = builtin_deny {
+            return Some(deny.into_match());
+        }
+
+        // A built-in allow quiets a built-in confirm for genuinely safe targets
+        // (e.g. the OS scratch directory), so an unattended agent is not blocked.
+        if builtin_allow.is_some() {
+            return None;
+        }
+
+        builtin_confirm.map(CompiledRule::into_match)
     }
 
     pub(crate) fn unattended_confirm_action(&self) -> BashPolicyAction {
@@ -260,10 +341,22 @@ fn builtin_deny_rules() -> Vec<CompiledRule> {
             "dd writing to /dev devices can irreversibly destroy disks.",
         ),
         CompiledRule::builtin(
-            "remove root directory",
-            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*[rf][^;&|]*[rf][^;&|]*\s+(?:--\s+)?/(?:\s|$)",
+            "wipe filesystem root",
+            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*r[^;&|]*\s+(?:--\s+)?/\*?(?:\s|$)",
             Deny,
-            "rm -rf / would recursively delete the filesystem root.",
+            "Recursive rm of / destroys the filesystem root.",
+        ),
+        CompiledRule::builtin(
+            "wipe home directory",
+            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*r[^;&|]*\s+(?:--\s+)?(?:~|\$HOME)(?:/|\s|$)",
+            Deny,
+            "Recursive rm of the home directory destroys the user's files.",
+        ),
+        CompiledRule::builtin(
+            "wipe system directory",
+            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*r[^;&|]*\s+(?:--\s+)?/(?:etc|usr|var|bin|sbin|lib|lib64|boot|proc|sys|dev|root|opt|mnt|media|srv|run)\b",
+            Deny,
+            "Recursive rm of a system directory can break the OS install.",
         ),
     ]
 }
@@ -302,10 +395,10 @@ fn builtin_confirm_rules() -> Vec<CompiledRule> {
             "git restore can discard local working tree changes.",
         ),
         CompiledRule::builtin(
-            "recursive force remove",
-            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*[rf][^;&|]*[rf][^;&|]*(?:\s|$)",
+            "recursive rm outside cwd",
+            r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*r[^;&|]*(?:\s--\s+|\s+(?:-[^\s;&|]+\s+)*)(?:/|\.\.)",
             Confirm,
-            "rm -rf recursively deletes files.",
+            "Recursive rm of an absolute path or parent directory leaves the current working directory. Remove a relative path inside the project instead, or add a per-project allow rule.",
         ),
         CompiledRule::builtin(
             "find delete",
@@ -370,6 +463,20 @@ fn builtin_confirm_rules() -> Vec<CompiledRule> {
     ]
 }
 
+/// Built-in `allow` rules. These never bypass a built-in `deny` (a recursive
+/// `rm` of `/` still cannot run); they only quiet a built-in `confirm`, so a
+/// genuinely safe target like the OS scratch directory does not block an
+/// unattended agent. A user `deny` rule still wins over everything.
+fn builtin_allow_rules() -> Vec<CompiledRule> {
+    use BashPolicyAction::Allow;
+    vec![CompiledRule::builtin(
+        "recursive rm of os scratch",
+        r"(?i)(^|[;&|()\s])(?:sudo\s+)?rm\s+-[^;&|]*r[^;&|]*\s+(?:--\s+)?/tmp(?:/|\s|$)",
+        Allow,
+        "Recursive rm inside /tmp cleans the OS scratch directory.",
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +497,74 @@ mod tests {
         let policy = BashPolicy::default();
         let decision = policy.evaluate("sudo rm -rf /").unwrap();
         assert_eq!(decision.action, BashPolicyAction::Deny);
+        assert_eq!(decision.name, "wipe filesystem root");
+    }
+
+    #[test]
+    fn recursive_rm_allows_relative_path_in_cwd() {
+        // The core ask: `rm` of files in the current dir is allowed and falls
+        // through to the normal permission broker, never the bash policy.
+        let policy = BashPolicy::default();
+        assert!(policy.evaluate("rm -rf target/").is_none());
+        assert!(policy.evaluate("rm -f build.log").is_none());
+        assert!(policy.evaluate("rm -rf node_modules dist").is_none());
+        assert!(policy.evaluate("rm stale.tmp").is_none());
+        assert!(policy.evaluate("rm -rf ./out").is_none());
+    }
+
+    #[test]
+    fn recursive_rm_confirms_absolute_path_outside_cwd() {
+        let policy = BashPolicy::default();
+        let decision = policy.evaluate("rm -rf /home/user/repo").unwrap();
+        assert_eq!(decision.action, BashPolicyAction::Confirm);
+        assert_eq!(decision.name, "recursive rm outside cwd");
+    }
+
+    #[test]
+    fn recursive_rm_allows_os_scratch_tmp() {
+        // /tmp is the OS scratch dir: cleaning it needs no confirmation, so an
+        // unattended agent is not blocked.
+        let policy = BashPolicy::default();
+        assert!(policy.evaluate("rm -rf /tmp/build-out").is_none());
+        assert!(policy.evaluate("rm -rf /tmp/").is_none());
+        assert!(policy.evaluate("rm -rf /tmp").is_none());
+        // The carve-out never breaches a built-in deny: a path that merely
+        // starts with the letters "tmp" is not /tmp.
+        assert!(policy.evaluate("rm -rf /tmpx").is_some());
+    }
+
+    #[test]
+    fn recursive_rm_confirms_parent_traversal() {
+        let policy = BashPolicy::default();
+        let decision = policy.evaluate("rm -rf ../sibling").unwrap();
+        assert_eq!(decision.action, BashPolicyAction::Confirm);
+        assert_eq!(decision.name, "recursive rm outside cwd");
+    }
+
+    #[test]
+    fn recursive_rm_denies_home_and_system_dirs() {
+        let policy = BashPolicy::default();
+        for cmd in ["rm -rf ~", "rm -rf $HOME", "rm -rf /etc", "rm -rf /usr/local"] {
+            let decision = policy.evaluate(cmd).unwrap();
+            assert_eq!(
+                decision.action,
+                BashPolicyAction::Deny,
+                "{cmd:?} should be denied"
+            );
+        }
+    }
+
+    #[test]
+    fn rm_substring_in_another_command_does_not_trip_rule() {
+        // Regression: a quoted "rm -rf" inside an unrelated command (e.g. an
+        // `rg` pattern or a heredoc body) must not be treated as an `rm`.
+        let policy = BashPolicy::default();
+        assert!(policy
+            .evaluate(r#"rg -n "rm -rf|recursive force remove" --glob '!target'"#)
+            .is_none());
+        assert!(policy
+            .evaluate("echo 'rm -rf /' >> notes.md")
+            .is_none());
     }
 
     #[test]

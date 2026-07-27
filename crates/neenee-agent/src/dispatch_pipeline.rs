@@ -212,8 +212,9 @@ impl<'a> DispatchPipeline<'a> {
 /// Helper: classify a policy-chain decision into a prepare outcome.
 ///
 /// `Approve`/`Pass` (chain fallback) → the call may run (caller builds the
-/// Runnable). `Deny` → Rejected (with the deny's `collective` flag noted via
-/// the output being `PermissionDenied`). `Ask` → Runnable with a pending ask.
+/// Runnable). `Deny` → Rejected (a `ToolOutput::PermissionDenied` output marks
+/// a user-style abort, which the store resolves collectively across the batch).
+/// `Ask` → Runnable with a pending ask.
 #[allow(dead_code)]
 pub fn decision_to_prepare(
     decision: PolicyDecision,
@@ -318,7 +319,6 @@ mod tests {
         let prepared = decision_to_prepare(
             PolicyDecision::Deny {
                 output: ToolOutput::Text("no".into()),
-                collective: false,
             },
             "call_2".into(),
             mkcall("write_file"),

@@ -244,8 +244,9 @@ pub enum BashPolicyActionConfig {
 pub struct PermissionRuleConfig {
     /// Tool name (e.g. `"bash"`, `"read_text"`, `"mcp__fs__read"`).
     pub tool: String,
-    /// Permission scope. `"*"` matches every call to the tool; a specific scope
-    /// (e.g. a path prefix) allows only matching calls.
+    /// Permission scope. `"*"` matches every call to the tool. Any other value
+    /// must match the call's scope *exactly* (e.g. a full path, or the exact
+    /// command string for `bash`) — there is no prefix/substring matching.
     #[serde(default = "default_scope")]
     pub scope: String,
 }

@@ -52,6 +52,11 @@ pub struct PermissionStore {
     /// no permission confirmations, no questions. Operationally this skips the
     /// permission prompt entirely (and bypasses the allowlist wholesale), but
     /// the flag's meaning is "no human in the loop," not just "skip prompts."
+    ///
+    /// This is the **single source of truth** for the agent's attended state:
+    /// `Agent::get_unattended`/`set_unattended` are thin forwards here, and the
+    /// permission chain snapshots it once into `PolicyContext::unattended`
+    /// (cloned before the async chain runs, so no lock is held across `.await`).
     unattended: Mutex<bool>,
 }
 
@@ -117,8 +122,10 @@ impl PermissionStore {
     // ── allowlist ───────────────────────────────────────────────────────
 
     /// Check whether a rule is in the "always allow" set. A stored scope of
-    /// `"*"` is a wildcard for that tool, matching the documented
-    /// `[[permissions.allow]] tool = "bash", scope = "*"` behaviour.
+    /// `"*"` is a wildcard for that tool (matches any scope). Any other stored
+    /// scope must match `rule.scope` **exactly** — there is no prefix or
+    /// substring matching, so `bash git` does not allow `bash git status`.
+    /// (`PermissionRuleConfig.scope` documents this contract for config authors.)
     pub fn is_always_allowed(&self, rule: &PermissionRule) -> bool {
         let state = lock(&self.state);
         state.always.contains(rule)

@@ -32,7 +32,8 @@
 //!    ones); the scope gate precedes the broker.
 //! 2. **`ScopeTarget` is the shared switch** for scope-gate / bash-policy /
 //!    broker: `Unspecified` skips all three.
-//! 3. **`Reject` is collective** — one reject rejects the whole pending batch.
+//! 3. **`Reject` is collective** — one reject rejects the whole pending batch
+//!    (owned by the permission store's `reply`, keyed on a reject decision).
 //! 4. **`unattended` bypasses interactive policies only** (broker, bash-confirm,
 //!    ask-user), never the hook or scope gate.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
@@ -55,12 +56,14 @@ pub enum PolicyDecision {
     Pass,
     /// Admit the call; no further policies consulted.
     Approve,
-    /// Reject the call with a typed output. `collective` flags whether this
-    /// deny should also reject sibling pending calls (true for broker rejects).
-    Deny {
-        output: ToolOutput,
-        collective: bool,
-    },
+    /// Reject the call with a typed output.
+    ///
+    /// A reject of one parked request also rejects the rest of its concurrent
+    /// batch, but that collective-abort is owned by the permission store's
+    /// `reply` (keyed on a `PermissionDecision::Reject`), not signalled here:
+    /// synchronous chain denies are per-call, and a `ToolOutput::PermissionDenied`
+    /// is enough for the caller to treat the outcome as a user-style abort.
+    Deny { output: ToolOutput },
     /// Defer to the user: park and await a [`neenee_core::PermissionDecision`].
     /// The chain caller parks, emits the request, awaits; the policy only
     /// contributes the request payload + the rule to remember on `Always`.
@@ -96,9 +99,6 @@ pub trait PermissionContext: Send + Sync {
 
     /// The permission store, for synchronous `is_always_allowed` checks.
     fn permissions(&self) -> &PermissionStore;
-
-    /// Whether the session is running unattended.
-    fn unattended(&self) -> bool;
 }
 
 /// Everything a policy needs to decide one call.
@@ -200,7 +200,6 @@ impl PermissionPolicy for HookPolicy {
                     message: format!("Blocked by hook: {}", reason),
                     detail: None,
                 },
-                collective: false,
             };
         }
         PolicyDecision::Pass
@@ -231,7 +230,6 @@ impl PermissionPolicy for DisabledPolicy {
         };
         PolicyDecision::Deny {
             output: ToolOutput::Text(message),
-            collective: false,
         }
     }
 }
@@ -254,7 +252,6 @@ impl PermissionPolicy for SchemaPolicy {
                     message: format!("Error executing {}: {}", ctx.call_name, message),
                     detail: None,
                 },
-                collective: false,
             },
         }
     }
@@ -279,7 +276,6 @@ impl PermissionPolicy for ScopeGatePolicy {
                     "[operation scope] Tool '{}' is blocked outside its granted scope.",
                     ctx.call_name
                 )),
-                collective: false,
             }
         }
     }
@@ -311,10 +307,7 @@ impl PermissionPolicy for BashPolicy {
         // Deny); a `None` means either Allow or "needs interactive Confirm"
         // (the latter falls through to execute_tool's full check_bash_policy).
         match ctx.ctx.check_bash_policy(&command, ctx.arguments).await {
-            Some(output) => {
-                let collective = matches!(output, ToolOutput::PermissionDenied { .. });
-                PolicyDecision::Deny { output, collective }
-            }
+            Some(output) => PolicyDecision::Deny { output },
             None => PolicyDecision::Pass,
         }
     }
@@ -336,7 +329,6 @@ impl PermissionPolicy for AskUserPolicy {
                      reasonable default and proceed."
                         .to_string(),
                 ),
-                collective: false,
             };
         }
         PolicyDecision::Pass
@@ -345,6 +337,15 @@ impl PermissionPolicy for AskUserPolicy {
 
 /// Gate 7: the permission broker. A non-`Unspecified` target not already
 /// always-allowed (and not unattended) yields `Ask`; the chain caller parks.
+///
+/// **Unattended bypass:** when `ctx.unattended` is true this gate auto-approves
+/// every call that survived scope-gate (gate 4) and bash-policy (gate 5). The
+/// broker therefore does *no* work for the common read-only envoy profiles,
+/// which are `unattended: true` — their real safety floor is admission
+/// (`resolve_tools`, which filters the toolset at spawn) plus the scope-gate.
+/// The broker is the live layer only for the principal agent and for the
+/// `INTERACTIVE` profile (`unattended: false`), which forwards prompts up to
+/// the parent (ADR-0029).
 pub struct BrokerPolicy;
 #[async_trait]
 impl PermissionPolicy for BrokerPolicy {
@@ -444,9 +445,6 @@ mod tests {
         fn permissions(&self) -> &PermissionStore {
             &self.perms
         }
-        fn unattended(&self) -> bool {
-            self.unattended
-        }
     }
 
     fn pctx<'a>(
@@ -522,7 +520,7 @@ mod tests {
         );
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Deny { collective: false, .. }
+            PolicyDecision::Deny { .. }
         ));
     }
 
@@ -607,7 +605,7 @@ mod tests {
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
-            PolicyDecision::Deny { collective: false, .. }
+            PolicyDecision::Deny { .. }
         ));
     }
 
