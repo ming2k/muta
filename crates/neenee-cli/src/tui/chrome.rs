@@ -101,10 +101,11 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
         .collect()
 }
 
-/// Draw the transient activity bar that sits directly above the todo bar.
-/// Replaces the old inline `┃ neenee ⟳ <status>` indicator: the brand prefix
-/// is dropped (the header already shows it) and the static `⟳` glyph is
-/// replaced by a breathing-dot indicator so the harness never looks frozen.
+/// Draw the transient activity bar that sits directly above the input box
+/// (below the ambient todo/queue meta bars). Replaces the old inline
+/// `┃ neenee ⟳ <status>` indicator: the brand prefix is dropped (the header
+/// already shows it) and the static `⟳` glyph is replaced by a breathing-dot
+/// indicator so the harness never looks frozen.
 ///
 /// Layout:
 /// ```text
@@ -114,8 +115,8 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// active and is hidden while idle, so the row returns to the transcript.
 /// Session-state flags such as `unattended` deliberately do not live here:
 /// they fold onto the hint bar's right cluster ([`draw_hint_bar`]) so this row
-/// stays a pure activity surface. The persistent task-list summary now lives
-/// on its own [`draw_todo_bar`] below this row.
+/// stays a pure activity surface. The persistent task-list summary lives on
+/// its own [`draw_todo_bar`], floated above this row as ambient meta-info.
 ///
 /// The bar surfaces what the user most wants to know mid-round — the live
 /// status, whether a pursuit/plan is in flight, and how long the round has
@@ -260,15 +261,26 @@ pub fn draw_activity_bar(
     Some(rect)
 }
 
-/// The one-row todo summary pinned directly below the activity bar (and above
-/// the queue bar). It is the permanent home for task-list affordances: a fixed
-/// `todo` tag, the done/total progress, and a one-line preview of the current
-/// item — the `InProgress` one, or the first `Pending` when nothing is
-/// mid-flight (so the bar always points at "what is happening / what is next").
+/// The pin glyph that leads the todo bar — a visual marker that this row is
+/// the agent's live task list. Emoji presentation, measured at 2 display cells
+/// by `unicode-width` (which the span-width sum already accounts for), so the
+/// right-pinned legend stays flush regardless of terminal.
+const PIN_GLYPH: &str = "📌";
+
+/// The one-row todo summary that leads the footer stack (above the queue bar,
+/// and above the transient activity bar). It is the permanent home for
+/// task-list affordances: a `📌` pin glyph leading a brand-colored `TODOS`
+/// label, the done/total progress, and a one-line preview of the current item
+/// — the `InProgress` one, or the first `Pending` when nothing is mid-flight
+/// (so the bar always points at "what is happening / what is next").
+///
+/// To read as a distinct pinned panel rather than another footer strip, the
+/// whole bar sits on a subtly raised surface (see [`Theme::raised`]) and the
+/// leading glyph + `TODOS` label share a brand-color "pin" treatment.
 ///
 /// Layout:
 /// ```text
-/// todo · d/t · {current item preview…}        Ctrl+T expand
+/// 📌 TODOS d/t · {current item preview…}        Ctrl+T expand
 /// ```
 /// The right-pinned `Ctrl+T expand` legend is the keyboard affordance that
 /// opens the Activity modal on the Todos section; it drops under width
@@ -289,12 +301,22 @@ pub fn draw_todo_bar(
 ) -> Rect {
     use neenee_core::{TodoItem, TodoStatus};
 
-    let bg = theme.surface();
+    // Distinct pinned surface: the raised tone reads as a panel rather than a
+    // plain footer strip. Every span carries this background so the tint covers
+    // the full row width (including the trailing fill).
+    let bg = theme.raised();
     let full_w = rect.width as usize;
     let dim = Style::default().fg(theme.muted()).bg(bg);
     let fg = Style::default().fg(theme.fg()).bg(bg);
     let bold = Style::default()
         .fg(theme.fg())
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+    // The pin treatment — the glyph and the `TODOS` label — wears the brand
+    // color so the left edge reads as a distinct, deliberately pinned marker.
+    let pin_color = theme.brand();
+    let pin_style = Style::default()
+        .fg(pin_color)
         .bg(bg)
         .add_modifier(Modifier::BOLD);
 
@@ -309,11 +331,18 @@ pub fn draw_todo_bar(
         .find(|i| i.status == TodoStatus::InProgress)
         .or_else(|| todos.items.iter().find(|i| i.status == TodoStatus::Pending));
 
-    // ── Left identity: `todo · d/t` ──
-    let mut left: Vec<Span<'static>> = Vec::new();
-    left.push(Span::styled("todo", bold));
-    left.push(Span::styled(" · ", dim));
-    left.push(Span::styled(progress, bold));
+    // ── Gutter + left identity: `📌 TODOS d/t` ──
+    // The pin glyph leads a tight, label-like cluster: uppercase `TODOS`,
+    // single-space separators, no bullet. Uppercase reads as a pinned
+    // section tag rather than a lowercase token, and dropping the `·` keeps
+    // the identity compact so the count sits one space off the label.
+    let left: Vec<Span<'static>> = vec![
+        Span::styled(PIN_GLYPH, pin_style),
+        Span::styled(" ", dim),
+        Span::styled("TODOS", pin_style),
+        Span::styled(" ", dim),
+        Span::styled(progress, bold),
+    ];
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
 
     // ── Right legend: `Ctrl+T expand`, dropping under width pressure ──
@@ -942,7 +971,7 @@ pub struct QueueBarView<'a> {
 ///
 /// Layout:
 /// ```text
-/// queue · N · HH:MM        esc insert · tab next round · F2 expand
+/// queue · N · HH:MM        esc insert · tab toggle · F2 expand
 /// {modifier} {preview…}
 /// ```
 /// - Row 1 carries the identity (a fixed `queue` tag, the total count, the
@@ -1011,6 +1040,7 @@ pub fn draw_queue_bar(
     // the old hint-bar used to embed as prose:
     //   Esc   — recall/dispatch the newest staged message immediately
     //   Tab   — flip the next busy Enter between insert and next-round
+    //           (default is next-round; Tab opts the next send into insert)
     //   F2    — expand the full queue list
     // The right cluster drops under width pressure (F2 first, then Tab, then
     // Esc), so the identity on the left always survives.
@@ -1027,7 +1057,7 @@ pub fn draw_queue_bar(
             sep(&mut spans);
             spans.push(keycap_span(theme, Key::TAB.display()));
             if matches!(density, LegendDensity::Full) {
-                spans.push(Span::styled(" next round", dim));
+                spans.push(Span::styled(" toggle", dim));
             }
         }
         if !matches!(density, LegendDensity::Tiny) {
@@ -1125,7 +1155,7 @@ pub fn draw_queue_bar(
 /// How much of the row-1 keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `Esc insert now · Tab next round · F2 expand`.
+    /// Keys + labels: `Esc insert now · Tab toggle · F2 expand`.
     Full,
     /// Keys only: `Esc · Tab · F2`.
     Compact,
@@ -1338,11 +1368,54 @@ mod tests {
     }
 
     #[test]
+    fn todo_bar_leads_with_pin_glyph_on_raised_tint_with_brand_pin() {
+        // The whole point of the pin treatment: the bar must render the 📌
+        // glyph at the left gutter, sit on a raised surface that is visibly
+        // distinct from the plain frame surface, and color the glyph + tag in
+        // the brand accent. We assert all three against the real buffer cells
+        // (the substring-only tests above can't see color or position).
+        let theme = Theme::default();
+        let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_todo_bar(frame, Rect::new(0, 0, 80, 1), &todos, &theme);
+        });
+        let cells = terminal.buffer().content.clone();
+
+        // (1) Gutter glyph: the first cell is the pin glyph, rendered in the
+        // brand color on the raised surface. Emoji occupy 2 cells in the grid;
+        // the leading cell carries the glyph symbol and style, the next is the
+        // wide-glyph continuation cell.
+        assert_eq!(cells[0].symbol(), "📌", "gutter glyph missing at col 0");
+        assert_eq!(cells[0].fg(), theme.brand(), "pin glyph not brand-colored");
+        assert_eq!(cells[0].bg(), theme.raised(), "pin glyph not on raised surface");
+
+        // (2) The raised tint must differ from the plain frame surface, and it
+        // must cover the full row (sample the trailing fill cell too).
+        assert_ne!(
+            theme.raised(),
+            theme.surface(),
+            "raised and surface must be distinct for the panel to read"
+        );
+        assert_eq!(
+            cells[79].bg(),
+            theme.raised(),
+            "trailing fill must paint the raised tint across the full width"
+        );
+
+        // (3) The `TODOS` label (after the 2-cell glyph + 1-space gap) is also
+        // brand-colored, so the whole left edge reads as one pinned marker.
+        // Layout: [📌(2)] [gap(1)] [TODOS(5)] → 'T' lands at index 3.
+        assert_eq!(cells[3].symbol(), "T", "expected 'TODOS' label at col 3");
+        assert_eq!(cells[3].fg(), theme.brand(), "TODOS label not brand-colored");
+    }
+
+    #[test]
     fn todo_bar_shows_tag_progress_current_item_and_legend() {
         // InProgress item is the surfaced "current" content.
         let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
         let text = todo_row_text(&todos, 80);
-        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        assert!(text.contains("TODOS 0/1"), "row was {text:?}");
         assert!(text.contains("write the docs"), "row was {text:?}");
         assert!(text.contains("Ctrl+T expand"), "row was {text:?}");
     }
@@ -1351,7 +1424,7 @@ mod tests {
     fn todo_bar_falls_back_to_first_pending_when_nothing_is_in_progress() {
         let todos = todo_list_with("write the docs", neenee_core::TodoStatus::Pending);
         let text = todo_row_text(&todos, 80);
-        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        assert!(text.contains("TODOS 0/1"), "row was {text:?}");
         // The first Pending item reads as "next up" when nothing is mid-flight.
         assert!(text.contains("write the docs"), "row was {text:?}");
     }
@@ -1361,7 +1434,7 @@ mod tests {
         let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
         // At 20 cols the `expand` label cannot fit alongside the preview.
         let text = todo_row_text(&todos, 20);
-        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        assert!(text.contains("TODOS 0/1"), "row was {text:?}");
         assert!(!text.contains("expand"), "legend leaked: {text:?}");
     }
 

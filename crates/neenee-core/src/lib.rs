@@ -4,10 +4,9 @@
 //! skills/MCP config schemas, and the events exchanged by sessions and
 //! frontends.
 //!
-//! This crate is **pure domain, zero I/O** (ADR-0005): no `rusqlite`, no
-//! filesystem, no network. Persistence-backed types that once lived here
-//! (`RepeatStore`, the SQLite migrations) moved to `neenee-persistence`; this
-//! crate keeps contracts shared by independent layers: domain values
+//! This crate is **pure domain, zero I/O** (ADR-0005): no filesystem, no
+//! network. It keeps only contracts shared by independent layers: domain
+//! values
 //! (`TokenUsage`, `RepeatJob`, `TodoList`, …), wire DTOs, and
 //! capability traits (`Provider`, `Tool`, `Hook`, `SessionReview`). Pure logic
 //! owned only by the agent belongs in `neenee-agent` (ADR-0057).

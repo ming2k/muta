@@ -11,7 +11,6 @@ neenee-cli ────┐
                ├──► neenee-transport ──► neenee-agent ──► neenee-persistence
 neenee-server ─┘             │                  ├──► neenee-skills ────────┤
                              │                  └──► neenee-providers      │
-                             ├──► neenee-mcp ──────────────────────────────┤
                              └─────────────────────────────────────────────┴──► neenee-core
 
 neenee-cli ──► neenee-tui-engine
@@ -48,7 +47,7 @@ multiple independent layers exchange it, it prevents a dependency cycle, or
 it is stable serialized/domain vocabulary. Agent-owned policy stays with the
 agent even when it performs no I/O (ADR-0057).
 
-### Foundation implementations — providers, skills, MCP, store, and AI SDKs
+### Foundation implementations — providers, skills, store, and AI SDKs
 
 These crates implement the contracts below orchestration:
 
@@ -66,18 +65,21 @@ These crates implement the contracts below orchestration:
   periodic refresh, and `use_skill` / `list_skills` tool adapters. The agent
   consumes the registry for model-context injection; Session also reads and
   refreshes it without reaching through Agent internals.
-- **`neenee-mcp`** — stdio JSON-RPC transport, MCP server lifecycle, tool
-  adapters, live runtime, and catalog refresh. It publishes tools through the
-  core `DynamicToolSink` contract and has no dependency on Agent or Session.
 - **`neenee-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
   repeat store, XDG paths (ADR-0014).
+
+The MCP runtime — stdio JSON-RPC transport, server lifecycle, tool adapters,
+live runtime, and catalog refresh — lives **inside `neenee-agent`** as its
+`mcp` module, co-located with the `ToolManager` it feeds (merged there from a
+former standalone `neenee-mcp` crate). It publishes tools through the core
+`DynamicToolSink` contract.
 
 ### `neenee-agent` — orchestration
 
 The engine. `Agent` + the round/turn loop (ADR-0047), model-request and
 system-prompt policy, durable conversation-context injection, tool-call
-dispatch and compatibility parsing, context projection, pursuit continuation,
-shell input policy, `ProxyProvider`, skill context injection,
+dispatch and compatibility parsing, context projection, the **MCP runtime**
+(`mcp` module), shell input policy, `ProxyProvider`, skill context injection,
 `EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It also owns the built-in tools
 (`bash`, `read_text`, `grep`, `glob`, `webfetch`, todo management, …) in its
@@ -85,7 +87,7 @@ to run *one* LLM round with tools. It also owns the built-in tools
 receive an agent-owned context bound in `tool_integration`. It consumes
 `neenee-skills` and interacts
 with static and dynamic tools through core contracts. It does not know about
-MCP protocol, sessions, slash commands, or frontends. Identity-agnostic and
+sessions, slash commands, or frontends. Identity-agnostic and
 role-agnostic by design.
 
 The `agent -> skills` edge is intentional layering, not a
@@ -101,8 +103,7 @@ session a frontend can drive." It owns:
   state, then routes each `AgentRequest` to a handler until the channel closes.
 - **Handlers** — `handlers_chat` / `handlers_permission` / `handlers_provider`
   / `handlers_session` / `handlers_slash`: one per `AgentRequest` group.
-- **`/btw` side sessions** (`side`), ownership of the **`neenee-mcp`
-  runtime**, **pursuits**, **hooks**, **export**, **review**, **shell**.
+- **`/btw` side sessions** (`side`), **hooks**, **export**, **review**, **shell**.
 - **`serve`** — the hot-attach WebSocket transport (ADR-0037 §7).
 - **`bootstrap`** — the session-harness assembly factory (ADR-0037 Step 6,
   landed by ADR-0081) that both application binaries call; identity,
@@ -146,9 +147,10 @@ layer's `bootstrap::assemble` factory:
 
 The session-layer factory retires the dependency "reach-through" this page
 used to document: provider/toolset/agent/driver assembly now lives behind
-`bootstrap::assemble`, both binaries assemble through it, and
-`neenee-cli`'s direct dependencies were pruned accordingly — it no longer
-depends on `neenee-mcp` directly.
+`bootstrap::assemble`, both application binaries assemble through it, and
+`neenee-cli`'s direct dependencies on tool/runtime crates were pruned
+accordingly — it reaches the MCP runtime through `neenee-agent`, not a
+separate crate.
 
 #### `neenee-server` — headless session host
 

@@ -37,7 +37,6 @@ inventory = "0.3"
 syn = { version = "2", features = ["derive"] }
 quote = "1"
 proc-macro2 = "1"
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 

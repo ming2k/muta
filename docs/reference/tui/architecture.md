@@ -96,7 +96,7 @@ the `crate::tui` module tree since ADR-0079; the shell addresses the view as
 The shell and the view layer communicate through one borrowed struct,
 `view::TranscriptView<'a>`, that the event loop fills in each frame. It
 carries **only borrowed data** — `&[TranscriptMessage]`, `&SelectionState`,
-`&Theme`, scroll/activity/pursuit/todo snapshots — and crucially **no
+`&Theme`, scroll/activity/todo snapshots — and crucially **no
 reference to `App`**. This is what keeps the view layer a pure rendering
 function: there is no back-channel into application state, so a widget can
 only draw what the shell chose to hand it.

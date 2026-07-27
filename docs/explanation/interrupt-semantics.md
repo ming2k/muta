@@ -104,7 +104,7 @@ transcript and forwards the prompt via a one-shot signal
 (`unsent_input_signal`) to the event loop, which restores it into the input
 box — text and pasted images — so the user can re-edit and re-submit. The
 conversation context ends up identical to the pre-send state. Hidden control
-prompts (pursuit continuation, verify nudge) are not unsentable: they are
+prompts (hook output, compaction checkpoints) are not unsentable: they are
 harness-internal and are never surfaced as editable user input.
 
 This is clean at the conversation layer: no assistant message enters history,

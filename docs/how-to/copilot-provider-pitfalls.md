@@ -72,7 +72,7 @@ transcript explaining which provider failed and why. A silently seed-only list
 ## Troubleshooting checklist
 
 1. **Re-run device login.** Delete the copilot entry from `auth.toml` and log in
-   again through the provider picker. This ensures the token was minted for
+   again through `/connections`. This ensures the token was minted for
    neenee's built-in public client id.
 2. **Check the token prefix.** Open `auth.toml` and look at the copilot
    `access` value. If it starts with `ghu_`, it came from a GitHub App flow and

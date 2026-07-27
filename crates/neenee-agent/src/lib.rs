@@ -60,11 +60,6 @@
 
 pub use neenee_core::*;
 
-// Persistence-backed types that lived in core pre-refactor now live in store
-// (ADR-0005: core is zero-I/O). Re-exported here so consumers keep reaching
-// them through `neenee_agent::` unchanged.
-pub use neenee_persistence::RepeatStore;
-
 // Explicit re-exports of core's top-level re-exports. `pub use X::*` does
 // not propagate through X's own `pub use` re-exports in Rust, so the items
 // the Agent struct expects at the crate root have to be listed here by name.

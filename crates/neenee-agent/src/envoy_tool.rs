@@ -413,7 +413,7 @@ impl EnvoyTool {
         // On failure we surface the partial transcript anyway — both so the
         // parent's tool-result message carries the envoy's work-in-progress
         // `children` and so the real token cost (which can be substantial for a
-        // 32-turn burnout) reaches the parent pursuit accounting. The
+        // 32-turn burnout) reaches the parent round's accounting. The
         // `final_content` is prefixed `Error: …` so the existing failure
         // classifier (`starts_with("Error")`) and the TUI's red Failed badge
         // both trigger.

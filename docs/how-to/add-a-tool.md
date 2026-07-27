@@ -10,7 +10,7 @@ Most built-in tools live in `neenee-agent`'s `tools` module. Pick the module tha
 matches the tool's domain: filesystem and web tools go in
 `crates/neenee-agent/src/tools/`, slash-command discovery and project
 scaffolding live in `crates/neenee-transport/src/` (`commands` and `project`),
-MCP adapters live in `crates/neenee-mcp`,
+MCP adapters live in `crates/neenee-agent/src/mcp`,
 and skill tools live in `crates/neenee-skills`. `envoy` likewise
 lives in `crates/neenee-agent/src/` because it constructs agents.
 The todo tools in `crates/neenee-agent/src/tools/todo.rs` receive their

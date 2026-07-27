@@ -7,7 +7,7 @@ This is the primary user-facing crate. It wires together the foundation
 (`neenee-core` + `neenee-persistence`), the LLM providers (`neenee-providers`),
 the orchestration loop and built-in tools (`neenee-agent`), and
 the session transport (`neenee-transport`), then renders the interactive interface
-via the in-house `neenee-tui` rendering engine (ADR-0038).
+via the in-house `neenee-tui-engine` rendering engine (ADR-0038).
 
 The coding identity (`neenee_identity` / `principal_code`) lives in this
 crate's `src/identity.rs` — the application layer, not the server layer
@@ -19,5 +19,5 @@ Run with:
 cargo run -p neenee-cli
 ```
 
-See the top-level [`README.md`](../../../README.md) for installation and usage,
-and [`docs/`](../../../docs/) for the architecture and how-tos.
+See the top-level [`README.md`](../../README.md) for installation and usage,
+and [`docs/`](../../docs/) for the architecture and how-tos.

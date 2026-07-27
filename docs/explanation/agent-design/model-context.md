@@ -33,7 +33,7 @@ Each provider request carries three conceptual inputs:
 
 | Input | Source | Purpose |
 |-------|--------|---------|
-| **System prompt** | Rebuilt from system-prompt sections and live state | Identity, behavior, active pursuit, model/provider guidance, and conditional workflow guidance |
+| **System prompt** | Rebuilt from system-prompt sections and live state | Identity, behavior, model/provider guidance, and conditional workflow guidance |
 | **Messages** | Current model window | User messages, assistant replies, assistant tool calls, tool results, and hidden harness messages that still belong in model-visible history |
 | **Tools** | Current tool catalog | Native tool declarations: name, description, and parameter schema for each enabled tool |
 

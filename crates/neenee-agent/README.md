@@ -7,22 +7,23 @@ other.
 ## What lives here
 
 - **The `Agent` struct** (`agent.rs`) — holds the provider, tool set, mode,
-  pursuit, and optional skill registry; runs the streaming ReAct loop.
+  and optional skill registry; runs the streaming ReAct loop.
 - **The round/turn loop** — tool-call parsing, permission brokering, context
   pressure (summarisation / context projection per ADR-0029), and the steering
   inbox.
 - **Conversation and model-request policy** — durable lifecycle-driven context
   additions, ephemeral system-prompt/tool snapshot assembly, context
-  projection, pursuit continuation, and compatibility parsing for text-emitted
+  projection, and compatibility parsing for text-emitted
   tool calls.
 - **Agent/tool integration** — construction of concrete tools bound to
   agent-owned state, custom-tool extension through `AgentBuilder`, and shell
   input policy. The built-in tools, including the todo implementations and
   their context, live in this crate's `tools` module; the agent binds them
   automatically.
-- **Extension integration** — optional `neenee-skills` context injection and a
-  connector-neutral dynamic-tool sink. MCP protocol/runtime lives outside the
-  agent in `neenee-mcp`.
+- **Extension integration** — optional `neenee-skills` context injection, a
+  connector-neutral dynamic-tool sink, and the **MCP runtime** (`mcp` module:
+  stdio JSON-RPC transport, server lifecycle, tool adapters, live runtime,
+  catalog refresh).
 - **Catalog & envoy** — model/channel resolution and sub-agent ("envoy")
   profiles.
 

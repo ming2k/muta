@@ -183,7 +183,7 @@ model, the layout/hit-testing map, and the text-selection state.
 The shell and the view never share a mutable `App`. They communicate
 through one borrowed struct, `view::TranscriptView<'a>`, that the event
 loop fills in each frame from its snapshot — `&[TranscriptMessage]`,
-`&SelectionState`, `&Theme`, plus activity/pursuit/todo snapshots — and
+`&SelectionState`, `&Theme`, plus activity/todo snapshots — and
 hands to `view::draw_transcript`. It carries **no reference to `App`**,
 which is what keeps the view layer a pure rendering function: there is no
 back-channel into application state, so a widget can only draw what the

@@ -1,7 +1,18 @@
 # 0024. Pragmatic SQLite migrations via `PRAGMA user_version`
 
-- **Status:** Accepted
+- **Status:** Superseded — SQLite removed from the project (2026-07)
 - **Date:** 2026-06-24
+
+> **Supersession note (2026-07, revised):** The last remaining SQLite consumer
+> was `RepeatStore`. It was first rewritten to a standalone `repeat.json`, then
+> **folded into session state entirely** — `/repeat` jobs are now session-scoped:
+> they live on `SessionData` and persist through the session's event log as
+> `SessionEvent::RepeatJobsSet`, alongside the todos, round counter, and
+> provider selection. The session that created a job owns it, so resume/fork
+> carry the schedule; the scheduler polls the live `SessionStore`. The
+> standalone `RepeatStore`, its `repeat.json`, and the `db` migration module
+> were all deleted. This removes `rusqlite` (+ its `bundled` SQLite C library)
+> from the dependency tree and build. This ADR is retained for history.
 
 ## Context
 

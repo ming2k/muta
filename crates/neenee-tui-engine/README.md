@@ -1,4 +1,4 @@
-# neenee-tui
+# neenee-tui-engine
 
 In-house terminal rendering engine (ADR-0038): a retained-mode cell grid with
 write-marks-dirty tracking, a back/front grid diff, and a crossterm backend
@@ -12,4 +12,4 @@ neenee's TUI needs finer control over IME composition windows, large diff
 rendering, and incremental redraw, so this crate implements the grid + diff
 engine directly on top of `crossterm` (raw mode, event stream, escape codes).
 
-Consumed by `neenee` for the interactive coding agent interface.
+Consumed by `neenee-cli` for the interactive coding agent interface.

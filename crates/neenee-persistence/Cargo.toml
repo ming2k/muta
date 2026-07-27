@@ -22,7 +22,6 @@ crc32c = "0.6"
 hex = "0.4"
 chrono = { workspace = true }
 inventory = { workspace = true }
-rusqlite = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,23 +1,22 @@
 # Activity bar
 
-Transient activity indicator shown at the top of the footer stack, directly
-above the [todo bar](todo-bar.md). It unifies the live status label, the
-active pursuit, and the breathing-dot liveness anchor into one click-to-open
-bar. Long-lived session-state flags (`unattended` and friends) are
-deliberately absent — they fold onto the [hint bar](hint-line.md) — and the
-task-list summary lives on its own todo bar below.
+Transient activity indicator shown in the footer stack, directly above the
+input box (below the ambient [todo bar](todo-bar.md) and queue bar). It
+unifies the live status label and the breathing-dot liveness anchor into one
+click-to-open bar. Long-lived session-state flags (`unattended` and friends)
+are deliberately absent — they fold onto the [hint bar](hint-line.md) — and
+the task-list summary lives on its own todo bar above.
 
 ## Appearance
 
 ```text
- ● making edits (23s · Esc Esc to interrupt) · » refactor auth module
+ ● making edits (23s · Esc Esc to interrupt)
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **live
-status** (lead, shimmering muted → brand sweep), an optional **pursuit
-badge** (`» <objective>`, shown only while a pursuit is armed), and the
-**elapsed** timer inside the interrupt hint. Segments are omitted when there
-is nothing to report, so a plain round reads simply:
+status** (lead, shimmering muted → brand sweep) and the **elapsed** timer
+inside the interrupt hint. Segments are omitted when there is nothing to
+report, so a plain round reads simply:
 
 ```text
  ● making edits (3s · Esc Esc to interrupt)
@@ -28,8 +27,7 @@ the bar. They take space and change rarely, so they moved into the
 **Activity modal** that this bar opens on click. The whole bar is a click
 target (and `Tab`/`Enter` opens the modal): one glance answers "what's
 happening, how long?", one click shows the full breakdown (Activity tab:
-pursuit, current prompt, round/turn/model/elapsed; Todos tab: the task
-list).
+current prompt, round/turn/model/elapsed; Todos tab: the task list).
 
 | Attribute | Value |
 |-----------|-------|
@@ -37,7 +35,7 @@ list).
 | Glyph | `●` (`spinner_glyph`), BOLD |
 | Glyph color | `breathing_color(phase, theme.brand(), theme.surface())` — a cosine luminance sweep between brand and surface so the dot breathes at roughly 10 fps instead of cycling braille frames |
 | Status text color | `theme.brand()` + ITALIC |
-| Pursuit / elapsed | `theme.muted()` |
+| Elapsed | `theme.muted()` |
 | Indent | 1 space |
 
 The breathing sweep is the TUI's single liveness anchor — every other

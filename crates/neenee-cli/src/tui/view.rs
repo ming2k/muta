@@ -443,16 +443,16 @@ pub fn draw_transcript(
     // whose only chrome is its page header.
     let in_envoy = envoy_bar.is_some();
 
-    // The status bar (animated spinner + activity text) sits on its own line
-    // above the input box, after a permanent one-row transcript gap. It is
-    // shown for every active phase —
-    // including streaming ("responding"), which is the longest phase and the
-    // one where the breathing dot's liveness signal matters most — and hidden
-    // only when the harness is idle, so the row returns to the transcript.
+    // The status bar (animated spinner + activity text) sits directly above the
+    // input box, below the ambient todo/queue meta bars. It is shown for every
+    // active phase — including streaming ("responding"), which is the longest
+    // phase and the one where the breathing dot's liveness signal matters most
+    // — and hidden only when the harness is idle, so the row returns to the
+    // transcript.
     let status_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
     // The activity bar is purely transient now: it shows only while a round is
     // active and hides when idle, so the row returns to the transcript (the
-    // persistent task-list summary has its own bar below).
+    // persistent task-list summary has its own bar above).
     let activity_row_needed = status_active;
     let status_height: u16 = if activity_row_needed {
         STATUS_BAR_ROWS
@@ -460,9 +460,10 @@ pub fn draw_transcript(
         0
     };
 
-    // The todo bar surfaces the live task list — a `todo` tag, the done/total
-    // progress, and a preview of the current item. It is hidden only while an
-    // overlay owns the chrome, inside an envoy zoom, or when the list is empty.
+    // The todo bar leads the footer stack and surfaces the live task list —
+    // a `📌 TODOS d/t` identity and a preview of the current item. It is
+    // hidden only while an overlay owns the chrome, inside an envoy zoom, or
+    // when the list is empty.
     let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
     let todo_row_needed = !chrome_hidden && !in_envoy && has_visible_todos;
     let todo_height: u16 = if todo_row_needed { TODO_BAR_ROWS } else { 0 };
@@ -504,11 +505,12 @@ pub fn draw_transcript(
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        // Order, top → bottom: gap, activity bar, todo bar, queue bar, input
-        // box, hint bar. The activity bar leads (transient liveness); the
-        // persistent todo bar follows (the agent's live task list); then the
-        // queue bar (pending outbox); the input box; and the hint bar caps the
-        // footer (carrying the `unattended` flag that used to have its own row).
+        // Order, top → bottom: gap, todo bar, queue bar, activity bar, input
+        // box, hint bar. The ambient meta bars (todo = task list, queue =
+        // outbox) lead; the activity bar sits directly on top of the input box
+        // so the live status reads as part of the composer; the hint bar caps
+        // the footer (carrying the `unattended` flag that used to have its own
+        // row).
         FOOTER_TOP_GAP_ROWS + status_height + todo_height + queue_height + input_box_height
             + hint_height
     };
@@ -650,49 +652,29 @@ pub fn draw_transcript(
         }
     }
 
-    // The footer stacks, from top to bottom: a permanent blank separator, the
-    // transient activity bar (when active), the input box, the persistent
-    // state bar (when any session-state indicator is on), and the hint bar.
-    // The separator keeps the latest response visually distinct from the
-    // controls even when the activity row appears or disappears. The activity
-    // bar doubles as the click target that opens the Activity modal (the
+    // The footer stacks, from top to bottom: a permanent blank separator,
+    // the persistent todo bar (when the task list is non-empty), the
+    // persistent queue bar (when the outbox is non-empty), the transient
+    // activity bar (when active), the input box, and the hint bar. The
+    // activity bar sits directly above the input box so the live "what the
+    // agent is doing right now" status reads as part of the composer cluster;
+    // the todo and queue bars are ambient meta-info and float above it. The
+    // separator keeps the latest response visually distinct from the controls
+    // even when the activity row appears or disappears. The activity bar
+    // doubles as the click target that opens the Activity modal (the
     // pursuit and plan summaries that used to live here now scroll inside that
-    // modal and as inline notices in the transcript). The state bar sits
-    // directly under the input box so `unattended` reads as an attribute of
-    // the composer area rather than a transient status above it.
+    // modal and as inline notices in the transcript).
     let footer_x = chunks[1].x + FOOTER_H_INSET;
     let footer_w = chunks[1].width.saturating_sub(2 * FOOTER_H_INSET);
 
     let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
 
-    // The transient activity bar leads the footer stack. It stays up for the
-    // entire active round lifecycle (queued → responding → tool work →
-    // finalizing), including the streaming phase, and hides only when idle.
-    // Keeping it up during "responding" avoids a layout shift at the stream
-    // boundary and sustains the breathing-dot liveness anchor (ADR-0008)
-    // through the longest phase. Returns its rect so the event loop can
-    // hit-test clicks → Activity modal.
-    let activity_rect = if activity_row_needed {
-        draw_activity_bar(
-            frame,
-            Rect::new(footer_x, status_y, footer_w, STATUS_BAR_ROWS),
-            &review_alert,
-            round_started_at,
-            activity,
-            spinner_phase,
-            theme,
-        )
-    } else {
-        None
-    };
-
-    // The persistent todo bar sits directly below the activity bar (or below
-    // the gap when the activity bar is idle). It surfaces the live task list —
-    // a `todo` tag, the done/total progress, and a preview of the current
-    // item — and is the click target that opens the Activity modal on the
-    // Todos section. Returns its rect for the event loop to hit-test.
+    // The persistent todo bar leads the footer stack. It surfaces the live task
+    // list — the `📌 TODOS d/t` identity and a preview of the current item — and
+    // is the click target that opens the Activity modal on the Todos section.
+    // Returns its rect for the event loop to hit-test.
     let todos_rect = if todo_row_needed {
-        let rect = Rect::new(footer_x, status_y + status_height, footer_w, TODO_BAR_ROWS);
+        let rect = Rect::new(footer_x, status_y, footer_w, TODO_BAR_ROWS);
         todos.map(|list| draw_todo_bar(frame, rect, list, theme))
     } else {
         None
@@ -704,21 +686,39 @@ pub fn draw_transcript(
     // expands the full Queue modal. Returns its rect for the event loop to
     // hit-test.
     let queue_rect = if queue_row_needed {
-        let rect = Rect::new(
-            footer_x,
-            status_y + status_height + todo_height,
-            footer_w,
-            QUEUE_BAR_ROWS,
-        );
+        let rect = Rect::new(footer_x, status_y + todo_height, footer_w, QUEUE_BAR_ROWS);
         Some(draw_queue_bar(frame, rect, queue_bar, theme))
     } else {
         None
     };
 
-    // The input box sits directly below the queue bar.
+    // The transient activity bar sits directly above the input box so the live
+    // "what the agent is doing right now" status reads as part of the composer
+    // cluster rather than floating above the ambient meta bars. It stays up for
+    // the entire active round lifecycle (queued → responding → tool work →
+    // finalizing), including the streaming phase, and hides only when idle.
+    // Keeping it up during "responding" avoids a layout shift at the stream
+    // boundary and sustains the breathing-dot liveness anchor (ADR-0008)
+    // through the longest phase. Returns its rect so the event loop can
+    // hit-test clicks → Activity modal.
+    let activity_rect = if activity_row_needed {
+        draw_activity_bar(
+            frame,
+            Rect::new(footer_x, status_y + todo_height + queue_height, footer_w, STATUS_BAR_ROWS),
+            &review_alert,
+            round_started_at,
+            activity,
+            spinner_phase,
+            theme,
+        )
+    } else {
+        None
+    };
+
+    // The input box sits directly below the activity bar.
     let input_rect = Rect::new(
         footer_x,
-        status_y + status_height + todo_height + queue_height,
+        status_y + todo_height + queue_height + status_height,
         footer_w,
         input_box_height,
     );
@@ -730,7 +730,7 @@ pub fn draw_transcript(
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + status_height + todo_height + queue_height + input_box_height,
+            status_y + todo_height + queue_height + status_height + input_box_height,
             footer_w,
             hint_height,
         )

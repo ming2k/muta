@@ -1,7 +1,7 @@
 # MCP tools
 
 Each MCP server's tools are wrapped in `McpTool`
-(`crates/neenee-mcp/src/client.rs`) and dispatch `tools/call` JSON-RPC over
+(`crates/neenee-agent/src/mcp/client.rs`) and dispatch `tools/call` JSON-RPC over
 stdio to the server child process. The wrapper inherits the server's
 `read_only` flag as its `ToolAccess`: a `read_only` server's tools are `Read`,
 and any other server's are `Write`. This classification affects permission
@@ -13,7 +13,7 @@ Configuration lives in `config.toml` under `[mcp.<server>]`.
 ## `mcp__<server>__<tool>`
 
 Parameters come from the MCP server's `inputSchema`, falling back to
-`{"type":"object"}` when absent (`crates/neenee-mcp/src/client.rs`). The public
+`{"type":"object"}` when absent (`crates/neenee-agent/src/mcp/client.rs`). The public
 name is `mcp__{sanitized_server}__{sanitized_original}`.
 
 See [MCP servers](../../explanation/agent-design/mcp.md) for the server model,

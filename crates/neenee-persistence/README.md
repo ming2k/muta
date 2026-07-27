@@ -7,10 +7,10 @@ one layer above it: the durable state and configuration a frontend needs to
 actually run a session:
 
 - config loading (`config.rs`) and path resolution (`paths.rs`);
-- the **event-sourced session store** (which carries the pursuit primitive per
-  ADR-0032), blob storage, and the embedding index;
-- the per-project advisory lock (`flock`), model-usage telemetry;
-- the SQLite-backed repeat/cron store (`repeat.db`).
+- the **event-sourced session store** (ADR-0032) — which also carries the
+  `/repeat` cron schedule as session-scoped state — blob storage, and the
+  embedding index;
+- the per-project advisory lock (`flock`), model-usage telemetry.
 
 This is the **local agent** persistence layer. It assumes a single-user
 workstation: paths resolve via XDG `ProjectDirs`, sessions are keyed by project

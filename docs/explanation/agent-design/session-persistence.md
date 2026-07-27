@@ -19,9 +19,8 @@ that conversation resumable:
 - the model window that future provider requests start from,
 - the archived transcript that has been projected out of the model window,
 - user-visible assistant and tool events,
-- hidden harness messages such as pursuit continuation and compaction
-  checkpoints,
-- task and pursuit state,
+- hidden harness messages such as compaction checkpoints,
+- task state,
 - the latest context-projection metadata,
 - the local blobs needed to reconstruct large tool results and attachments.
 
@@ -93,8 +92,8 @@ local session first, then sends the restored model window on the next provider
 request.
 
 The resume path restores the visible transcript, the model window, the archived
-transcript, hidden harness context, projection metadata, task state, pursuit
-state, and any blobs that are still referenced by messages. It also restores
+transcript, hidden harness context, projection metadata, task state, and any
+blobs that are still referenced by messages. It also restores
 the session's **provider/model pin** — if the session had switched providers or
 models, resume lands back on that choice rather than the global default, so a
 reopened session talks to the same model it was using. For the dual-write
@@ -118,7 +117,7 @@ A session is correctly resumable when these conditions hold:
   compaction,
 - tool-call ids still pair assistant calls with tool results,
 - hidden harness messages keep their provenance,
-- unfinished pursuit or task state is restored before the next round,
+- unfinished task state is restored before the next round,
 - context-projection metadata says what operation produced the current window.
 
 If those conditions hold, a resumed session does not need to re-prune or

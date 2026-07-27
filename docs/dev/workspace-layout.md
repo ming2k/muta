@@ -13,9 +13,8 @@ crates/
   neenee-server/       # headless session host: one session served over WebSocket
   neenee-tui-engine/           # in-house grid + diff rendering engine
   neenee-transport/       # session harness, handlers, serve transport
-  neenee-agent/         # orchestration: the round/turn loop, plus built-in tools (bash, read, grep, glob, webfetch, …)
+  neenee-agent/         # orchestration: the round/turn loop, built-in tools (bash, read, grep, glob, webfetch, …), and the MCP runtime (mcp module)
   neenee-skills/        # skill discovery, registry, and tool adapters
-  neenee-mcp/           # MCP stdio transport and tool publication
   neenee-persistence/         # durable state: session store, config, paths
   neenee-core/          # shared domain and wire contracts (no deps)
   neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)

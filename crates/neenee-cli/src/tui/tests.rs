@@ -1047,7 +1047,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
-        send_target: crate::tui::app::SendTarget::Insert,
+        send_target: crate::tui::app::SendTarget::NextRound,
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),

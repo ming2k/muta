@@ -130,11 +130,6 @@ impl Dirs {
         self.projects_dir().join(project_bucket_name(project_root))
     }
 
-    /// SQLite database for `/repeat` cron jobs (durable recurring prompts).
-    pub fn repeat_db(&self) -> PathBuf {
-        self.data_dir.join("repeat.db")
-    }
-
     /// User-global skills (`$XDG_DATA_HOME/neenee/skills`). Per-project skills
     /// still live under the project's working directory (`.neenee/skills/`)
     /// and are not stored here.

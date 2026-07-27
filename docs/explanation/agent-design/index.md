@@ -53,30 +53,26 @@ model of one agent round.
 5. [Model context](model-context.md) — the provider-facing request view:
    rebuilt system prompt, model-visible messages, tool schemas, assistant tool
    calls, tool results, and provider-specific serialization.
-6. [Pursuits](pursuits.md) — durable per-session objectives driven by the
-   `/pursue` stop-gate (within-round continuation until the condition is met)
-   and the `/repeat` cron scheduler. How the agent keeps working toward an
-   objective across rounds and restarts.
-7. [Envoys](envoys.md) — the `envoy` tool's isolated child agent.
+6. [Envoys](envoys.md) — the `envoy` tool's isolated child agent.
    The reference for isolation: what is shared (the provider), what is fresh
-   (history, pursuits, plan state), how events stream back through one
-   pipeline, and how a profile admits tools by capability axis.
-8. [MCP servers](mcp.md) — local stdio MCP servers as dynamically discovered
+   (history), how events stream back through one pipeline, and how a profile
+   admits tools by capability axis.
+7. [MCP servers](mcp.md) — local stdio MCP servers as dynamically discovered
    tools. The reference for failure isolation and for how an extension surface
    reuses the same `Tool` trait and execution path as built-ins.
-9. [User questions](user-questions.md) — the `ask_user` tool that blocks a round
+8. [User questions](user-questions.md) — the `ask_user` tool that blocks a round
    to resolve ambiguity. The reference for the oneshot-channel blocking
    pattern the permission broker also uses.
-10. [Unattended operation](unattended.md) — the design intent of running
+9. [Unattended operation](unattended.md) — the design intent of running
    without human intervention. Separates the *enforced* floor (the broker
    gate the flag controls) from the broader *expressed* posture
    (no confirmations, no questions), and the contexts where the flag is
    forced on. The autonomous counterpart to user questions, read as a pair.
-11. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
+10. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
    lazy body loading, the source/priority cascade, and explicit versus
    implicit invocation. The reference for the extension surface that adds
    instructions rather than tools.
-12. [Lifecycle hooks](hooks.md) — user-configured actions that fire on the
+11. [Lifecycle hooks](hooks.md) — user-configured actions that fire on the
    agent's lifecycle events (tool call, round end, session start, compaction).
    One event axis with capability implied by the event; the reference for
    the extension surface that adds practice (format, CI gates, context
@@ -85,20 +81,20 @@ model of one agent round.
 The harness's [context projection](harness.md#context-projection) section has two
 deep-dive references, read as a pair:
 
-13. [Context pruning](context-pruning.md) — the cheap, implicit first layer:
+12. [Context pruning](context-pruning.md) — the cheap, implicit first layer:
     clearing stale tool-result bodies while preserving the `tool_call_id`
     chain, gated at ~65% of the window, surfaced only as a `debug` trace.
-14. [Context compaction](context-compaction.md) — the heavier second layer:
+13. [Context compaction](context-compaction.md) — the heavier second layer:
     summarizing older complete rounds into a durable checkpoint at ~85%, with
     a model-written anchored summary, deterministic fallback, and the visible
     `Compacted` notice.
-15. [Token accounting](token-accounting.md) — how the token count that drives
+14. [Token accounting](token-accounting.md) — how the token count that drives
     pruning and compaction is *measured*: the two-source priority chain
     (upstream `usage` first, char-class estimator fallback), the ledger that
     attributes every token as reported vs. estimated, and the report modal that
     makes that accuracy visible. Read this to understand the unit the previous
     two layers operate on.
-16. [Prompt caching](prompt-caching.md) — the cost counterpart to token
+15. [Prompt caching](prompt-caching.md) — the cost counterpart to token
     accounting: how a cached prefix is billed at ~0.1× (or folded into a
     discount), the three provider strategies (`Breakpoints` / `SessionKey` /
     `Automatic`), and the single rule that keeps the savings honest — every
@@ -115,7 +111,6 @@ user message
   └─ [Harness] execute_round
        ├─ [Session]   use the durable model window and projection metadata
        ├─ [Context]   prepare request messages and rebuild the system prompt
-       └─ [Pursuits]  active pursuit injected into the prompt
        └─ [Hooks]     UserPromptSubmit: deny? / prepend context
        └─ [Provider] stream tokens; reconstruct native tool-call deltas
             └─ fallback? [Rounds and turns] parse tool call from text
@@ -127,9 +122,8 @@ user message
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio
             └─ [User questions] if call is `ask_user`: block on oneshot
        └─ [Hooks] PostToolUse | PostToolUseFailure: inject context?
-       └─ completion marker? [Pursuits] finalize on completion signal
        └─ next tool turn, or stop on final message / safety bound
-            └─ [Hooks] Stop gate composes with /pursue: deny? → another turn
+            └─ [Hooks] Stop hook: deny? → another turn
 ```
 
 Every arrow is documented in one of the canon pages above.

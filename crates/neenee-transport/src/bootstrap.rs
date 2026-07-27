@@ -30,7 +30,6 @@ use neenee_core::{
 };
 use neenee_agent::mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
-    RepeatStore,
     config::{Config, TuiConfig},
     embedding, lock, paths, provider_usage,
     session::SessionStore,
@@ -138,8 +137,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         "assemble only handles Fresh/Resume/Picker; Doctor, Attach, and Showcase must short-circuit in the caller"
     );
 
-    // First-run friendliness: this harness opens some stores eagerly (the
-    // repeat scheduler's SQLite db under data_dir) and does not create their
+    // First-run friendliness: this harness opens stores eagerly (the session
+    // store and embedding index under data_dir) and does not create their
     // parent dirs first — on a developer's machine those dirs usually already
     // exist from prior runs, but any binary may be started into a fresh XDG
     // root (wrappers, CI, sandboxes, a spawned session server). Create the
@@ -241,28 +240,16 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
 
-    // Durable store for `/repeat` cron jobs. Opened once; cloned for the
-    // command handler and the background scheduler.
-    //
-    // Open it concurrently with the independent `EmbeddingStore::open` (a file
-    // read for the semantic-search index), so the two blocking I/O opens run
-    // in parallel instead of sequentially.
-    let (repeat_store, embedding_store) = tokio::try_join!(
-        RepeatStore::open(paths::get().repeat_db()),
-        embedding::EmbeddingStore::open(
-            paths::get().project_embeddings(&project_root),
-            Arc::new(embedding::MockEmbeddingProvider::new(384)),
-        ),
-    )?;
+    // Open the per-project embedding index (a file read for the
+    // semantic-search index) concurrently with nothing else heavy; it feeds
+    // `/search` and the agent's retrieval tools.
+    let embedding_store = embedding::EmbeddingStore::open(
+        paths::get().project_embeddings(&project_root),
+        Arc::new(embedding::MockEmbeddingProvider::new(384)),
+    )
+    .await?;
     let embedding_store: Arc<AsyncRwLock<embedding::EmbeddingStore>> =
         Arc::new(AsyncRwLock::new(embedding_store));
-    // Background scheduler: every 30s prune expired jobs and fire any that are
-    // due, dispatching each prompt as a normal chat round.
-    start_repeat_scheduler(
-        repeat_store.clone(),
-        req_tx.clone(),
-        std::time::Duration::from_secs(30),
-    );
 
     // Initialize Agent logic. The provider is resolved through the model
     // catalog (`build_provider_for`), the single source of truth for the
@@ -314,6 +301,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         #[cfg(debug_assertions)]
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };
+
+    // Background `/repeat` scheduler, bound to THIS session. Every 30s it prunes
+    // expired jobs and fires any that are due, dispatching each prompt as a
+    // normal `AgentRequest::Chat` round. Jobs are session-scoped state now, so
+    // a resumed session's schedule is already loaded above and the scheduler
+    // runs against it from the first tick.
+    start_repeat_scheduler(
+        Arc::clone(&session),
+        req_tx.clone(),
+        std::time::Duration::from_secs(30),
+    );
 
     // C6: overlay the session's provider/model pin onto the effective config
     // before building the initial provider. A session that previously ran
@@ -542,7 +540,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let lifecycle = Arc::new(RoundLifecycle::new());
     let commands_for_task = Arc::new(custom_commands);
     let embedding_store_for_commands = embedding_store.clone();
-    let repeat_store_for_commands = repeat_store.clone();
     let req_tx_for_commands = req_tx.clone();
     // `/btw` side-conversation state (ADR-0017). The primary round machinery is
     // left exactly as-is; this slot peers it with an optional live side
@@ -589,7 +586,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime,
         commands: commands_for_task,
         embedding_store: embedding_store_for_commands,
-        repeat_store: repeat_store_for_commands,
         lifecycle,
         side,
         active_view_side,

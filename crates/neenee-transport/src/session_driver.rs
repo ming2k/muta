@@ -18,7 +18,7 @@ use neenee_agent::{Agent, EnvoyRegistry, RoundLifecycle};
 use neenee_core::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use neenee_agent::mcp::McpRuntime;
 use neenee_persistence::{
-    RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
 
@@ -72,8 +72,6 @@ pub struct SessionDriver {
     pub commands: Arc<HashMap<String, CustomCommand>>,
     /// Project embedding index for `/search` (`embedding_store_for_commands`).
     pub embedding_store: Arc<AsyncRwLock<embedding::EmbeddingStore>>,
-    /// Durable store for `/repeat` cron jobs (`repeat_store_for_commands`).
-    pub repeat_store: RepeatStore,
     /// Primary round lifecycle: at most one active round, superseded by the
     /// next begin (replaces the old token-slot + generation-counter pair).
     pub lifecycle: Arc<RoundLifecycle>,
@@ -132,7 +130,6 @@ impl SessionDriver {
             mcp_runtime,
             commands: commands_for_task,
             embedding_store: embedding_store_for_commands,
-            repeat_store: repeat_store_for_commands,
             lifecycle,
             side,
             active_view_side,
@@ -519,7 +516,6 @@ impl SessionDriver {
                         &skills_registry_for_commands,
                         &commands_for_task,
                         &embedding_store_for_commands,
-                        &repeat_store_for_commands,
                         &req_tx_for_commands,
                         &project_root_for_side,
                         &startup,

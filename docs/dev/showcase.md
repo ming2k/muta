@@ -38,7 +38,7 @@ mid-interaction, so you can never get trapped in a raw-mode terminal.
 | `history` | `Ctrl+R` input-history fuzzy search | type to filter `↑↓` |
 | `sessions` | session picker | `↑↓` |
 | `session` | session-context tabbed modal (Model/MCP/Skills/Permissions/Tools) | `←→`/`Tab` cycle panes `↑↓` |
-| `activity` | activity modal (pursuit + tasks + round/turn/status) | `←→`/`Tab` cycle tabs `↑↓` scroll |
+| `activity` | activity modal (tasks + round/turn/status) | `←→`/`Tab` cycle tabs `↑↓` scroll |
 | `help` | keybindings help (read-only) | `Esc` quit |
 | `toast` | copy / armed toasts | `Tab` next variant |
 

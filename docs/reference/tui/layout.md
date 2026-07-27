@@ -70,7 +70,7 @@ and hint bars are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
-| Activity bar | `STATUS_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label, the active pursuit objective, and the round elapsed timer. Click to open the Activity modal. See [Activity bar](status-bar.md). |
+| Activity bar | `STATUS_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](status-bar.md). |
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `todo` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
 | Queue bar | `QUEUE_BAR_ROWS = 2` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. Count · next-item send time · key legend (row 1) and a one-line preview of the next item to pop (row 2). Click to expand the Queue modal. |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
@@ -78,24 +78,25 @@ and hint bars are persistent (when chrome is visible):
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
-│ ● making edits (23s · Esc Esc to interrupt)                │  ← activity bar
-│ todo · 2/5 · write the documentation        Ctrl+T expand  │  ← todo bar
-│ queue · 1 · 14:02   {next item preview…}          [insert] │  ← queue bar (2 rows)
-│  > type here…                                              │  ← input box
-│ Enter send          unattended   Kimi K2.7 Code  89.2k (8%) │  ← hint bar
+│ 📌 TODOS 2/5 · write the documentation      Ctrl+T expand   │  ← todo bar
+│ queue · 1 · 14:02   {next item preview…}          [insert]  │  ← queue bar (2 rows)
+│ ● making edits (23s · Esc Esc to interrupt)                 │  ← activity bar
+│  > type here…                                               │  ← input box
+│ Enter send          unattended   Kimi K2.7 Code  89.2k (8%)  │  ← hint bar
 └────────────────────────────────────────────────────────────┘
 ```
 
 The activity bar carries the breathing-dot liveness anchor plus the live
-status label, the active pursuit objective, and the round elapsed timer —
-each surfaced only while it applies. The todo bar, directly below it, owns
-the agent's live task list (tag · progress · current item); the queue bar
-owns the pending outbox. The structural counters (`round N · turn M ·
-<model>`) deliberately do **not** appear on the bars; they live inside the
-Activity modal (opened by clicking the activity bar), along with the
-per-item todo breakdown. The hint bar carries the persistent session-state
-flags (e.g. `unattended`) on its right cluster, so none of the bars above it
-have to. The footer is inset by
+status label and the round elapsed timer — each surfaced only while it
+applies. It sits directly above the input box so the live status reads as
+part of the composer cluster. The ambient meta bars float above it: the todo
+bar leads the stack and owns the agent's live task list (tag · progress ·
+current item); the queue bar owns the pending outbox. The structural counters
+(`round N · turn M · <model>`) deliberately do **not** appear on the bars;
+they live inside the Activity modal (opened by clicking the activity bar),
+along with the per-item todo breakdown. The hint bar carries the persistent
+session-state flags (e.g. `unattended`) on its right cluster, so none of the
+bars above it have to. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share
 the same horizontal extent so their left and right edges line up.
 
@@ -253,7 +254,7 @@ the transcript content above.
 | `view.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `STATUS_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `HINT_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
-| `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + pursuit + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `render/composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
 | `disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
 | `app.rs` | `in_envoy_view`, `focus_stack`, `follow_bottom`, scroll clamping |

@@ -3,12 +3,9 @@
 //! `neenee-core` holds the pure domain (types & traits), zero I/O. This
 //! crate sits one layer above it: the durable state and configuration a
 //! frontend needs to actually run a session — config loading, path
-//! resolution, the event-sourced session store, blob storage, the embedding index, the
-//! per-project advisory lock, model-usage telemetry, and the SQLite-backed
-//! repeat-cron (`repeat.db`) store. The repeat store lived in `neenee-core`
-//! before the ADR-0005 "zero-I/O core" boundary was enforced; it moved here
-//! so core stays free of `rusqlite`. The shared migration helpers (`db`)
-//! moved with it.
+//! resolution, the event-sourced session store (which carries the `/repeat`
+//! cron schedule as session-scoped state), blob storage, the embedding index,
+//! the per-project advisory lock, and model-usage telemetry.
 //!
 //! This is the **local agent** persistence layer. It assumes a
 //! single-user workstation: paths resolve via XDG `ProjectDirs`, sessions
@@ -28,15 +25,11 @@
 pub mod blobs;
 pub mod cache;
 pub mod config;
-pub mod db;
 pub mod embedding;
 pub mod events;
 pub mod fsutil;
 pub mod lock;
 pub mod paths;
 pub mod provider_usage;
-pub mod repeat;
 pub mod search_tool;
 pub mod session;
-
-pub use repeat::RepeatStore;

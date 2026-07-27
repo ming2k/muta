@@ -31,9 +31,10 @@ use neenee_core::{
     AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
     NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent, Tool,
     estimate_bytes, estimate_tokens,
+    repeat::RepeatJob,
 };
 use neenee_persistence::{
-    RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
@@ -83,7 +84,6 @@ pub async fn dispatch(
     skills_registry_for_commands: &Arc<SkillRegistry>,
     commands_for_task: &HashMap<String, CustomCommand>,
     embedding_store_for_commands: &Arc<AsyncRwLock<embedding::EmbeddingStore>>,
-    repeat_store_for_commands: &RepeatStore,
     req_tx_for_commands: &mpsc::UnboundedSender<AgentRequest>,
     project_root_for_side: &std::path::Path,
     startup: &StartupMode,
@@ -621,13 +621,14 @@ pub async fn dispatch(
                 return;
             }
             if rest == "list" {
-                let jobs = repeat_store_for_commands.list().await.unwrap_or_default();
+                let mut jobs = session.repeat_jobs().await;
                 if jobs.is_empty() {
                     let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text("No /repeat jobs scheduled.".to_string()),
                     ));
                 } else {
+                    jobs.sort_by_key(|j| j.next_fire);
                     let mut lines = vec!["Scheduled /repeat jobs:".to_string()];
                     for j in &jobs {
                         lines.push(format!(
@@ -647,17 +648,21 @@ pub async fn dispatch(
             }
             if let Some(id) = rest.strip_prefix("cancel ") {
                 let id = id.trim();
-                match repeat_store_for_commands.delete(id).await {
-                    Ok(true) => {
+                let mut jobs = session.repeat_jobs().await;
+                let before = jobs.len();
+                jobs.retain(|j| j.id != id);
+                if before == jobs.len() {
+                    let _ = resp_tx.send(round_response(
+                        &session.id().await,
+                        RoundEvent::Text(format!("No repeat job with id {id}.")),
+                    ));
+                    return;
+                }
+                match session.set_repeat_jobs(jobs).await {
+                    Ok(()) => {
                         let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Cancelled repeat job {id}.")),
-                        ));
-                    }
-                    Ok(false) => {
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("No repeat job with id {id}.")),
                         ));
                     }
                     Err(error) => {
@@ -695,18 +700,27 @@ pub async fn dispatch(
                     return;
                 }
             };
-            match repeat_store_for_commands.add(&cron, &prompt, next).await {
-                Ok(job) => {
+            let mut jobs = session.repeat_jobs().await;
+            let job = RepeatJob {
+                id: uuid::Uuid::new_v4().to_string(),
+                cron: cron.clone(),
+                prompt: prompt.clone(),
+                created_at: now,
+                next_fire: next,
+                last_fire: None,
+            };
+            let short_id = job.id[..8.min(job.id.len())].to_string();
+            jobs.push(job);
+            match session.set_repeat_jobs(jobs).await {
+                Ok(()) => {
                     let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Scheduled repeat job {} (`{}`), next {}. Running now.",
-                            &job.id[..8.min(job.id.len())],
-                            cron,
+                            "Scheduled repeat job {short_id} (`{cron}`), next {}. Running now.",
                             next.format("%Y-%m-%d %H:%M"),
                         )),
                     ));
-                    // Fire the first run immediately (cron handles the rest).
+                    // Fire the first run immediately (the scheduler handles the rest).
                     let _ = req_tx_for_commands.send(AgentRequest::Chat {
                         text: prompt,
                         images: Vec::new(),
@@ -1101,7 +1115,6 @@ pub async fn dispatch(
                     skills_registry: skills_registry_for_commands,
                     commands: commands_for_task,
                     embedding_store: embedding_store_for_commands,
-                    repeat_store: repeat_store_for_commands,
                     req_tx: req_tx_for_commands,
                     project_root: project_root_for_side,
                     startup,

@@ -136,7 +136,7 @@ admitted by a non-empty `write_paths` grant; the other two axes are gates:
   write anywhere outside the granted path is blocked at the execution funnel.
   Admission says *whether*; `WriteScope` says *where*. No built-in profile
   uses this today.
-- **Pursuit and todo tools are inert.** They are added inside the envoy
+- **Todo tools are inert.** They are added inside the envoy
   from a snapshot, tied to its own (empty) state cells — not the parent's.
   For a read-only research task they have nothing to act on.
 

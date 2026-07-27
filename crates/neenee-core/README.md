@@ -2,8 +2,8 @@
 
 Shared domain and wire contracts for the neenee agent stack.
 
-This crate is the **zero-I/O domain core** (ADR-0005): no `rusqlite`, no
-filesystem, no network. It is the dependency-inversion boundary used by
+This crate is the **zero-I/O domain core** (ADR-0005): no filesystem, no
+network. It is the dependency-inversion boundary used by
 independent providers, tools, persistence, sessions, SDK adapters, and
 frontends:
 
@@ -12,7 +12,7 @@ frontends:
   [`capability.rs`][cap]);
 - conversation, event, and tool-output protocol types;
 - shared value policy such as capability scopes and context budgets;
-- pursuit / repeat / todo domain types, envoy profiles, skills/MCP config
+- repeat / todo domain types, envoy profiles, skills/MCP config
   schemas;
 - the wire events the harness and frontends exchange.
 
@@ -26,7 +26,7 @@ their own behavior or I/O above it. Persistence belongs in
 [`neenee-persistence`](../neenee-persistence), provider transports in the AI SDK/provider
 crates, and orchestration in `neenee-agent`.
 
-See the architecture overview in [`docs/`](../../../docs/), ADR-0005 for the
+See the architecture overview in [`docs/`](../../docs/), ADR-0005 for the
 zero-I/O dependency rule, and ADR-0057 for the contract-only admission rule.
 
 [`Provider`]: src/capability.rs

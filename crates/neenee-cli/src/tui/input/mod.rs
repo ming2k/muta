@@ -164,6 +164,7 @@ pub enum InputAction {
     /// Send a chat message.
     SendChat(String),
     /// Toggle busy-send semantics for the next message (insert ↔ next round).
+    /// The default is `NextRound`; Tab opts the next single send into `Insert`.
     ToggleSendTarget,
     /// Send a slash command.
     SendSlash(String),

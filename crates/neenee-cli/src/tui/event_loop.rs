@@ -2349,8 +2349,11 @@ pub(super) async fn run_app_loop(
                     if !text.is_empty() || has_images {
                         if app.running_sessions.contains(&viewed_session_id) {
                             // Busy sends live in the fixed outbox, not the
-                            // scrollback. Insert is the default; Tab selects a
-                            // one-message next-round follow-up.
+                            // scrollback. NextRound is the default so a staged
+                            // message waits for the running round to finish
+                            // naturally before starting a new one (rather than
+                            // injecting mid-round at the next turn boundary);
+                            // Tab opts the next single send back into Insert.
                             let id = uuid::Uuid::new_v4().to_string();
                             let target = app.send_target;
                             let queued_at_ms = now_epoch_ms();
@@ -2379,7 +2382,7 @@ pub(super) async fn run_app_loop(
                                     },
                                 });
                             }
-                            app.send_target = crate::tui::app::SendTarget::Insert;
+                            app.send_target = crate::tui::app::SendTarget::NextRound;
                             app.record_input_history(text.clone());
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
@@ -2391,7 +2394,7 @@ pub(super) async fn run_app_loop(
                             // in the text as positional labels.
                             let expanded =
                                 composer_attachments::expand_paste_chips(&text, &text_pastes);
-                            app.send_target = crate::tui::app::SendTarget::Insert;
+                            app.send_target = crate::tui::app::SendTarget::NextRound;
                             if !app.in_side_view {
                                 runtime.is_responding.store(true, Ordering::SeqCst);
                                 *runtime.activity_status.lock().await = "queued".to_string();

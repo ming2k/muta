@@ -223,7 +223,7 @@ selected entry into the composer for editing — it never sends.
 ╭──────────────────────────────────────────────────╮   browse mode
 │ Input History  · / to search                     │   (no query field)
 │                                                  │
-│   1  /pursue fix the auth module                  │   newest first
+│   1  /repeat @hourly check for failing tests      │   newest first
 │   2  how do I open the file?                     │
 │   3  explain this function ↵                      │   ↵ = multi-line entry
 │                                                  │
@@ -415,7 +415,7 @@ Two tabs cycled with `←`/`→`:
 
 | Tab | Contents |
 |-----|----------|
-| **Activity** | Pursuit (if any), the current round's user prompt (wrapped), and the live status block: `round N · turn M · <model> · <elapsed>` + activity label + optional review alert |
+| **Activity** | The current round's user prompt (wrapped) and the live status block: `round N · turn M · <model> · <elapsed>` + activity label + optional review alert |
 | **Tasks** | The unified todo list: `done/total` header plus one row per item with a status glyph |
 
 | Key | Effect |

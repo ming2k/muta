@@ -32,7 +32,7 @@ use std::sync::{Arc, RwLock, atomic::AtomicBool};
 use neenee_agent::{Agent, RoundLifecycle};
 use neenee_core::{AgentRequest, AgentResponse, Provider, Tool};
 use neenee_persistence::{
-    RepeatStore, config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
 use crate::commands::CustomCommand;
@@ -76,7 +76,6 @@ pub struct SlashContext<'a> {
     pub skills_registry: &'a Arc<SkillRegistry>,
     pub commands: &'a HashMap<String, CustomCommand>,
     pub embedding_store: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
-    pub repeat_store: &'a RepeatStore,
     pub req_tx: &'a mpsc::UnboundedSender<AgentRequest>,
     pub project_root: &'a Path,
     pub startup: &'a StartupMode,

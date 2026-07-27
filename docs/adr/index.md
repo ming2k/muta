@@ -34,7 +34,7 @@ See [ADR Workflow](../dev/documentation/adr-workflow.md) for the process.
 | [0021](0021-pruning-is-implicit-and-distinct-from-compaction.md) | Tool-result pruning is implicit (silent, gated at ~65%) and renamed distinct from compaction (`ContextRelief*`) | Accepted |
 | [0022](0022-session-level-ai-title.md) | Session-level AI title (first-turn auto + on-demand `/title` + manual lock; `TITLE` sub-agent profile) | Accepted |
 | [0023](0023-relevance-aware-tiered-pruning-and-layered-token-accounting.md) | Relevance-aware, tiered pruning (staleness/keep-alive, truncate→clear, informative placeholders) and layered token accounting (`effective_pressure_tokens`) | Accepted |
-| [0024](0024-pragmatic-sqlite-migrations.md) | Pragmatic SQLite migrations via `PRAGMA user_version` | Accepted |
+| [0024](0024-pragmatic-sqlite-migrations.md) | Pragmatic SQLite migrations via `PRAGMA user_version` | Superseded (SQLite removed) |
 | [0025](0025-lifecycle-event-hooks.md) | Lifecycle event hooks (single event axis: SessionStart/End, UserPromptSubmit, PreToolUse/PostToolUse/Stop/PreCompact; command-handler config; delete one-shot `CompactionHooks`) | Accepted |
 | [0026](0026-plan-progression-forcing-functions.md) | Plan progression forcing functions (plan-exit nudge, todo-continuation nudge, approval-handoff instruction; re-order verify-nudge after the todo list drains) | Superseded by ADR-0033 |
 | [0027](0027-plan-as-subagent.md) | Plan as a subagent (replace Plan mode with a `PLAN` profile + a `plan` tool; supersedes ADR-0006, revises ADR-0026; depends on ADR-0028/0029) | Superseded by ADR-0033 |

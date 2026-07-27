@@ -37,9 +37,13 @@ use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendTarget {
-    /// Admit at the next safe model/tool boundary of the running round.
+    /// Admit at the next safe model/tool boundary of the running round
+    /// (mid-round, at the next turn). Opted into per-send via Tab when the
+    /// default `NextRound` is not what the user wants for the next message.
     Insert,
     /// Wait for the running round to finish naturally, then start a new one.
+    /// This is the default send target: a staged message waits for the round
+    /// rather than injecting mid-round at a turn boundary.
     NextRound,
 }
 

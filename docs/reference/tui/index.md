@@ -59,7 +59,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Thinking step](thinking-step.md) | Expandable step for reasoning text |
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
-| [Activity bar](status-bar.md) | Breathing-dot liveness anchor + live status label + pursuit objective + elapsed; clickable to open the Activity modal |
+| [Activity bar](status-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Todo bar](todo-bar.md) | One-row task-list summary: `todo` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
 | [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
@@ -97,7 +97,7 @@ ADR-0079; paths below are relative to that directory.
 | `layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
 | `tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
-| `chrome.rs` | `draw_activity_bar` (breathing dot + status + pursuit + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
 | `notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `components/notice.rs` |

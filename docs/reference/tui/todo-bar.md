@@ -1,18 +1,18 @@
 # Todo bar
 
-One-row persistent summary of the agent's live task list, shown directly
-below the [activity bar](status-bar.md) and above the queue bar in the
-footer stack. It is the permanent home for task-list affordances: the
-activity bar no longer embeds a todos badge, so the list is always glanceable
-while it is non-empty — even while the harness is idle.
+One-row persistent summary of the agent's live task list, shown at the top of
+the footer stack — above the [queue bar](queue-bar.md) and the transient
+[activity bar](status-bar.md). It is the permanent home for task-list
+affordances: the activity bar no longer embeds a todos badge, so the list is
+always glanceable while it is non-empty — even while the harness is idle.
 
 ## Appearance
 
 ```text
- todo · 2/5 · write the documentation        Ctrl+T expand
+ 📌 TODOS 2/5 · write the documentation      Ctrl+T expand
 ```
 
-The bar surfaces three things at a glance: a fixed **`todo`** tag, the
+The bar surfaces three things at a glance: a `📌`-led **`TODOS`** label, the
 **done/total progress**, and a one-line **preview of the current item** — the
 `InProgress` item, or the first `Pending` item when nothing is mid-flight (it
 then reads as "next up"). A right-pinned **`Ctrl+T expand`** legend is the

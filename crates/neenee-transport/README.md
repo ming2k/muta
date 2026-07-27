@@ -28,28 +28,29 @@ product here.
 
 - **`session_driver`** — `SessionDriver` owns one session's request loop and
   routes `AgentRequest`s to handlers.
-- **Handlers** — chat, permission, provider, session, slash (the 22 built-in
+- **Handlers** — chat, permission, provider, session, slash (the 23 built-in
   commands).
 - **`slash_handler`** — a `SlashCommandHandler` trait + `SlashCommandRegistry`
   so embeddings register Rust slash commands without forking this crate
   (ADR-0054).
 - **`serve`** — the hot-attach WebSocket transport. Loopback by default;
   `--public` binds all interfaces and requires a bearer token (ADR-0054).
-- **`/btw` side sessions**, **MCP runtime**, **pursuits**, **hooks**, **export**,
+- **`/btw` side sessions**, **MCP runtime**, **hooks**, **export**,
   **review**, **shell**.
 - **`UiBridge`** — the one frontend-capability trait (`/export` clipboard).
 
 ## Frontend protocol
 
 The current hot-attach WebSocket API is documented in the
-[frontend integration guide](../../../docs/reference/server-api.md) and the
-[machine-readable AsyncAPI contract](../../../docs/reference/server.asyncapi.yaml).
+[frontend integration guide](../../docs/reference/server-api.md) and the
+[machine-readable AsyncAPI contract](../../docs/reference/server.asyncapi.yaml).
 The crate layering is described in
-[crate layering](../../../docs/explanation/crate-layering.md). See ADR-0037 and
+[crate layering](../../docs/explanation/crate-layering.md). See ADR-0037 and
 ADR-0054 for the design decisions.
 
 ## Status
 
 `SessionRegistry::create_session` / `close_session` are stubs (ADR-0037 Step 6,
-Pending). Today the application's `main.rs` constructs one `SessionDriver` per
-process; moving that assembly into the registry is the remaining daemon step.
+Pending). Today both application binaries build one `SessionDriver` per process
+through the `bootstrap::assemble` factory (ADR-0081); moving that assembly into
+the registry is the remaining daemon step.

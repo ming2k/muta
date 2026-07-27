@@ -23,8 +23,8 @@ For the provider schema and field meanings, see
 
 ## Add an OpenAI sub2api relay
 
-1. Open the provider picker with `Ctrl+M`.
-2. Select `＋ Add provider`.
+1. Open `/connections`.
+2. Select `＋ Add connection`.
 3. Select `OpenAI (sub2api)`.
 4. Fill the fields:
 
@@ -51,8 +51,8 @@ the provider's model list and use `＋ Add model`.
 
 ## Add an Anthropic sub2api relay
 
-1. Open the provider picker with `Ctrl+M`.
-2. Select `＋ Add provider`.
+1. Open `/connections`.
+2. Select `＋ Add connection`.
 3. Select `Anthropic (sub2api)`.
 4. Fill the fields:
 
@@ -71,8 +71,8 @@ is not listed.
 
 ## Add the Antigravity Google relay
 
-1. Open the provider picker with `Ctrl+M`.
-2. Select `＋ Add provider`.
+1. Open `/connections`.
+2. Select `＋ Add connection`.
 3. Select `Antigravity (sub2api)`.
 4. Fill `Name` and `Token`.
 5. Keep the pre-filled `Base URL` unless your relay uses a different host:

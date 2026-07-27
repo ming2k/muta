@@ -6,8 +6,8 @@ surface — one page per tool category. For how tools are gated (access tiers,
 capability axes, the permission broker), see [Tool access](access.md).
 
 Most built-in tools live in `neenee-agent`'s `tools` module; skill adapters live in
-`neenee-skills`, MCP adapters in `neenee-mcp`, and `envoy` in `neenee-agent`
-proper.
+`neenee-skills`, MCP adapters in `neenee-agent`'s `mcp` module, and `envoy` in
+`neenee-agent` proper.
 The `Tool` trait is defined in
 `crates/neenee-core/src/capability.rs`.
 

@@ -237,8 +237,8 @@ error = "#be6f68"
 
 Lifecycle event hooks (ADR-0025): each entry runs a shell command at one
 point in the agent's lifecycle. See the [hooks explanation](../explanation/agent-design/hooks.md)
-for the event set, the command contract, and how hooks compose with the
-permission broker and the `/pursue` stop-gate.
+for the event set, the command contract, and how a `Stop` hook composes with
+round termination.
 
 The `[[hooks]]` array contains one table per hook. The capability a hook has
 (block / inject / observe) is implied by its `event` — see the explanation for

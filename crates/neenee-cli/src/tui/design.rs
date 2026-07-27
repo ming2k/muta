@@ -79,9 +79,9 @@ pub(crate) const HINT_BAR_GAP_MIN: usize = 2;
 pub(crate) const HINT_BAR_SEGMENT_GAP: usize = 2;
 
 pub(crate) const STATUS_BAR_ROWS: u16 = 1;
-/// Todo bar: a one-line region pinned directly below the activity bar (and
-/// above the queue bar) that surfaces the live task list — a `todo` tag, the
-/// done/total progress, and a one-line preview of the current item (the
+/// Todo bar: a one-line region that leads the footer stack (above the queue
+/// bar and the transient activity bar) and surfaces the live task list — a
+/// `📌 TODOS d/t` identity and a one-line preview of the current item (the
 /// `InProgress` one, or the first `Pending` when nothing is mid-flight). The
 /// whole bar is the click target that opens the Activity modal on the Todos
 /// section. Always one row tall when visible (hidden only while an overlay
@@ -90,11 +90,12 @@ pub(crate) const STATUS_BAR_ROWS: u16 = 1;
 /// no longer needs to embed the `todos d/t` badge.
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Queue bar: a two-line persistent region pinned directly below the todo bar
-/// that always surfaces the pending outbox (a count, the send time of the
-/// next item to pop, key affordances, and a preview of that item's text).
-/// Always two rows tall when visible (hidden only while an overlay modal
-/// replaces the chrome, or inside an envoy zoom). It is the permanent home for
-/// queue affordances, so the hint bar no longer needs to embed outbox counts.
+/// (and above the transient activity bar) that always surfaces the pending
+/// outbox (a count, the send time of the next item to pop, key affordances,
+/// and a preview of that item's text). Always two rows tall when visible
+/// (hidden only while an overlay modal replaces the chrome, or inside an envoy
+/// zoom). It is the permanent home for queue affordances, so the hint bar no
+/// longer needs to embed outbox counts.
 pub(crate) const QUEUE_BAR_ROWS: u16 = 2;
 /// Permanent breathing room between the transcript and footer chrome. Keeping
 /// this row even while the activity bar is idle prevents the latest response

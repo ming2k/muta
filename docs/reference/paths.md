@@ -37,7 +37,6 @@ Persistent, program-generated, must survive restart. Back it up.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `blobs/<2-char-prefix>/<hash>` | Content-addressed blob store for large payloads | Yes |
-| `repeat.db` | SQLite `/repeat` cron-job database (durable recurring prompts) | Yes |
 | `projects/<16-hex-bucket>/` | Per-project bucket: sessions, current pointer, metadata | Yes |
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |
 | `projects/<bucket>/neenee.lock` | Per-project advisory lock | Rebuildable |
@@ -59,7 +58,7 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
-| `provider_usage.json` | Per-model usage telemetry driving recency sort in the provider picker | Rebuildable |
+| `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `neenee.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
 | `log/` | Structured rolling-log appender output (reserved) | Rebuildable |
 
@@ -117,7 +116,7 @@ The override stack is identical; only the fallback locations differ.
 
 ## Cleanup quick reference
 
-| Pursuit | Command |
+| Purpose | Command |
 |------|---------|
 | Reset caches | `rm -rf $XDG_CACHE_HOME/neenee` |
 | Reset rebuildable state | `rm -rf $XDG_STATE_HOME/neenee` |
