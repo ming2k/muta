@@ -284,16 +284,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Session loading honors the startup mode. Under ADR-0018
     // `load_for_project` pins a fresh `sessions/<id>.{json,jsonl}`, so a bare
     // start always begins a new session; prior sessions stay on disk and are
-    // reachable through the picker or `resume`. Resume opens an existing
-    // session file by id.
+    // reachable through the picker or `resume`. `neenee resume <id>` opens
+    // that exact session — a missing target is a hard error (propagated via
+    // `?`) rather than a silent fresh-session fallback, so the operator knows
+    // the resume never happened. `neenee resume` (no id) opens the sessions
+    // picker overlay instead of guessing.
     let session = Arc::new(SessionStore::load_for_project(project_root.clone()));
     let open_picker_on_start = match &startup {
         StartupMode::Fresh => false,
         StartupMode::Picker => true,
         StartupMode::Resume(id) => {
-            if let Err(error) = session.resume(id.as_deref()).await {
-                eprintln!("resume failed: {error}; starting a fresh session.");
-            }
+            session.resume(id.as_deref()).await?;
             false
         }
         StartupMode::Doctor => unreachable!("doctor returns before this match"),

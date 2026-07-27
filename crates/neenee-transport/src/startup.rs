@@ -89,6 +89,10 @@ pub fn split_custom_command(input: &str) -> (&str, &str) {
 pub enum StartupMode {
     Fresh,
     Resume(Option<String>),
+    /// `neenee resume` with no id: pop the sessions picker overlay so the
+    /// user can choose which session to resume. Distinct from
+    /// `Resume(None)` (which would auto-resume the most-recent session) so
+    /// the two stay explicit.
     Picker,
     Doctor,
     /// Attach the TUI to an already-running session server for this project

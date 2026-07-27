@@ -10,6 +10,7 @@ mod showcase;
 mod tui;
 
 pub(crate) use neenee_transport::startup;
+use neenee_transport::session_view::short_session_id;
 
 /// This CLI's identity, handed to the engine as its opening system prompt.
 /// Lives here (not in `neenee-agent`) so the engine stays identity-agnostic
@@ -93,6 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // drop — hold the guard in `main`'s scope for the process lifetime.
     let _process_lock = process_lock;
     let initial_round_count = session.round_counter().await;
+    // Keep a handle on this session so we can print a `neenee resume <id>`
+    // hint after the TUI exits. `start_tui` moves the `Arc` into the
+    // session source, so clone first.
+    let session_for_exit = Arc::clone(&session);
 
     tokio::spawn(driver.run());
 
@@ -116,6 +121,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // SessionEnd hooks (ADR-0025): observers fire on clean exit.
             agent_for_session_end.fire_session_end().await;
             let _ = Config::save_history(&history);
+            // The terminal is already restored to cooked mode here, so a
+            // plain `println!` renders correctly. Hint how to reopen this
+            // session — but only if it actually gained content, otherwise we
+            // pointlessly advertise resuming an empty conversation.
+            let id = session_for_exit.id().await;
+            if !session_for_exit.full_transcript().await.is_empty() {
+                println!(
+                    "Session {} ended. To continue it later, run: neenee resume {}",
+                    short_session_id(&id),
+                    id,
+                );
+            }
         }
         Err(e) => return Err(e),
     }

@@ -87,7 +87,8 @@ pub struct SessionDriver {
     /// Startup mode — read by the misplaced SessionStart-hooks block inside
     /// `/pursue status` (preserved verbatim; see note in [`Self::run`]).
     pub startup: StartupMode,
-    /// Whether the sessions picker should open on launch.
+    /// Whether the sessions picker should open on launch (`neenee resume`
+    /// with no id).
     pub open_picker_on_start: bool,
     /// Frontend clipboard bridge (ADR-0037 step 3). The TUI provides a real
     /// impl; a future browser frontend provides its own. Used only by the
