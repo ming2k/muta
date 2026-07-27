@@ -504,7 +504,7 @@ fn failed_edit_renders_error_instead_of_intended_diff() {
 /// spacing between consecutive steps is captured. Backgrounds are omitted:
 /// these tests are about row counts, not palette.
 fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u16) -> String {
-    use super::{EmptyStateGuidance, Theme, TranscriptView, draw_transcript};
+    use super::{EmptyStateGuidance, QueueBarView, Theme, TranscriptView, draw_transcript};
     use crate::tui::model::layout::LayoutMap;
 
     let theme = Theme::default();
@@ -525,13 +525,15 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 input: "",
                 byte_cursor: 0,
                 chrome_hidden: false,
+                queue_bar: QueueBarView {
+                    items: &[],
+                    paused: false,
+                },
                 envoy_bar: None,
                 side_banner: None,
-                pursuit: None,
                 todos: None,
                 review_alert: String::new(),
                 round_started_at: None,
-                unattended: false,
                 hovered_step: None,
                 focused_target: None,
                 logo: None,
@@ -600,7 +602,7 @@ fn collapsed_tool_steps_stack_flush() {
             false,
         ),
     ];
-    let grid = render_transcript_grid(&steps, 60, 12);
+    let grid = render_transcript_grid(&steps, 60, 14);
     // The three headers must be adjacent: no blank row between any pair. Each
     // header carries the disclosure marker (`+` collapsed) somewhere in the
     // line, so locate their row indices and assert they are consecutive.
@@ -687,7 +689,7 @@ fn user_message_before_tool_step_has_single_separator_row() {
         ),
     ];
 
-    let grid = render_transcript_grid(&messages, 60, 14);
+    let grid = render_transcript_grid(&messages, 60, 16);
     let rows: Vec<&str> = grid.lines().collect();
     let user_text_idx = rows
         .iter()
@@ -851,7 +853,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
     )
     .with_turn(7);
 
-    let grid = render_transcript_grid(&[thinking, first, second], 72, 14);
+    let grid = render_transcript_grid(&[thinking, first, second], 72, 16);
     let rows: Vec<&str> = grid.lines().collect();
     let turn_idx = rows
         .iter()
@@ -899,7 +901,7 @@ fn different_tool_turns_have_one_vertical_gap() {
         )
         .with_turn(turn)
     };
-    let grid = render_transcript_grid(&[make_step(1), make_step(2)], 72, 14);
+    let grid = render_transcript_grid(&[make_step(1), make_step(2)], 72, 16);
     let rows: Vec<&str> = grid.lines().collect();
     let turn_rows: Vec<usize> = rows
         .iter()
@@ -938,7 +940,7 @@ fn provider_retry_is_one_expandable_transcript_component() {
     );
     retry.pin_provider_retry_expanded(true);
 
-    let grid = render_transcript_grid(&[retry], 72, 12);
+    let grid = render_transcript_grid(&[retry], 72, 14);
     assert!(
         grid.contains("provider retry 1/3 · next in"),
         "summary should expose current/max retry and live countdown:\n{grid}"

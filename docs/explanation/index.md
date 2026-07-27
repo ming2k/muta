@@ -28,11 +28,10 @@ before the individual docs.
 | Page | Purpose |
 |------|--------|
 | [Agent design](agent-design/index.md) | Section index: the recurring design themes, a suggested reading order, and how a round flows through the canon |
-| [Harness architecture](agent-design/harness.md) | Control plane around provider calls, pursuit state, autonomous loop, safety bounds |
+| [Harness architecture](agent-design/harness.md) | Control plane around provider calls, the round loop, safety bounds |
 | [Rounds and turns](agent-design/rounds-and-turns.md) | The two-layer execution model (round vs turn) and the lifecycle inside one turn: declaration, gating, execution, and how outcomes re-enter the conversation |
 | [Session persistence](agent-design/session-persistence.md) | The durable local session scene: model window, archived transcript, projection metadata, and resume recovery contract |
 | [Model context](agent-design/model-context.md) | The request-scoped context sent to a provider: rebuilt system prompt, model-visible messages, tool schemas, tool-call arguments, and tool results |
-| [Pursuits](agent-design/pursuits.md) | The `/pursue` stop-gate (within-round condition-driven pursuit) and the `/repeat` cron scheduler |
 | [Envoys](agent-design/envoys.md) | The `envoy` tool's read-only child agent: isolation model, event streaming, and the TUI zoom view |
 | [MCP servers](agent-design/mcp.md) | Local stdio MCP server discovery, the `mcp__<server>__<tool>` wrapper, failure isolation, and access-tier gating |
 | [User questions](agent-design/user-questions.md) | How the `ask_user` tool blocks the agent, renders a modal, and returns answers |

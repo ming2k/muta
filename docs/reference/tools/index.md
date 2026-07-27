@@ -18,10 +18,6 @@ Most tools self-register through `inventory` and are collected into a
 `todo_update`, bound to that instance's live task-list context. `EnvoyTool` is
 assembled explicitly because it captures a snapshot of the other tools.
 
-The pursuit lifecycle has no model-facing tools: `/pursue` (entry, user), the
-stop-gate (continuation, harness), and `[NEENEE_PURSUIT_COMPLETE]` (exit, model)
-own the three phases directly. See [pursuits](pursuits.md) and ADR-0031.
-
 | Tool | Access | Permission scope | Reference page |
 |------|--------|------------------|----------------|
 | `bash` | `Execute` | `command` argument | [bash](bash.md) |

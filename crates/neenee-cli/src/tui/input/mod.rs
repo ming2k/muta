@@ -141,6 +141,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::ConfigTheme
             | super::Modal::ConfigLayout
             | super::Modal::Activity
+            | super::Modal::Queue
             | super::Modal::TokenReport
     )
 }
@@ -175,7 +176,8 @@ pub enum InputAction {
     /// current model in Connections. Falls through to the API-key setup modal
     /// when the target has no key.
     ProviderPickerActivate,
-    /// Toggle the favorite flag on the highlighted Connections row.
+    /// Toggle the favorite flag on the highlighted Models row (model-level,
+    /// ADR-0046). The Connections list has no favorite concept.
     ProviderPickerToggleFavorite,
     /// Open the unified provider editor (`e`): the per-model settings editor
     /// for the highlighted Models row, or the provider editor (key / meta) for
@@ -225,9 +227,6 @@ pub enum InputAction {
     CopyOauthContent {
         target: OauthCopyTarget,
     },
-    /// Remove the highlighted model from its user-defined provider (`d` in the
-    /// Models picker). Built-in providers are ignored by the handler.
-    ProviderPickerRemoveModel,
     /// Delete the entire highlighted custom provider from the Connections list
     /// (`Shift+D`). Built-in providers are ignored by the handler. Opens the
     /// provider-delete confirm overlay rather than deleting immediately.
@@ -248,11 +247,18 @@ pub enum InputAction {
     /// Open the Connections list (`/connections`) — the provider-instance
     /// management surface.
     OpenConnections,
+    /// Open the add-provider template chooser (`a` in the Connections modal) —
+    /// the first step of adding a new provider connection.
+    OpenProviderTemplate,
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
     /// Open the help / keybindings modal.
     OpenHelp,
+    /// Open the queue overview modal (the full outbox list). Reached via `F2`
+    /// or by clicking the persistent queue bar. Mirrors clicking the queue bar
+    /// — the request is never forwarded, it only opens the overlay.
+    OpenQueue,
     /// Open the permissions manager modal: a centered list of cached "always
     /// allow" rules with per-row revoke and clear-all. Reached via the
     /// `/permissions` slash command (intercepted locally, never sent to the
@@ -1144,6 +1150,7 @@ pub fn process_event(
                         super::Modal::Mcp => InputAction::CloseModal,
                         super::Modal::Skills => InputAction::SkillsToggleDetail,
                         super::Modal::Permissions => InputAction::CloseModal,
+                        super::Modal::Queue => InputAction::RecallQueued,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::ConfigTheme => InputAction::ConfigThemeActivate,
                         super::Modal::ConfigThemeCustom => InputAction::ConfigThemeCustomSave,
@@ -1607,15 +1614,24 @@ pub fn process_event(
                         // Browse mode: `/` opens the search sub-layer rather than
                         // inserting a literal slash — mirrors the history modal.
                         InputAction::ModelEnterSearch
-                    } else if context.active_modal == super::Modal::Connections
+                    } else if context.active_modal == super::Modal::Models
                         && !context.model_searching
                         && c == '*'
                     {
-                        // Connections browse mode only: star the highlighted
-                        // provider as a favorite. In the search sub-layer `*` is
-                        // a query char; favoriting is a provider-level action so
-                        // it is not offered in the flat Models picker.
+                        // Models browse mode only: star the highlighted MODEL as
+                        // a favorite (favorite is model-level, ADR-0046). In the
+                        // search sub-layer `*` is a query char; the Connections
+                        // list has no favorite concept.
                         InputAction::ProviderPickerToggleFavorite
+                    } else if context.active_modal == super::Modal::Connections
+                        && !context.model_searching
+                        && c == 'a'
+                    {
+                        // Connections browse mode: `a` opens the add-provider
+                        // template chooser (the first step of adding a
+                        // connection). In the search sub-layer `a` is a query
+                        // char.
+                        InputAction::OpenProviderTemplate
                     } else if matches!(
                         context.active_modal,
                         super::Modal::Models | super::Modal::Connections
@@ -1625,21 +1641,13 @@ pub fn process_event(
                         // Connections: edit the highlighted provider. Models:
                         // edit the highlighted model's per-model settings.
                         InputAction::OpenModelEditor
-                    } else if context.active_modal == super::Modal::Models
-                        && !context.model_searching
-                        && c == 'd'
-                    {
-                        // Models browse mode: `d` removes the highlighted model
-                        // from its provider (ignored for built-ins by the
-                        // handler).
-                        InputAction::ProviderPickerRemoveModel
                     } else if context.active_modal == super::Modal::Connections
                         && !context.model_searching
                         && c == 'D'
                     {
                         // Connections browse mode: `Shift+D` deletes the entire
-                        // highlighted custom provider (ignored for built-ins and
-                        // the "＋ Add connection" row by the handler).
+                        // highlighted custom provider (ignored for built-ins by
+                        // the handler).
                         InputAction::DeleteProvider
                     } else if context.active_modal == super::Modal::Sessions && c == 'd' {
                         InputAction::DeleteSelectedSession
@@ -1884,6 +1892,7 @@ pub fn process_event(
                         super::Modal::Tools => InputAction::SessionSelect { forward: false },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: false },
                         super::Modal::Skills => InputAction::SessionSelect { forward: false },
+                        super::Modal::Queue => InputAction::SessionSelect { forward: false },
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
                         super::Modal::ConfigTheme => InputAction::ModalUp,
@@ -1950,6 +1959,7 @@ pub fn process_event(
                         super::Modal::Tools => InputAction::SessionSelect { forward: true },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: true },
                         super::Modal::Skills => InputAction::SessionSelect { forward: true },
+                        super::Modal::Queue => InputAction::SessionSelect { forward: true },
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
                         super::Modal::ConfigTheme => InputAction::ModalDown,
@@ -2182,10 +2192,10 @@ mod tests {
 
     #[test]
     fn enter_executes_an_exact_slash_command() {
-        let mut input = "/pursue".to_string();
+        let mut input = "/repeat".to_string();
         assert_eq!(
             enter(&mut input, true),
-            InputAction::SendSlash("/pursue".to_string())
+            InputAction::SendSlash("/repeat".to_string())
         );
     }
 
@@ -2736,12 +2746,50 @@ mod tests {
     }
 
     #[test]
-    fn star_in_connections_modal_toggles_favorite() {
+    fn star_in_models_modal_toggles_model_favorite() {
+        // `*` favorites the highlighted MODEL (favorite is model-level,
+        // ADR-0046). It is a Models-only action; in the Connections list `*`
+        // falls through to the ordinary char path (inert in browse mode).
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
         let action = process_event(
             Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Models,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::ProviderPickerToggleFavorite);
+    }
+
+    #[test]
+    fn a_in_connections_modal_opens_template_chooser() {
+        // `a` in the Connections modal opens the add-provider template chooser.
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
             &mut input,
             &mut cursor,
             InputContext {
@@ -2766,7 +2814,7 @@ mod tests {
             },
             &mut drag,
         );
-        assert_eq!(action, InputAction::ProviderPickerToggleFavorite);
+        assert_eq!(action, InputAction::OpenProviderTemplate);
     }
 
     #[test]
@@ -2841,10 +2889,10 @@ mod tests {
     }
 
     #[test]
-    fn star_in_models_picker_is_inert_favorite_is_provider_level() {
-        // `*` favorites a provider — a Connections-only action. In the flat
-        // Models picker it must not map to ToggleFavorite (it falls through to
-        // the ordinary char path, which is inert in browse mode).
+    fn star_in_connections_modal_is_inert_favorite_is_model_level() {
+        // `*` favorites a MODEL — a Models-only action (ADR-0046). In the
+        // Connections list it must not map to ToggleFavorite (it falls through
+        // to the ordinary char path, which is inert in browse mode).
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
@@ -2853,7 +2901,7 @@ mod tests {
             &mut input,
             &mut cursor,
             InputContext {
-                active_modal: crate::tui::Modal::Models,
+                active_modal: crate::tui::Modal::Connections,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,

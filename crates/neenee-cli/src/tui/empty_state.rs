@@ -177,7 +177,7 @@ fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'st
                 Span::styled("Try ", muted),
                 Span::styled("/skills", info),
                 Span::styled(" · ", muted),
-                Span::styled("/pursue <goal>", info),
+                Span::styled("/repeat", info),
                 Span::styled(" · ", muted),
                 Span::styled("/help", info),
             ]),

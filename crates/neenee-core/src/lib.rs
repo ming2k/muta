@@ -1,6 +1,6 @@
 //! Shared domain and wire contracts for the neenee agent stack: the `Provider`
 //! and `Tool` capability traits, conversation and tool-output types, the
-//! context-pressure model, pursuit/repeat/todo values, envoy profiles,
+//! context-pressure model, repeat/todo values, envoy profiles,
 //! skills/MCP config schemas, and the events exchanged by sessions and
 //! frontends.
 //!
@@ -8,10 +8,9 @@
 //! filesystem, no network. Persistence-backed types that once lived here
 //! (`RepeatStore`, the SQLite migrations) moved to `neenee-persistence`; this
 //! crate keeps contracts shared by independent layers: domain values
-//! (`Pursuit`, `TokenUsage`, `RepeatJob`, `TodoList`, …), wire DTOs, and
+//! (`TokenUsage`, `RepeatJob`, `TodoList`, …), wire DTOs, and
 //! capability traits (`Provider`, `Tool`, `Hook`, `SessionReview`). Pure logic
-//! owned only by the agent belongs in `neenee-agent` (ADR-0057). Pursuit
-//! persistence moved onto `SessionStore` (`SessionData.pursuit`) in ADR-0032.
+//! owned only by the agent belongs in `neenee-agent` (ADR-0057).
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
@@ -23,9 +22,7 @@ pub mod colorschemeconfig;
 pub use colorschemeconfig::ColorSchemeConfig;
 pub mod cache;
 pub use cache::CachePolicy;
-pub mod pursuit;
 pub mod repeat;
-pub use pursuit::{Pursuit, PursuitBudget};
 pub use repeat::{DEFAULT_MAX_AGE_DAYS, RepeatJob};
 pub mod usage;
 pub use usage::TokenUsage;
@@ -95,8 +92,8 @@ pub use events::{
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
     ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
-    UserQuestionReply, UserQuestionRequest,
+    RoundSummary, SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion,
+    UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,

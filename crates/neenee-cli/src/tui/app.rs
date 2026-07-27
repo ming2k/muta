@@ -16,7 +16,7 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc};
 
 use neenee_core::{
     AgentRequest, AgentResponse, ChannelAuth, ImagePart, LoopStatus, ParentStatus,
-    PermissionRequest, ProviderPickerSnapshot, Pursuit, SessionOverview, TodoList,
+    PermissionRequest, ProviderPickerSnapshot, SessionOverview, TodoList,
 };
 
 use crate::tui::completion::{CompletionItemKind, PathScan};
@@ -70,6 +70,10 @@ pub struct QueuedDispatch {
     pub state: QueuedDispatchState,
     /// The user's literal prompt text, sent verbatim to the agent on dispatch.
     pub text: String,
+    /// When the item was staged (epoch ms). Surfaced by the persistent queue
+    /// bar and the Queue modal as the item's send time, distinct from the
+    /// `sent_at_ms` stamped on the dispatch request — this is *queued-at*.
+    pub queued_at_ms: u64,
     /// Pasted images staged for this message (Ctrl+V). Empty for plain text.
     pub images: Vec<ImagePart>,
     /// Large pasted text blocks staged behind `[Pasted text #N +M lines]`
@@ -195,15 +199,22 @@ pub struct App {
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<neenee_core::ContextTokenSnapshot>,
+    /// Latest per-round throughput summary for the viewed session, shown in the
+    /// TokenReport modal. `None` until the first natural round completes.
+    pub round_tps: Option<neenee_core::RoundSummary>,
     /// Scroll offset of the TokenReport modal body.
     pub token_report_scroll: usize,
     /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
     /// usage; `false` when it shows the session's round list.
     pub token_report_detail: bool,
-    /// Screen rect of the `todos d/t` segment on the activity bar, so a click
+    /// Screen rect of the todo bar (the one-row task-list summary), so a click
     /// on it opens the Activity modal directly on the Todos section. `None`
     /// when no todos are shown (empty task list or bar hidden).
     pub todos_rect: Option<neenee_tui_engine::Rect>,
+    /// Screen rect of the persistent queue bar (the two-row outbox summary),
+    /// so a click anywhere on it expands the full Queue modal. `None` when the
+    /// bar is hidden (chrome hidden or envoy zoom).
+    pub queue_rect: Option<neenee_tui_engine::Rect>,
     /// Screen rect of the currently-open dismissable overlay modal (the
     /// centered panel, not the full-screen backdrop), so a click that lands
     /// outside it closes the modal — mirroring Esc. Written each render from
@@ -330,7 +341,6 @@ pub struct App {
     /// accepted path completion so newly-created files become visible without
     /// a restart. `None` = not scanned yet.
     pub path_scan_cache: Option<PathScan>,
-    pub current_pursuit: Option<Pursuit>,
     /// Latest session-context snapshot for the Tools / Mcp / Skills /
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Refreshed each frame from the response listener.
@@ -373,6 +383,17 @@ pub struct App {
     /// Scroll offset inside `Modal::Activity`. Reset to 0 each time the modal
     /// opens; clamped each frame by the modal's body renderer.
     pub activity_scroll: usize,
+    /// Scroll offset inside `Modal::Queue`. Reset to 0 each time the modal
+    /// opens; clamped each frame by the modal's body renderer. When
+    /// `queue_modal_follow` is set, it is nudged so the ↑/↓ selection stays
+    /// on screen.
+    pub queue_scroll: usize,
+    /// When true, the queue modal's body scroll follows the ↑/↓ selection
+    /// cursor (the default after open / navigation). Cleared the moment the
+    /// user scrolls manually (wheel / page keys) so they can browse a long
+    /// queue freely, and re-set the moment they navigate again. Mirrors
+    /// `session_modal_follow` / `question_modal_follow`.
+    pub queue_modal_follow: bool,
     /// Scroll offset inside `Modal::Help`. Reset to 0 each time the modal opens;
     /// clamped each frame by the modal's body renderer. The keybinding list
     /// overflows a typical terminal, so this is what keeps the lower sections
@@ -1615,38 +1636,25 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Number of selectable rows in the active picker — Connections counts the
-    /// provider rows plus the trailing synthetic "＋ Add connection" row; Models
-    /// counts the flat (provider, model) rows. Used to clamp the ↑/↓ selection
-    /// cursor. Returns 0 when no picker is open.
+    /// Number of selectable rows in the active picker. Connections counts only
+    /// the provider rows (adding a connection is a footer shortcut now, not a
+    /// synthetic list row); Models counts the flat (provider, model) rows. Used
+    /// to clamp the ↑/↓ selection cursor. Returns 0 when no picker is open.
     pub fn picker_row_count(&self) -> usize {
         match self.active_modal {
-            // The trailing synthetic "＋ Add connection" row is always
-            // selectable, even with no matches.
-            Modal::Connections => self.providers_filtered().len() + 1,
+            Modal::Connections => self.providers_filtered().len(),
             Modal::Models => self.models_flat_filtered().len(),
             _ => 0,
         }
     }
 
-    /// Whether `modal_index` is on the Connections "＋ Add connection" row (the
-    /// synthetic trailing row, index == provider count). Only meaningful while
-    /// [`Modal::Connections`] is open.
-    pub fn connections_on_add_row(&self) -> bool {
-        self.active_modal == Modal::Connections
-            && self.modal_index == self.providers_filtered().len()
-    }
-
     /// Stage the highlighted custom provider for deletion: open the confirm
     /// overlay ([`App::pending_provider_delete`]) over the Connections list
-    /// without destroying anything yet. No-op for built-in providers, the
-    /// synthetic "＋ Add connection" row, or when an overlay is already open
-    /// (prevents re-staging). Driven by the `Shift+D` → `DeleteProvider` arm.
+    /// without destroying anything yet. No-op for built-in providers or when an
+    /// overlay is already open (prevents re-staging). Driven by the `Shift+D`
+    /// → `DeleteProvider` arm.
     pub fn stage_provider_delete(&mut self) {
-        if self.active_modal != Modal::Connections
-            || self.pending_provider_delete.is_some()
-            || self.connections_on_add_row()
-        {
+        if self.active_modal != Modal::Connections || self.pending_provider_delete.is_some() {
             return;
         }
         let ranked = self.providers_filtered();

@@ -15,7 +15,7 @@ use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
 use neenee_core::{
-    InjectionKind, InjectionOrigin, Message, Provider, Pursuit, Role, count_tokens, estimate_bytes,
+    InjectionKind, InjectionOrigin, Message, Provider, Role, count_tokens, estimate_bytes,
     estimate_tokens,
 };
 use serde::{Deserialize, Serialize};
@@ -25,9 +25,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
-/// C2 (ADR-0022): added `title` and `title_manual`. C3 (ADR-0032): added
-/// `pursuit`. C4 (ADR-0034): added `Message::origin` (`Option<InjectionOrigin>`)
-/// for structured injection provenance. All three are structural no-ops for
+/// C2 (ADR-0022): added `title` and `title_manual`. C4 (ADR-0034): added `Message::origin` (`Option<InjectionOrigin>`)
+/// for structured injection provenance. Both are structural no-ops for
 /// legacy snapshots, which load with the new fields at their `#[serde(default)]`
 /// values (`None` / `false`). C6 (per-session provider/model): added
 /// `provider_selection`. A session that has run `/models` pins its own
@@ -45,78 +44,6 @@ const CURRENT_SCHEMA_VERSION: u32 = 7;
 pub struct ProviderSelection {
     pub provider: String,
     pub model: Option<String>,
-}
-
-/// Legacy sentinel for checkpoints written before pursuit's explicit safety
-/// cap was projected into the durable checkpoint. Kept public so old callers
-/// and snapshots remain source-compatible; new checkpoints carry the real cap.
-pub const UNCAPPED_ITERATIONS: usize = usize::MAX;
-
-/// Durable projection of a pursuit run's terminal/non-terminal condition.
-///
-/// This is deliberately separate from [`Pursuit`]: the pursuit is the durable
-/// objective record, while this status describes one execution attempt.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PursuitCheckpointStatus {
-    Running,
-    Completed,
-    Interrupted,
-    Error,
-    /// Forward-compatible fallback for a status written by a newer version.
-    #[default]
-    #[serde(other)]
-    Unknown,
-}
-
-impl std::fmt::Display for PursuitCheckpointStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = match self {
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Interrupted => "interrupted",
-            Self::Error => "error",
-            Self::Unknown => "unknown",
-        };
-        f.write_str(value)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PursuitCheckpoint {
-    // Serde key kept as `goal` so pre-rename session snapshots still load.
-    #[serde(rename = "goal")]
-    pub pursuit: String,
-    pub iteration: usize,
-    pub max_iterations: usize,
-    #[serde(default)]
-    pub status: PursuitCheckpointStatus,
-}
-
-/// The session-scoped runtime view of a pursuit, persisted separately from the
-/// `Pursuit` core type (ADR-0048 Phase 2; ADR-0083). The `Pursuit` is the durable
-/// objective record; this carries the stop-gate attempt state (armed flag,
-/// continuation count, and budget counters) that otherwise lives only in
-/// `Agent::pursuit_state` and would be lost on resume.
-///
-/// `#[serde(default)]` on the field keeps legacy snapshots loadable as `None`
-/// (no runtime view), matching the ADR-0017/0022 backward-compat contract.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PursuitRuntime {
-    /// Whether the stop-gate was armed when the session was last persisted.
-    pub armed: bool,
-    /// Forced-continuation count at the last persist.
-    pub iterations: u32,
-    /// Pursuit passes charged against the optional pursuit budget.
-    /// `turns` is the pre-ADR-0083 persistence key.
-    #[serde(default, alias = "turns")]
-    pub passes: u32,
-    /// Tokens charged against the optional pursuit budget.
-    #[serde(default)]
-    pub tokens: u64,
-    /// Active wall-clock time charged against the optional pursuit budget.
-    #[serde(default)]
-    pub wall_clock_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -151,7 +78,6 @@ struct SessionData {
     model_window: Vec<Message>,
     #[serde(rename = "archived_transcript", alias = "archived_messages")]
     archived_transcript: Vec<Message>,
-    loop_checkpoint: Option<PursuitCheckpoint>,
     /// Stats of the most recent model-context projection (prune or compaction).
     /// `alias` keeps snapshots written before the rename loadable.
     #[serde(
@@ -188,14 +114,6 @@ struct SessionData {
     /// `false` for legacy snapshots and AI-generated titles.
     #[serde(default)]
     title_manual: bool,
-    /// The durable per-session pursuit (ADR-0032). `None` means no pursuit is
-    /// set. Mirrors the runtime [`neenee_core::Pursuit`] carried by
-    /// `crate::pursuit_state::PursuitState` (the in-memory stop-gate view);
-    /// this field is the durable authority read on resume and written by the
-    /// `/pursue` slash command and the harness completion path. `#[serde(default)]`
-    /// so legacy snapshots load with `pursuit = None` and no migration is needed.
-    #[serde(default)]
-    pursuit: Option<Pursuit>,
     /// High-water mark: the `seq` of the last event already folded into this
     /// snapshot. On load, the snapshot is read as a fast path and only log
     /// events with `seq > applied_seq` are replayed (the tail), so resuming a
@@ -231,11 +149,6 @@ struct SessionData {
     /// across `/session open` boundaries.
     #[serde(default)]
     request_usage_records: Vec<neenee_core::RequestUsageRecord>,
-    /// Session-scoped stop-gate runtime view (ADR-0048 Phase 2). `None` for a
-    /// session with no armed pursuit. Restored on resume so an armed pursuit
-    /// mid-iteration does not silently disarm.
-    #[serde(default)]
-    pursuit_runtime: Option<PursuitRuntime>,
 }
 
 impl Default for SessionData {
@@ -248,7 +161,6 @@ impl Default for SessionData {
             updated_at: now,
             model_window: Vec::new(),
             archived_transcript: Vec::new(),
-            loop_checkpoint: None,
             last_projection: None,
             project_root: default_project_root(),
             todos: neenee_core::TodoList::default(),
@@ -256,13 +168,11 @@ impl Default for SessionData {
             checksum: None,
             title: None,
             title_manual: false,
-            pursuit: None,
             applied_seq: None,
             provider_selection: None,
             disabled_tools: std::collections::HashSet::new(),
             round_counter: 0,
             request_usage_records: Vec::new(),
-            pursuit_runtime: None,
         }
     }
 }
@@ -284,9 +194,6 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     // C2 (ADR-0022): title fields were added with `#[serde(default)]`, so a
     // legacy snapshot already loads with `title = None` / `title_manual =
     // false`; no payload transformation is needed, only the version bump.
-    // C3 (ADR-0032): `pursuit` was added with `#[serde(default)]`, so a legacy
-    // snapshot already loads with `pursuit = None`; no payload transformation
-    // is needed, only the version bump.
     // C4 (ADR-0034): `Message::origin` (`Option<InjectionOrigin>`) was added
     // with `#[serde(default, skip_serializing_if = "Option::is_none")]`, so a
     // legacy snapshot and event-log lines already load with `origin = None`
@@ -463,7 +370,6 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::MessagesAppended { messages } => {
                 data.model_window.extend(messages.clone())
             }
-            SessionEvent::CheckpointSet { checkpoint } => data.loop_checkpoint = checkpoint.clone(),
             SessionEvent::ContextProjectionCommitted {
                 archived_originals,
                 model_window,
@@ -482,12 +388,6 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::TitleSet { title, manual } => {
                 data.title = title.clone();
                 data.title_manual = *manual;
-            }
-            SessionEvent::PursuitSet { pursuit } => {
-                data.pursuit = pursuit.clone();
-            }
-            SessionEvent::PursuitRuntimeSet { runtime } => {
-                data.pursuit_runtime = runtime.clone();
             }
             SessionEvent::DisabledToolsSet { tools } => {
                 data.disabled_tools = tools.clone();
@@ -520,11 +420,6 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::Forked { id, parent_id } => {
                 data.id = id.clone();
                 data.parent_id = Some(parent_id.clone());
-                data.loop_checkpoint = None;
-                // A forked side session starts without the parent's pursuit
-                // (ADR-0032). The old per-thread store keyed by session id, so
-                // a fresh id had no pursuit row; the session field mirrors that.
-                data.pursuit = None;
             }
         }
         data.updated_at = envelope.timestamp;
@@ -573,15 +468,6 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             },
         });
     }
-    if let Some(checkpoint) = &data.loop_checkpoint {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::CheckpointSet {
-                checkpoint: Some(checkpoint.clone()),
-            },
-        });
-    }
     if !data.todos.is_empty() {
         events.push(crate::events::EventEnvelope {
             seq: events.len() as u64,
@@ -598,15 +484,6 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             event: SessionEvent::TitleSet {
                 title: data.title.clone(),
                 manual: data.title_manual,
-            },
-        });
-    }
-    if let Some(pursuit) = &data.pursuit {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::PursuitSet {
-                pursuit: Some(pursuit.clone()),
             },
         });
     }
@@ -646,15 +523,6 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             },
         });
     }
-    if let Some(runtime) = &data.pursuit_runtime {
-        events.push(crate::events::EventEnvelope {
-            seq: events.len() as u64,
-            timestamp: data.updated_at,
-            event: SessionEvent::PursuitRuntimeSet {
-                runtime: Some(runtime.clone()),
-            },
-        });
-    }
     events
 }
 
@@ -665,8 +533,8 @@ pub struct SessionSummary {
     pub message_count: usize,
     pub updated_at: u64,
     pub created_at: u64,
-    /// Short description of what the session is about (first user message or
-    /// the active pursuit), already truncated for display.
+    /// Short description of what the session is about (first user message),
+    /// already truncated for display.
     pub overview: String,
     pub active: bool,
 }
@@ -806,10 +674,6 @@ impl SessionStore {
         messages
     }
 
-    pub async fn checkpoint(&self) -> Option<PursuitCheckpoint> {
-        self.state.lock().await.data.loop_checkpoint.clone()
-    }
-
     /// The unified task list, mirrored from `Agent::todos`. Empty means no
     /// active task list. Read on resume to seed the agent and the sticky
     /// panel.
@@ -874,57 +738,6 @@ impl SessionStore {
 
     pub async fn parent_id(&self) -> Option<String> {
         self.state.lock().await.data.parent_id.clone()
-    }
-
-    /// The durable per-session pursuit (ADR-0032). `None` means no pursuit is
-    /// set. Read on resume to seed the agent's runtime `PursuitState` and by
-    /// `/pursue status` / `/pursue` (empty, re-arm).
-    pub async fn pursuit(&self) -> Option<Pursuit> {
-        self.state.lock().await.data.pursuit.clone()
-    }
-
-    /// Replace the pursuit (or clear it with `None`). Persists both the
-    /// snapshot and the event log so resume restores the same pursuit. The
-    /// single write path for the pursuit primitive; `mark_pursuit_complete`
-    /// and `update_pursuit_objective` delegate here.
-    pub async fn set_pursuit(&self, pursuit: Option<Pursuit>) -> Result<(), String> {
-        let (path, data) = {
-            let mut state = self.state.lock().await;
-            state.data.pursuit = pursuit.clone();
-            state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::PursuitSet { pursuit })?;
-            (state.path.clone(), state.data.clone())
-        };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
-    }
-
-    /// The session-scoped stop-gate runtime view (ADR-0048 Phase 2). `None`
-    /// when no pursuit is armed. Restored on resume so an armed pursuit
-    /// mid-iteration does not silently disarm.
-    pub async fn pursuit_runtime(&self) -> Option<PursuitRuntime> {
-        self.state.lock().await.data.pursuit_runtime.clone()
-    }
-
-    /// Replace the stop-gate runtime view (or clear it with `None`). Mirrors
-    /// `Agent::pursuit_state`'s armed flag + iteration counter so resume
-    /// restores them. The single write path for the pursuit runtime view.
-    pub async fn set_pursuit_runtime(&self, runtime: Option<PursuitRuntime>) -> Result<(), String> {
-        let (path, data) = {
-            let mut state = self.state.lock().await;
-            state.data.pursuit_runtime = runtime.clone();
-            state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::PursuitRuntimeSet { runtime })?;
-            (state.path.clone(), state.data.clone())
-        };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
     }
 
     /// The session-level disabled-tool mask (ADR-0048 Phase 2). Empty means
@@ -1064,46 +877,6 @@ impl SessionStore {
             .await
     }
 
-    /// Flip `is_complete = true` on the current pursuit, if any. Returns the
-    /// updated pursuit, or `None` if no pursuit was set. Called by the harness
-    /// completion path after the model emits `[NEENEE_PURSUIT_COMPLETE]` and by
-    /// the `/pursue done` slash command.
-    pub async fn mark_pursuit_complete(&self) -> Result<Option<Pursuit>, String> {
-        let current = self.pursuit().await;
-        if let Some(mut pursuit) = current {
-            pursuit.is_complete = true;
-            pursuit.terminal_reason = None;
-            self.set_pursuit(Some(pursuit.clone())).await?;
-            Ok(Some(pursuit))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Rewrite the objective on the current pursuit, if any. Returns the
-    /// updated pursuit, or `None` if no pursuit was set. Called by the
-    /// `/pursue edit` slash command.
-    pub async fn update_pursuit_objective(
-        &self,
-        objective: &str,
-    ) -> Result<Option<Pursuit>, String> {
-        let objective = objective.trim();
-        if objective.is_empty() {
-            return Err("pursuit objective must not be empty".to_string());
-        }
-        if objective.chars().count() > 4000 {
-            return Err("pursuit objective must be at most 4000 characters".to_string());
-        }
-        let current = self.pursuit().await;
-        if let Some(mut pursuit) = current {
-            pursuit.objective = objective.to_string();
-            self.set_pursuit(Some(pursuit.clone())).await?;
-            Ok(Some(pursuit))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub async fn replace_messages(&self, messages: Vec<Message>) -> Result<(), String> {
         let (path, data) = {
             let mut state = self.state.lock().await;
@@ -1239,24 +1012,6 @@ impl SessionStore {
         }
     }
 
-    pub async fn set_checkpoint(
-        &self,
-        checkpoint: Option<PursuitCheckpoint>,
-    ) -> Result<(), String> {
-        let (path, data) = {
-            let mut state = self.state.lock().await;
-            state.data.loop_checkpoint = checkpoint;
-            state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state.event_log.append(SessionEvent::CheckpointSet {
-                checkpoint: state.data.loop_checkpoint.clone(),
-            })?;
-            (state.path.clone(), state.data.clone())
-        };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
-    }
-
     pub async fn commit_context_projection(
         &self,
         result: ContextProjectionResult,
@@ -1347,7 +1102,6 @@ impl SessionStore {
         child.parent_id = Some(parent_id.clone());
         child.created_at = now;
         child.updated_at = now;
-        child.loop_checkpoint = None;
         // Usage belongs to concrete requests made by the parent session. A
         // fork inherits context, not historical billing records.
         child.request_usage_records.clear();
@@ -1391,7 +1145,6 @@ impl SessionStore {
         side.parent_id = Some(parent_id.clone());
         side.created_at = now;
         side.updated_at = now;
-        side.loop_checkpoint = None;
         side.request_usage_records.clear();
 
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
@@ -1807,7 +1560,7 @@ fn summary(data: &SessionData, active: bool) -> SessionSummary {
 
 /// Derive a short, human-readable description of a session. Precedence
 /// (ADR-0022): a stored title (AI or manual) wins; otherwise the first user
-/// message; then the active pursuit; then a placeholder. A title is already
+/// message; then a placeholder. A title is already
 /// ≤ [`neenee_core::TITLE_MAX_LEN`] chars, so it is returned verbatim; the
 /// fallback paths are still truncated to the picker-row budget.
 fn session_overview(data: &SessionData) -> String {
@@ -1822,9 +1575,6 @@ fn session_overview(data: &SessionData) -> String {
         .find(|message| message.role == neenee_core::Role::User)
     {
         return truncate_preview(&message.content, MAX);
-    }
-    if let Some(checkpoint) = &data.loop_checkpoint {
-        return truncate_preview(&checkpoint.pursuit, MAX);
     }
     "(empty session)".to_string()
 }
@@ -2141,7 +1891,7 @@ const SUMMARY_TEMPLATE: &str = "\
 Output exactly the Markdown structure shown inside <template> and keep the \
 section order unchanged. Do not include the <template> tags in your response.\n\
 <template>\n\
-## Pursuit\n\
+## Objective\n\
 - [single-sentence task summary]\n\
 \n\
 ## Constraints & Preferences\n\
@@ -2615,54 +2365,10 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         let messages = vec![Message::new(neenee_core::Role::User, "hello")];
         store.replace_messages(messages.clone()).await.unwrap();
-        store
-            .set_checkpoint(Some(PursuitCheckpoint {
-                pursuit: "test".to_string(),
-                iteration: 2,
-                max_iterations: 8,
-                status: PursuitCheckpointStatus::Running,
-            }))
-            .await
-            .unwrap();
 
         let data: SessionData = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(data.model_window[0].content, messages[0].content);
-        let checkpoint = data.loop_checkpoint.unwrap();
-        assert_eq!(checkpoint.iteration, 2);
-        assert_eq!(checkpoint.status, PursuitCheckpointStatus::Running);
         let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn legacy_pursuit_runtime_defaults_new_budget_counters() {
-        let runtime: PursuitRuntime =
-            serde_json::from_str(r#"{"armed":true,"iterations":4}"#).unwrap();
-
-        assert!(runtime.armed);
-        assert_eq!(runtime.iterations, 4);
-        assert_eq!(runtime.passes, 0);
-        assert_eq!(runtime.tokens, 0);
-        assert_eq!(runtime.wall_clock_ms, 0);
-
-        let legacy: PursuitRuntime =
-            serde_json::from_str(r#"{"armed":true,"iterations":4,"turns":3}"#).unwrap();
-        assert_eq!(legacy.passes, 3);
-        let serialized = serde_json::to_string(&legacy).unwrap();
-        assert!(serialized.contains("\"passes\":3"));
-        assert!(!serialized.contains("\"turns\""));
-    }
-
-    #[test]
-    fn pursuit_checkpoint_status_is_forward_compatible() {
-        let future: PursuitCheckpoint = serde_json::from_str(
-            r#"{"goal":"ship","iteration":2,"max_iterations":50,"status":"paused"}"#,
-        )
-        .unwrap();
-        let legacy: PursuitCheckpoint =
-            serde_json::from_str(r#"{"goal":"ship","iteration":2,"max_iterations":50}"#).unwrap();
-
-        assert_eq!(future.status, PursuitCheckpointStatus::Unknown);
-        assert_eq!(legacy.status, PursuitCheckpointStatus::Unknown);
     }
 
     #[test]
@@ -3128,58 +2834,35 @@ mod tests {
     #[tokio::test]
     async fn session_runtime_state_round_trips_through_disk() {
         // ADR-0048 Phase 2: the session-scoped runtime state — disabled-tool
-        // mask, round counter, and pursuit stop-gate runtime view — must
-        // survive persist + reload so a resumed session restores the agent's
-        // exact state instead of silently dropping a toggle, resetting the
-        // counter, or disarming an in-flight pursuit.
+        // mask and round counter — must survive persist + reload so a resumed
+        // session restores the agent's exact state instead of silently dropping
+        // a toggle or resetting the counter.
         let directory =
             std::env::temp_dir().join(format!("neenee-runtime-state-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         assert!(store.disabled_tools().await.is_empty());
         assert_eq!(store.round_counter().await, 0);
-        assert!(store.pursuit_runtime().await.is_none());
 
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("bash".to_string());
         disabled.insert("edit_file".to_string());
         store.set_disabled_tools(disabled.clone()).await.unwrap();
         store.set_round_counter(42).await.unwrap();
-        store
-            .set_pursuit_runtime(Some(PursuitRuntime {
-                armed: true,
-                iterations: 3,
-                passes: 3,
-                tokens: 12_345,
-                wall_clock_ms: 9_000,
-            }))
-            .await
-            .unwrap();
 
         let loaded = SessionStore::for_path(path.clone());
         assert_eq!(loaded.disabled_tools().await, disabled);
         assert_eq!(loaded.round_counter().await, 42);
-        let runtime = loaded
-            .pursuit_runtime()
-            .await
-            .expect("pursuit runtime round-trips through disk");
-        assert!(runtime.armed);
-        assert_eq!(runtime.iterations, 3);
-        assert_eq!(runtime.passes, 3);
-        assert_eq!(runtime.tokens, 12_345);
-        assert_eq!(runtime.wall_clock_ms, 9_000);
 
-        // Clearing each (None / 0 / empty) persists.
+        // Clearing each (0 / empty) persists.
         loaded
             .set_disabled_tools(std::collections::HashSet::new())
             .await
             .unwrap();
         loaded.set_round_counter(0).await.unwrap();
-        loaded.set_pursuit_runtime(None).await.unwrap();
         let cleared = SessionStore::for_path(path.clone());
         assert!(cleared.disabled_tools().await.is_empty());
         assert_eq!(cleared.round_counter().await, 0);
-        assert!(cleared.pursuit_runtime().await.is_none());
 
         let _ = fs::remove_dir_all(directory);
     }

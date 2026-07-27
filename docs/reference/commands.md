@@ -24,7 +24,6 @@ Project and user-defined commands are covered under
 | `/sessions` | Browse past sessions |
 | `/btw` | Open a side conversation that runs alongside the main session |
 | `/resume [id]` | Resume the most recent or selected session |
-| `/pursue [condition\|status\|stop\|done\|edit\|clear]` | Pursue a pursuit: the harness keeps the round going until the condition is met |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression |
 | `/init [path]` | Initialize a `.neenee/` config tree |
 | `/skills [list\|reload]` | List or reload available skills |
@@ -60,27 +59,6 @@ all share the same agent request queue.
 
 ## Subcommands
 
-### `/pursue`
-
-| Form | Effect |
-|------|--------|
-| `/pursue <condition>` | Set the condition as the active pursuit, arm the stop-gate, and drive the round until it is met |
-| `/pursue` | Re-arm and drive a pursuit on the existing active pursuit |
-| `/pursue status` | Show the current pursuit, armed state, one-based pursuit pass, and budget counters |
-| `/pursue budget [passes=N] [tokens=N] [time=N]` | Replace the optional positive pursuit-pass, token, and millisecond budgets; no axes clears the budget. The former `turns=N` axis is accepted as a compatibility alias for `passes=N` |
-| `/pursue edit <condition>` | Rewrite the condition of the current pursuit |
-| `/pursue done` | Mark the pursuit completed (disarms the gate) |
-| `/pursue stop` | Stop the active pursuit |
-| `/pursue clear` | Remove the pursuit (disarms and clears) |
-
-`/pursue` arms a **stop-gate**: each time the model would end the round, the
-harness re-injects the condition and forces another turn until the model
-signals completion (`[NEENEE_PURSUIT_COMPLETE]`), the 50-pass safety cap is hit,
-or the user interrupts (`/pursue stop` / `Esc`). Pursuit state is persisted per
-session in its event log and snapshot, so it survives restarts and is restored
-on `/resume`. See
-[Pursuits and the pursue stop-gate](../explanation/agent-design/pursuits.md).
-
 ### `/repeat`
 
 | Form | Effect |
@@ -93,8 +71,7 @@ on `/resume`. See
 `<cron>` is five fields — `minute hour day-of-month month day-of-week` — e.g.
 `*/5 * * * *` (every 5 minutes), `0 9 * * 1-5` (09:00 on weekdays). Jobs are
 durable (survive restarts) and auto-expire after 30 days. `/repeat` is a
-clock-driven scheduler, independent of `/pursue`. See
-[Pursuits and the pursue stop-gate](../explanation/agent-design/pursuits.md).
+clock-driven scheduler for unattended, scheduled prompts.
 
 ### `/session`
 
@@ -210,7 +187,7 @@ Returns the most relevant past messages for the query (see the
 
 | Form | Effect |
 |------|--------|
-| `/export` | Render the live conversation as Markdown — metadata header (session id, provider/model, pursuit, exported-at), pursuit checklist, then a chronological transcript of user prompts, assistant replies, tool calls, and inlined tool results — and copy it to the system clipboard so it can be pasted into another agent to continue the work. |
+| `/export` | Render the live conversation as Markdown — metadata header (session id, provider/model, exported-at), then a chronological transcript of user prompts, assistant replies, tool calls, and inlined tool results — and copy it to the system clipboard so it can be pasted into another agent to continue the work. |
 
 The receiving agent gets the full chain of decisions and side effects: hidden
 and system messages are skipped (mirroring TUI rendering), reasoning traces
@@ -247,6 +224,6 @@ are not shadowed by custom commands.
 
 ## See also
 
-- [Harness architecture](../explanation/agent-design/harness.md) — pursuit state, autonomous
+- [Harness architecture](../explanation/agent-design/harness.md) — the round
   loop, durable session, permission broker, context compaction
 - [Modals](tui/modals.md) — the `/models`, `/connections`, and `/sessions` pickers

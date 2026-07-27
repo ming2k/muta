@@ -11,7 +11,7 @@ use crate::tui::components::options::{
 };
 use crate::tui::model::layout::{ModalHitMap, PermissionActionHit, QuestionOptionHit};
 use crate::tui::primitives::{
-    FixedModalSpec, FooterHint, contrast_fg, modal_area, modal_footer_text, modal_frame,
+    FixedModalSpec, FooterHint, contrast_fg, keyvocab, modal_area, modal_footer_text, modal_frame,
     panel_block, render_body, render_modal_footer,
 };
 use crate::tui::text_layout::wrap_text;
@@ -247,18 +247,18 @@ pub fn draw_question_modal(
             "submit"
         };
         let mut hints = vec![
-            FooterHint::navigation("↑↓", "navigate"),
+            FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
             FooterHint::navigation("wheel/Pg", "scroll"),
-            FooterHint::primary("Enter", enter_label),
+            FooterHint::primary(keyvocab::ENTER, enter_label),
         ];
         if current_question > 0 {
-            hints.push(FooterHint::secondary("⇧Tab", "back"));
+            hints.push(FooterHint::secondary(keyvocab::SHIFT_TAB, "back"));
         }
         if question.is_some_and(|q| q.multi_select) {
-            hints.push(FooterHint::secondary("Space", "select"));
+            hints.push(FooterHint::secondary(keyvocab::SPACE, "select"));
         }
         hints.push(FooterHint::secondary("1-9", "jump"));
-        hints.push(FooterHint::always("Esc", "cancel"));
+        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
     area
@@ -516,22 +516,22 @@ pub fn draw_permission_sheet(
     }
     let hints: &[FooterHint] = if confirm_always {
         &[
-            FooterHint::navigation("←→", "select"),
-            FooterHint::primary("Enter", "confirm"),
-            FooterHint::always("Esc", "back"),
+            FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
+            FooterHint::primary(keyvocab::ENTER, "confirm"),
+            FooterHint::always(keyvocab::ESC, "back"),
         ]
     } else if max_scroll > 0 {
         &[
-            FooterHint::navigation("↑↓", "scroll"),
-            FooterHint::navigation("←→", "select"),
-            FooterHint::primary("Enter", "confirm"),
-            FooterHint::always("Esc", "reject"),
+            FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
+            FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
+            FooterHint::primary(keyvocab::ENTER, "confirm"),
+            FooterHint::always(keyvocab::ESC, "reject"),
         ]
     } else {
         &[
-            FooterHint::navigation("←→", "select"),
-            FooterHint::primary("Enter", "confirm"),
-            FooterHint::always("Esc", "reject"),
+            FooterHint::navigation(keyvocab::ARROWS_LR, "select"),
+            FooterHint::primary(keyvocab::ENTER, "confirm"),
+            FooterHint::always(keyvocab::ESC, "reject"),
         ]
     };
     let footer_width = content_w as usize;

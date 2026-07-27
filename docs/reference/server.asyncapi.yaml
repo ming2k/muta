@@ -652,8 +652,6 @@ components:
         - { $ref: '#/components/schemas/EventInputRequest' }
         - { $ref: '#/components/schemas/EventCompacted' }
         - { $ref: '#/components/schemas/EventHarnessState' }
-        - { $ref: '#/components/schemas/EventPursuitUpdated' }
-        - { type: string, const: PursuitCleared }
         - { $ref: '#/components/schemas/EventTodosUpdated' }
         - { $ref: '#/components/schemas/EventUnattendedChanged' }
         - { $ref: '#/components/schemas/EventSessionReview' }
@@ -756,18 +754,12 @@ components:
       properties:
         HarnessState:
           type: object
-          required: [pursuit, loop_status, round_counter, unattended]
+          required: [loop_status, round_counter, unattended]
           properties:
-            pursuit: { oneOf: [{ $ref: '#/components/schemas/Pursuit' }, { type: 'null' }] }
-            loop_status: { type: string, enum: [idle, running, pursue] }
+            loop_status: { type: string, enum: [idle, running] }
             round_counter: { type: integer, minimum: 0 }
             unattended: { type: boolean }
           additionalProperties: false
-      additionalProperties: false
-    EventPursuitUpdated:
-      type: object
-      required: [PursuitUpdated]
-      properties: { PursuitUpdated: { $ref: '#/components/schemas/Pursuit' } }
       additionalProperties: false
     EventTodosUpdated:
       type: object
@@ -881,7 +873,7 @@ components:
         surface: { enum: [inline, toast, banner] }
         title: { type: string }
         body: { type: [string, 'null'] }
-        source: { enum: [agent, turn_guard, todo, review, pursuit, harness] }
+        source: { enum: [agent, turn_guard, todo, review, harness] }
       additionalProperties: false
     PermissionRequest:
       type: object
@@ -991,11 +983,6 @@ components:
           minProperties: 1
           maxProperties: 1
           additionalProperties: true
-    Pursuit:
-      type: object
-      required: [objective, is_complete]
-      properties: { objective: { type: string }, is_complete: { type: boolean } }
-      additionalProperties: false
     TodoList:
       type: object
       required: [items, next_id, updated_at_round]

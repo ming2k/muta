@@ -33,6 +33,7 @@ mid-interaction, so you can never get trapped in a raw-mode terminal.
 | `question` | ask\_user modal: single-select (live — highlight is the selection), multi-select (Space toggle), multi-page | `↑↓` `Space` *(multi)* `1-9` `Enter` `Tab`=next fixture |
 | `permission` | tool-permission sheet + confirm-always sub-step + Details scroll | `←→` `Enter` `↑↓` `Tab`=next fixture |
 | `provider` | `/connections` provider picker with filter | `↑↓` type to filter `Enter` |
+| `models` | `Ctrl+M` models picker — full-width, gap-grouped rows (the row standard) | `↑↓` `*` favorite `Enter` `/` search |
 | `model-editor` | API-key / model-id editor | `Tab` switch field, type to edit |
 | `history` | `Ctrl+R` input-history fuzzy search | type to filter `↑↓` |
 | `sessions` | session picker | `↑↓` |

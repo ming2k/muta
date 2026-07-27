@@ -1,11 +1,10 @@
 # Chat API primitives
 
 neenee's agent is not an arbitrary program that happens to call a language
-model. Its shape — the role split, the tool loop, the compaction backstop, the
-durable pursuit — is a direct consequence of the chat completion API contract.
-This page names the three protocol primitives that drive that shape, so the
-rest of the agent design reads as their consequence rather than a series of
-independent choices.
+model. Its shape — the role split, the tool loop, the compaction backstop —
+is a direct consequence of the chat completion API contract. This page names
+the three protocol primitives that drive that shape, so the rest of the agent
+design reads as their consequence rather than a series of independent choices.
 
 For the byte-level wire shape, see [Request flow](request-flow.md). For the
 request/response cycle of a single tool call, see
@@ -35,14 +34,11 @@ neenee exploits this gradient to layer intent by durability:
 
 | Placed in `system` | Placed in `user` |
 |--------------------|------------------|
-| Persona, tool catalog, the active **pursuit** as a persistent anchor | The real prompt, plus dynamic control prompts that should drive action |
+| Persona, tool catalog | The real prompt, plus dynamic control prompts that should drive action |
 
-The pursuit lives in the system prompt so the model treats it as a durable rule
-rather than a one-off request it can consider finished. Loop control prompts
-live in `user` so the model treats them as the current round's work. Reversing
-the two would fail: a pursuit in `user` reads as a request that is done after one
-round; a control prompt in `system` dilutes the authority a system message
-carries. See [Pursuits](agent-design/pursuits.md).
+Loop control prompts live in `user` so the model treats them as the current
+round's work; placing them in `system` would dilute the authority a system
+message carries.
 
 There is one attribute orthogonal to role: **visibility**. A message can be
 marked hidden, which means the model still receives it (it enters the request)
@@ -70,17 +66,14 @@ most of the harness machinery:
 - **The array is bounded**, so long work needs
   [context compaction](agent-design/harness.md) to stay within the model's
   window — summarizing or pruning old messages so the array stays finite.
-- **Cross-session intent cannot live in the array**, so a durable objective
-  needs a [pursuit](agent-design/pursuits.md) persisted outside the request, then
-  re-injected into the system prompt each turn.
 - **A tool's effect is invisible to the model unless it re-enters the array**,
   so every tool result is appended as a `tool` message before the next
   request. The model cannot "remember" running a command; it can only read the
   result message neenee sends back.
 
 The agent is therefore a stateless API plus client-managed external state —
-the messages array, the persisted pursuit and session, the in-memory checklist.
-Nothing else carries across a turn.
+the messages array, the persisted session, the in-memory checklist. Nothing
+else carries across a turn.
 
 ## Function calling is the ReAct loop, not an implementation detail
 
@@ -126,8 +119,6 @@ Two protocol constraints shape the harness:
 Read together, the three primitives explain design choices that otherwise look
 arbitrary:
 
-- The **pursuit sits in the system prompt** because of the role authority
-  gradient — it needs to read as durable framing, not a request.
 - **Compaction exists** because the API is stateless and the messages array
   is the only memory, and it is bounded.
 - **The tool loop looks the way it does** because function calling is the
@@ -135,7 +126,7 @@ arbitrary:
 - **The hidden control channel exists** because the `user` role drives action,
   and visibility is separable from role.
 
-The rest of this section — harness, rounds and turns, pursuits, tool turns — is
+The rest of this section — harness, rounds and turns, tool turns — is
 each a specialization of one or more of these primitives.
 
 ## See also
@@ -144,7 +135,6 @@ each a specialization of one or more of these primitives.
 - [Rounds and turns](agent-design/rounds-and-turns.md) — the request/response cycle of one tool call
 - [Provider capabilities](provider-capabilities.md) — which providers implement
   which primitives
-- [Pursuits](agent-design/pursuits.md) — the pursuit as a system-prompt anchor
 - [Harness architecture](agent-design/harness.md) — compaction and the
   stateless-memory consequence
 - [ADR-0009](../adr/0009-uncapped-agentic-loop.md) — the uncapped loop as a

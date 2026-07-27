@@ -4,7 +4,7 @@
 //! clipboard so it can be pasted into another tool's prompt.
 //!
 //! Format is intentionally agent-readable: a metadata header (session id,
-//! provider / model, pursuit, exported-at) followed by a preamble that
+//! provider / model, exported-at) followed by a preamble that
 //! tells the receiving agent how to use the document, then a chronological
 //! transcript of user prompts, assistant replies, tool calls, and tool
 //! results. Hidden and system messages are skipped (mirroring
@@ -13,7 +13,7 @@
 //! so the export stays scannable.
 
 use chrono::Utc;
-use neenee_core::{Message, Pursuit, Role, ToolCall};
+use neenee_core::{Message, Role, ToolCall};
 
 /// Metadata carried from the harness into the exporter so the header reflects
 /// the live session state at the moment of export.
@@ -22,7 +22,6 @@ pub struct ExportContext<'a> {
     pub session_id: &'a str,
     pub provider: &'a str,
     pub model: &'a str,
-    pub pursuit: Option<&'a Pursuit>,
 }
 
 /// Render the current conversation as a Markdown handoff document.
@@ -36,18 +35,6 @@ pub fn format_export_markdown(ctx: ExportContext<'_>, messages: &[Message]) -> S
         "- **Provider / Model:** {} / {}\n",
         ctx.provider, ctx.model
     ));
-    match ctx.pursuit {
-        Some(pursuit) => out.push_str(&format!(
-            "- **Pursuit [{}]:** {}\n",
-            if pursuit.is_complete {
-                "complete"
-            } else {
-                "active"
-            },
-            pursuit.objective
-        )),
-        None => out.push_str("- **Pursuit:** _none_\n"),
-    }
     out.push_str(&format!("- **Exported at:** {}\n\n", exported_at));
 
     out.push_str(
@@ -252,7 +239,7 @@ fn choose_fence(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::{Pursuit, ToolCall};
+    use neenee_core::ToolCall;
 
     fn user(content: &str) -> Message {
         Message::new(Role::User, content)
@@ -280,33 +267,12 @@ mod tests {
                 session_id: "abcd1234ef",
                 provider: "kimi-code",
                 model: "kimi-k2.7-code",
-                pursuit: None,
             },
             &[user("hello")],
         );
         assert!(out.contains("Session ID:** `abcd1234ef`"));
         assert!(out.contains("Provider / Model:** kimi-code / kimi-k2.7-code"));
-        assert!(out.contains("**Pursuit:** _none_"));
         assert!(out.contains("A fresh agent can read it as context"));
-    }
-
-    #[test]
-    fn includes_pursuit_objective() {
-        let pursuit = Pursuit {
-            objective: "Ship /export".to_string(),
-            is_complete: false,
-            ..Default::default()
-        };
-        let out = format_export_markdown(
-            ExportContext {
-                session_id: "id",
-                provider: "p",
-                model: "m",
-                pursuit: Some(&pursuit),
-            },
-            &[user("hi")],
-        );
-        assert!(out.contains("Ship /export"));
     }
 
     #[test]
@@ -321,7 +287,6 @@ mod tests {
                 session_id: "id",
                 provider: "p",
                 model: "m",
-                pursuit: None,
             },
             &messages,
         );
@@ -347,7 +312,6 @@ mod tests {
                 session_id: "id",
                 provider: "p",
                 model: "m",
-                pursuit: None,
             },
             &messages,
         );
@@ -380,7 +344,6 @@ mod tests {
                 session_id: "id",
                 provider: "p",
                 model: "m",
-                pursuit: None,
             },
             &messages,
         );
@@ -407,7 +370,6 @@ mod tests {
                 session_id: "id",
                 provider: "p",
                 model: "m",
-                pursuit: None,
             },
             &messages,
         );
@@ -421,7 +383,6 @@ mod tests {
                 session_id: "id",
                 provider: "p",
                 model: "m",
-                pursuit: None,
             },
             &[],
         );

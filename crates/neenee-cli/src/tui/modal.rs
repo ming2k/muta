@@ -127,6 +127,13 @@ pub enum Modal {
     /// status. Opened by clicking the activity bar. The body scrolls via
     /// `App::activity_scroll`.
     Activity,
+    /// Queue overview: the full list of staged outbox messages for the viewed
+    /// session, in dispatch order, each with its target modifier, queued time,
+    /// and (truncated) text. Opened by clicking the persistent queue bar below
+    /// the transcript gap, or with `F2`. `↑` recalls the highlighted item into
+    /// the composer for editing; `Esc` closes. The body scrolls via
+    /// `App::queue_scroll`.
+    Queue,
     /// Context-usage report: current AI-visible context plus request totals by
     /// user round, with a ReAct-turn drill-down. Value styling distinguishes
     /// provider-reported counts from local estimates. Opened by clicking the
@@ -209,6 +216,7 @@ impl Modal {
                 | Modal::ConfigTheme
                 | Modal::ConfigLayout
                 | Modal::Activity
+                | Modal::Queue
                 | Modal::HistorySearch
                 | Modal::Models
                 | Modal::Connections

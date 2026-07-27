@@ -8,7 +8,7 @@
 //! provider request.
 //!
 //! The default system sections ([`IdentityPreamble`], [`ToneGuidance`],
-//! [`PersistenceGuidance`], [`PursuitObjective`], [`DelegationGuidance`])
+//! [`PersistenceGuidance`], [`DelegationGuidance`])
 //! compose the system message in rank order: sections
 //! that need a visual gap include a leading `\n` in their own `render`, so
 //! joining on a single `\n` preserves a stable layout.
@@ -161,34 +161,6 @@ impl SystemPromptSection for UnattendedGuidance {
     }
 }
 
-/// The active pursuit objective, when one is armed. Leading `\n` separates
-/// it from the guidance paragraphs above.
-struct PursuitObjective;
-
-impl SystemPromptSection for PursuitObjective {
-    fn id(&self) -> &'static str {
-        "system.pursuit_objective"
-    }
-    fn rank(&self) -> u32 {
-        40
-    }
-    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.pursuit.is_some()
-    }
-    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
-        let pursuit = ctx.pursuit.as_ref()?;
-        let state_label = if pursuit.is_complete {
-            "complete"
-        } else {
-            "active"
-        };
-        Some(format!(
-            "\nActive harness pursuit ({state_label}):\n{}",
-            pursuit.objective
-        ))
-    }
-}
-
 /// Guidance for delegating read-only exploration. Active only when a
 /// dispatch tool is admitted this turn, so identity-less / tool-less test
 /// agents are unaffected. Generic tool-category policy: it names no specific
@@ -268,7 +240,6 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ProviderGuidance);
     registry.register(PersistenceGuidance);
     registry.register(UnattendedGuidance);
-    registry.register(PursuitObjective);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry

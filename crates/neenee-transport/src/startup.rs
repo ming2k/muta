@@ -66,7 +66,6 @@ define_builtin_commands! {
     Sessions    = "/sessions"     : "Browse past sessions",
     Btw         = "/btw"          : "Open a side conversation that runs alongside the main session",
     Resume      = "/resume"       : "Resume the most recent or selected session",
-    Pursue      = "/pursue"       : "Pursue a condition: drive the agent until it is met, or manage the pursuit",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
     Skills      = "/skills"       : "List or reload available skills (list|reload)",
     Skill       = "/skill"        : "Load a skill by name",

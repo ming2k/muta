@@ -188,9 +188,6 @@ pub struct Agent {
     /// Shared with the todo tools so they can stamp
     /// `updated_at_round` for the TUI stale detector.
     round_counter: Arc<std::sync::Mutex<u64>>,
-    /// In-memory pursuit state: the active [`Pursuit`], the stop-gate armed
-    /// flag, and the iteration counter. See [`crate::pursuit_state::PursuitState`].
-    pursuit_state: crate::pursuit_state::PursuitState,
     permissions: crate::permission_store::PermissionStore,
     ask_user: std::sync::Mutex<AskUserState>,
     /// Parked interactive-input requests (L3.5 β). Mirrors `ask_user`.
@@ -269,6 +266,15 @@ pub struct Agent {
     /// UI an exact answer in the cancellation-vs-admission race. `None` means
     /// the round is not accepting inserts.
     user_input_queue: std::sync::Mutex<Option<UserInputRound>>,
+    /// Cumulative milliseconds the current round has spent parked on a human
+    /// decision (permission prompt or `ask_user`). Reset to 0 at the start of
+    /// each user round and added to at every permission/ask_user `await`. Read
+    /// at the round exit gate to derive "active" generation time
+    /// (`duration_ms - paused_ms`) for an honest tokens/sec that excludes the
+    /// human-thinking pause. `AtomicU64` because the parking sites
+    /// (`execute_tool`, the bash policy path, `execute_ask_user`) take `&self`,
+    /// not `&mut state`.
+    round_paused_ms: std::sync::atomic::AtomicU64,
     /// Who this agent is and what it is for. The single string the system
     /// prompt opens with — supplied by the *embedding* (e.g. the CLI), so this
     /// crate stays identity-agnostic and can be reused by frontends that are
@@ -397,12 +403,6 @@ impl EnvoyHandle {
 #[derive(Default)]
 pub(crate) struct RoundState {
     token_usage: TokenUsage,
-    /// Cumulative usage already charged to the active pursuit at a stop-gate
-    /// boundary. The next boundary books only the delta, avoiding triangular
-    /// over-counting as `token_usage` grows across the whole round.
-    pursuit_booked_usage: TokenUsage,
-    /// Elapsed round time already charged to the active pursuit.
-    pursuit_booked_duration_ms: u64,
     /// Consecutive ReAct turns whose tool calls were all `Read`-tier. Surfaced
     /// to user-configured `Turn` hooks so a hook can act on "exploration
     /// without progress". Reset to 0 by any turn containing an
@@ -684,6 +684,12 @@ pub struct RoundOutcome {
     pub message: crate::Message,
     pub token_usage: TokenUsage,
     pub duration_ms: u64,
+    /// Milliseconds of `duration_ms` spent parked on a human decision (a
+    /// permission prompt or an `ask_user`). The "active" generation time is
+    /// `duration_ms - paused_ms`; the harness derives an honest tokens/sec
+    /// from the active time so the human-thinking pause never drags the
+    /// measured server throughput down.
+    pub paused_ms: u64,
 }
 
 impl Agent {
@@ -737,7 +743,6 @@ impl Agent {
         identity: AgentIdentity,
         model_request_assembler: crate::model_request::ModelRequestAssembler,
     ) -> Self {
-        let pursuit_state = crate::pursuit_state::PursuitState::new();
         let thread_id = Arc::new(std::sync::Mutex::new(None));
 
         let mut toolset = toolset;
@@ -789,7 +794,6 @@ impl Agent {
             tool_manager,
             todos,
             round_counter,
-            pursuit_state,
             permissions: crate::permission_store::PermissionStore::new(),
             ask_user: std::sync::Mutex::new(AskUserState::default()),
             input: std::sync::Mutex::new(InputState::default()),
@@ -810,6 +814,7 @@ impl Agent {
             inbox_tx: std::sync::Mutex::new(None),
             inbox_rx: std::sync::Mutex::new(None),
             user_input_queue: std::sync::Mutex::new(None),
+            round_paused_ms: std::sync::atomic::AtomicU64::new(0),
             identity,
             turn_persist: std::sync::Mutex::new(None),
             model_request_assembler,
@@ -922,7 +927,6 @@ impl Agent {
 
         crate::SystemPromptContext {
             identity_preamble: self.identity.preamble(),
-            pursuit: self.get_pursuit(),
             tool_names,
             model_guidance,
             provider_guidance,
@@ -1436,90 +1440,12 @@ impl Agent {
         &self.identity
     }
 
-    pub fn get_pursuit(&self) -> Option<Pursuit> {
-        self.pursuit_state.get()
-    }
-
-    pub fn set_pursuit(&self, pursuit: Pursuit) {
-        self.pursuit_state.set(pursuit);
-    }
-
-    pub fn restore_pursuit(&self, pursuit: Pursuit) {
-        self.pursuit_state.restore(pursuit);
-    }
-
-    pub fn clear_pursuit(&self) {
-        self.pursuit_state.clear();
-    }
-
-    pub fn pursuit_can_complete(&self) -> bool {
-        self.pursuit_state.can_complete()
-    }
-
-    // ── Pursuit stop-gate ───────────────────────────────────────────────
-    // `/pursue <condition>` arms the gate. Each time the model would end the
-    // round, the gate re-injects the condition and forces another turn until
-    // the model signals completion, the safety cap is hit, or the pursuit is
-    // disarmed. See [`PursuitState::continuation`].
-
-    pub fn arm_pursuit(&self) {
-        self.pursuit_state.arm();
-    }
-
-    pub fn resume_pursuit(&self) {
-        self.pursuit_state.resume();
-    }
-
-    pub fn disarm_pursuit(&self) {
-        self.pursuit_state.disarm();
-    }
-
-    pub fn stop_pursuit(&self, reason: impl Into<String>) -> Option<Pursuit> {
-        self.pursuit_state.stop(reason)
-    }
-
-    pub fn is_pursuit_armed(&self) -> bool {
-        self.pursuit_state.is_armed()
-    }
-
-    pub fn pursuit_iterations(&self) -> u32 {
-        self.pursuit_state.iterations()
-    }
-
-    /// A snapshot of the per-pursuit runtime counters (passes / tokens /
-    /// wall-clock), zeroed when the pursuit is armed and accumulated at each
-    /// stop-gate boundary (ADR-0083). Used to surface usage in the stop summary
-    /// and to enforce [`neenee_core::PursuitBudget`].
-    pub fn pursuit_stats(&self) -> PursuitStats {
-        self.pursuit_state.stats()
-    }
-
-    /// Restore the stop-gate runtime view (armed + iterations) from persisted
-    /// state on resume (ADR-0048 Phase 2). Does not reset the iteration
-    /// counter — an armed pursuit mid-iteration resumes with its count intact.
-    pub fn restore_pursuit_runtime(&self, armed: bool, iterations: u32, stats: PursuitStats) {
-        self.pursuit_state.restore_runtime(armed, iterations, stats);
-    }
-
-    pub(crate) fn pursuit_continuation(&self, response: &Message) -> Option<String> {
-        self.pursuit_state
-            .continuation(response, MAX_PURSUIT_ITERATIONS)
-    }
-
-    /// The round-end gate (ADR-0025). Combines the `/pursue` stop-gate with any
-    /// `Stop` hooks: a pursuit forcing continuation wins; otherwise a `Stop`
-    /// hook may force another turn with feedback. Returns `None` to let the
-    /// round end — i.e. both the pursuit gate and every Stop hook must agree
-    /// to stop. The pursuit gate is queried first so its safety-cap disarm
-    /// side effect is preserved.
-    ///
-    /// Returns the prompt together with the [`InjectionKind`] that produced it,
-    /// so the push site stamps the correct provenance (pursuit continuation vs
-    /// a `Stop` hook inject) instead of guessing from the text.
+    /// The round-end gate (ADR-0025). A `Stop` hook may force another turn with
+    /// feedback. Returns `None` to let the round end — i.e. every Stop hook
+    /// must agree to stop. Returns the prompt together with the
+    /// [`InjectionKind`] that produced it, so the push site stamps the correct
+    /// provenance instead of guessing from the text.
     async fn stop_gate(&self, response: &Message) -> Option<(String, InjectionKind)> {
-        if let Some(prompt) = self.pursuit_continuation(response) {
-            return Some((prompt, InjectionKind::PursuitContinuation));
-        }
         self.hooks()
             .check_stop(
                 response.content.as_str(),
@@ -1533,65 +1459,12 @@ impl Agent {
     /// Book the usage delta since the previous stop-gate boundary into the
     /// active pursuit (ADR-0083). This runs before continuation policy so a
     /// budget reached by the just-finished pass stops immediately.
-    fn book_pursuit_pass(&self, state: &mut RoundState, duration_ms: u64) {
-        if !self.pursuit_state.is_armed() {
-            return;
-        }
-        let previous = state.pursuit_booked_usage;
-        let delta = TokenUsage {
-            prompt_tokens: state
-                .token_usage
-                .prompt_tokens
-                .saturating_sub(previous.prompt_tokens),
-            completion_tokens: state
-                .token_usage
-                .completion_tokens
-                .saturating_sub(previous.completion_tokens),
-            total_tokens: state
-                .token_usage
-                .total_tokens
-                .saturating_sub(previous.total_tokens),
-            cache_creation_input_tokens: state
-                .token_usage
-                .cache_creation_input_tokens
-                .saturating_sub(previous.cache_creation_input_tokens),
-            cache_read_input_tokens: state
-                .token_usage
-                .cache_read_input_tokens
-                .saturating_sub(previous.cache_read_input_tokens),
-        };
-        let duration_delta = duration_ms.saturating_sub(state.pursuit_booked_duration_ms);
-        self.pursuit_state.book_pass(delta, duration_delta);
-        state.pursuit_booked_usage = state.token_usage;
-        state.pursuit_booked_duration_ms = duration_ms;
-    }
-
-    /// Inject convergence guidance after continuation has been approved and a
-    /// configured budget is at least 75% consumed.
-    fn inject_pursuit_convergence_reminder(&self, messages: &mut Vec<Message>) {
-        let stats = self.pursuit_state.stats();
-        // Convergence guidance: once any budget axis crosses 75%, steer the
-        // model toward finishing rather than starting new optional work. Fires
-        // once per crossing band to avoid repeating the same nudge on later turns.
-        if let Some(pursuit) = self.pursuit_state.get()
-            && let Some(budget) = pursuit.budget
-            && let Some(fraction) =
-                budget.usage_fraction(stats.passes, stats.tokens, stats.wall_clock_ms)
-            && (0.75..1.0).contains(&fraction)
-        {
-            crate::conversation_context::inject_reminders(messages, |sink| {
-                sink.remind(format!(
-                    "Pursuit budget is {:.0}% consumed (passes {}, tokens {}, {:.0}s). \
-                     Converge on the objective: finish in-flight work, verify it, and \
-                     emit {marker} rather than starting new optional work.",
-                    fraction * 100.0,
-                    stats.passes,
-                    stats.tokens,
-                    stats.wall_clock_ms as f64 / 1000.0,
-                    marker = crate::PURSUIT_COMPLETE_MARKER,
-                ));
-            });
-        }
+    /// Add `ms` to the current round's accumulated human-decision pause time
+    /// (a permission prompt or `ask_user`). Called around every blocking
+    /// `receiver.await` so the round exit gate can subtract it from the
+    /// wall-clock for an honest tokens/sec. No-op after saturating at `u64::MAX`.
+    fn book_pause(&self, ms: u64) {
+        self.round_paused_ms.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn thread_id(&self) -> Option<String> {
@@ -1599,14 +1472,6 @@ impl Agent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-    }
-
-    pub fn inject_pursuit_continuation(&self, messages: &mut Vec<Message>) {
-        self.pursuit_state.inject_continuation(messages);
-    }
-
-    pub fn inject_objective_updated(&self, messages: &mut Vec<Message>) {
-        self.pursuit_state.inject_objective_updated(messages);
     }
 
     pub fn reply_permission(&self, request_id: &str, decision: PermissionDecision) -> bool {
@@ -2226,6 +2091,11 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let round_started_at = std::time::Instant::now();
+        // Reset the human-decision pause accumulator for this round so the
+        // tokens/sec derived at the exit gate excludes only *this* round's
+        // permission/ask_user waits.
+        self.round_paused_ms
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         let mut state = RoundState {
             guards: RoundState::guards_default(self.doom_guard_config()),
             ..RoundState::default()
@@ -2346,11 +2216,8 @@ impl Agent {
             // same. When neither applies, `close_if_empty` atomically closes
             // admission before this round returns.
             let duration_ms = round_started_at.elapsed().as_millis() as u64;
-            self.book_pursuit_pass(&mut state, duration_ms);
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
-                self.pursuit_state.bump_iterations();
-                self.inject_pursuit_convergence_reminder(messages);
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
@@ -2381,6 +2248,9 @@ impl Agent {
                 message: response,
                 token_usage: state.token_usage,
                 duration_ms,
+                paused_ms: self
+                    .round_paused_ms
+                    .load(std::sync::atomic::Ordering::Relaxed),
             });
         }
     }
@@ -2407,6 +2277,11 @@ impl Agent {
     /// round from scratch. Standalone callers use [`Self::run_streaming_with_events`],
     /// which creates and consumes the state in one call.
     pub(crate) fn begin_streaming_round(&self) -> StreamingRoundState {
+        // Reset the human-decision pause accumulator for this round so the
+        // tokens/sec derived at the exit gate excludes only *this* round's
+        // permission/ask_user waits.
+        self.round_paused_ms
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         StreamingRoundState {
             state: RoundState {
                 guards: RoundState::guards_default(self.doom_guard_config()),
@@ -2756,11 +2631,8 @@ impl Agent {
             // typed during a would-be final answer can still force one more
             // turn in this same round.
             let duration_ms = round.started_at.elapsed().as_millis() as u64;
-            self.book_pursuit_pass(&mut round.state, duration_ms);
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
-                self.pursuit_state.bump_iterations();
-                self.inject_pursuit_convergence_reminder(messages);
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
@@ -2792,6 +2664,9 @@ impl Agent {
                 message: response,
                 token_usage: round.state.token_usage,
                 duration_ms,
+                paused_ms: self
+                    .round_paused_ms
+                    .load(std::sync::atomic::Ordering::Relaxed),
             });
         }
     }
@@ -3648,9 +3523,14 @@ impl Agent {
         // Observe-only interrupt hook: fire notifications (desktop/bell) so the
         // user notices the agent is blocked on their input. No-op without
         // `[hooks]`. Outcomes are ignored — this never gates the question.
+        let parked_at = std::time::Instant::now();
         self.fire_user_question_hooks(&request).await;
 
-        match receiver.await.unwrap_or(None) {
+        let reply = receiver.await.unwrap_or(None);
+        // Charge the human-thinking pause to the round so the exit gate can
+        // subtract it for an honest tokens/sec.
+        self.book_pause(parked_at.elapsed().as_millis() as u64);
+        match reply {
             Some(reply) => {
                 let output = serde_json::to_string_pretty(&reply.answers)
                     .unwrap_or_else(|_| format!("{:?}", reply.answers));
@@ -3773,12 +3653,16 @@ impl Agent {
                     arguments: arguments.to_string(),
                     scope: command.to_string(),
                 };
-                let receiver = self.permissions.park_request(request.id.clone());
+                let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
                 tracing::info!(command = %command, rule = %decision.name, "bash policy confirmation requested");
                 let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
                 self.fire_permission_request_hooks(&request).await;
 
-                match receiver.await.unwrap_or(PermissionDecision::Reject) {
+                let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
+                // Charge the human-thinking pause to the round so the exit gate
+                // can subtract it for an honest tokens/sec.
+                self.book_pause(parked_at.elapsed().as_millis() as u64);
+                match decision {
                     PermissionDecision::Once | PermissionDecision::Always => {
                         // Deliberately do not persist `Always`: a dangerous-command
                         // confirmation is sharper than ordinary tool permission and
@@ -3922,11 +3806,15 @@ impl Agent {
                         id: format!("permission_{}", uuid::Uuid::new_v4()),
                         ..request
                     };
-                    let receiver = self.permissions.park_request(request.id.clone());
+                    let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
                     tracing::info!(tool = %request.tool, scope = %request.scope, "permission requested");
                     let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
                     self.fire_permission_request_hooks(&request).await;
-                    match receiver.await.unwrap_or(PermissionDecision::Reject) {
+                    let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
+                    // Charge the human-thinking pause to the round so the exit
+                    // gate can subtract it for an honest tokens/sec.
+                    self.book_pause(parked_at.elapsed().as_millis() as u64);
+                    match decision {
                         PermissionDecision::Once => {
                             tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
                         }

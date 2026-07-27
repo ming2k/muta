@@ -177,6 +177,10 @@ pub(super) struct UiRuntime {
     pub current_model: Arc<Mutex<String>>,
     /// Latest AI-visible context size for the primary session.
     pub context_tokens: Arc<Mutex<HashMap<String, neenee_core::ContextTokenSnapshot>>>,
+    /// Latest per-round throughput summary (keyed by session id), surfaced in
+    /// the TokenReport modal as an honest tokens/sec that excludes the time
+    /// the round spent parked on human decisions.
+    pub round_tps: Arc<Mutex<HashMap<String, neenee_core::RoundSummary>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     pub activity_status: Arc<Mutex<String>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
@@ -768,7 +772,6 @@ pub(super) async fn run_app_loop(
             app.current_provider = runtime.current_provider.lock().await.clone();
             app.current_model = runtime.current_model.lock().await.clone();
             let harness = runtime.harness.lock().await.clone();
-            app.current_pursuit = harness.pursuit;
             app.loop_status = harness.loop_status;
             app.unattended = harness.unattended;
             app.activity_status = runtime.activity_status.lock().await.clone();
@@ -1006,6 +1009,12 @@ pub(super) async fn run_app_loop(
         .to_string();
         app.context_tokens = runtime
             .context_tokens
+            .lock()
+            .await
+            .get(&viewed_session_id)
+            .copied();
+        app.round_tps = runtime
+            .round_tps
             .lock()
             .await
             .get(&viewed_session_id)
@@ -1302,6 +1311,23 @@ pub(super) async fn run_app_loop(
                 let chrome_interactive =
                     matches!(app.active_modal, Modal::None | Modal::Permission);
 
+                // Project the viewed session's outbox into the small view the
+                // persistent queue bar renders. Dispatch order (front pops
+                // first) is preserved, so the bar previews the genuine next
+                // item to ship. The items are owned snapshots so the bar/modal
+                // do not borrow `app` (which is mutated again right after the
+                // draw closure).
+                let queue_items: Vec<view::QueueItemView> = app
+                    .pending_dispatch
+                    .iter()
+                    .filter(|item| item.session_id == viewed_session_id)
+                    .map(|item| view::QueueItemView {
+                        target: item.target,
+                        queued_at_ms: item.queued_at_ms,
+                        text: item.text.clone(),
+                    })
+                    .collect();
+
                 let transcript_render = view::draw_transcript(
                     f,
                     &mut layout_map,
@@ -1317,13 +1343,19 @@ pub(super) async fn run_app_loop(
                         input: &masked_input,
                         byte_cursor: app.byte_cursor(),
                         chrome_hidden,
+                        queue_bar: view::QueueBarView {
+                            items: &queue_items,
+                            paused: app.pending_counts(&viewed_session_id).1 > 0
+                                && app.idle_sessions.contains(&viewed_session_id)
+                                && !app
+                                    .naturally_completed_sessions
+                                    .contains(&viewed_session_id),
+                        },
                         envoy_bar,
                         side_banner,
-                        pursuit: app.current_pursuit.as_ref(),
                         todos: app.todos.as_ref(),
                         review_alert: app.review_alert.clone(),
                         round_started_at: app.round_started_at,
-                        unattended: app.unattended,
                         hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
                         focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
                         logo: app.logo.as_deref(),
@@ -1337,6 +1369,7 @@ pub(super) async fn run_app_loop(
                 let hint_rect = transcript_render.hint_rect;
                 let activity_rect = transcript_render.activity_rect;
                 let todos_rect = transcript_render.todos_rect;
+                let queue_rect = transcript_render.queue_rect;
                 let content_lines = transcript_render.content_lines;
                 let view_height = transcript_render.view_height;
                 let sticky = transcript_render.sticky;
@@ -1385,15 +1418,7 @@ pub(super) async fn run_app_loop(
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
                             busy: app.running_sessions.contains(&viewed_session_id),
-                            send_next_round: app.send_target
-                                == crate::tui::app::SendTarget::NextRound,
-                            pending_insert: app.pending_counts(&viewed_session_id).0,
-                            pending_next_round: app.pending_counts(&viewed_session_id).1,
-                            outbox_paused: app.pending_counts(&viewed_session_id).1 > 0
-                                && app.idle_sessions.contains(&viewed_session_id)
-                                && !app
-                                    .naturally_completed_sessions
-                                    .contains(&viewed_session_id),
+                            unattended: app.unattended,
                             context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                         },
                         &app.theme,
@@ -1523,6 +1548,7 @@ pub(super) async fn run_app_loop(
                 app.view_height = view_height;
                 app.activity_rect = activity_rect;
                 app.todos_rect = todos_rect;
+                app.queue_rect = queue_rect;
                 // Feed the observed composer rect back so the *next* iteration's
                 // immediate cursor flush (which runs before this draw closure
                 // re-runs) places the caret against the geometry the user is
@@ -1602,18 +1628,10 @@ pub(super) async fn run_app_loop(
                     }
                     Modal::Models => {
                         let models = app.models_flat_filtered();
-                        // Whether the highlighted row's provider is user-defined —
-                        // gates the `d remove` footer hint (the input gate does
-                        // the real filtering).
-                        let highlighted_custom = models
-                            .get(app.modal_index)
-                            .or_else(|| models.first())
-                            .is_some_and(|row| app.provider_is_custom(&row.provider_id));
                         Some(view::draw_models_modal(
                             f,
                             &mut layout_map,
                             &models,
-                            highlighted_custom,
                             &app.current_provider,
                             &app.current_model,
                             app.modal_index,
@@ -1787,7 +1805,11 @@ pub(super) async fn run_app_loop(
                             .bindings()
                             .iter()
                             .map(|b| view::HelpBinding {
-                                key: b.key.label(),
+                                // Help prose rows use the compact lowercase
+                                // chord form (`ctrl+t`), sourced from the same
+                                // vocabulary the footers' capitalized form
+                                // (`Ctrl+T`) derives from.
+                                key: b.key.chord(),
                                 description: b.description,
                             })
                             .collect();
@@ -1822,6 +1844,7 @@ pub(super) async fn run_app_loop(
                                 window_tokens: crate::tui::providers::model_context_window(
                                     &app.current_model,
                                 ),
+                                round_summary: app.round_tps,
                             },
                             app.modal_index
                                 .min(view::token_report_round_count(&report).saturating_sub(1)),
@@ -1922,7 +1945,6 @@ pub(super) async fn run_app_loop(
                             f,
                             view::ActivityModalView {
                                 active_tab: app.activity_tab,
-                                pursuit: app.current_pursuit.as_ref(),
                                 todos: app.todos.as_ref(),
                                 user_prompt: user_prompt.as_deref(),
                                 round_count: app.round_count,
@@ -1936,6 +1958,21 @@ pub(super) async fn run_app_loop(
                             &app.theme,
                         ))
                     }
+                    Modal::Queue => Some(view::draw_queue_modal(
+                        f,
+                        view::QueueModalView {
+                            items: &queue_items,
+                            paused: app.pending_counts(&viewed_session_id).1 > 0
+                                && app.idle_sessions.contains(&viewed_session_id)
+                                && !app
+                                    .naturally_completed_sessions
+                                    .contains(&viewed_session_id),
+                        },
+                        app.modal_index,
+                        &mut app.queue_scroll,
+                        app.queue_modal_follow,
+                        &app.theme,
+                    )),
                     Modal::None => None,
                 };
 
@@ -2316,6 +2353,7 @@ pub(super) async fn run_app_loop(
                             // one-message next-round follow-up.
                             let id = uuid::Uuid::new_v4().to_string();
                             let target = app.send_target;
+                            let queued_at_ms = now_epoch_ms();
                             app.pending_dispatch
                                 .push_back(crate::tui::app::QueuedDispatch {
                                     id: id.clone(),
@@ -2323,6 +2361,7 @@ pub(super) async fn run_app_loop(
                                     target,
                                     state: crate::tui::app::QueuedDispatchState::Waiting,
                                     text: text.clone(),
+                                    queued_at_ms,
                                     images: images.clone(),
                                     text_pastes: text_pastes.clone(),
                                 });
@@ -2336,7 +2375,7 @@ pub(super) async fn run_app_loop(
                                         text: expanded,
                                         display_text: Some(text.clone()),
                                         images: images.clone(),
-                                        sent_at_ms: Some(now_epoch_ms()),
+                                        sent_at_ms: Some(queued_at_ms),
                                     },
                                 });
                             }
@@ -2569,37 +2608,32 @@ pub(super) async fn run_app_loop(
                     let _ = app.tx.send(AgentRequest::ShellCommand { command });
                 }
                 input::InputAction::ProviderPickerActivate => {
-                    if app.active_modal == Modal::Connections && app.connections_on_add_row() {
-                        // Connections "＋ Add connection" row: open the template
-                        // chooser instead of activating a provider.
-                        app.open_provider_template_chooser();
-                    } else {
-                        // Resolve the activation target. Connections: the
-                        // highlighted provider's current model. Models: the
-                        // highlighted flat (provider, model) pair. Both then
-                        // share one activation path (key-ready / OAuth / key
-                        // editor) via `activate_picked_model`.
-                        let key_ready =
-                            |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
-                        let target = match app.active_modal {
-                            Modal::Connections => {
-                                let rows = app.providers_filtered();
-                                rows.get(app.modal_index)
-                                    .or_else(|| rows.first())
-                                    .map(|row| (row.id.clone(), row.model.clone()))
-                            }
-                            Modal::Models => {
-                                let rows = app.models_flat_filtered();
-                                rows.get(app.modal_index)
-                                    .or_else(|| rows.first())
-                                    .map(|row| (row.provider_id.clone(), row.model.clone()))
-                            }
-                            _ => None,
-                        };
-                        if let Some((id, model)) = target {
-                            let ready = key_ready(app, &id);
-                            activate_picked_model(app, id, model, ready);
+                    // Resolve the activation target. Connections: the
+                    // highlighted provider's current model. Models: the
+                    // highlighted flat (provider, model) pair. Both then
+                    // share one activation path (key-ready / OAuth / key
+                    // editor) via `activate_picked_model`. (Adding a connection
+                    // is a separate `a` footer shortcut, not an activate path.)
+                    let key_ready =
+                        |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
+                    let target = match app.active_modal {
+                        Modal::Connections => {
+                            let rows = app.providers_filtered();
+                            rows.get(app.modal_index)
+                                .or_else(|| rows.first())
+                                .map(|row| (row.id.clone(), row.model.clone()))
                         }
+                        Modal::Models => {
+                            let rows = app.models_flat_filtered();
+                            rows.get(app.modal_index)
+                                .or_else(|| rows.first())
+                                .map(|row| (row.provider_id.clone(), row.model.clone()))
+                        }
+                        _ => None,
+                    };
+                    if let Some((id, model)) = target {
+                        let ready = key_ready(app, &id);
+                        activate_picked_model(app, id, model, ready);
                     }
                 }
                 input::InputAction::CustomProviderNextField => {
@@ -2676,21 +2710,6 @@ pub(super) async fn run_app_loop(
                         app.model_scroll = 0;
                         app.model_modal_follow = true;
                         app.modal_index = 0;
-                    }
-                }
-                input::InputAction::ProviderPickerRemoveModel => {
-                    // Models picker `d`: remove the highlighted model when its
-                    // provider is user-defined. Built-in providers are ignored.
-                    if app.active_modal == Modal::Models {
-                        let rows = app.models_flat_filtered();
-                        if let Some(row) = rows.get(app.modal_index)
-                            && app.provider_is_custom(&row.provider_id)
-                        {
-                            let _ = app.tx.send(AgentRequest::RemoveProviderModel {
-                                provider_id: row.provider_id.clone(),
-                                model: row.model.clone(),
-                            });
-                        }
                     }
                 }
                 input::InputAction::DeleteProvider => {
@@ -2826,16 +2845,17 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ProviderPickerToggleFavorite => {
-                    // Connections only (gated in input): toggle the favorite on
-                    // the highlighted provider (falling back to the first visible
-                    // row). Sending the request is enough; the backend pushes a
-                    // fresh snapshot that flips the ★ next frame.
-                    if app.active_modal == Modal::Connections {
-                        let ranked = app.providers_filtered();
+                    // Models only (gated in input): toggle the favorite on the
+                    // highlighted MODEL (falling back to the first visible row).
+                    // Favorite is model-level (ADR-0046), so the id is the
+                    // model wire id. Sending the request is enough; the backend
+                    // pushes a fresh snapshot that flips the ★ next frame.
+                    if app.active_modal == Modal::Models {
+                        let ranked = app.models_flat_filtered();
                         if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
-                            let _ = app
-                                .tx
-                                .send(AgentRequest::ToggleFavorite { id: row.id.clone() });
+                            let _ = app.tx.send(AgentRequest::ToggleFavorite {
+                                id: row.model.clone(),
+                            });
                         }
                     }
                 }
@@ -3120,6 +3140,14 @@ pub(super) async fn run_app_loop(
                         })
                         .unwrap_or(0);
                     app.suggestion_index = None;
+                }
+                input::InputAction::OpenProviderTemplate => {
+                    // `a` in the Connections modal: open the add-provider
+                    // template chooser (the first step of adding a connection).
+                    // Only meaningful from Connections; ignored otherwise.
+                    if app.active_modal == Modal::Connections {
+                        app.open_provider_template_chooser();
+                    }
                 }
                 input::InputAction::OpenHistory => {
                     // Stash whatever the user was composing so Esc restores it
@@ -3470,6 +3498,11 @@ pub(super) async fn run_app_loop(
                             .as_ref()
                             .map(|s| s.skills.len())
                             .unwrap_or(0)
+                    } else if app.active_modal == Modal::Queue {
+                        app.pending_dispatch
+                            .iter()
+                            .filter(|item| item.session_id == viewed_session_id)
+                            .count()
                     } else {
                         app.session_tools_len()
                     };
@@ -3481,7 +3514,16 @@ pub(super) async fn run_app_loop(
                         } else {
                             app.modal_index - 1
                         };
-                        app.session_modal_follow = true;
+                        // The queue modal tracks its own follow flag so it can
+                        // be scrolled independently of the shared session
+                        // scroll the other list modals reuse.
+                        if app.active_modal == Modal::Queue {
+                            app.queue_modal_follow = true;
+                        } else {
+                            app.session_modal_follow = true;
+                        }
+                    } else if app.active_modal == Modal::Queue {
+                        // Empty queue: Up/Down is inert.
                     } else {
                         app.session_scroll = if forward {
                             app.session_scroll.saturating_add(1)
@@ -3887,12 +3929,26 @@ pub(super) async fn run_app_loop(
                     // list surfaced on its own overlay. The list is
                     // agent-owned and read-only in the TUI; this simply opens
                     // the Activity modal pinned to the Todos section, exactly
-                    // like clicking the `todos d/t` badge on the activity bar.
+                    // like clicking the todo bar.
                     app.active_modal = Modal::Activity;
                     app.activity_tab = ActivityTab::Todos;
                     app.modal_keymap_open = false;
                     app.modal_index = 0;
                     app.activity_scroll = 0;
+                    app.selection = SelectionState::None;
+                    app.focused_target = None;
+                    app.drag.cancel();
+                }
+                input::InputAction::OpenQueue => {
+                    // F2 opens the queue overview — the full outbox list that
+                    // the persistent queue bar previews. The selection starts
+                    // at the front (the next item to pop). This mirrors a
+                    // click on the queue bar.
+                    app.active_modal = Modal::Queue;
+                    app.modal_keymap_open = false;
+                    app.modal_index = 0;
+                    app.queue_scroll = 0;
+                    app.queue_modal_follow = true;
                     app.selection = SelectionState::None;
                     app.focused_target = None;
                     app.drag.cancel();
@@ -4141,18 +4197,26 @@ pub(super) async fn run_app_loop(
                         app.completion_dismissed = true;
                     }
                 }
-                input::InputAction::RecallQueued => match app.recall_queued(&viewed_session_id) {
-                    Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
-                        app.restore_dispatch(dispatch);
+                input::InputAction::RecallQueued => {
+                    // The Queue modal's `Enter` recalls the newest staged item
+                    // into the composer; close the modal so the user lands back
+                    // in the input ready to edit.
+                    if app.active_modal == Modal::Queue {
+                        app.active_modal = Modal::None;
                     }
-                    Some(crate::tui::app::RecallQueued::CancelInsert { input_id }) => {
-                        let _ = app.tx.send(AgentRequest::CancelInsertedInput {
-                            session_id: viewed_session_id.clone(),
-                            input_id,
-                        });
+                    match app.recall_queued(&viewed_session_id) {
+                        Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
+                            app.restore_dispatch(dispatch);
+                        }
+                        Some(crate::tui::app::RecallQueued::CancelInsert { input_id }) => {
+                            let _ = app.tx.send(AgentRequest::CancelInsertedInput {
+                                session_id: viewed_session_id.clone(),
+                                input_id,
+                            });
+                        }
+                        None => {}
                     }
-                    None => {}
-                },
+                }
                 input::InputAction::HistoryNext => {
                     if let Some(i) = app.history_index {
                         if i + 1 < app.input_history.len() {
@@ -4278,6 +4342,13 @@ pub(super) async fn run_app_loop(
                             app.modal_index = (app.modal_index + count - 1) % count;
                         }
                     }
+                    Modal::Queue => {
+                        // Wheel/PageUp: scroll the queue body. Clearing the
+                        // follow flag lets the user browse freely until they
+                        // navigate with ↑/↓ again.
+                        app.queue_scroll = app.queue_scroll.saturating_sub(1);
+                        app.queue_modal_follow = false;
+                    }
                     Modal::Help
                     | Modal::Question
                     | Modal::ModelEditor
@@ -4353,6 +4424,13 @@ pub(super) async fn run_app_loop(
                                 .max(1);
                             app.modal_index = (app.modal_index + 1) % count;
                         }
+                    }
+                    Modal::Queue => {
+                        // Wheel/PageDown: scroll the queue body. Clearing the
+                        // follow flag lets the user browse freely until they
+                        // navigate with ↑/↓ again.
+                        app.queue_scroll = app.queue_scroll.saturating_add(1);
+                        app.queue_modal_follow = false;
                     }
                     Modal::Help
                     | Modal::Question
@@ -4615,9 +4693,9 @@ pub(super) async fn run_app_loop(
                         app.drag.cancel();
                     } else if app.active_modal == Modal::None
                         && app.todos_rect.is_some_and(|r| {
-                            // `todos d/t` badge: open the Activity modal on the
-                            // Todos section directly. Checked before the full-bar
-                            // rect since the badge sits inside the bar.
+                            // Todo bar: open the Activity modal on the Todos
+                            // section directly. Checked before the activity-bar
+                            // rect in case the two bars ever overlap.
                             r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
                         })
                     {
@@ -4642,6 +4720,22 @@ pub(super) async fn run_app_loop(
                         app.activity_tab = ActivityTab::Activity;
                         app.modal_index = 0;
                         app.activity_scroll = 0;
+                        app.selection = SelectionState::None;
+                        app.focused_target = None;
+                        app.drag.cancel();
+                    } else if app.active_modal == Modal::None
+                        && app.queue_rect.is_some_and(|r| {
+                            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
+                        })
+                    {
+                        // Click anywhere on the persistent queue bar → expand
+                        // the full Queue modal. Selection starts at the front
+                        // (the next item to pop).
+                        app.active_modal = Modal::Queue;
+                        app.modal_keymap_open = false;
+                        app.modal_index = 0;
+                        app.queue_scroll = 0;
+                        app.queue_modal_follow = true;
                         app.selection = SelectionState::None;
                         app.focused_target = None;
                         app.drag.cancel();
@@ -5057,8 +5151,6 @@ pub(super) fn display_status(
         // always has a non-empty label to anchor the breathing dot against.
         (LoopStatus::Running, "") => "preparing".to_string(),
         (LoopStatus::Running, activity) => activity.to_string(),
-        (status, "") => status.to_string(),
-        (status, activity) => format!("{} · {}", status, activity),
     }
 }
 

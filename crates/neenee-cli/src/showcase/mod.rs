@@ -29,6 +29,7 @@ pub fn run(component: &str) -> Result<(), Box<dyn std::error::Error>> {
         "tool-step" => tool_step::run().map_err(Into::into),
         "transcript" => transcript::run().map_err(Into::into),
         "provider" => simple::provider().map_err(Into::into),
+        "models" => simple::models().map_err(Into::into),
         "model-editor" => simple::model_editor().map_err(Into::into),
         "history" => simple::history().map_err(Into::into),
         "sessions" => simple::sessions().map_err(Into::into),
@@ -45,10 +46,11 @@ pub fn run(component: &str) -> Result<(), Box<dyn std::error::Error>> {
                  tool-step    the parallel tools transcript (spacing + lifecycles)\n  \
                  transcript   full transcript fixtures (markdown, CJK, scroll, resize)\n  \
                  provider     the /connections provider picker\n  \
+                 models       the Ctrl+M models picker (full-width gap-grouped rows)\n  \
                  model-editor the API-key / model-id editor\n  \
                  history      the Ctrl+R input-history search\n  \
                  sessions     the session picker\n  \
-                 activity     the activity / pursuit / tasks modal\n  \
+                 activity     the activity / tasks modal\n  \
                  help         the keybindings help modal\n  \
                  toast        copy / armed toasts\n\n\
                  Usage: neenee showcase <component>"

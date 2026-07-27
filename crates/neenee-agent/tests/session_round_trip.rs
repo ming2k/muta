@@ -76,7 +76,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
 
     let prompt = "hello, mock";
     let sent_at_ms = 1_700_000_000_123;
-    let completed = execute_round(
+    execute_round(
         RoundContext {
             agent: agent.clone(),
             tx,
@@ -105,11 +105,6 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
     )
     .await
     .expect("round completes with the mock provider");
-
-    // The bool return is pursuit-completion (the model emitted the marker AND the
-    // stop-gate accepted it), not round completion. With no pursuit set the
-    // value is always false; the round still ran end to end and persisted.
-    assert!(!completed, "no pursuit is set, so completion flag is false");
 
     // Snapshot the live state before dropping everything.
     let saved_id = session.id().await;

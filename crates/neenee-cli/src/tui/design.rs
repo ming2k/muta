@@ -79,11 +79,23 @@ pub(crate) const HINT_BAR_GAP_MIN: usize = 2;
 pub(crate) const HINT_BAR_SEGMENT_GAP: usize = 2;
 
 pub(crate) const STATUS_BAR_ROWS: u16 = 1;
-/// State bar: a single-line strip for persistent session-state indicators
-/// (unattended mode today; workspace and other ambient state later). Always
-/// one row tall when visible; the caller allocates zero rows when no
-/// indicator is active.
-pub(crate) const STATE_BAR_ROWS: u16 = 1;
+/// Todo bar: a one-line region pinned directly below the activity bar (and
+/// above the queue bar) that surfaces the live task list — a `todo` tag, the
+/// done/total progress, and a one-line preview of the current item (the
+/// `InProgress` one, or the first `Pending` when nothing is mid-flight). The
+/// whole bar is the click target that opens the Activity modal on the Todos
+/// section. Always one row tall when visible (hidden only while an overlay
+/// modal replaces the chrome, inside an envoy zoom, or when the task list is
+/// empty). It is the permanent home for todo affordances, so the activity bar
+/// no longer needs to embed the `todos d/t` badge.
+pub(crate) const TODO_BAR_ROWS: u16 = 1;
+/// Queue bar: a two-line persistent region pinned directly below the todo bar
+/// that always surfaces the pending outbox (a count, the send time of the
+/// next item to pop, key affordances, and a preview of that item's text).
+/// Always two rows tall when visible (hidden only while an overlay modal
+/// replaces the chrome, or inside an envoy zoom). It is the permanent home for
+/// queue affordances, so the hint bar no longer needs to embed outbox counts.
+pub(crate) const QUEUE_BAR_ROWS: u16 = 2;
 /// Permanent breathing room between the transcript and footer chrome. Keeping
 /// this row even while the activity bar is idle prevents the latest response
 /// from visually running into the composer when the active row appears or
@@ -230,6 +242,8 @@ pub(crate) const PANEL_BAR_INSET: u16 = 1;
 pub(crate) const MIN_TERMINAL_COLS: u16 = 40;
 
 /// Minimum terminal height (rows) for a usable layout. Accounts for the
-/// viewport's top/bottom margin (2 rows), the footer chrome (gap + status bar
-/// + composer minimum + hint bar = 6 rows), and at least one transcript row.
+/// viewport's top/bottom margin (2 rows), the minimum footer chrome (a
+/// permanent gap, the composer minimum, and the hint bar, totalling 5 rows —
+/// the activity bar and queue bar appear only while active/pending), and at
+/// least a couple of transcript rows.
 pub(crate) const MIN_TERMINAL_ROWS: u16 = 12;

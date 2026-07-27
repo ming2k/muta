@@ -2,8 +2,8 @@
 
 Single-row status strip below the input box. The left side states what
 the next `Enter` does; the right side carries the model name, an optional
-reasoning-effort tag, and the context-usage indicator. Session-state flags
-are not shown here — `unattended` lives on the [state bar](state-bar.md).
+reasoning-effort tag, the context-usage indicator, and the persistent
+session-state flag `unattended` (a warning-toned tag when set).
 
 ## Appearance
 

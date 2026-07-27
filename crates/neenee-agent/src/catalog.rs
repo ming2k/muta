@@ -1238,9 +1238,22 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 .map(channel_model_info)
                 .map(|mut info| {
                     info.last_used_ms = usage.model_last_used_ms(&info.model);
+                    // Favorite is model-level (ADR-0046): a starred
+                    // daily-driver model carries its flag into the flat
+                    // Models picker wherever it is served.
+                    info.favorite = config.favorites.iter().any(|fav| fav == &info.model);
                     info
                 })
                 .collect();
+            // The template that birthed this instance drives the
+            // Connections list's provider-type label (distinct from the
+            // user-given instance name).
+            let template_id = config
+                .providers
+                .iter()
+                .find(|p| p.id == entry.id)
+                .and_then(|p| p.template_id.clone())
+                .unwrap_or_default();
             ProviderPickerRow {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
@@ -1251,7 +1264,7 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 protocol,
                 base_url,
                 key_ready: entry.key_ready(),
-                favorite: config.favorites.iter().any(|fav| fav == &entry.id),
+                template_id,
                 last_used_ms: usage.last_used_ms(&entry.id),
                 auth: provider_auth(config, &entry.id),
             }
@@ -1302,6 +1315,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
                 last_used_ms: None,
+                favorite: false,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -1322,6 +1336,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: effective,
                 thinking: None,
                 last_used_ms: None,
+                favorite: false,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -1337,6 +1352,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: effective,
                 thinking: None,
                 last_used_ms: None,
+                favorite: false,
             }
         }
         Transport::Google { .. } => ProviderModelInfo {
@@ -1345,6 +1361,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             effort: None,
             thinking: None,
             last_used_ms: None,
+            favorite: false,
         },
     }
 }

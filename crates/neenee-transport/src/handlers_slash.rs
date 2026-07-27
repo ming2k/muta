@@ -24,13 +24,12 @@ use crate::project::init_neenee_config;
 use neenee_agent::Agent;
 use neenee_agent::RoundLifecycle;
 use neenee_agent::orchestration::{
-    ContextProjectionSettings, PursuitContext, RoundInput, compact_round_history,
-    emit_pursuit_updated, refresh_agent_pursuit, restore_agent_pursuit, round_response,
-    send_compaction, send_harness_state, start_pursuit, stop_superseded_pursuit,
+    ContextProjectionSettings, RoundInput, compact_round_history, round_response,
+    send_compaction, send_harness_state,
 };
 use neenee_core::{
     AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, Provider, Pursuit, RoundEvent, Tool,
+    NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent, Tool,
     estimate_bytes, estimate_tokens,
 };
 use neenee_persistence::{
@@ -46,7 +45,6 @@ use std::sync::{
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
-use crate::pursuits::{format_pursuit_budget, format_pursuit_status, parse_pursuit_budget};
 use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
 use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
@@ -56,7 +54,6 @@ use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
 async fn supersede_for_session_switch(
     lifecycle: &RoundLifecycle,
     agent: &Agent,
-    session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
 ) {
     lifecycle.supersede();
@@ -65,15 +62,6 @@ async fn supersede_for_session_switch(
     agent.reject_pending_inputs();
     let _ = resp_tx.send(AgentResponse::PermissionsCleared);
     lifecycle.cancel_current().await;
-    let session_id = session.id().await;
-    stop_superseded_pursuit(
-        agent,
-        session,
-        resp_tx,
-        &session_id,
-        "superseded by a session switch",
-    )
-    .await;
 }
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
@@ -307,10 +295,10 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Resume) => {
-            supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
+            supersede_for_session_switch(lifecycle, agent, resp_tx).await;
             match resume_session(session, parts.get(1).copied()).await {
                 Ok((id, transcript)) => {
-                    restore_agent_pursuit(agent, session).await;
+                    agent.restore_round_count(session.round_counter().await);
                     let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                     let _ = resp_tx.send(round_response(
                         &session.id().await,
@@ -332,25 +320,15 @@ pub async fn dispatch(
                     .unwrap_or_else(|| "none".to_string());
                 let message_count = session.model_window().await.len();
                 let archived_count = session.archived_transcript_count().await;
-                let checkpoint = session.checkpoint().await;
                 let last_projection = session.last_projection().await;
-                let checkpoint_text = checkpoint
-                    .map(|item| {
-                        format!(
-                            "{} {}/{} ({})",
-                            item.pursuit, item.iteration, item.max_iterations, item.status
-                        )
-                    })
-                    .unwrap_or_else(|| "none".to_string());
                 let _ = resp_tx.send(round_response(
                                         &session.id().await,
                                         RoundEvent::Text(format!(
-                                    "Session: {}\nForked from: {}\nModel-window messages: {}\nArchived transcript messages: {}\nLoop checkpoint: {}\nLast context projection: {}",
+                                    "Session: {}\nForked from: {}\nModel-window messages: {}\nArchived transcript messages: {}\nLast context projection: {}",
                                     id,
                                     parent_id,
                                     message_count,
                                     archived_count,
-                                    checkpoint_text,
                                     last_projection
                                         .map(|item| format!(
                                             "{:?}: {} -> {} chars",
@@ -386,10 +364,10 @@ pub async fn dispatch(
                 }
             },
             "fork" => {
-                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
+                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 match session.fork().await {
                     Ok((id, parent_id)) => {
-                        restore_agent_pursuit(agent, session).await;
+                        agent.restore_round_count(session.round_counter().await);
                         let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::Text(format!("Forked session {} from {}.", id, parent_id)),
@@ -408,10 +386,10 @@ pub async fn dispatch(
                     ));
                     return;
                 };
-                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
+                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 match session.open(id).await {
                     Ok(()) => {
-                        restore_agent_pursuit(agent, session).await;
+                        agent.restore_round_count(session.round_counter().await);
                         let transcript = session.full_transcript().await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the opened session's own
@@ -437,10 +415,10 @@ pub async fn dispatch(
                 }
             }
             "resume" => {
-                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
+                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 match resume_session(session, parts.get(2).copied()).await {
                     Ok((id, transcript)) => {
-                        restore_agent_pursuit(agent, session).await;
+                        agent.restore_round_count(session.round_counter().await);
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the resumed session's own
                         // provider pin (or the global default if it has none).
@@ -465,11 +443,11 @@ pub async fn dispatch(
                 }
             }
             "new" => {
-                supersede_for_session_switch(lifecycle, agent, session, resp_tx).await;
+                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 agent.clear_todos();
                 match session.reset().await {
                     Ok(id) => {
-                        restore_agent_pursuit(agent, session).await;
+                        agent.restore_round_count(session.round_counter().await);
                         // C6: a fresh session has no provider pin, so the live
                         // provider falls back to the global default.
                         crate::handlers_provider::reapply_session_selection(
@@ -626,298 +604,6 @@ pub async fn dispatch(
                 }
             }
             agent.fire_post_compact().await;
-        }
-        Some(BuiltinCmd::Pursue) => {
-            let thread_id = session.id().await;
-            let argument = cmd.strip_prefix("/pursue").unwrap_or("").trim();
-            let rest = argument;
-
-            async fn report_pursuit_result(
-                tx: &mpsc::UnboundedSender<AgentResponse>,
-                session_id: &str,
-                agent: &Agent,
-                result: Result<Option<Pursuit>, String>,
-                success: impl FnOnce(&Pursuit) -> String,
-                empty: impl Into<String>,
-            ) {
-                match result {
-                    Ok(Some(pursuit)) => {
-                        agent.set_pursuit(pursuit.clone());
-                        emit_pursuit_updated(tx, session_id, &pursuit);
-                        let _ = tx.send(round_response(
-                            session_id,
-                            RoundEvent::Text(success(&pursuit)),
-                        ));
-                    }
-                    Ok(None) => {
-                        let _ = tx.send(AgentResponse::Error(empty.into()));
-                    }
-                    Err(error) => {
-                        let _ = tx.send(AgentResponse::Error(error));
-                    }
-                }
-            }
-
-            if rest == "stop" {
-                let stopped = agent.is_pursuit_armed() && lifecycle.cancel_current().await;
-                if stopped {
-                    if let Some(pursuit) = agent.stop_pursuit("stopped by user") {
-                        match session.set_pursuit(Some(pursuit.clone())).await {
-                            Ok(()) => emit_pursuit_updated(resp_tx, &session.id().await, &pursuit),
-                            Err(error) => {
-                                let _ = resp_tx.send(AgentResponse::Error(error));
-                            }
-                        }
-                    }
-                    let _ = resp_tx.send(round_response(
-                        &thread_id,
-                        RoundEvent::Text("Pursuit stop requested.".to_string()),
-                    ));
-                } else {
-                    let _ = resp_tx.send(round_response(
-                        &thread_id,
-                        RoundEvent::Text("No pursuit is running.".to_string()),
-                    ));
-                }
-                if stopped {
-                    // Genuine lifecycle transition (mirrors `interrupt`):
-                    // flip the harness to idle eagerly so the activity bar
-                    // reflects the stopped work before terminal persistence.
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                return;
-            }
-
-            if rest == "status" {
-                refresh_agent_pursuit(agent, session).await;
-
-                // SessionStart hooks (ADR-0025): inject setup context before the first
-                // round. Resume vs fresh start is surfaced so a hook can branch.
-                {
-                    let source = match &startup {
-                        StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
-                        _ => neenee_core::SessionSource::Startup,
-                    };
-                    let mut messages = session.model_window().await;
-                    agent.fire_session_start(source, &mut messages).await;
-                    // Persist the hook-injected setup context through the
-                    // single write path so the session stays the source of
-                    // truth (ADR-0048). A full replace is correct here: this
-                    // is a rare startup path, not the per-round hot loop.
-                    if let Err(err) = session.replace_messages(messages).await {
-                        let _ = resp_tx.send(AgentResponse::Error(err));
-                    }
-                }
-                let armed = agent.is_pursuit_armed();
-                let iterations = agent.pursuit_iterations();
-                let message = match agent.get_pursuit() {
-                    Some(pursuit) => {
-                        let mut m = format_pursuit_status(&pursuit);
-                        if armed {
-                            let stats = agent.pursuit_stats();
-                            let pass = iterations
-                                .saturating_add(1)
-                                .min(neenee_agent::MAX_PURSUIT_ITERATIONS);
-                            m.push_str(&format!(
-                                "\nPursuit active · pass {pass}/{} · \
-                                 {} completed pass{}, {} tokens, {:.0}s",
-                                neenee_agent::MAX_PURSUIT_ITERATIONS,
-                                stats.passes,
-                                if stats.passes == 1 { "" } else { "es" },
-                                stats.tokens,
-                                stats.wall_clock_ms as f64 / 1000.0
-                            ));
-                        }
-                        m
-                    }
-                    None => "No active pursuit. Start one with /pursue <condition>.".to_string(),
-                };
-                let _ = resp_tx.send(round_response(&thread_id, RoundEvent::Text(message)));
-            } else if rest == "clear" {
-                agent.disarm_pursuit();
-                match session.set_pursuit(None).await {
-                    Ok(_) => {
-                        if agent.get_pursuit().is_some() {
-                            agent.clear_pursuit();
-                            // Mirror the cleared pursuit into the TUI snapshot
-                            // via the non-gated channel so the activity bar's
-                            // `⟴` badge updates without flushing the live
-                            // activity cell (which a `HarnessState("idle")`
-                            // would do, flickering the bar mid-round).
-                            let _ = resp_tx
-                                .send(round_response(&thread_id, RoundEvent::PursuitCleared));
-                            let _ = resp_tx.send(round_response(
-                                &thread_id,
-                                RoundEvent::Text("Pursuit cleared.".to_string()),
-                            ));
-                        } else {
-                            let _ = resp_tx.send(round_response(
-                                &thread_id,
-                                RoundEvent::Text("No pursuit to clear.".to_string()),
-                            ));
-                        }
-                    }
-                    Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
-                    }
-                }
-            } else if rest == "done" {
-                agent.disarm_pursuit();
-                report_pursuit_result(
-                    resp_tx,
-                    &thread_id,
-                    agent,
-                    session.mark_pursuit_complete().await,
-                    |_| "Pursuit marked completed.".to_string(),
-                    "No pursuit to complete.",
-                )
-                .await;
-            } else if rest.starts_with("edit ") {
-                let new_objective = rest.strip_prefix("edit ").unwrap_or("").trim();
-                if new_objective.is_empty() {
-                    let _ = resp_tx.send(AgentResponse::Error(
-                        "Usage: /pursue edit <new condition>".to_string(),
-                    ));
-                } else {
-                    match session.update_pursuit_objective(new_objective).await {
-                        Ok(Some(pursuit)) => {
-                            agent.set_pursuit(pursuit.clone());
-                            {
-                                let mut messages = session.model_window().await;
-                                agent.inject_objective_updated(&mut messages);
-                                let _ = session.replace_messages(messages).await;
-                            }
-                            emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
-                            let _ = resp_tx.send(round_response(
-                                &thread_id,
-                                RoundEvent::Text(format!("Pursuit updated: {}", pursuit.objective)),
-                            ));
-                        }
-                        Ok(None) => {
-                            let _ = resp_tx.send(AgentResponse::Error(
-                                "No pursuit to edit. Start one with /pursue <condition>."
-                                    .to_string(),
-                            ));
-                        }
-                        Err(error) => {
-                            let _ = resp_tx.send(AgentResponse::Error(error));
-                        }
-                    }
-                }
-            } else if rest == "pause" || rest == "resume" {
-                let _ = resp_tx.send(AgentResponse::Error(
-                    "/pursue pause and /pursue resume are not supported. Use /pursue \
-                     <condition>, /pursue edit, /pursue done, /pursue clear, /pursue status, \
-                     /pursue budget, or /pursue stop."
-                        .to_string(),
-                ));
-            } else if rest == "budget" || rest.starts_with("budget ") {
-                // `/pursue budget passes=20 tokens=500000 time=1800000` sets hard
-                // budgets on the active pursuit (ADR-0069). Any subset may be
-                // given; an axis omitted leaves it uncapped. `/pursue budget`
-                // (no args) clears the budget. Budgets are opt-in only and never
-                // invented by the model.
-                let args = rest.strip_prefix("budget").unwrap_or("").trim();
-                match session.pursuit().await {
-                    Some(mut pursuit) if !pursuit.is_complete => match parse_pursuit_budget(args) {
-                        Ok(budget) => {
-                            pursuit.budget = budget;
-                            match session.set_pursuit(Some(pursuit.clone())).await {
-                                Ok(_) => {
-                                    agent.set_pursuit(pursuit.clone());
-                                    emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
-                                    let label = format_pursuit_budget(pursuit.budget);
-                                    let _ = resp_tx.send(round_response(
-                                        &thread_id,
-                                        RoundEvent::Text(format!("Pursuit budget {label}.")),
-                                    ));
-                                }
-                                Err(error) => {
-                                    let _ = resp_tx.send(AgentResponse::Error(error));
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let _ = resp_tx.send(AgentResponse::Error(error));
-                        }
-                    },
-                    Some(_) => {
-                        let _ = resp_tx.send(AgentResponse::Error(
-                            "Cannot set a budget on a completed pursuit.".to_string(),
-                        ));
-                    }
-                    None => {
-                        let _ = resp_tx.send(AgentResponse::Error(
-                            "No pursuit to budget. Start one with /pursue <condition>.".to_string(),
-                        ));
-                    }
-                }
-            } else {
-                // `/pursue <condition>` sets a fresh condition and drives it;
-                // `/pursue` (empty) re-arms and drives the existing pursuit.
-                let resume_runtime = rest.is_empty() && agent.is_pursuit_armed();
-                let condition = if rest.is_empty() {
-                    match session.pursuit().await {
-                        Some(pursuit) if !pursuit.is_complete => {
-                            let _ = resp_tx.send(round_response(
-                                &thread_id,
-                                RoundEvent::Text(format!(
-                                    "Resuming pursuit on existing pursuit: {}",
-                                    pursuit.objective
-                                )),
-                            ));
-                            pursuit.objective
-                        }
-                        _ => {
-                            let _ = resp_tx.send(AgentResponse::Error(
-                                "No active pursuit. Start one with /pursue <condition>."
-                                    .to_string(),
-                            ));
-                            return;
-                        }
-                    }
-                } else {
-                    let pursuit = Pursuit {
-                        objective: rest.to_string(),
-                        is_complete: false,
-                        ..Default::default()
-                    };
-                    match session.set_pursuit(Some(pursuit.clone())).await {
-                        Ok(_) => {
-                            agent.set_pursuit(pursuit.clone());
-                            emit_pursuit_updated(resp_tx, &thread_id, &pursuit);
-                            pursuit.objective
-                        }
-                        Err(error) => {
-                            let _ = resp_tx.send(AgentResponse::Error(error));
-                            return;
-                        }
-                    }
-                };
-                start_pursuit(
-                    PursuitContext {
-                        agent: agent.clone(),
-                        tx: resp_tx.clone(),
-                        lifecycle: lifecycle.clone(),
-                        session: session.clone(),
-                        session_id: session.id().await,
-                        projection: ContextProjectionSettings::from_config(
-                            config,
-                            active_context_window(agent),
-                        ),
-                        retry_max_attempts: config.provider_retry_max_attempts,
-                        retry_base_ms: config.provider_retry_base_ms,
-                        retry_max_ms: config.provider_retry_max_ms,
-                        resume_runtime,
-                    },
-                    condition,
-                )
-                .await;
-            }
-            // `/pursue status` / unsupported-subcommand paths reach here. None
-            // of them mutate harness state, so there is nothing to mirror and
-            // no round boundary to signal — a `HarnessState("idle")` here would
-            // only flicker the activity bar.
         }
         Some(BuiltinCmd::Repeat) => {
             let rest = cmd.strip_prefix("/repeat").unwrap_or("").trim();
@@ -1144,13 +830,11 @@ pub async fn dispatch(
             let session_id = session.id().await;
             let provider_id = agent.provider.provider_id();
             let model_name = agent.provider.model();
-            let pursuit = agent.get_pursuit();
             let markdown = crate::export::format_export_markdown(
                 crate::export::ExportContext {
                     session_id: &session_id,
                     provider: &provider_id,
                     model: &model_name,
-                    pursuit: pursuit.as_ref(),
                 },
                 &messages,
             );
@@ -1254,7 +938,6 @@ pub async fn dispatch(
                     let window = active_context_window(agent);
                     let tokens = estimate_tokens(&messages);
                     let estimated_bytes = estimate_bytes(&messages);
-                    let pursuit = agent.get_pursuit();
                     let session_id = session.id().await;
                     let timestamp = chrono::Utc::now();
                     let pressure_pct = if window > 0 {
@@ -1279,7 +962,6 @@ pub async fn dispatch(
                         "estimated_tokens": tokens,
                         "estimated_bytes": estimated_bytes,
                         "pressure_pct": pressure_pct,
-                        "pursuit": pursuit,
                         "tools": agent
                             .installed_tools()
                             .iter()

@@ -16,6 +16,7 @@ use neenee_tui_engine::{
     Frame, Modifier, Span, {Line, Style},
 };
 
+use crate::tui::components::keycap::keycap_style;
 use crate::tui::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
 use crate::tui::components::scroll::ScrollBody;
 use crate::tui::primitives::{FixedModalSpec, FooterHint};
@@ -42,14 +43,7 @@ pub fn draw_help_modal(
     bindings: &[HelpBinding],
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
-    let key = |k: &str| {
-        Span::styled(
-            format!("{:<10}", k),
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+    let key = |k: &str| Span::styled(format!("{:<10}", k), keycap_style(theme));
     let desc = |d: &str| Span::styled(d.to_string(), Style::default().fg(theme.muted()));
     let section = |title: &str| {
         Span::styled(
@@ -115,7 +109,6 @@ pub fn draw_help_modal(
         row("/", "slash commands"),
         Line::from(""),
         Line::from(section("Modes")),
-        row("/pursue", "pursue a pursuit until it is met"),
         Line::from(""),
         Line::from(desc("Drag to select · Ctrl+C or Ctrl+Shift+C to copy.")),
     ]);

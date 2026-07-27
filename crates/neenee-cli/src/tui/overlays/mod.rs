@@ -30,6 +30,7 @@ pub mod permission;
 pub mod permissions_manager;
 pub mod provider;
 pub mod provider_delete_confirm;
+pub mod queue;
 pub mod session;
 pub mod skills;
 pub mod toast;
@@ -52,6 +53,7 @@ pub use provider::{
     draw_models_modal, draw_oauth_pending, draw_provider_template_chooser,
 };
 pub use provider_delete_confirm::draw_provider_delete_confirm;
+pub use queue::{QueueModalView, draw_queue_modal};
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
 pub use toast::{draw_armed_toast, draw_copy_toast};

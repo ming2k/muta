@@ -61,7 +61,6 @@ pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
 pub mod project;
-pub mod pursuits;
 pub mod review;
 pub mod serve;
 pub mod serve_discovery;

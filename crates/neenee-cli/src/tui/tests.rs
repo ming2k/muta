@@ -475,12 +475,12 @@ fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
         "using MCP"
     );
     assert_eq!(
-        display_status(LoopStatus::Pursue, "running command", false),
-        "pursue · running command"
+        display_status(LoopStatus::Running, "running command", false),
+        "running command"
     );
     assert_eq!(
-        display_status(LoopStatus::Pursue, "running command", true),
-        "pursue · awaiting permission"
+        display_status(LoopStatus::Running, "running command", true),
+        "awaiting permission"
     );
 }
 
@@ -980,9 +980,11 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         hint_context_rect: None,
         token_ledger: None,
         context_tokens: None,
+        round_tps: None,
         token_report_scroll: 0,
         token_report_detail: false,
         todos_rect: None,
+        queue_rect: None,
         modal_rect: None,
         sticky_summary_line: None,
         pin_summary_line: None,
@@ -1014,7 +1016,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         current_model: "mock".to_string(),
         cwd: cwd.clone(),
         path_scan_cache: None,
-        current_pursuit: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
@@ -1026,6 +1027,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
+        queue_scroll: 0,
+        queue_modal_follow: true,
         help_scroll: 0,
         modal_keymap_open: false,
         pending_permission: None,
@@ -1132,11 +1135,11 @@ fn completions_returns_empty_when_input_does_not_trigger() {
 #[test]
 fn completions_classifies_slash_input_as_slash_kind() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/pu".to_string();
+    app.input = "/re".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
-    assert!(completions.iter().any(|c| c.label == "/pursue"));
+    assert!(completions.iter().any(|c| c.label == "/repeat"));
     // Slash candidates replace the whole input.
     for c in &completions {
         assert_eq!(c.replace_start, 0);
@@ -1303,7 +1306,10 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
 }
 
 #[test]
-fn picker_add_row_is_the_trailing_connections_row() {
+fn picker_connections_count_matches_provider_rows_no_add_row() {
+    // Adding a connection is a footer shortcut (`a`) now, not a synthetic list
+    // row, so `picker_row_count()` for Connections equals the provider count
+    // exactly (no +1).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.active_modal = Modal::Connections;
     // Seed a few snapshot rows so providers_filtered() renders the full list
@@ -1318,7 +1324,7 @@ fn picker_add_row_is_the_trailing_connections_row() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        favorite: false,
+        template_id: String::new(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -1326,17 +1332,9 @@ fn picker_add_row_is_the_trailing_connections_row() {
         default_id: "kimi-code".to_string(),
         rows: vec![row("kimi-code"), row("openai"), row("anthropic")],
     };
-    // The add row sits just past the provider rows and is counted as selectable.
     let providers = app.providers_filtered().len();
     assert!(providers > 0, "snapshot seeds the full provider list");
-    assert_eq!(app.picker_row_count(), providers + 1);
-    app.modal_index = providers;
-    assert!(
-        app.connections_on_add_row(),
-        "last Connections row is the add row"
-    );
-    app.modal_index = providers - 1;
-    assert!(!app.connections_on_add_row());
+    assert_eq!(app.picker_row_count(), providers);
 }
 
 /// `Shift+D` on a custom provider must STAGE the deletion (open the confirm
@@ -1358,7 +1356,7 @@ fn delete_provider_stages_overlay_without_deleting() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        favorite: false,
+        template_id: String::new(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -1400,7 +1398,7 @@ fn delete_provider_ignores_builtin() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        favorite: false,
+        template_id: String::new(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -1474,16 +1472,16 @@ fn accept_slash_completion_does_not_append_trailing_space() {
     // of "Enter/Tab finishes the completion". The user opts into subcommand
     // discovery by typing a space themselves.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/pu".to_string();
+    app.input = "/re".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let idx = completions
         .iter()
-        .position(|c| c.label == "/pursue")
-        .expect("/pursue in candidates");
+        .position(|c| c.label == "/repeat")
+        .expect("/repeat in candidates");
     app.accept_completion(idx);
     // The label is spliced verbatim — no trailing space.
-    assert_eq!(app.input, "/pursue");
+    assert_eq!(app.input, "/repeat");
     assert_eq!(app.cursor_position, "/pursue".chars().count());
     // A slash accept is a terminal commit: the popup must stay hidden and
     // no subcommand menu may fire. This holds for BOTH Tab and Enter since
@@ -1703,6 +1701,7 @@ fn queued_dispatch(id: &str, session_id: &str, text: &str, target: SendTarget) -
         target,
         state: QueuedDispatchState::Waiting,
         text: text.to_string(),
+        queued_at_ms: 0,
         images: Vec::new(),
         text_pastes: Vec::new(),
     }
@@ -1719,6 +1718,7 @@ fn queued_dispatch_carries_text_and_images() {
         target: SendTarget::Insert,
         state: QueuedDispatchState::Waiting,
         text: "hello".to_string(),
+        queued_at_ms: 0,
         images: vec![neenee_core::ImagePart {
             mime: "image/png".to_string(),
             data: "base64".to_string(),

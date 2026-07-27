@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A Rust-based AI coding agent with a semantic TUI, tool use, on-demand skills, and bounded autonomous pursuits.
+  A Rust-based AI coding agent with a semantic TUI, tool use, on-demand skills, and scheduled prompts.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 - **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
-- **Autonomous Pursuits** — Set a pursuit with `/pursue <condition>` and the harness keeps the turn going (a stop-gate) until the condition is met. Schedule recurring prompts on a clock with `/repeat`.
+- **Scheduled Prompts** — Schedule recurring prompts on a clock with `/repeat` so the agent can run unattended on a schedule.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
 

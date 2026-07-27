@@ -116,7 +116,7 @@ pub enum ToolOutput {
     /// A read-only envoy run (produced by the `task` tool). Carries the
     /// envoy's full internal transcript so it can be persisted on the
     /// parent session and replayed on resume, plus the actual token usage so
-    /// parent-side pursuit accounting no longer under-counts by 100x. `summary`
+    /// parent-side accounting no longer under-counts by 100x. `summary`
     /// is the short text the parent model sees as the tool result.
     ///
     /// `failed` is the structured failure flag set explicitly by the envoy tool

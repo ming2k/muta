@@ -22,7 +22,7 @@ use super::common::placeholder;
 use crate::tui::design::MODAL_INNER_H_PADDING;
 use crate::tui::primitives::{
     ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, content_modal_probe,
-    modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
+    keyvocab, modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
 };
 use crate::tui::view::Theme;
 
@@ -31,6 +31,10 @@ use crate::tui::view::Theme;
 pub struct ContextUsageView {
     pub snapshot: Option<ContextTokenSnapshot>,
     pub window_tokens: usize,
+    /// Latest per-round throughput summary, surfaced as an honest tokens/sec
+    /// that excludes the time the round spent parked on human decisions.
+    /// `None` until the first natural round completes.
+    pub round_summary: Option<neenee_core::RoundSummary>,
 }
 
 /// Number of user rounds represented by a report.
@@ -68,8 +72,8 @@ pub fn draw_token_report_modal(
             "Round Usage",
             detail_body(report, selected, body_width, theme),
             vec![
-                FooterHint::always("↑↓", "scroll"),
-                FooterHint::always("Esc", "rounds"),
+                FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
+                FooterHint::always(keyvocab::ESC, "rounds"),
             ],
         )
     } else if round_count == 0 {
@@ -79,11 +83,12 @@ pub fn draw_token_report_modal(
                 report,
                 context.snapshot,
                 context.window_tokens,
+                context.round_summary,
                 selected,
                 body_width,
                 theme,
             ),
-            vec![FooterHint::always("Esc", "close")],
+            vec![FooterHint::always(keyvocab::ESC, "close")],
         )
     } else {
         (
@@ -92,14 +97,15 @@ pub fn draw_token_report_modal(
                 report,
                 context.snapshot,
                 context.window_tokens,
+                context.round_summary,
                 selected,
                 body_width,
                 theme,
             ),
             vec![
-                FooterHint::always("↑↓", "select"),
-                FooterHint::always("Enter", "turns"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::always(keyvocab::ARROWS_UD, "select"),
+                FooterHint::always(keyvocab::ENTER, "turns"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ],
         )
     };
@@ -144,6 +150,7 @@ fn list_body(
     report: &TokenSourceReport,
     current_context: Option<ContextTokenSnapshot>,
     context_window: usize,
+    latest_tps: Option<neenee_core::RoundSummary>,
     selected: usize,
     body_width: usize,
     theme: &Theme,
@@ -174,6 +181,36 @@ fn list_body(
             "Current context estimate unavailable.",
             true,
             theme.muted(),
+        ));
+    }
+
+    // Latest generation throughput: output tokens / *active* generation time.
+    // Active time excludes the human-decision pause (permission prompts /
+    // ask_user), so this reflects the server's real efficiency, not how long
+    // the user deliberated. The pause share is shown parenthetically so a
+    // round that was mostly waiting is not misread as a slow model.
+    if let Some(summary) = latest_tps {
+        let tps = summary.tps();
+        let tps_label = if tps > 0.0 {
+            format!("{:.1} tok/s", tps)
+        } else {
+            "–".to_string()
+        };
+        let active_s = summary.active_ms() as f64 / 1000.0;
+        let paused_pct = if summary.duration_ms > 0 {
+            ((summary.paused_ms as f64 / summary.duration_ms as f64) * 100.0).round() as u32
+        } else {
+            0
+        };
+        let detail = format!(
+            "{tps_label}  ·  {active_s:.1}s active  ·  {paused_pct}% paused  ·  round {}",
+            summary.round
+        );
+        body.push(kv_styled(
+            "Throughput",
+            &detail,
+            reported_style(theme),
+            theme,
         ));
     }
 
@@ -818,6 +855,7 @@ mod tests {
                 source: ContextTokenSource::Projection,
             }),
             200_000,
+            None,
             0,
             80,
             &theme,
@@ -864,7 +902,7 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         assert_eq!(token_report_round_count(&report), 2);
-        let list = body_text(&list_body(&report, None, 0, 0, 80, &theme));
+        let list = body_text(&list_body(&report, None, 0, None, 0, 80, &theme));
         assert!(list.contains("Round 2"));
         assert!(list.contains("Round 3"));
         assert!(!list.contains("relay"));

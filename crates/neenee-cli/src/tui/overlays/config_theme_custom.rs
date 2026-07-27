@@ -7,7 +7,7 @@ use neenee_tui_engine::{
 
 use crate::tui::components::footer::render_modal_footer;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_area,
+    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_area, keyvocab,
     modal_chrome_rows, modal_frame, modal_header_parts, render_body,
 };
 use crate::tui::view::{CUSTOM_COLOR_FIELDS, Theme};
@@ -110,8 +110,8 @@ pub fn draw_config_theme_custom_modal(
             footer,
             &[
                 FooterHint::secondary("Tab/↑↓", "field"),
-                FooterHint::primary("Enter", "save"),
-                FooterHint::always("Esc", "cancel"),
+                FooterHint::primary(keyvocab::ENTER, "save"),
+                FooterHint::always(keyvocab::ESC, "cancel"),
             ],
             theme,
         );

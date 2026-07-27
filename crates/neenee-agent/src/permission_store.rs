@@ -77,11 +77,17 @@ impl PermissionStore {
     // ── pending requests ────────────────────────────────────────────────
 
     /// Register a pending permission request and return the receiver the
-    /// caller should `await` for the user's decision.
-    pub fn park_request(&self, request_id: String) -> oneshot::Receiver<PermissionDecision> {
+    /// caller should `await` for the user's decision, alongside the instant the
+    /// request was parked. The caller measures the elapsed time across the
+    /// `await` so it can be subtracted from the round's wall-clock to derive an
+    /// honest active-generation time (tokens/sec that excludes the human pause).
+    pub fn park_request(
+        &self,
+        request_id: String,
+    ) -> (oneshot::Receiver<PermissionDecision>, std::time::Instant) {
         let (sender, receiver) = oneshot::channel();
         lock(&self.state).pending.insert(request_id, sender);
-        receiver
+        (receiver, std::time::Instant::now())
     }
 
     /// Resolve a pending permission request. Rejecting one settles the whole
@@ -332,5 +338,23 @@ mod tests {
         store.seed_from_config(std::slice::from_ref(&rule));
         store.seed_from_config(std::slice::from_ref(&rule)); // idempotent
         assert_eq!(store.allowed_tools().len(), 1);
+    }
+
+    #[test]
+    fn park_request_returns_a_receiver_and_timestamp() {
+        // The receiver is awaited by the round task; the timestamp lets the
+        // caller measure how long the human took to decide, so that pause can
+        // be subtracted from the round's wall-clock for an honest tokens/sec.
+        let store = PermissionStore::new();
+        let (mut receiver, parked_at) = store.park_request("req-1".to_string());
+        let elapsed_before_reply = parked_at.elapsed();
+        // Replying resolves the receiver; the elapsed measured at the call site
+        // is non-negative by construction.
+        assert!(store.reply("req-1", PermissionDecision::Once));
+        let decision = receiver
+            .try_recv()
+            .expect("reply resolves the parked receiver");
+        assert_eq!(decision, PermissionDecision::Once);
+        assert!(elapsed_before_reply.as_nanos() < u128::MAX);
     }
 }

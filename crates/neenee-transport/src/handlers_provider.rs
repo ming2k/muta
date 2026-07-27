@@ -412,6 +412,9 @@ pub async fn remove_model(
     if config.default_model.as_deref() == Some(model.as_str()) {
         config.default_model = None;
     }
+    // Favorite is model-level (ADR-0046): a removed model's star is pruned so
+    // the picker never references a model that is no longer served.
+    config.favorites.retain(|fav| *fav != model);
     if let Err(error) = config.save_preserving_provider_selection() {
         tracing::warn!(?error, "could not persist removed provider model");
     }
@@ -565,15 +568,30 @@ pub async fn delete(
 ) {
     // Drop the user-defined entry. `retain` is a no-op when the id is unknown,
     // and built-in ids are never present in `config.providers`, so this is
-    // safely a built-in guard.
+    // safely a built-in guard. Capture the deleted provider's model ids first —
+    // favorite is model-level (ADR-0046), so those are the favorites to prune.
+    let deleted_models: Vec<String> = config
+        .providers
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| {
+            p.channels
+                .iter()
+                .filter_map(|c| c.model.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let before = config.providers.len();
     config.providers.retain(|p| p.id != id);
     // Nothing to do — the id was not a user-defined provider.
     if config.providers.len() == before {
         return;
     }
-    // Prune the removed id from favorites so the picker never references it.
-    config.favorites.retain(|fav| *fav != id);
+    // Prune the deleted provider's model ids from favorites (model-level) so
+    // the picker never references a model that is no longer served.
+    if !deleted_models.is_empty() {
+        config.favorites.retain(|fav| !deleted_models.iter().any(|m| m == fav));
+    }
 
     let was_active = config.default_provider == id;
     if was_active {
@@ -1080,8 +1098,10 @@ async fn activate(
     )));
 }
 
-/// `AgentRequest::ToggleFavorite` — flip the id in the favorites list,
-/// persist, and push a fresh picker snapshot so the ★ flips at once.
+/// `AgentRequest::ToggleFavorite` — flip the model id in the favorites list,
+/// persist, and push a fresh picker snapshot so the ★ flips at once. Favorite
+/// is model-level (ADR-0046), so `id` is a model wire id; the flag surfaces on
+/// every flat Models row that serves that model.
 pub async fn toggle_favorite(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,

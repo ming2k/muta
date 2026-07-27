@@ -21,8 +21,7 @@
 use crate::commands::{CustomCommand, discover_commands};
 use neenee_agent::catalog;
 use neenee_agent::orchestration::{
-    MidTurnPruneProjectionGate, ProxyProvider, restore_agent_pursuit, round_response,
-    start_repeat_scheduler,
+    MidTurnPruneProjectionGate, ProxyProvider, round_response, start_repeat_scheduler,
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_core::{
@@ -493,12 +492,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // command at one lifecycle point (PreToolUse / PostToolUse / Stop / …).
     agent.set_hooks(crate::hooks::build_hook_registry(&config.hooks));
 
-    // Tie the agent to this session/thread and restore the durable pursuit.
-    // ADR-0032: pursuit lives on `SessionData` (via `SessionStore`), not a
-    // separate SQLite db.
+    // Tie the agent to this session/thread.
     let thread_id = session.id().await;
     agent.set_thread_id(&thread_id);
-    restore_agent_pursuit(&agent, &session).await;
 
     // Restore the unified task list so resume re-shows the sticky panel with
     // the same items (and identity) the model last persisted. An empty list
@@ -508,11 +504,26 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.set_todos(persisted_todos);
     }
 
-    // Restore the remaining session-scoped runtime state (ADR-0048 Phase 2).
-    // `restore_agent_pursuit` above restored both pursuit layers together;
-    // these restore the orthogonal tool mask and round counter.
+    // Restore the remaining session-scoped runtime state (ADR-0048 Phase 2):
+    // the orthogonal tool mask and round counter.
     agent.restore_disabled_tools(session.disabled_tools().await);
     agent.restore_round_count(session.round_counter().await);
+
+    // SessionStart hooks (ADR-0025): inject setup context before the first
+    // round. Resume vs fresh start is surfaced so a hook can branch.
+    {
+        let source = match &startup {
+            StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
+            _ => neenee_core::SessionSource::Startup,
+        };
+        let mut messages = session.model_window().await;
+        agent.fire_session_start(source, &mut messages).await;
+        // Persist the hook-injected setup context through the single write
+        // path so the session stays the source of truth (ADR-0048).
+        if let Err(err) = session.replace_messages(messages).await {
+            tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+        }
+    }
 
     // Load history — awaited here after running concurrently with the agent
     // setup above. `unwrap` is safe: `spawn_blocking` only panics if the

@@ -21,7 +21,7 @@ the pre-ADR-0047 convention, which older documents may still use. See
 | **round lifecycle** | The at-most-one-active-round protocol per session, owned by `RoundLifecycle`: a new round supersedes its predecessor (generation bump + fresh cancellation token); interrupt cancels without superseding, so the unwinding round still emits its own cleanup. [ADR-0078](../adr/0078-round-lifecycle-type.md) |
 | **`round_counter`** | Monotonic counter bumped once per round and persisted across resume; stamps todo staleness. Legacy snapshots/config events using `turn_counter` remain readable. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **ReAct loop** | The model-request → tool-call → result loop iterated once per turn inside a round. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
-| **harness** | The control plane around provider calls; keeps model output inside explicit state, execution, and safety boundaries. Owns steering, pursuit, retry, and the autonomous loop. [Harness architecture](../explanation/agent-design/harness.md) |
+| **harness** | The control plane around provider calls; keeps model output inside explicit state, execution, and safety boundaries. Owns steering, retry, and the round loop. [Harness architecture](../explanation/agent-design/harness.md) |
 | **transcript** | The append-mostly message history resent in full on every request — the model's only memory between requests. Never edited to change meaning. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **catalog** (tool catalog) | The list of tool schemas published to the provider on every request; ephemeral to the runtime, republished each turn. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **gating stack** | The ordered checks every tool call crosses before running: lookup → write-scope gate → permission broker. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
@@ -29,7 +29,7 @@ the pre-ADR-0047 convention, which older documents may still use. See
 | **fallback tool-call path** | For providers without native function calling: the model emits a call as ordinary text, the agent extracts it and promotes it onto the assistant message. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **repeated-call guard** | The only in-loop guardrail: three identical tool calls in a row are stuck, so the fourth is rejected as an error. [Harness architecture](../explanation/agent-design/harness.md) |
 | **uncapped agentic loop** | Distinct tool calls and autonomous iterations are uncapped; context compaction is the backstop. [ADR-0009](../adr/0009-uncapped-agentic-loop.md) |
-| **hidden user message** | A message that steers the model but is not rendered in the visible transcript (pursuit re-injection, implicit skill body, hook-injected context). [Pursuits](../explanation/agent-design/pursuits.md) |
+| **hidden user message** | A message that steers the model but is not rendered in the visible transcript (implicit skill body, hook-injected context). |
 
 ## Roles
 
@@ -42,24 +42,18 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **principal** | The top-level, human-facing agent a frontend drives. Owns the visible conversation and the user-tunable `[principal]` config table (`hard_stop_turns`, `allow_model_stdin`, and the advanced `nudge` guard). [Configuration](configuration.md) |
 | **envoy** | An isolated child agent the principal spawns via the `envoy` tool to serve a bounded sub-question; fresh history, profile-filtered tools, shares only the provider. See the [Envoys](#envoys) section. [Envoys](../explanation/agent-design/envoys.md) |
 
-## Pursuits and scheduling
+## Scheduling
 
 | Term | Definition |
 |------|------------|
-| **pursuit** | A durable, per-session objective: an objective string plus a single `is_complete` boolean, with an optional budget (passes / tokens / wall-clock, ADR-0069/0083). No status machine, no checklist. Persisted on the session store (`SessionData.pursuit`, ADR-0032). [Pursuits](../explanation/agent-design/pursuits.md) |
-| **pursuit pass** | Work between two natural round-stop decisions while the pursuit gate is armed. Tool-calling ReAct turns inside that work do not create more pursuit passes. [Pursuits](../explanation/agent-design/pursuits.md#safety-cap) |
-| **objective** | The durable condition to pursue — the end-state statement carried by a pursuit. [Pursuits](../explanation/agent-design/pursuits.md) |
-| **stop-gate** | What `/pursue <condition>` arms: when the model would end the round, it can re-inject the condition and force another turn instead. [Pursuits](../explanation/agent-design/pursuits.md) |
-| **`[NEENEE_PURSUIT_COMPLETE]`** | The plain-text control signal the model emits to signal pursuit completion; always stripped from visible output. The gate gates, the model signals. [Pursuits](../explanation/agent-design/pursuits.md) |
-| **`MAX_PURSUIT_ITERATIONS`** | The 50-pass safety cap that bounds a pursuit that never signals completion. [Pursuits](../explanation/agent-design/pursuits.md) |
-| **`/repeat` cron scheduler** | Orthogonal clock-driven scheduler: schedules a prompt on a five-field cron expression, stores jobs durably, fires a fresh round per tick, auto-expires after 30 days. [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
+| **`/repeat` cron scheduler** | Clock-driven scheduler: schedules a prompt on a five-field cron expression, stores jobs durably, fires a fresh round per tick, auto-expires after 30 days. |
 
 ## Task list
 
 | Term | Definition |
 |------|------------|
 | **todo list** | The single source of truth for remaining work, shared with `todo`/`todo_update`, shown in the Activity modal, and persisted across restarts. The model populates it directly; there is no longer a plan tool that seeds it. [ADR-0020](../adr/0020-unified-task-list.md) |
-| **stop-gate** | The round-exit forcing function: the `/pursue` stop-gate plus any `Stop` hooks. It is the only gate that can refuse a round ending and force one more turn. [Harness architecture](../explanation/agent-design/harness.md) |
+| **stop-gate** | The round-exit forcing function: any `Stop` hooks. It is the only gate that can refuse a round ending and force one more turn. [Harness architecture](../explanation/agent-design/harness.md) |
 
 ## Envoys
 
@@ -136,7 +130,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **durable session** | The local recoverable scene for one coding session: durable transcript, model window, archived transcript, title, task list, pursuit state, and projection metadata. [Session persistence](../explanation/agent-design/session-persistence.md) |
+| **durable session** | The local recoverable scene for one coding session: durable transcript, model window, archived transcript, title, task list, and projection metadata. [Session persistence](../explanation/agent-design/session-persistence.md) |
 | **admission** | Writes the visible or hidden user message before provider work; each round records its admission session id. [Harness architecture](../explanation/agent-design/harness.md) |
 | **XDG layout** | Files classified by nature and routed to Config, Data, State, Cache, or Runtime categories with different operational lifetimes. [Persistence](../explanation/persistence.md) |
 | **override precedence** | Who decides a path, highest→lowest: CLI flag → app env (`NEENEE_*_DIR`) → standard XDG env → native per-OS default → `$HOME` fallback → current directory. [Persistence](../explanation/persistence.md) |
@@ -159,7 +153,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **model-request assembly** | The pure pre-provider projection that clones the current window, removes non-driving command echoes and legacy system messages, composes one fresh system message, and snapshots admitted tools into `ModelRequest`. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`SystemPromptSection`** | An agent-owned declarative system-prompt fragment with a stable id, rank, activation predicate, and renderer. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message of an ephemeral request. It does not construct user-role context or mutate the durable model window. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
-| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, pursuit, admitted tool names, model/provider guidance, and unattended state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, admitted tool names, model/provider guidance, and unattended state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **harness context message** | A model-visible user-role message inserted by the harness rather than authored by the user. Common constructors enforce role, visibility, and provenance; lifecycle owners decide payload and insertion time. [Prompt and message assembly](../explanation/agent-design/prompt-assembly.md) |
 
 ## Architecture
@@ -168,7 +162,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 |------|------------|
 | **`neenee-core`** | Zero-I/O contract crate: shared provider/tool traits, `ModelRequest`, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
 | **`neenee-persistence`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| **`neenee-transport`** | The transport layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` hot-attach WebSocket bridge, `/btw` side sessions, MCP runtime ownership, pursuits, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| **`neenee-transport`** | The transport layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` hot-attach WebSocket bridge, `/btw` side sessions, MCP runtime ownership, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
 | **`neenee-llm-client`** | The multi-protocol HTTP client: pooled transport (`Client`, `Endpoint`, SSE, retry/error) plus one module per wire protocol (OpenAI chat-completions + Responses, Anthropic Messages, Google native). [Crate layering](../explanation/crate-layering.md) |
 | **`neenee-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery, the mock provider, and the `oauth` module (OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store); selects which backend, with `neenee-llm-client` knowing how. API-key auth is not here — it is config resolution in `neenee-persistence`. [Crate layering](../explanation/crate-layering.md), [ADR-0052](../adr/0052-xai-supergrok-provider.md) |
 | **`neenee-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
@@ -178,7 +172,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **`neenee-cli`** | The package producing the `neenee` command; contains the TUI and drives an in-process standalone session by default, or attaches to a running server with `--attach`. The *coding* application's interactive frontend. [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
 | **`neenee-server`** | The headless session-host binary: hosts one session and serves it over WebSocket for attached clients. [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) |
 | **attach mode** | `neenee --attach [session-id]`: the TUI running as a WebSocket client of a running `neenee-server`, co-driving the hosted session; spawns the server on demand when none runs. [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) |
-| **`Agent`** | The central type in `neenee-agent`; owns the round/turn loop, gates, pursuit state, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`Agent`** | The central type in `neenee-agent`; owns the round/turn loop, gates, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **strict layering** | An acyclic dependency rule: shared contracts point toward core, concrete implementations point only downward, orchestration may consume implementations, and session/application layers never acquire reverse edges. [Crate layering](../explanation/crate-layering.md) |
 | **MCP server** | A local stdio MCP server exposing dynamically discovered tools; surfaces as `mcp__<server>__<tool>`. [MCP servers](../explanation/agent-design/mcp.md) |
 
@@ -199,13 +193,13 @@ documentation and ADRs.
 | `neenee-oauth` | `neenee-providers` (`oauth` module) | [Crate layering](../explanation/crate-layering.md) |
 | `neenee-harness` | `neenee-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | `neenee-tui-view` | merged into `neenee-cli` (`crate::tui` modules) | [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md) |
-| `/goal` + `/loop` | `/pursue` + `/repeat` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
-| `[NEENEE_GOAL_COMPLETE]` | `[NEENEE_PURSUIT_COMPLETE]` | [ADR-0015](../adr/0015-pursue-stop-gate-and-repeat-cron.md) |
+| `/goal` + `/loop` | removed (`/pursue` removed in ADR-0082; `/repeat` kept) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
+| `[NEENEE_GOAL_COMPLETE]` | removed (marker gone with the pursuit stop-gate) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
 | Plan mode | plan-as-an-envoy | [ADR-0027](../adr/0027-plan-as-subagent.md) |
 | per-plan progress panel | unified todo list | [ADR-0020](../adr/0020-unified-task-list.md) |
 | `plan` / `verify_plan_execution` tools | removed (planning is prompt-level) | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
 | `PLAN` / `VERIFY` profiles | removed | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
-| verify-nudge / todo-continuation nudge | stop-gate (pursue + `Stop` hooks) | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
+| verify-nudge / todo-continuation nudge | `Stop` hooks | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |
 | stall detector | session-review diagnostic | [ADR-0009](../adr/0009-uncapped-agentic-loop.md) |
 | `PromptChannel` / `PromptSection` / `PromptRegistry` / `PromptContext` | specialized `SystemPrompt*` vocabulary plus model-context message constructors | [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 

@@ -7,7 +7,7 @@ inside explicit state, execution, and safety boundaries.
 
 Every CLI round runs the streaming agent loop:
 
-1. Refresh the system context with pursuit, tools, and skill metadata.
+1. Refresh the system context with tools and skill metadata.
 2. Stream provider text and reconstruct native tool-call deltas by index.
 3. Execute native or JSON fallback tool calls through the same registry.
 4. Emit tool call/result events for the TUI.
@@ -93,46 +93,20 @@ Fallback text is withdrawn from the visible transcript before the tool step
 is emitted, matching the native streaming path. The same registry, permission
 broker, and result-message format apply to native and fallback calls.
 
-## Pursuit state
+## Round termination
 
-`/pursue <condition>` creates a durable, per-session objective persisted as a
-field on `SessionData` (`Option<Pursuit>` via `SessionStore`, ADR-0032), so it
-survives restarts and `/resume`. The durable objective holds its objective,
-completion bit, optional user budget, and the latest terminal reason; an
-orthogonal runtime record holds the armed flag, continuation count, and budget
-counters. This is intentionally not one flattened status machine and has no
-checklist. See
-[ADR-0010](../../adr/0010-slim-goal-primitive.md) and
-[ADR-0015](../../adr/0015-pursue-stop-gate-and-repeat-cron.md). There are no
-model-facing pursuit tools: the user sets the condition via `/pursue`, the
-harness drives continuation via the stop-gate, and the model signals completion
-with `[NEENEE_PURSUIT_COMPLETE]` (ADR-0031). See
-[Pursuits](pursuits.md) for the primitive and the persistence model.
+A round ends when the model replies with no tool calls — that natural stop is
+treated as completion. This is the only round shape: there is no special
+autonomous mode, no forced-continuation gate, no completion marker. A capable
+model completes long tasks within one round by its own tool-calling. The
+clock-driven `/repeat` scheduler is the only scheduled-prompt mechanism and is
+fully orthogonal to the round loop.
 
-## Pursue stop-gate
-
-`/pursue` arms a **stop-gate** on the agent and drives one round. Each time the
-model would end the round, the gate re-injects the condition as a hidden user
-message and forces another turn instead of returning. The round therefore runs
-across many turns.
-
-| Form | Effect |
-|------|--------|
-| `/pursue <condition>` | Set the condition, arm the gate, and drive the round until met |
-| `/pursue` | Re-arm and drive on the existing active pursuit |
-
-The pursuit stops when:
-
-- the model emits `[NEENEE_PURSUIT_COMPLETE]`;
-- the 50-pass safety cap is hit (the gate disarms);
-- the user presses `Esc` or runs `/pursue stop`;
-- a newer request supersedes it;
-- the provider or tool pipeline returns an error.
-
-This replaces the old outer multi-round `/loop` with
-within-round continuation — one driver, no outer loop. The clock-driven
-counterpart is `/repeat`, a cron scheduler; see
-[Pursuits](pursuits.md) for the comparison.
+> The pursuit stop-gate and primitive (a forced-continuation gate plus a
+> `[NEENEE_PURSUIT_COMPLETE]` completion marker) were removed in
+> [ADR-0082](../../adr/0082-remove-pursuit-stop-gate.md). `Stop` hooks
+> (ADR-0025) remain the only lever that can refuse a round ending and force
+> one more turn.
 
 Task generation ids prevent an older task from clearing the cancellation state
 of a newer task.
@@ -166,13 +140,6 @@ claude-code agentic-loop model. Context compaction (thresholds derived from
 the active model's context window, plus mid-round pruning) is the backstop that
 keeps them within the model window; the user can interrupt at any time. An
 explicit `hard_stop_turns` remains available as an opt-in bound.
-
-The pursuit stop-gate is deliberately different: an explicitly armed
-autonomous attempt has a 50-pursuit-pass safety cap, in addition to any
-user-set pass/token/time budget. A pursuit pass is one natural-stop decision,
-not every tool-calling model turn. This does not reintroduce a default cap on
-ordinary rounds; it bounds only the opt-in mechanism that keeps overriding the
-model's natural stop.
 
 ### Advanced doom-loop guard
 
@@ -260,13 +227,7 @@ branch snapshots under `sessions/<id>.json`:
 - Each round records its admission session id and refuses a late commit after a
   session switch.
 
-Pursuit checkpoints project the one-based pursuit pass, the 50-pass maximum, and
-a typed attempt status (`running`, `completed`, `interrupted`, or `error`).
-`/session status` exposes that projection. The objective record and pursuit
-runtime — not the display checkpoint — restore an unfinished attempt's armed
-flag, continuation count, and budget counters; running `/pursue` on that
-restored attempt preserves those counters. `/session new` cancels old work and
-creates a fresh session id.
+`/session new` cancels old work and creates a fresh session id.
 
 ## Context projection
 

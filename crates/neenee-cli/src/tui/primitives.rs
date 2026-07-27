@@ -16,6 +16,11 @@ pub(crate) use super::components::footer::{
 #[cfg(test)]
 use super::design::PANEL_BAR_INSET;
 use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP};
+/// Canonical key-display vocabulary: named `&'static str` constants for the
+/// glyphs footers and legends repeat (`keyvocab::ESC`, `keyvocab::ARROWS_UD`,
+/// …). Re-exported here because every overlay already imports this module for
+/// `FooterHint`, so a footer's key + label both come from one place.
+pub(crate) use super::keymap::keyvocab;
 
 /// Global viewport margin. Only vertical breathing room (1 cell top and
 /// bottom) is reserved; horizontally every component spans the full terminal
@@ -167,6 +172,7 @@ impl ContentModalSpec {
 
     pub const TOOLS: Self = Self::new(64, 11, 84);
     pub const MCP: Self = Self::new(64, 9, 84);
+    pub const QUEUE: Self = Self::new(66, 9, 84);
     pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
     pub const CONFIG: Self = Self::new(62, 14, 84);
     pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);

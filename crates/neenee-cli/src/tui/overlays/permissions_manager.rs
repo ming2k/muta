@@ -9,8 +9,8 @@ use neenee_tui_engine::{Frame, Line};
 
 use super::common::{placeholder, selectable_row};
 use crate::tui::primitives::{
-    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header,
-    render_body, render_modal_footer,
+    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, keyvocab, modal_area, modal_frame,
+    modal_header, render_body, render_modal_footer,
 };
 use crate::tui::view::Theme;
 
@@ -79,13 +79,13 @@ pub fn draw_permissions_manager(
     // ── Footer ──
     if let Some(fo) = f.footer {
         let hints: &[FooterHint] = if rules.is_empty() {
-            &[FooterHint::always("Esc", "close")]
+            &[FooterHint::always(keyvocab::ESC, "close")]
         } else {
             &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("Space", "revoke"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
+                FooterHint::primary(keyvocab::SPACE, "revoke"),
                 FooterHint::secondary("c", "clear all"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ]
         };
         render_modal_footer(frame, fo, hints, theme);

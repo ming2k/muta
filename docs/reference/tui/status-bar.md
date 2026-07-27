@@ -1,24 +1,23 @@
 # Activity bar
 
-Transient activity indicator shown directly above the input box. It unifies
-the live status label, the active pursuit, todos progress, and the
-breathing-dot liveness anchor into one click-to-open bar. Long-lived
-session-state flags (`unattended` and friends) are deliberately absent —
-they live on the [state bar](state-bar.md).
+Transient activity indicator shown at the top of the footer stack, directly
+above the [todo bar](todo-bar.md). It unifies the live status label, the
+active pursuit, and the breathing-dot liveness anchor into one click-to-open
+bar. Long-lived session-state flags (`unattended` and friends) are
+deliberately absent — they fold onto the [hint bar](hint-line.md) — and the
+task-list summary lives on its own todo bar below.
 
 ## Appearance
 
 ```text
- ● making edits (23s · Esc Esc to interrupt) · » refactor auth module      todos 2/5
+ ● making edits (23s · Esc Esc to interrupt) · » refactor auth module
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **live
 status** (lead, shimmering muted → brand sweep), an optional **pursuit
-badge** (`» <objective>`, shown only while a pursuit is armed), the
-**elapsed** timer inside the interrupt hint, and **todos progress**
-(`todos d/t`, right-pinned, shown only when a non-empty task list exists).
-Segments are omitted when there is nothing to report, so a plain round
-reads simply:
+badge** (`» <objective>`, shown only while a pursuit is armed), and the
+**elapsed** timer inside the interrupt hint. Segments are omitted when there
+is nothing to report, so a plain round reads simply:
 
 ```text
  ● making edits (3s · Esc Esc to interrupt)
@@ -28,9 +27,9 @@ The structural counters — `round N · turn M · <model>` — no longer live on
 the bar. They take space and change rarely, so they moved into the
 **Activity modal** that this bar opens on click. The whole bar is a click
 target (and `Tab`/`Enter` opens the modal): one glance answers "what's
-happening, are there todos, how long?", one click shows the full breakdown
-(Activity tab: pursuit, current prompt, round/turn/model/elapsed; Tasks tab:
-the todo list).
+happening, how long?", one click shows the full breakdown (Activity tab:
+pursuit, current prompt, round/turn/model/elapsed; Todos tab: the task
+list).
 
 | Attribute | Value |
 |-----------|-------|
@@ -38,7 +37,7 @@ the todo list).
 | Glyph | `●` (`spinner_glyph`), BOLD |
 | Glyph color | `breathing_color(phase, theme.brand(), theme.surface())` — a cosine luminance sweep between brand and surface so the dot breathes at roughly 10 fps instead of cycling braille frames |
 | Status text color | `theme.brand()` + ITALIC |
-| Pursuit / todos / elapsed | `theme.muted()` |
+| Pursuit / elapsed | `theme.muted()` |
 | Indent | 1 space |
 
 The breathing sweep is the TUI's single liveness anchor — every other
@@ -50,7 +49,7 @@ moves. See [ADR-0008](../../adr/0008-single-breathing-anchor.md).
 
 | Condition | Visible? |
 |-----------|----------|
-| Idle | Only while a non-empty todo list keeps the row alive (`ready` + right-pinned `todos d/t`) |
+| Idle | No — the row returns to the transcript (the task list lives on the [todo bar](todo-bar.md)) |
 | Streaming assistant text ("responding") | Yes — the bar stays up across the whole round lifecycle, sustaining the breathing-dot liveness anchor (ADR-0008) through the longest phase |
 | Running tool / queued / waiting | Yes |
 | Overlay modal open | No |

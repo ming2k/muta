@@ -5,10 +5,11 @@
 //! labels are stripped, a trailing `? more` chip is appended (mandatory — never
 //! omitted when collapsed) so the user can open the in-modal keymap page.
 
-use neenee_tui_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
+use neenee_tui_engine::{Frame, Line, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::super::Theme;
+use super::keycap::keycap_style;
 
 /// Coarse priority band for a footer hint. Higher-ranked variants survive
 /// longer under width pressure.
@@ -201,12 +202,7 @@ pub(crate) fn keymap_body_lines<'a>(
         let pad = key_width.saturating_sub(key.width());
         let key_cell = format!("  {}{}", key, " ".repeat(pad));
         lines.push(Line::from(vec![
-            Span::styled(
-                key_cell,
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(key_cell, keycap_style(theme)),
             Span::styled(format!("  {}", label), Style::default().fg(theme.fg())),
         ]));
     }
@@ -216,14 +212,55 @@ pub(crate) fn keymap_body_lines<'a>(
 /// Footer hints shown while the in-modal keymap page is open.
 pub(crate) fn keymap_page_footer_hints() -> [FooterHint; 2] {
     [
-        FooterHint::navigation("↑↓", "scroll"),
-        FooterHint::always("Esc", "back"),
+        FooterHint::navigation(super::super::keymap::keyvocab::ARROWS_UD, "scroll"),
+        FooterHint::always(super::super::keymap::keyvocab::ESC, "back"),
     ]
+}
+
+/// A single rendered segment of the footer line. Keys are tagged so the
+/// renderer can apply the unified keycap style while everything else stays
+/// muted — without the layout having to know about styling.
+#[derive(Clone)]
+enum FooterSeg {
+    /// A keyboard-key label (rendered with the keycap style).
+    Key(String),
+    /// Any other text: a hint label, a ` · ` separator, or the `? more` chip.
+    Text(String),
+}
+
+impl FooterSeg {
+    fn text(&self) -> &str {
+        match self {
+            FooterSeg::Key(s) | FooterSeg::Text(s) => s,
+        }
+    }
+}
+
+/// Flatten a segment list to its plain-text form (used by the width-only /
+/// test-facing string APIs, which must not change just because keys are now
+/// styled differently).
+fn segs_to_string(segs: &[FooterSeg]) -> String {
+    segs.iter().map(|s| s.text()).collect()
+}
+
+/// Materialize the segment list as styled spans: keys take the unified keycap
+/// style, everything else is muted. This is the single place that decides how
+/// footer keys look, so it can never drift from the activity bar / Help modal.
+fn segs_to_spans(segs: &[FooterSeg], theme: &Theme) -> Vec<Span<'static>> {
+    let key_style = keycap_style(theme);
+    let dim = Style::default().fg(theme.muted());
+    segs.iter()
+        .map(|seg| match seg {
+            FooterSeg::Key(s) => Span::styled(s.clone(), key_style),
+            FooterSeg::Text(s) => Span::styled(s.clone(), dim),
+        })
+        .collect()
 }
 
 /// Result of laying out a footer for a given width.
 struct FooterLayout {
     text: String,
+    segs: Vec<FooterSeg>,
     /// True when at least one hint was dropped or labels were stripped.
     /// (Kept for readability of the layout control flow; not all paths read it.)
     #[allow(dead_code)]
@@ -240,10 +277,7 @@ fn render_footer_impl(
 ) {
     let layout = layout_footer(hints, extra, rect.width as usize, show_more);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            layout.text,
-            Style::default().fg(theme.muted()),
-        ))),
+        Paragraph::new(Line::from(segs_to_spans(&layout.segs, theme))),
         rect,
     );
 }
@@ -269,6 +303,7 @@ fn layout_footer(
     if width == 0 || hints.is_empty() && extra.is_empty() {
         return FooterLayout {
             text: String::new(),
+            segs: Vec::new(),
             collapsed: false,
         };
     }
@@ -296,10 +331,18 @@ fn layout_footer(
     let mut drop_order: Vec<usize> = (0..ranked.len()).collect();
     drop_order.sort_by_key(|&i| (ranked[i].rank, usize::MAX - ranked[i].order));
 
+    // Wrap a segment list into a complete FooterLayout (text mirrors the
+    // segments so the width-only / test APIs stay byte-identical to before).
+    let finish = |segs: Vec<FooterSeg>, collapsed: bool| FooterLayout {
+        text: segs_to_string(&segs),
+        segs,
+        collapsed,
+    };
+
     // Pass 1: full labels, progressively dropping lowest-priority items.
     for drop_count in 0..=ranked.len().saturating_sub(1) {
         let any_dropped = drop_count > 0;
-        if let Some(text) = try_subset(
+        if let Some(segs) = try_subset(
             &ranked,
             &drop_order,
             drop_count,
@@ -308,16 +351,13 @@ fn layout_footer(
             show_more,
             any_dropped,
         ) {
-            return FooterLayout {
-                text,
-                collapsed: any_dropped,
-            };
+            return finish(segs, any_dropped);
         }
     }
 
     // Pass 2: compact (keys only), same drop ladder. Compact is collapsed.
     for drop_count in 0..=ranked.len().saturating_sub(1) {
-        if let Some(text) = try_subset(
+        if let Some(segs) = try_subset(
             &ranked,
             &drop_order,
             drop_count,
@@ -326,10 +366,7 @@ fn layout_footer(
             show_more,
             true,
         ) {
-            return FooterLayout {
-                text,
-                collapsed: true,
-            };
+            return finish(segs, true);
         }
     }
 
@@ -346,35 +383,39 @@ fn layout_footer(
         for candidate in [
             append_more(&base, MORE_FULL),
             append_more(&base, MORE_COMPACT),
-            MORE_FULL.to_string(),
-            MORE_COMPACT.to_string(),
+            only_text(MORE_FULL),
+            only_text(MORE_COMPACT),
         ] {
-            if !candidate.is_empty() && candidate.width() <= width {
-                return FooterLayout {
-                    text: candidate,
-                    collapsed: true,
-                };
+            let text = segs_to_string(&candidate);
+            if !text.is_empty() && text.width() <= width {
+                return finish(candidate, true);
             }
         }
-        return FooterLayout {
-            text: truncate_to_width(MORE_COMPACT, width),
-            collapsed: true,
-        };
+        return finish(only_text_truncated(MORE_COMPACT, width), true);
     }
 
-    let text = if base.width() <= width {
+    let text = segs_to_string(&base);
+    let segs = if text.width() <= width {
         base
     } else {
-        truncate_to_width(&base, width)
+        only_text_truncated(&text, width)
     };
-    FooterLayout {
-        text,
-        collapsed: true,
-    }
+    finish(segs, true)
+}
+
+/// A segment list that is just one plain-text run (used for the bare `? more` /
+/// `?` chip fallbacks and truncations, which carry no keys).
+fn only_text(s: &str) -> Vec<FooterSeg> {
+    vec![FooterSeg::Text(s.to_string())]
+}
+
+/// A segment list that is one plain-text run, truncated to `max` cells.
+fn only_text_truncated(s: &str, max: usize) -> Vec<FooterSeg> {
+    only_text(&truncate_to_width(s, max))
 }
 
 /// Try a subset (dropping the first `drop_count` lowest-priority rows) for the
-/// given label mode. Returns the joined string if it fits, else None.
+/// given label mode. Returns the segment list if it fits, else None.
 fn try_subset(
     ranked: &[RankedHint],
     drop_order: &[usize],
@@ -383,7 +424,7 @@ fn try_subset(
     width: usize,
     show_more: bool,
     collapsed: bool,
-) -> Option<String> {
+) -> Option<Vec<FooterSeg>> {
     let dropped: std::collections::HashSet<usize> =
         drop_order.iter().take(drop_count).copied().collect();
     let subset: Vec<&RankedHint> = ranked
@@ -399,41 +440,50 @@ fn try_subset(
     if base.is_empty() {
         return None;
     }
+    let text = segs_to_string(&base);
     if !show_more || !collapsed {
-        return (base.width() <= width).then_some(base);
+        return (text.width() <= width).then_some(base);
     }
     // Incomplete strip: chip is mandatory and must be the last token.
     for chip in [MORE_FULL, MORE_COMPACT] {
         let candidate = append_more(&base, chip);
-        if candidate.width() <= width {
+        let t = segs_to_string(&candidate);
+        if t.width() <= width {
             return Some(candidate);
         }
     }
     None
 }
 
-/// Join hints in stable display order (`order`) for a given label mode.
-fn join_hints(hints: &[&RankedHint], mode: FooterLabelMode) -> String {
+/// Join hints in stable display order (`order`) for a given label mode into a
+/// segment list. Keys are tagged `FooterSeg::Key` so the renderer can apply the
+/// keycap style; separators and labels are `Text`.
+fn join_hints(hints: &[&RankedHint], mode: FooterLabelMode) -> Vec<FooterSeg> {
     let mut ordered: Vec<&&RankedHint> = hints.iter().collect();
     ordered.sort_by_key(|r| r.order);
-    ordered
-        .iter()
-        .map(|hint| match mode {
-            FooterLabelMode::Full if !hint.label.is_empty() => {
-                format!("{} {}", hint.key, hint.label)
-            }
-            _ => hint.key.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join(" · ")
+    let mut segs: Vec<FooterSeg> = Vec::new();
+    for (idx, hint) in ordered.iter().enumerate() {
+        if idx > 0 {
+            segs.push(FooterSeg::Text(" · ".to_string()));
+        }
+        segs.push(FooterSeg::Key(hint.key.to_string()));
+        if let FooterLabelMode::Full = mode
+            && !hint.label.is_empty()
+        {
+            segs.push(FooterSeg::Text(format!(" {}", hint.label)));
+        }
+    }
+    segs
 }
 
-fn append_more(base: &str, chip: &str) -> String {
-    if base.is_empty() {
-        chip.to_string()
+fn append_more(base: &[FooterSeg], chip: &str) -> Vec<FooterSeg> {
+    let mut out = base.to_vec();
+    if out.is_empty() {
+        out.push(FooterSeg::Text(chip.to_string()));
     } else {
-        format!("{base} · {chip}")
+        out.push(FooterSeg::Text(format!(" · {chip}")));
     }
+    out
 }
 
 fn truncate_to_width(s: &str, max: usize) -> String {

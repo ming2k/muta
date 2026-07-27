@@ -321,6 +321,21 @@ pub fn provider_template_label_for(protocol: &str) -> String {
         .unwrap_or_else(|| "＋ Add connection".to_string())
 }
 
+/// Resolve the provider **type** label for a Connections row from its template
+/// id — e.g. `template_id = "openai-sub2api"` → `"OpenAI (sub2api)"`. This is
+/// the provider *kind* shown beside the user-given instance name (distinct from
+/// the instance name itself). Returns `None` for legacy instances with no
+/// recorded template, in which case the row renders the instance name alone.
+pub fn provider_type_label(template_id: &str) -> Option<&'static str> {
+    if template_id.is_empty() {
+        return None;
+    }
+    PROVIDER_TEMPLATES
+        .iter()
+        .find(|t| t.id == template_id)
+        .map(|t| t.label)
+}
+
 /// The ordered editor fields shown when **editing** an existing user provider.
 /// For an API-key channel the form offers Name, Base URL, and Token (the Model
 /// field is omitted — models, and their per-model reasoning, ADR-0046, are
@@ -414,6 +429,10 @@ pub struct RankedModel {
     /// can expose effort; Anthropic rows can expose effort plus thinking.
     pub effort: Option<String>,
     pub thinking: Option<bool>,
+    /// Whether this model is favorited (mirrors the snapshot's per-model
+    /// `favorite` flag; ADR-0046). A starred daily-driver model sorts to the
+    /// top of the flat list wherever it is served and shows a `★` glyph.
+    pub favorite: bool,
     /// Unix epoch milliseconds of this model's last activation (`None` = never,
     /// sorts as oldest). Drives the flat list's recency sort.
     pub last_used_ms: Option<u64>,
@@ -438,9 +457,11 @@ pub struct RankedProvider {
     /// `true` for built-in presets, `false` for user-defined providers. Drives
     /// the built-in/custom grouping and whether `e` opens the full meta editor.
     pub builtin: bool,
-    /// Whether the provider is favorited (mirrors the snapshot row).
-    pub favorite: bool,
-    /// The rendered label — the provider's display name.
+    /// The add-provider template that birthed this instance (`"openai"`, …),
+    /// when known. Surfaced so the Connections list can show the provider
+    /// *type* beside the instance name. Empty for legacy instances.
+    pub template_id: String,
+    /// The rendered label — the provider's display name (the instance name).
     pub label: String,
     /// The fuzzy match against `label`, or `None` in browse mode (empty query).
     pub m: Option<fuzzy::FuzzyMatch>,
@@ -469,8 +490,9 @@ fn model_order(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
     }
 }
 
-/// The favorite → last-used-desc → name ordering of the Connections provider
-/// list. Pulls each provider's live signals from its snapshot row.
+/// The last-used-desc → name ordering of the Connections provider list. Pulls
+/// each provider's recency signal from its snapshot row. (Favorite is
+/// model-level now — ADR-0046 — so the Connections list no longer sorts by it.)
 fn provider_order(
     picker: &ProviderPickerSnapshot,
     a_id: &str,
@@ -478,24 +500,20 @@ fn provider_order(
     a_name: &str,
     b_name: &str,
 ) -> std::cmp::Ordering {
-    let signal = |id: &str| {
+    let used = |id: &str| {
         picker
             .rows
             .iter()
             .find(|r| r.id == id)
-            .map(|r| (r.favorite, r.last_used_ms))
-            .unwrap_or((false, None))
+            .and_then(|r| r.last_used_ms)
     };
-    let (a_fav, a_used) = signal(a_id);
-    let (b_fav, b_used) = signal(b_id);
-    b_fav
-        .cmp(&a_fav)
-        .then_with(|| b_used.cmp(&a_used))
-        .then_with(|| a_name.cmp(b_name))
+    let a_used = used(a_id);
+    let b_used = used(b_id);
+    b_used.cmp(&a_used).then_with(|| a_name.cmp(b_name))
 }
 
 /// Build the **Connections** provider rows: one per snapshot row,
-/// fuzzy-filtered by `query` against the provider name and sorted favorite →
+/// fuzzy-filtered by `query` against the provider (instance) name and sorted
 /// last-used → name. An empty `query` (browse mode) keeps every provider with
 /// no match positions.
 pub fn providers_filtered_from(
@@ -519,7 +537,7 @@ pub fn providers_filtered_from(
             model: prow.model.clone(),
             models: prow.models.clone(),
             builtin: prow.builtin,
-            favorite: prow.favorite,
+            template_id: prow.template_id.clone(),
             label,
             m,
         });
@@ -539,17 +557,13 @@ pub fn providers_filtered_from(
 /// are included unhighlighted (`m = None`) so "show me everything Anthropic
 /// serves" works from the same search box. Match positions always index onto
 /// the model label's characters only.
-pub fn models_flat_filtered_from(
-    picker: &ProviderPickerSnapshot,
-    query: &str,
-) -> Vec<RankedModel> {
+pub fn models_flat_filtered_from(picker: &ProviderPickerSnapshot, query: &str) -> Vec<RankedModel> {
     let mut rows: Vec<RankedModel> = Vec::new();
     for prow in &picker.rows {
         // The provider-name fallback match is computed once per provider: when
         // it hits, every model of that provider is included (unhighlighted)
         // even if its own label does not match the query.
-        let provider_matches =
-            !query.is_empty() && fuzzy::fuzzy_match(&prow.name, query).is_some();
+        let provider_matches = !query.is_empty() && fuzzy::fuzzy_match(&prow.name, query).is_some();
         for model in &prow.models {
             let info = prow
                 .model_info
@@ -579,25 +593,18 @@ pub fn models_flat_filtered_from(
                 provider_label: prow.name.clone(),
                 effort: info.effort,
                 thinking: info.thinking,
+                favorite: info.favorite,
                 last_used_ms: info.last_used_ms,
                 m,
             });
         }
     }
-    // Provider-favorite first (read from the snapshot row like `provider_order`
-    // does), then per-model recency, then provider name and model label as
-    // stable, deterministic tiebreakers.
-    let favorite = |id: &str| {
-        picker
-            .rows
-            .iter()
-            .find(|r| r.id == id)
-            .map(|r| r.favorite)
-            .unwrap_or(false)
-    };
+    // Model-favorite first (ADR-0046: favorite is per-model), then per-model
+    // recency, then provider name and model label as stable, deterministic
+    // tiebreakers.
     rows.sort_by(|a, b| {
-        favorite(&b.provider_id)
-            .cmp(&favorite(&a.provider_id))
+        b.favorite
+            .cmp(&a.favorite)
             .then_with(|| model_order(a.last_used_ms, b.last_used_ms))
             .then_with(|| a.provider_label.cmp(&b.provider_label))
             .then_with(|| a.label.cmp(&b.label))
@@ -621,7 +628,7 @@ mod tests {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            favorite: false,
+            template_id: String::new(),
             last_used_ms: None,
             auth: Default::default(),
         }
@@ -837,19 +844,19 @@ mod tests {
     }
 
     #[test]
-    fn connections_sorts_favorites_first_within_group() {
+    fn connections_orders_by_last_used_then_name_no_favorite() {
+        // Favorite is model-level now (ADR-0046), so the Connections list no
+        // longer sorts by it — only last-used desc, then instance name.
         let mut snapshot = sample();
-        // Favorite a built-in: it sorts to the top of the built-in group (which
-        // itself precedes the custom group).
+        // Give kimi-code a recent activation so it leads.
         for r in &mut snapshot.rows {
-            r.favorite = r.id == "anthropic";
+            r.last_used_ms = (r.id == "kimi-code").then_some(1_000);
         }
         let rows = providers_filtered_from(&snapshot, "");
-        assert_eq!(rows[0].id, "anthropic");
-        assert!(rows[0].favorite);
-        // Built-ins group before the custom provider regardless of favorites.
-        let custom_pos = rows.iter().position(|r| r.id == "my-relay").unwrap();
-        assert!(rows[..custom_pos].iter().all(|r| r.builtin));
+        assert_eq!(rows[0].id, "kimi-code");
+        // The rest fall back to name order.
+        let rest: Vec<&str> = rows[1..].iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(rest, vec!["anthropic", "my-relay", "openai"]);
     }
 
     #[test]
@@ -886,21 +893,19 @@ mod tests {
             .expect("openai pair present");
         assert_eq!(openai.provider_label, "OpenAI");
         assert!(rows.iter().any(|r| r.provider_id == "my-relay"));
-        assert!(rows
-            .iter()
-            .any(|r| r.provider_id == "anthropic" && r.model == "claude-opus-4-8"));
+        assert!(
+            rows.iter()
+                .any(|r| r.provider_id == "anthropic" && r.model == "claude-opus-4-8")
+        );
     }
 
     #[test]
-    fn flat_sorts_favorite_provider_first_then_recency() {
-        // Favorite anthropic and give two of its models recency timestamps:
-        // all anthropic pairs lead (favorite provider first), the recently used
-        // one before the unused one, and every non-favorite provider's pairs
-        // follow, ordered provider name → model label.
+    fn flat_sorts_favorite_model_first_then_recency() {
+        // Favorite is model-level (ADR-0046): a starred model sorts to the top
+        // of the flat list wherever it is served. Give two anthropic models
+        // recency timestamps and favorite one of them: the favorited model
+        // leads, then recency orders the rest.
         let mut snapshot = sample();
-        for r in &mut snapshot.rows {
-            r.favorite = r.id == "anthropic";
-        }
         let anthropic = snapshot
             .rows
             .iter_mut()
@@ -912,6 +917,7 @@ mod tests {
                 protocol: "anthropic".to_string(),
                 effort: None,
                 thinking: None,
+                favorite: true,
                 last_used_ms: Some(9_000),
             },
             ProviderModelInfo {
@@ -919,34 +925,22 @@ mod tests {
                 protocol: "anthropic".to_string(),
                 effort: None,
                 thinking: None,
+                favorite: false,
                 last_used_ms: Some(100),
             },
         ];
         let rows = models_flat_filtered_from(&snapshot, "");
+        // The favorited model leads the whole flat list.
+        assert!(rows[0].favorite);
+        assert_eq!(rows[0].model, "claude-sonnet-5");
+        // Everything after the favorited model is not favorited.
+        assert!(rows[1..].iter().all(|r| !r.favorite));
+        // Within the non-favorites, recency then provider name → model label.
         let anthropic_rows: Vec<&RankedModel> = rows
             .iter()
             .filter(|r| r.provider_id == "anthropic")
             .collect();
-        assert_eq!(anthropic_rows.len(), 4);
-        // The favorite provider's pairs all precede every other provider's.
-        let last_anthropic = rows
-            .iter()
-            .rposition(|r| r.provider_id == "anthropic")
-            .unwrap();
-        assert!(rows[..=last_anthropic]
-            .iter()
-            .all(|r| r.provider_id == "anthropic"));
-        // Within it: most-recently-used first, never-used oldest.
-        assert_eq!(anthropic_rows[0].model, "claude-sonnet-5");
         assert_eq!(anthropic_rows[1].model, "claude-fable-5");
-        // Non-favorite providers order by provider name, then model label.
-        let rest: Vec<(&str, &str)> = rows[last_anthropic + 1..]
-            .iter()
-            .map(|r| (r.provider_label.as_str(), r.label.as_str()))
-            .collect();
-        let mut sorted = rest.clone();
-        sorted.sort();
-        assert_eq!(rest, sorted, "provider name → model label tiebreak");
     }
 
     #[test]

@@ -13,8 +13,8 @@ use neenee_tui_engine::{
 
 use super::common::{placeholder, selectable_row};
 use crate::tui::primitives::{
-    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, modal_area, modal_frame, modal_header,
-    render_body, render_modal_footer,
+    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, keyvocab, modal_area, modal_frame,
+    modal_header, render_body, render_modal_footer,
 };
 use crate::tui::view::Theme;
 
@@ -119,14 +119,14 @@ pub fn draw_skills_modal(
         let hints: &[FooterHint] = if skills.is_empty() {
             &[
                 FooterHint::secondary("r", "reload"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ]
         } else {
             &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("Enter", "detail"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
+                FooterHint::primary(keyvocab::ENTER, "detail"),
                 FooterHint::secondary("r", "reload"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ]
         };
         render_modal_footer(frame, fo, hints, theme);

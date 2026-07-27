@@ -2,7 +2,7 @@
 //! responses ([`AgentResponse`]), live agent events ([`AgentEvent`]), and the
 //! small data records they carry.
 
-use crate::{ImagePart, Message, Pursuit, ToolOutput, ToolStream};
+use crate::{ImagePart, Message, ToolOutput, ToolStream};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,8 +172,9 @@ pub enum AgentRequest {
     DeleteProvider {
         id: String,
     },
-    /// Toggle the favorite flag on a model in the picker. The id is
-    /// canonicalized by the harness before it touches config.
+    /// Toggle the favorite flag on a model in the **Models** picker. `id` is the
+    /// model wire id. Favorite is model-level (a daily-driver model is starred
+    /// wherever it is served), so the Connections list has no favorite concept.
     ToggleFavorite {
         id: String,
     },
@@ -441,7 +442,6 @@ pub enum NoticeSource {
     TurnGuard,
     Todo,
     Review,
-    Pursuit,
     Harness,
 }
 
@@ -467,6 +467,47 @@ pub enum ContextTokenSource {
 pub struct ContextTokenSnapshot {
     pub tokens: usize,
     pub source: ContextTokenSource,
+}
+
+/// A compact per-round accounting handed to frontends when a user round
+/// completes naturally. The "active" generation time is
+/// `duration_ms.saturating_sub(paused_ms)`; dividing `output_tokens` by it
+/// yields an honest tokens/sec that reflects the server's real throughput,
+/// unaffected by how long the user deliberated on a permission prompt or
+/// `ask_user` question.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoundSummary {
+    /// 1-based user-round index, mirroring the transcript's round counter.
+    pub round: u64,
+    /// Total output (completion) tokens the model generated this round.
+    pub output_tokens: u64,
+    /// Full wall-clock duration of the round, including any human-decision
+    /// pause time (`paused_ms`).
+    pub duration_ms: u64,
+    /// Time within `duration_ms` the round spent parked on a human decision
+    /// (a permission request or an `ask_user`). `0` when nothing blocked.
+    pub paused_ms: u64,
+}
+
+impl RoundSummary {
+    /// Net-active generation time: the wall-clock minus the human-decision
+    /// pause. Saturates at 0 so a round that somehow paused longer than it ran
+    /// still yields a finite (large) TPS rather than dividing by a negative.
+    pub fn active_ms(&self) -> u64 {
+        self.duration_ms.saturating_sub(self.paused_ms)
+    }
+
+    /// Output tokens per second of *active* generation time. Returns `0.0`
+    /// when there was no measurable active time (e.g. an empty round) so the
+    /// UI can render `–` rather than `inf`.
+    pub fn tps(&self) -> f64 {
+        let active = self.active_ms();
+        if active == 0 {
+            0.0
+        } else {
+            (self.output_tokens as f64) * 1000.0 / (active as f64)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,7 +542,10 @@ pub enum RoundEvent {
     /// The user-driven round reached its natural, successful terminal path.
     /// Interruptions, blocked prompts, and errors deliberately emit no such
     /// event, so next-round outbox items pause instead of auto-running.
-    RoundCompleted,
+    /// Carries a small per-round summary so frontends can show an honest
+    /// generation throughput (tokens/sec) that excludes the time the round
+    /// spent parked on human decisions (permission prompts / ask_user).
+    RoundCompleted(RoundSummary),
     Text(String),
     /// Turn-level error (e.g. a provider failure mid-turn). Distinct from the
     /// global [`AgentResponse::Error`] only in that it belongs to a specific
@@ -542,13 +586,6 @@ pub enum RoundEvent {
         after_chars: usize,
     },
     HarnessState(HarnessSnapshot),
-    PursuitUpdated(Pursuit),
-    /// The active pursuit was cleared (`/pursue clear`, or a session switch
-    /// that drops it). A non-gated mirror event: unlike `HarnessState`,
-    /// clearing the pursuit is *not* a round lifecycle transition, so it must
-    /// not touch the activity bar. The TUI uses it to null out the snapshot's
-    /// `pursuit` field without flushing the live activity cell.
-    PursuitCleared,
     /// The task list changed (full-replace via `todo`, surgical update via
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
@@ -624,10 +661,8 @@ pub enum ParentStatus {
 /// Coarse, display-level status of a session's round lifecycle, mirrored to
 /// the TUI activity bar. This is a badge, not the protocol state: the round
 /// lifecycle itself (`RoundLifecycle` in neenee-agent) is binary — no active
-/// round, or an active round identified by a generation. `Pursue` is a
-/// `Running` round with the pursuit stop-gate armed (ADR-0031), kept as a
-/// separate value only so the activity bar can show *why* the round keeps
-/// going. Awaiting-permission / awaiting-input are overlays derived from the
+/// round, or an active round identified by a generation.
+/// Awaiting-permission / awaiting-input are overlays derived from the
 /// parked-request tables (see [`ParentStatus`]), not values here: they carry
 /// no lifecycle meaning (interrupt behaves identically) and there is no
 /// user-level pause/resume for them to describe.
@@ -636,8 +671,6 @@ pub enum ParentStatus {
 pub enum LoopStatus {
     Idle,
     Running,
-    /// A running round with the pursuit stop-gate armed (ADR-0031).
-    Pursue,
 }
 
 impl LoopStatus {
@@ -650,7 +683,6 @@ impl LoopStatus {
         match self {
             Self::Idle => "idle",
             Self::Running => "running",
-            Self::Pursue => "pursue",
         }
     }
 }
@@ -663,7 +695,6 @@ impl std::fmt::Display for LoopStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessSnapshot {
-    pub pursuit: Option<Pursuit>,
     pub loop_status: LoopStatus,
     /// Monotonic session round counter. For a running snapshot this is the
     /// admitted active round; for an idle snapshot it is the most recently
@@ -722,7 +753,13 @@ pub struct ProviderPickerRow {
     /// for built-ins and keyless/native transports.
     pub base_url: String,
     pub key_ready: bool,
-    pub favorite: bool,
+    /// The add-provider template that birthed this instance (`"openai"`,
+    /// `"anthropic"`, `"openai-sub2api"`, …), when known. Surfaced to the TUI
+    /// so the **Connections** list can show the provider *type* beside the
+    /// instance name — distinct from the user-given instance name. Empty for
+    /// instances with no recorded template (legacy configs).
+    #[serde(default)]
+    pub template_id: String,
     /// Unix epoch milliseconds of the last activation. `None` if the provider
     /// has never been activated, which the picker sorts as "oldest".
     pub last_used_ms: Option<u64>,
@@ -775,6 +812,12 @@ pub struct ProviderModelInfo {
     /// "oldest". Added late, so it defaults on deserialize for older snapshots.
     #[serde(default)]
     pub last_used_ms: Option<u64>,
+    /// Whether this model is favorited in the **Models** picker (ADR-0046 moved
+    /// favorite from provider-level to per-model). A starred daily-driver model
+    /// sorts to the top of the flat list wherever it is served. Added late, so
+    /// it defaults to `false` on deserialize for older snapshots.
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 /// Full snapshot of provider-picker state: which provider is the current
@@ -931,7 +974,6 @@ pub enum AgentEvent {
         id: String,
         name: String,
     },
-    PursuitUpdated(Pursuit),
     /// The task list changed (`todo` / `todo_update`). The TUI uses this to refresh the
     /// unified sticky panel above the input box.
     TodosUpdated(crate::todos::TodoList),
@@ -971,7 +1013,7 @@ pub enum PermissionDecision {
 pub struct PermissionRequest {
     pub id: String,
     pub tool: String,
-    /// Short human-friendly title for the prompt (e.g. `"Create pursuit"`).
+    /// Short human-friendly title for the prompt (e.g. `"Run tests"`).
     /// Falls back to [`tool`](Self::tool) when a tool does not override
     /// `Tool::permission_label`. The TUI renders this as the header.
     #[serde(default)]
@@ -1078,7 +1120,7 @@ pub struct ModelInfo {
 }
 
 /// One tool in the session, as seen by the modal's Tools pane. `source`
-/// classifies origin: `builtin`, `mcp:<server>`, `pursuit`, or `plan`. `enabled`
+/// classifies origin: `builtin`, `mcp:<server>`, or `plan`. `enabled`
 /// reflects the session-level enable/disable flag (toggled via
 /// [`AgentRequest::ToggleTool`]); disabled tools stay installed but are hidden
 /// from the model and rejected if invoked.
@@ -1123,4 +1165,51 @@ pub struct McpServerInfo {
     pub disabled: bool,
     pub failure: Option<String>,
     pub tool_names: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_summary_tps_excludes_human_pause() {
+        // 500 output tokens over 10s wall-clock, 8s of which the user spent
+        // deliberating on a permission prompt → only 2s of active generation.
+        // The honest TPS is therefore 250 tok/s, not 50.
+        let summary = RoundSummary {
+            round: 3,
+            output_tokens: 500,
+            duration_ms: 10_000,
+            paused_ms: 8_000,
+        };
+        assert_eq!(summary.active_ms(), 2_000);
+        assert!((summary.tps() - 250.0).abs() < 0.01, "got {}", summary.tps());
+    }
+
+    #[test]
+    fn round_summary_tps_is_zero_when_round_had_no_active_time() {
+        let summary = RoundSummary {
+            round: 1,
+            output_tokens: 0,
+            duration_ms: 0,
+            paused_ms: 0,
+        };
+        assert_eq!(summary.active_ms(), 0);
+        assert_eq!(summary.tps(), 0.0);
+    }
+
+    #[test]
+    fn round_summary_active_time_saturates_when_pause_exceeds_duration() {
+        // Defensive: a round whose recorded pause exceeds its wall-clock
+        // (shouldn't happen, but must never panic on subtraction) yields zero
+        // active time rather than a negative.
+        let summary = RoundSummary {
+            round: 1,
+            output_tokens: 100,
+            duration_ms: 1_000,
+            paused_ms: 2_000,
+        };
+        assert_eq!(summary.active_ms(), 0);
+        assert_eq!(summary.tps(), 0.0);
+    }
 }

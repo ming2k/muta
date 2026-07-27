@@ -10,7 +10,7 @@ use neenee_tui_engine::{
 use super::common::todo_status_glyph_color;
 use crate::tui::design::{MODAL_BODY_LEADING_INDENT, MODAL_TITLE_META_GAP};
 use crate::tui::primitives::{
-    FixedModalSpec, FooterHint, modal_area, modal_frame, render_body, render_modal_footer,
+    FixedModalSpec, FooterHint, keyvocab, modal_area, modal_frame, render_body, render_modal_footer,
 };
 use crate::tui::text_layout::{indented_wrapped_lines, wrap_text};
 use crate::tui::view::Theme;
@@ -23,9 +23,6 @@ pub struct ActivityModalView<'a> {
     /// Which section to show (Activity or Todos). Each section is opened
     /// independently by clicking the corresponding segment on the activity bar.
     pub active_tab: crate::tui::modal::ActivityTab,
-    /// Active pursuit, if any. Shown as an objective line plus one row per
-    /// checklist item.
-    pub pursuit: Option<&'a neenee_core::Pursuit>,
     /// Live unified task list, if any. Shown as a header (done/total) plus
     /// one row per item with a status glyph.
     pub todos: Option<&'a neenee_core::TodoList>,
@@ -57,7 +54,6 @@ pub fn draw_activity_modal(
 ) -> neenee_tui_engine::Rect {
     let ActivityModalView {
         active_tab,
-        pursuit,
         todos,
         user_prompt,
         round_count,
@@ -102,31 +98,6 @@ pub fn draw_activity_modal(
     match active_tab {
         crate::tui::modal::ActivityTab::Activity => {
             let mut have_section = false;
-
-            // ── Pursuit ──
-            if let Some(pursuit) = pursuit {
-                have_section = true;
-                lines.push(Line::from(vec![Span::styled(
-                    "Pursuit",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                )]));
-                let objective_label = if pursuit.is_complete {
-                    "✓ complete · ".to_string()
-                } else {
-                    String::new()
-                };
-                // Pre-wrap so a long objective's continuation rows inherit the
-                // leading indent (render_body no longer soft-wraps this modal).
-                let objective = format!("{}{}", objective_label, pursuit.objective);
-                lines.extend(indented_wrapped_lines(
-                    &objective,
-                    MODAL_BODY_LEADING_INDENT,
-                    f.body.width as usize,
-                    Style::default().fg(theme.fg()),
-                ));
-            }
 
             // ── Prompt (current round's user message) ──
             if let Some(prompt) = user_prompt.filter(|p| !p.is_empty()) {
@@ -289,8 +260,8 @@ pub fn draw_activity_modal(
             frame,
             footer,
             &[
-                FooterHint::navigation("↑↓", "scroll"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ],
             theme,
         );

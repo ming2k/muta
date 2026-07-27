@@ -3,11 +3,11 @@
 //! `Agent` (in [`crate::agent`]) runs a single ReAct turn against a provider.
 //! This module wraps every turn with the cross-cutting policy a frontend
 //! cannot reasonably reimplement: context compaction (pre-turn and mid-turn
-//! pruning), retry with exponential backoff, permission relay, the `/pursue`
-//! stop-gate driver, and the `/repeat` cron scheduler.
+//! pruning), retry with exponential backoff, permission relay, and the
+//! `/repeat` cron scheduler.
 //!
 //! Frontends drive the harness through [`execute_round`],
-//! [`start_interactive_round`], [`start_pursuit`], and
+//! [`start_interactive_round`], and
 //! [`start_repeat_scheduler`]. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
 //! future GUI); the actual round machinery is shared here.
 //!
@@ -30,18 +30,17 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::{Agent, PURSUIT_COMPLETE_MARKER, RequestTokenEstimate, RoundBegin, RoundLifecycle};
+use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Pursuit, Role, RoundEvent, estimate_bytes,
+    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, estimate_bytes,
 };
 use neenee_persistence::{
     RepeatStore,
     config::Config,
     session::{
-        ContextProjectionCheckpoint, ContextProjectionResult, PursuitCheckpoint,
-        PursuitCheckpointStatus, PursuitRuntime, SessionStore, run_compaction,
+        ContextProjectionCheckpoint, ContextProjectionResult, SessionStore, run_compaction,
     },
 };
 
@@ -478,7 +477,7 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
     }
 }
 
-/// Emit the current harness snapshot (mode, pursuit, round counter, loop
+/// Emit the current harness snapshot (mode, round counter, loop
 /// status, unattended) to the UI.
 pub fn send_harness_state(
     tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -486,7 +485,7 @@ pub fn send_harness_state(
     agent: &Agent,
     loop_status: LoopStatus,
 ) {
-    // Running/Pursue snapshots are emitted after lifecycle admission but
+    // Running snapshots are emitted after lifecycle admission but
     // immediately before `execute_round` performs the counter bump. Project
     // that admitted round here so frontends receive the authoritative display
     // value without locally guessing from transcript length.
@@ -496,166 +495,11 @@ pub fn send_harness_state(
     let _ = tx.send(round_response(
         session_id,
         RoundEvent::HarnessState(HarnessSnapshot {
-            pursuit: agent.get_pursuit(),
             loop_status,
             round_counter,
             unattended: agent.get_unattended(),
         }),
     ));
-}
-
-/// Refresh the durable pursuit objective for the session currently selected
-/// by `SessionStore`.
-pub async fn refresh_agent_pursuit(agent: &Agent, session: &SessionStore) -> Option<Pursuit> {
-    match session.pursuit().await {
-        Some(pursuit) => {
-            agent.set_pursuit(pursuit.clone());
-            Some(pursuit)
-        }
-        None => {
-            agent.clear_pursuit();
-            None
-        }
-    }
-}
-
-/// Restore both pursuit layers when selecting or bootstrapping a session.
-///
-/// Unlike [`refresh_agent_pursuit`], this replaces the attempt runtime too
-/// and therefore must not be used as a live status refresh while a round is
-/// advancing counters.
-pub async fn restore_agent_pursuit(agent: &Agent, session: &SessionStore) -> Option<Pursuit> {
-    // Session switches reuse the principal Agent. Restore the monotonic round
-    // counter before any HarnessState for the selected session is emitted.
-    agent.restore_round_count(session.round_counter().await);
-    let pursuit = refresh_agent_pursuit(agent, session).await;
-    match session.pursuit_runtime().await {
-        Some(runtime) => agent.restore_pursuit_runtime(
-            runtime.armed,
-            runtime.iterations,
-            crate::PursuitStats {
-                passes: runtime.passes,
-                tokens: runtime.tokens,
-                wall_clock_ms: runtime.wall_clock_ms,
-            },
-        ),
-        None => agent.restore_pursuit_runtime(false, 0, crate::PursuitStats::default()),
-    }
-    pursuit
-}
-
-pub fn emit_pursuit_updated(
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    session_id: &str,
-    pursuit: &Pursuit,
-) {
-    let _ = tx.send(round_response(
-        session_id,
-        RoundEvent::PursuitUpdated(pursuit.clone()),
-    ));
-}
-
-fn pursuit_runtime(agent: &Agent) -> Option<PursuitRuntime> {
-    if !agent.is_pursuit_armed() && agent.pursuit_iterations() == 0 {
-        return None;
-    }
-    let stats = agent.pursuit_stats();
-    Some(PursuitRuntime {
-        armed: agent.is_pursuit_armed(),
-        iterations: agent.pursuit_iterations(),
-        passes: stats.passes,
-        tokens: stats.tokens,
-        wall_clock_ms: stats.wall_clock_ms,
-    })
-}
-
-fn pursuit_checkpoint(agent: &Agent, status: PursuitCheckpointStatus) -> Option<PursuitCheckpoint> {
-    let pursuit = agent.get_pursuit()?;
-    Some(PursuitCheckpoint {
-        pursuit: pursuit.objective,
-        // `iterations` counts forced continuations. Checkpoints expose the
-        // one-based pursuit pass so iteration and max_iterations share a unit.
-        iteration: agent
-            .pursuit_iterations()
-            .saturating_add(1)
-            .min(crate::MAX_PURSUIT_ITERATIONS) as usize,
-        max_iterations: crate::MAX_PURSUIT_ITERATIONS as usize,
-        status,
-    })
-}
-
-async fn persist_current_pursuit(
-    agent: &Agent,
-    session: &SessionStore,
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    session_id: &str,
-) {
-    let Some(pursuit) = agent.get_pursuit() else {
-        return;
-    };
-    match session.set_pursuit(Some(pursuit.clone())).await {
-        Ok(()) => emit_pursuit_updated(tx, session_id, &pursuit),
-        Err(error) => {
-            let _ = tx.send(round_response(
-                session_id,
-                RoundEvent::Error(format!("Failed to persist pursuit state: {error}")),
-            ));
-        }
-    }
-}
-
-/// Settle a pursuit attempt that another lifecycle operation superseded.
-///
-/// The superseded task is generation-guarded and must not mutate shared state
-/// while a successor owns it. The caller that performed the supersession
-/// therefore owns this disarm + persistence step (ADR-0078/0083).
-pub async fn stop_superseded_pursuit(
-    agent: &Agent,
-    session: &SessionStore,
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    session_id: &str,
-    reason: &str,
-) -> bool {
-    let Some(current) = agent.get_pursuit() else {
-        return false;
-    };
-    let armed = agent.is_pursuit_armed();
-    let stored = session.pursuit().await;
-    // The gate may have disarmed and stamped a specific reason immediately
-    // before supersession. Flush that state if its owning task became stale;
-    // do not re-settle an older, already persisted stopped objective.
-    let pending_terminal_flush =
-        current.terminal_reason.is_some() && stored.as_ref() != Some(&current);
-    if !armed && !pending_terminal_flush {
-        return false;
-    }
-    if armed {
-        agent.stop_pursuit(reason);
-    }
-    persist_current_pursuit(agent, session, tx, session_id).await;
-    if let Err(error) = session.set_pursuit_runtime(pursuit_runtime(agent)).await {
-        let _ = tx.send(round_response(
-            session_id,
-            RoundEvent::Error(format!("Failed to persist pursuit runtime: {error}")),
-        ));
-    }
-    let status = if agent
-        .get_pursuit()
-        .is_some_and(|pursuit| pursuit.is_complete)
-    {
-        PursuitCheckpointStatus::Completed
-    } else {
-        PursuitCheckpointStatus::Interrupted
-    };
-    if let Some(checkpoint) = pursuit_checkpoint(agent, status)
-        && let Err(error) = session.set_checkpoint(Some(checkpoint)).await
-    {
-        let _ = tx.send(round_response(
-            session_id,
-            RoundEvent::Error(format!("Failed to persist pursuit checkpoint: {error}")),
-        ));
-    }
-    true
 }
 
 #[derive(Clone)]
@@ -671,7 +515,7 @@ pub struct RoundContext {
     pub retry_max_attempts: usize,
     pub retry_base_ms: u64,
     pub retry_max_ms: u64,
-    /// Emit the frontend's natural-completion signal. Pursuit/repeat drivers
+    /// Emit the frontend's natural-completion signal. Repeat drivers
     /// call `execute_round` internally and must not release a user's paused
     /// next-round outbox between their own continuation iterations.
     pub emit_round_completed: bool,
@@ -715,16 +559,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         let _ = context.tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
-    // Also settles a crash-restored armed attempt that has no live predecessor
-    // token: an ordinary user round is an explicit choice not to resume it.
-    stop_superseded_pursuit(
-        &context.agent,
-        &context.session,
-        &context.tx,
-        &context.session_id,
-        "superseded by a new round",
-    )
-    .await;
     for stale in context
         .agent
         .begin_user_input_round(context.session_id.clone(), generation)
@@ -801,7 +635,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
 pub async fn execute_round(
     context: RoundContext,
     mut input: RoundInput,
-) -> Result<bool, HarnessError> {
+) -> Result<(), HarnessError> {
     let RoundContext {
         agent,
         tx,
@@ -828,8 +662,7 @@ pub async fn execute_round(
     ));
 
     // UserPromptSubmit hooks (ADR-0025): a hook may deny the prompt or prepend
-    // context. Hidden control prompts (pursuit continuation, verify nudge) are
-    // harness-internal and bypass the gate.
+    // context. Hidden control prompts are harness-internal and bypass the gate.
     if !input.hidden {
         match agent.fire_user_prompt_submit(&input.prompt).await {
             crate::hooks::UserPromptVerdict::Deny(reason) => {
@@ -837,7 +670,7 @@ pub async fn execute_round(
                     &session_id,
                     RoundEvent::Text(format!("Prompt blocked by hook: {reason}")),
                 ));
-                return Ok(true);
+                return Ok(());
             }
             crate::hooks::UserPromptVerdict::Prepend(context) => {
                 input.prompt = format!("{context}\n\n{}", input.prompt);
@@ -923,17 +756,6 @@ pub async fn execute_round(
                     session
                         .set_request_usage_records(ledger.records_for_session(&session_id))
                         .await?;
-                }
-                let runtime = pursuit_runtime(&agent);
-                if runtime != session.pursuit_runtime().await {
-                    session.set_pursuit_runtime(runtime).await?;
-                }
-                if agent.is_pursuit_armed()
-                    && let Some(checkpoint) =
-                        pursuit_checkpoint(&agent, PursuitCheckpointStatus::Running)
-                    && session.checkpoint().await.as_ref() != Some(&checkpoint)
-                {
-                    session.set_checkpoint(Some(checkpoint)).await?;
                 }
                 Ok(())
             })
@@ -1156,7 +978,7 @@ pub async fn execute_round(
     {
         // The user message is the last entry in `round_history` (pushed before
         // the streaming round). Only a non-hidden round is unsentable: hidden
-        // control prompts (pursuit continuation, verify nudge) are harness-
+        // control prompts are harness-
         // internal and should not be surfaced as editable user input.
         if round_history
             .last()
@@ -1175,7 +997,7 @@ pub async fn execute_round(
                     images: unsent_images,
                 },
             ));
-            return Ok(false);
+            return Ok(());
         }
     }
     if session.id().await != admitted_session_id {
@@ -1194,54 +1016,9 @@ pub async fn execute_round(
     send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
     let outcome = result?;
 
-    // Marker-based completion: if the model explicitly emitted the completion
-    // marker and an active pursuit exists, mark it complete in the DB.
-    let requested_completion = outcome.message.content.contains(PURSUIT_COMPLETE_MARKER);
-    let mut completed = false;
-    if requested_completion && agent.pursuit_can_complete() {
-        match session.mark_pursuit_complete().await {
-            Ok(Some(pursuit)) => {
-                agent.set_pursuit(pursuit.clone());
-                emit_pursuit_updated(&tx, &session_id, &pursuit);
-                completed = true;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let _ = tx.send(round_response(
-                    &session_id,
-                    RoundEvent::Error(format!("Failed to mark pursuit complete: {error}")),
-                ));
-            }
-        }
-    } else if agent
-        .get_pursuit()
-        .is_some_and(|pursuit| pursuit.is_complete)
-    {
-        completed = true;
-    }
-
-    let visible = outcome
-        .message
-        .content
-        .replace(PURSUIT_COMPLETE_MARKER, "")
-        .trim()
-        .to_string();
+    let visible = outcome.message.content.trim().to_string();
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {
         let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible)));
-    }
-    if requested_completion && !completed {
-        let _ = tx.send(round_response(
-            &session_id,
-            RoundEvent::Text(
-                "Pursuit completion marker ignored: no active pursuit is set.".to_string(),
-            ),
-        ));
-    }
-    if completed {
-        let _ = tx.send(round_response(
-            &session_id,
-            RoundEvent::Text("Pursuit completed.".to_string()),
-        ));
     }
 
     // Mirror the unified task list so resume restores the sticky panel. The
@@ -1273,9 +1050,9 @@ pub async fn execute_round(
     }
 
     // Mirror session-scoped runtime state to the durable session (ADR-0048
-    // Phase 2): the disabled-tool mask, the round counter, and the pursuit
-    // stop-gate runtime view. Each is compared against the durable value and
-    // skipped on a match to avoid a no-op event-log entry (mirroring the todos
+    // Phase 2): the disabled-tool mask and the round counter. Each is compared
+    // against the durable value and skipped on a match to avoid a no-op
+    // event-log entry (mirroring the todos
     // diff above).
     let agent_disabled = agent.disabled_tools_snapshot();
     if agent_disabled != session.disabled_tools().await
@@ -1289,17 +1066,19 @@ pub async fn execute_round(
     {
         tracing::warn!(error = %err, "could not persist round counter");
     }
-    let desired_runtime = pursuit_runtime(&agent);
-    if desired_runtime != session.pursuit_runtime().await
-        && let Err(err) = session.set_pursuit_runtime(desired_runtime).await
-    {
-        tracing::warn!(error = %err, "could not persist pursuit runtime");
-    }
 
     if emit_round_completed {
-        let _ = tx.send(round_response(&session_id, RoundEvent::RoundCompleted));
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::RoundCompleted(neenee_core::RoundSummary {
+                round: agent_round,
+                output_tokens: outcome.token_usage.completion_tokens.max(0) as u64,
+                duration_ms: outcome.duration_ms,
+                paused_ms: outcome.paused_ms,
+            }),
+        ));
     }
-    Ok(completed)
+    Ok(())
 }
 
 fn send_context_projection(
@@ -1429,12 +1208,7 @@ pub fn relay_agent_event(
         }
         AgentEvent::AssistantEnd(content) => round_response(
             session_id,
-            RoundEvent::StreamEnd(
-                content
-                    .replace(PURSUIT_COMPLETE_MARKER, "")
-                    .trim()
-                    .to_string(),
-            ),
+            RoundEvent::StreamEnd(content.trim().to_string()),
         ),
         AgentEvent::AssistantDiscard => round_response(session_id, RoundEvent::StreamDiscard),
         AgentEvent::ReasoningDelta { delta, start } => {
@@ -1480,9 +1254,6 @@ pub fn relay_agent_event(
         }
         AgentEvent::ToolStream { id, stream } => {
             round_response(session_id, RoundEvent::ToolStream { id, stream })
-        }
-        AgentEvent::PursuitUpdated(pursuit) => {
-            round_response(session_id, RoundEvent::PursuitUpdated(pursuit))
         }
         AgentEvent::TodosUpdated(todos) => {
             round_response(session_id, RoundEvent::TodosUpdated(todos))
@@ -1611,226 +1382,6 @@ pub fn send_compaction(
             after_chars: checkpoint.after_chars,
         },
     ));
-}
-
-#[derive(Clone)]
-pub struct PursuitContext {
-    pub agent: Arc<Agent>,
-    pub tx: mpsc::UnboundedSender<AgentResponse>,
-    pub lifecycle: Arc<RoundLifecycle>,
-    pub session: Arc<SessionStore>,
-    /// Session id this pursuit belongs to (ADR-0017).
-    pub session_id: String,
-    pub projection: ContextProjectionSettings,
-    pub retry_max_attempts: usize,
-    pub retry_base_ms: u64,
-    pub retry_max_ms: u64,
-    /// Preserve a restored in-flight attempt's iteration and budget counters.
-    /// Fresh objectives and explicitly re-armed stopped attempts set this
-    /// false and start at zero.
-    pub resume_runtime: bool,
-}
-
-/// Run a pursuit: arm the stop-gate and execute a single agent round.
-///
-/// The gate (`Agent::pursuit_continuation`) re-injects the condition and
-/// forces additional turns *within* the round until the model signals
-/// completion, the safety cap is hit, or the pursuit is interrupted — so a
-/// single `execute_round` here runs to completion instead of looping whole
-/// rounds (the old `/loop` model).
-///
-/// Terminates when:
-/// - the model emits `PURSUIT_COMPLETE_MARKER` (`Ok(true)`);
-/// - the stop-gate exhausts its safety cap (`Ok(false)` — disarmed without a
-///   completion signal);
-/// - the user interrupts (`Esc` or `/pursue stop`);
-/// - a newer request supersedes this one (generation bump);
-/// - a provider or tool pipeline error aborts the round.
-pub async fn start_pursuit(context: PursuitContext, condition: String) {
-    let RoundBegin {
-        token,
-        generation,
-        previous,
-    } = context.lifecycle.begin().await;
-    if let Some(previous) = previous {
-        context.agent.reject_pending_permissions();
-        context.agent.reject_pending_user_questions();
-        context.agent.reject_pending_inputs();
-        let _ = context.tx.send(AgentResponse::PermissionsCleared);
-        previous.cancel();
-    }
-
-    send_harness_state(
-        &context.tx,
-        &context.session_id,
-        &context.agent,
-        LoopStatus::Pursue,
-    );
-
-    tokio::spawn(async move {
-        // Arm the stop-gate so `execute_round`'s ReAct loop keeps driving toward
-        // the condition instead of ending on the first stop. The gate
-        // self-disarms on cap/completion; we also disarm below as a backstop.
-        if context.resume_runtime {
-            context.agent.resume_pursuit();
-        } else {
-            context.agent.arm_pursuit();
-        }
-        if let Some(checkpoint) =
-            pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Running)
-        {
-            let _ = context.session.set_checkpoint(Some(checkpoint)).await;
-        }
-        let prompt = format!(
-            "Pursue this pursuit until it is fully achieved and verified:\n\
-             {condition}\n\
-             Work autonomously: inspect the current state, use tools, implement and verify \
-             work. Do not stop at a plan. The harness keeps this round going until the pursuit is \
-             done, so keep making concrete progress. Emit {marker} only once the entire pursuit \
-             is achieved and verified.",
-            condition = condition,
-            marker = PURSUIT_COMPLETE_MARKER,
-        );
-        let outcome = execute_round(
-            RoundContext {
-                agent: context.agent.clone(),
-                tx: context.tx.clone(),
-                token: token.clone(),
-                session: context.session.clone(),
-                session_id: context.session_id.clone(),
-                projection: context.projection.clone(),
-                retry_max_attempts: context.retry_max_attempts,
-                retry_base_ms: context.retry_base_ms,
-                retry_max_ms: context.retry_max_ms,
-                emit_round_completed: false,
-            },
-            RoundInput {
-                prompt,
-                hidden: true,
-                display_prompt: None,
-                sent_at_ms: None,
-                images: Vec::new(),
-            },
-        )
-        .await;
-        // A newer round may have superseded this attempt while it was
-        // unwinding. Its pursuit runtime now owns the shared agent state, so a
-        // stale task must not disarm or persist over the successor.
-        if !context.lifecycle.is_current(generation) {
-            return;
-        }
-        context.agent.disarm_pursuit();
-        // `execute_round` may have persisted the runtime while the gate was
-        // still armed (for example on marker completion). Persist the terminal
-        // disarmed view so resume cannot restart a finished attempt.
-        let _ = context
-            .session
-            .set_pursuit_runtime(pursuit_runtime(&context.agent))
-            .await;
-        match outcome {
-            Ok(true) => {
-                if let Some(checkpoint) =
-                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Completed)
-                {
-                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
-                }
-                let _ = context.tx.send(round_response(
-                    &context.session_id,
-                    RoundEvent::Text("Pursuit complete.".to_string()),
-                ));
-            }
-            Ok(false) => {
-                // The stop-gate disarmed without a completion signal: either
-                // the safety cap was reached or the model stopped without
-                // emitting the marker.
-                context
-                    .agent
-                    .stop_pursuit("stopped without a completion signal");
-                persist_current_pursuit(
-                    &context.agent,
-                    &context.session,
-                    &context.tx,
-                    &context.session_id,
-                )
-                .await;
-                if let Some(checkpoint) =
-                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Interrupted)
-                {
-                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
-                }
-                // Surface *why* the loop stopped when a budget tripped
-                // (ADR-0060), plus a usage summary so the cost is visible.
-                let stats = context.agent.pursuit_stats();
-                let reason = context
-                    .agent
-                    .get_pursuit()
-                    .and_then(|p| p.terminal_reason)
-                    .unwrap_or_else(|| "safety cap reached or no completion signal".to_string());
-                let summary = if stats.passes > 0 {
-                    format!(
-                        "Pursuit stopped: {reason} ({} pass{}, {} tokens, {:.0}s).",
-                        stats.passes,
-                        if stats.passes == 1 { "" } else { "s" },
-                        stats.tokens,
-                        stats.wall_clock_ms as f64 / 1000.0
-                    )
-                } else {
-                    format!("Pursuit stopped: {reason}.")
-                };
-                let _ = context.tx.send(round_response(
-                    &context.session_id,
-                    RoundEvent::Text(summary),
-                ));
-            }
-            Err(HarnessError::Interrupted) => {
-                context.agent.stop_pursuit("interrupted");
-                persist_current_pursuit(
-                    &context.agent,
-                    &context.session,
-                    &context.tx,
-                    &context.session_id,
-                )
-                .await;
-                if let Some(checkpoint) =
-                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Interrupted)
-                {
-                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
-                }
-                let _ = context.tx.send(round_response(
-                    &context.session_id,
-                    RoundEvent::Text("Pursuit interrupted.".to_string()),
-                ));
-            }
-            Err(error) => {
-                context.agent.stop_pursuit(format!("error: {error}"));
-                persist_current_pursuit(
-                    &context.agent,
-                    &context.session,
-                    &context.tx,
-                    &context.session_id,
-                )
-                .await;
-                if let Some(checkpoint) =
-                    pursuit_checkpoint(&context.agent, PursuitCheckpointStatus::Error)
-                {
-                    let _ = context.session.set_checkpoint(Some(checkpoint)).await;
-                }
-                let _ = context.tx.send(round_response(
-                    &context.session_id,
-                    RoundEvent::Error(error.to_string()),
-                ));
-            }
-        }
-
-        if context.lifecycle.finish(generation).await {
-            send_harness_state(
-                &context.tx,
-                &context.session_id,
-                &context.agent,
-                LoopStatus::Idle,
-            );
-        }
-    });
 }
 
 // ── /repeat scheduler ─────────────────────────────────────────────────

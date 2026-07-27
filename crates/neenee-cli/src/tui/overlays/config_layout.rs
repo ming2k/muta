@@ -18,7 +18,7 @@ use crate::tui::components::scroll::ScrollBody;
 use crate::tui::design::MODAL_INNER_H_PADDING;
 use crate::tui::layout::Strategy;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe,
+    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe, keyvocab,
 };
 use crate::tui::view::Theme;
 
@@ -159,9 +159,9 @@ pub fn draw_config_layout_modal(
                 wrap: false,
             },
             footer_hints: &[
-                FooterHint::navigation("↑↓", "select"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary("Enter/Space", "apply"),
-                FooterHint::always("Esc", "back"),
+                FooterHint::always(keyvocab::ESC, "back"),
             ],
             extra_footer_hints: &[],
             keymap_open,

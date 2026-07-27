@@ -5,7 +5,7 @@
 //! picks it up unchanged.
 
 use neenee_agent::Agent;
-use neenee_agent::orchestration::{round_response, send_harness_state, stop_superseded_pursuit};
+use neenee_agent::orchestration::{round_response, send_harness_state};
 use neenee_agent::tools::BashTool;
 use neenee_agent::{RoundBegin, RoundLifecycle};
 use neenee_core::{AgentResponse, LoopStatus, Message, RoundEvent, Tool, ToolOutput, ToolStream};
@@ -62,14 +62,6 @@ pub async fn run_shell_command(
         let _ = tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
-    stop_superseded_pursuit(
-        &agent,
-        &session,
-        &tx,
-        &session_id,
-        "superseded by a direct shell command",
-    )
-    .await;
     let is_current = || lifecycle.is_current(generation);
 
     // Surface the synthetic tool step starting. The response listener maps

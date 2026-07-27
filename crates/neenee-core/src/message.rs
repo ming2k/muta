@@ -63,13 +63,6 @@ pub enum InjectionKind {
     /// Sites: `HookRegistry::{session_start, run_post_tool_use,
     /// run_post_tool_use_failure, check_stop, run_turn, run_turn_start}`.
     Hook(HookEventKind),
-    /// Pursuit stop-gate re-applied the continuation prompt to keep the model
-    /// on-task mid-round at a turn boundary. Site: `PursuitState::inject_continuation` and the
-    /// `stop_gate` continuation arm.
-    PursuitContinuation,
-    /// The active pursuit's objective was changed mid-flight. Site:
-    /// `PursuitState::inject_objective_updated`.
-    PursuitObjectiveUpdated,
     /// Inter-agent steering note (`AgentOp::InterAgentMessage`, codex
     /// `InterAgentCommunication` analogue). Site: `Agent::drain_inbox`.
     InterAgent,
@@ -94,7 +87,7 @@ pub enum InjectionKind {
     /// `neenee-agent`'s conversation-context skill injection policy.
     ImplicitSkill,
     /// System-prompt assembly: the harness rebuilt the head system message
-    /// from live identity, pursuit, model/provider, and tool state through the
+    /// from live identity, model/provider, and tool state through the
     /// agent's request-scoped `SystemPromptRegistry` assembly.
     SystemPrompt,
     /// Built-in anti-anchoring nudge fired by the deterministic read-loop guard
@@ -117,7 +110,7 @@ pub enum InjectionKind {
     /// A non-driving command echo: the literal text of a user invocation that
     /// is recorded in the durable transcript for resume/export/audit
     /// faithfulness but is **never sent to the model**. Covers slash commands
-    /// (`/pursue …`) and `!command` shell passthroughs, both of which the
+    /// (e.g. `/session …`) and `!command` shell passthroughs, both of which the
     /// harness handles directly without an LLM roundtrip. Distinct from
     /// `HiddenRoundInput` (which *is* a driving hidden prompt): a `CommandEcho`
     /// carries no instruction for the model. Projected out before the wire by
@@ -131,17 +124,12 @@ pub enum InjectionKind {
     /// block. Unlike the stable head `SystemPrompt`, a system reminder is
     /// event-driven and mid-turn: it carries a transient, situation-specific
     /// instruction the model MUST follow (it may override normal behavior —
-    /// e.g. "you are now read-only"). Distinct from `UntrustedDirective`,
-    /// which wraps data, not authority. Site:
-    /// `conversation_context::system_reminder::inject`. (ADR-0068.)
+    /// e.g. "you are now read-only"). (ADR-0068.)
     SystemReminder,
     /// User-provided or foreign task data wrapped in an `<untrusted_…>` block
     /// (objective text, pasted content) that the model must treat as **data,
     /// not instructions** — it must not override system messages, tool schemas,
-    /// or permission rules. The escaping + tag is owned by the reminder layer,
-    /// which stamps this provenance so a transcript can distinguish "authoritative
-    /// directive" from "untrusted data" without string-sniffing. Site:
-    /// `conversation_context::system_reminder::inject`. (ADR-0068.)
+    /// or permission rules. (ADR-0068.)
     UntrustedDirective,
 }
 
@@ -697,8 +685,6 @@ mod tests {
             InjectionKind::Hook(HookEventKind::Stop),
             InjectionKind::Hook(HookEventKind::Turn),
             InjectionKind::Hook(HookEventKind::TurnStart),
-            InjectionKind::PursuitContinuation,
-            InjectionKind::PursuitObjectiveUpdated,
             InjectionKind::InterAgent,
             InjectionKind::EnvoySteer,
             InjectionKind::EnvoyTask,
@@ -765,7 +751,7 @@ mod tests {
         // yet non-driving (is_command_echo=true, so it is projected out before
         // the wire). It must not be conflated with an injected/hidden message,
         // whose `hidden` axis means the opposite half (ADR-0050).
-        let m = Message::command_echo("/pursue ship it");
+        let m = Message::command_echo("/session list");
         assert!(!m.hidden, "command echo must be visible on resume/export");
         assert_eq!(m.role, Role::User);
         assert!(m.is_command_echo());

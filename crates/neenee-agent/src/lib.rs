@@ -5,7 +5,7 @@
 //! # What lives here
 //!
 //! - **The `Agent` struct** (`agent.rs`) — holds the provider, tool set, mode,
-//!   pursuit, and skill registry; runs the streaming ReAct loop
+//!   and skill registry; runs the streaming ReAct loop
 //!   (`run_streaming_with_events`).
 //! - **Model-request assembly** (`model_request/`) — immutable request
 //!   projection and system-prompt policy. Durable harness-authored messages
@@ -15,8 +15,8 @@
 //!   a protocol-neutral dynamic-tool port. Discovery and transport stay in
 //!   their dedicated capability crates.
 //! - **Turn orchestration** (`orchestration.rs`) — the policy that wraps every
-//!   agent turn: compaction, mid-turn pruning, retries with backoff, the
-//!   `/pursue` stop-gate driver, and the `/repeat` cron scheduler. Frontends drive the harness
+//!   agent turn: compaction, mid-turn pruning, retries with backoff, and the
+//!   `/repeat` cron scheduler. Frontends drive the harness
 //!   through [`orchestration::execute_round`] and friends; they own only the
 //!   UI-specific input path (slash commands for the CLI, menus/dialogs for a
 //!   future GUI).
@@ -74,7 +74,7 @@ pub use neenee_core::{
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
     McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
     PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
-    ProviderStreamEvent, PruneOutcome, Pursuit, RetryableError, Role, SessionOverview,
+    ProviderStreamEvent, PruneOutcome, RetryableError, Role, SessionOverview,
     ShellTermination, SkillsConfig, StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput,
     ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption,
     UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens,
@@ -89,18 +89,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-
-/// Safety cap on the number of forced continuation passes the `/pursue`
-/// stop-gate will drive within a single round. Prevents a pursuit that never signals completion
-/// from looping forever; the user can also interrupt with `Esc`. Generous by
-/// design — a well-behaved pursuit completes by signalling the marker well
-/// before this.
-///
-/// This is **not** a default per-round turn cap: an ordinary round (no pursuit
-/// armed) stays uncapped and ends when the model stops calling tools. This cap
-/// only bounds the forced re-injection of an opt-in stop-gate the user
-/// explicitly armed — see ADR-0015/0083.
-pub const MAX_PURSUIT_ITERATIONS: u32 = 50;
 
 /// Maximum interval between consecutive stream events (text/reasoning/tool-call
 /// deltas) before the stream is considered stalled. All LLM providers use
@@ -153,9 +141,6 @@ mod dispatch_pipeline;
 mod disclosure_ledger;
 #[allow(dead_code)] // machinery: disclosure bridge awaits the select_tools switchover.
 mod disclosure_bridge;
-mod pursuit_prompts;
-pub mod pursuit_state;
-pub use pursuit_state::PursuitStats;
 pub mod round_lifecycle;
 pub use round_lifecycle::{RoundBegin, RoundLifecycle};
 pub mod session_review;
@@ -181,9 +166,6 @@ pub use model_request::system_prompt::{
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
 pub use session_review::{LoopingReview, default_reviews};
-
-/// Model-emitted marker that satisfies the opt-in pursuit stop gate.
-pub const PURSUIT_COMPLETE_MARKER: &str = "[NEENEE_PURSUIT_COMPLETE]";
 
 #[cfg(test)]
 mod tests;

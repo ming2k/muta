@@ -39,8 +39,7 @@ The generation guard, not a display enum, decides which round may emit
 terminal cleanup. `LoopStatus` is only a UI projection:
 
 - `idle`: no displayed work;
-- `running`: a normal round;
-- `pursue`: a running round whose pursuit stop-gate is armed.
+- `running`: a normal round.
 
 Waiting for permission, user answers, or interactive input is not another
 round lifecycle state. It is a parked-request overlay on the same running
@@ -133,27 +132,6 @@ page N --Shift+Tab, N>1--> page N-1
 final page --Enter--> submitted
 any page --Esc/round cancellation--> cancelled
 ```
-
-## Pursuit protocols
-
-Pursuit state is deliberately split into three aligned subjects:
-
-| Subject | State |
-|---------|-------|
-| Durable objective | optional objective, completion bit, optional budget, optional terminal reason |
-| Runtime attempt | armed flag, forced-continuation count, pursuit passes/tokens/active time |
-| Checkpoint projection | one-based pursuit pass, 50-pass maximum, running/completed/interrupted/error plus unknown compatibility fallback |
-
-A fresh or explicitly re-armed attempt clears the previous terminal reason and
-resets counters. Resuming a crash-restored armed attempt preserves counters.
-Completion sets the completion bit and clears the reason. Budget, safety cap,
-interrupt, supersession, or error disarms the attempt, leaves the objective
-incomplete, and records a reason. Clearing removes the objective entirely.
-
-The checkpoint reports an attempt; it does not decide whether the objective is
-complete. See
-[ADR-0083](../adr/0083-crash-consistent-pursuit-attempt-accounting.md) for the
-recovery and accounting decision.
 
 ## Transcript step presentation
 

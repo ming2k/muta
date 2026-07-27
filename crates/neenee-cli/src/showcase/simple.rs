@@ -11,7 +11,7 @@ use std::io;
 use crossterm::event::KeyCode;
 
 use neenee_core::{ProviderPickerRow, ProviderPickerSnapshot, SessionOverview};
-use neenee_core::{Pursuit, TodoId, TodoItem, TodoList, TodoStatus};
+use neenee_core::{TodoId, TodoItem, TodoList, TodoStatus};
 
 use crate::showcase::common::{self, ShowAction};
 use crate::tui::ActivityTab;
@@ -20,7 +20,8 @@ use crate::tui::model::layout::LayoutMap;
 use crate::tui::view::Theme;
 use crate::tui::view::{
     ActivityModalView, draw_activity_modal, draw_armed_toast, draw_connections_modal,
-    draw_copy_toast, draw_help_modal, draw_history_modal, draw_model_editor, draw_sessions_modal,
+    draw_copy_toast, draw_help_modal, draw_history_modal, draw_model_editor, draw_models_modal,
+    draw_sessions_modal,
 };
 
 // ─────────────────────────── provider picker ──────────────────────────────
@@ -37,27 +38,37 @@ struct ProviderState {
 
 pub fn provider() -> io::Result<()> {
     let theme = Theme::default();
-    let mk = |id: &str, name: &str, models: &[&str], fav: bool, key: bool| ProviderPickerRow {
-        id: id.to_string(),
-        name: name.to_string(),
-        model: models.first().copied().unwrap_or("").to_string(),
-        models: models.iter().map(|m| m.to_string()).collect(),
-        model_info: Vec::new(),
-        builtin: true,
-        protocol: String::new(),
-        base_url: String::new(),
-        key_ready: key,
-        favorite: fav,
-        last_used_ms: fav.then_some(1_700_000_000_000),
-        auth: Default::default(),
+    let mk = |id: &str, name: &str, template_id: &str, models: &[&str], fav: bool, key: bool| {
+        ProviderPickerRow {
+            id: id.to_string(),
+            name: name.to_string(),
+            model: models.first().copied().unwrap_or("").to_string(),
+            models: models.iter().map(|m| m.to_string()).collect(),
+            model_info: Vec::new(),
+            builtin: true,
+            protocol: String::new(),
+            base_url: String::new(),
+            key_ready: key,
+            template_id: template_id.to_string(),
+            last_used_ms: fav.then_some(1_700_000_000_000),
+            auth: Default::default(),
+        }
     };
     let picker = ProviderPickerSnapshot {
         default_id: "anthropic".into(),
         rows: vec![
-            mk("openai", "OpenAI", &["gpt-4o", "gpt-4o-mini"], false, false),
+            mk(
+                "openai",
+                "OpenAI",
+                "openai",
+                &["gpt-4o", "gpt-4o-mini"],
+                false,
+                false,
+            ),
             mk(
                 "anthropic",
                 "Anthropic",
+                "anthropic",
                 &["claude-opus-4-8", "claude-sonnet-4-6"],
                 true,
                 true,
@@ -65,6 +76,7 @@ pub fn provider() -> io::Result<()> {
             mk(
                 "kimi-code",
                 "Kimi Code",
+                "kimi-code",
                 &["k3", "kimi-k2.7-code"],
                 false,
                 true,
@@ -125,6 +137,141 @@ pub fn provider() -> io::Result<()> {
                 KeyCode::Esc => {
                     // Two-stage Esc, mirroring the real picker: search → browse,
                     // then browse → quit.
+                    if s.search {
+                        s.search = false;
+                        s.query.clear();
+                        s.cursor = 0;
+                        s.index = 0;
+                        return ShowAction::Continue;
+                    }
+                    ShowAction::Exit
+                }
+                KeyCode::Up => {
+                    if s.index > 0 {
+                        s.index -= 1;
+                    }
+                    ShowAction::Continue
+                }
+                KeyCode::Down => {
+                    s.index += 1;
+                    ShowAction::Continue
+                }
+                KeyCode::Char('/') if !s.search => {
+                    s.search = true;
+                    s.index = 0;
+                    ShowAction::Continue
+                }
+                KeyCode::Backspace if s.search => {
+                    if s.cursor > 0 {
+                        s.cursor -= 1;
+                        s.query.remove(s.cursor);
+                    }
+                    s.index = 0;
+                    ShowAction::Continue
+                }
+                KeyCode::Char(c) if s.search => {
+                    s.query.insert(s.cursor, c);
+                    s.cursor += 1;
+                    s.index = 0;
+                    ShowAction::Continue
+                }
+                _ => ShowAction::Continue,
+            }
+        },
+    )
+}
+
+// ──────────────────────────── model editor ────────────────────────────────
+
+// ──────────────────────────── models picker ──────────────────────────────
+
+/// A live showcase of the flat **Models** picker — the surface that exercises
+/// the full-width, gap-grouped row standard (status glyphs + identity cluster
+/// + optional trailing reasoning tag). Run it to eyeball the Gestalt spacing
+/// and the edge-to-edge fill under the brand cursor.
+pub fn models() -> io::Result<()> {
+    let theme = Theme::default();
+    // Seed a snapshot with a couple of providers and a favorited model so the
+    // star glyph, the current dot, and the recency sort all render.
+    let mk = |id: &str, name: &str, template_id: &str, models: &[&str]| ProviderPickerRow {
+        id: id.to_string(),
+        name: name.to_string(),
+        model: models.first().copied().unwrap_or("").to_string(),
+        models: models.iter().map(|m| m.to_string()).collect(),
+        model_info: models
+            .iter()
+            .map(|m| neenee_core::ProviderModelInfo {
+                model: m.to_string(),
+                protocol: String::new(),
+                effort: None,
+                thinking: None,
+                favorite: *m == "claude-sonnet-4-6",
+                last_used_ms: (*m == "gpt-4o").then_some(1_700_000_000_000),
+            })
+            .collect(),
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        template_id: template_id.to_string(),
+        last_used_ms: None,
+        auth: Default::default(),
+    };
+    let picker = ProviderPickerSnapshot {
+        default_id: "anthropic".into(),
+        rows: vec![
+            mk("openai", "OpenAI", "openai", &["gpt-4o", "gpt-4o-mini"]),
+            mk(
+                "anthropic",
+                "Anthropic",
+                "anthropic",
+                &["claude-opus-4-8", "claude-sonnet-4-6"],
+            ),
+        ],
+    };
+    let mut state = ProviderState {
+        index: 0,
+        query: String::new(),
+        cursor: 0,
+        scroll: 0,
+        search: false,
+        picker,
+        key_status: HashMap::new(),
+    };
+
+    common::run_showcase(
+        &mut state,
+        |f, s| {
+            let title = format!(
+                " models picker · {} pairs · / to search · q/Ctrl+C=quit",
+                s.picker.rows.iter().map(|r| r.models.len()).sum::<usize>(),
+            );
+            let hint = " ↑↓ navigate · Enter activate · * favorite · e settings · Esc back/quit ";
+            common::draw_with_chrome(f, &title, hint, &theme, |f| {
+                let mut lm = LayoutMap::new();
+                let query = if s.search { s.query.trim() } else { "" };
+                let ranked = crate::tui::providers::models_flat_filtered_from(&s.picker, query);
+                let mut scroll = s.scroll;
+                draw_models_modal(
+                    f,
+                    &mut lm,
+                    &ranked,
+                    &s.picker.default_id,
+                    "claude-sonnet-4-6",
+                    s.index,
+                    &s.query,
+                    s.cursor,
+                    &mut scroll,
+                    true,
+                    s.search,
+                    false,
+                    &theme,
+                );
+            });
+        },
+        |s, key| -> ShowAction {
+            match key.code {
+                KeyCode::Esc => {
                     if s.search {
                         s.search = false;
                         s.query.clear();
@@ -384,7 +531,6 @@ pub fn sessions() -> io::Result<()> {
 // ──────────────────────────── activity modal ──────────────────────────────
 
 struct ActivityState {
-    pursuit: Pursuit,
     todos: TodoList,
     tab: ActivityTab,
     scroll: Cell<usize>,
@@ -393,11 +539,6 @@ struct ActivityState {
 
 pub fn activity() -> io::Result<()> {
     let theme = Theme::default();
-    let pursuit = Pursuit {
-        objective: "Land the component showcase framework".into(),
-        is_complete: false,
-        ..Default::default()
-    };
     let todos = TodoList {
         items: vec![
             TodoItem {
@@ -432,7 +573,6 @@ pub fn activity() -> io::Result<()> {
         ..Default::default()
     };
     let mut state = ActivityState {
-        pursuit,
         todos,
         tab: ActivityTab::Activity,
         scroll: Cell::new(0),
@@ -450,7 +590,6 @@ pub fn activity() -> io::Result<()> {
                     f,
                     ActivityModalView {
                         active_tab: s.tab,
-                        pursuit: Some(&s.pursuit),
                         todos: Some(&s.todos),
                         user_prompt: Some("Build a showcase for all TUI components"),
                         round_count: 3,

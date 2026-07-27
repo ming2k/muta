@@ -2,8 +2,8 @@
 //! session, round, turn, and tool-call points.
 //!
 //! neenee keeps a single event axis — the context-threshold, turn-count, and
-//! clock concerns are already owned by `CompactionPolicy`, `/pursue`, and
-//! `/repeat` and are deliberately **not** re-exposed here. The capability a
+//! clock concerns are already owned by `CompactionPolicy` and `/repeat` and
+//! are deliberately **not** re-exposed here. The capability a
 //! hook has (block / inject / observe) is implicit in the event it fires on,
 //! matching Claude Code's model: a `PreToolUse` hook may deny, a `Stop` hook
 //! may force another turn, the rest only observe or inject context.

@@ -728,8 +728,10 @@ pub struct Config {
     /// active. `None` falls back to the provider's default model.
     #[serde(default)]
     pub default_model: Option<String>,
-    /// Favorite provider ids for quick access in the picker. Stored as a flat
-    /// list of canonical provider ids.
+    /// Favorite model ids for quick access in the Models picker (ADR-0046
+    /// moved favorite from provider-level to per-model). Stored as a flat list
+    /// of model wire ids; a starred daily-driver model sorts to the top of the
+    /// flat list wherever it is served.
     #[serde(default)]
     pub favorites: Vec<String>,
     /// User-defined providers that override built-ins or add new ones, each with

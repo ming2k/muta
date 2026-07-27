@@ -490,24 +490,6 @@ impl App {
     pub fn completions(&mut self) -> Vec<Completion> {
         let current = self.input.to_lowercase();
 
-        // Subcommand completion for /pursue
-        if let Some(after) = current.strip_prefix("/pursue ") {
-            return [
-                ("/pursue status", "Show the current pursuit"),
-                ("/pursue stop", "Stop the active pursuit"),
-                ("/pursue done", "Mark the pursuit completed"),
-                ("/pursue clear", "Remove the pursuit"),
-            ]
-            .iter()
-            .filter(|(cmd, _)| {
-                cmd.strip_prefix("/pursue ")
-                    .map(|sub| sub.starts_with(after))
-                    .unwrap_or(false)
-            })
-            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
-            .collect();
-        }
-
         if let Some(after) = current.strip_prefix("/permissions ") {
             return [(
                 "/permissions clear",

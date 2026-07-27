@@ -94,7 +94,7 @@ use crossterm::{
 };
 use neenee_core::{
     AgentRequest, AgentResponse, HarnessSnapshot, LoopStatus, Message, ParentStatus,
-    PermissionRequest, ProviderPickerSnapshot, Pursuit, Role, RoundEvent, SessionContextSnapshot,
+    PermissionRequest, ProviderPickerSnapshot, Role, RoundEvent, SessionContextSnapshot,
     SessionOverview, TodoList, UserQuestionRequest,
 };
 use neenee_tui_engine::{Backend, Terminal};
@@ -245,10 +245,16 @@ pub async fn run_tui(
     >::new()));
     let context_tokens_clone = context_tokens.clone();
 
+    // Per-session throughput summary for the most recent natural round, shown
+    // in the TokenReport modal as an honest tokens/sec.
+    let round_tps = Arc::new(Mutex::new(
+        HashMap::<String, neenee_core::RoundSummary>::new(),
+    ));
+    let round_tps_clone = round_tps.clone();
+
     let is_responding = Arc::new(AtomicBool::new(false));
     let ir_clone = is_responding.clone();
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
-        pursuit: None,
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
         unattended: false,
@@ -466,7 +472,11 @@ pub async fn run_tui(
                                 },
                             );
                         }
-                        RoundEvent::RoundCompleted => {
+                        RoundEvent::RoundCompleted(summary) => {
+                            round_tps_clone
+                                .lock()
+                                .await
+                                .insert(session_id.clone(), summary);
                             outbox_signals_clone
                                 .lock()
                                 .await
@@ -1075,33 +1085,6 @@ pub async fn run_tui(
                             }
                             finalize_streaming_reasoning(&mut msgs, duration_ms);
                         }
-                        RoundEvent::PursuitUpdated(pursuit) => {
-                            let prev = if !routes_to_side {
-                                harness_clone.lock().await.pursuit.clone()
-                            } else {
-                                None
-                            };
-                            if let Some(text) = describe_pursuit_change(prev.as_ref(), &pursuit) {
-                                let mut msgs = buf.write().await;
-                                push_local_notice(&mut msgs, NoticeSeverity::Info, text);
-                            }
-                            if !routes_to_side {
-                                harness_clone.lock().await.pursuit = Some(pursuit);
-                            }
-                        }
-                        RoundEvent::PursuitCleared => {
-                            // Non-gated mirror: null the snapshot's pursuit
-                            // field *without* flushing the activity cell. This
-                            // is the fix for the activity-bar-flicker bug —
-                            // `/pursue clear` used to refresh the field via a
-                            // spurious `HarnessState("idle")`, which the
-                            // HarnessState handler treats as a turn-end
-                            // signal and uses to clear the live activity
-                            // status, momentarily hiding the bar mid-turn.
-                            if !routes_to_side {
-                                harness_clone.lock().await.pursuit = None;
-                            }
-                        }
                         RoundEvent::TodosUpdated(list) => {
                             if !routes_to_side {
                                 *todos_clone.lock().await = Some(list);
@@ -1335,9 +1318,11 @@ pub async fn run_tui(
         hint_context_rect: None,
         token_ledger,
         context_tokens: None,
+        round_tps: None,
         token_report_scroll: 0,
         token_report_detail: false,
         todos_rect: None,
+        queue_rect: None,
         modal_rect: None,
         sticky_summary_line: None,
         pin_summary_line: None,
@@ -1369,7 +1354,6 @@ pub async fn run_tui(
         current_model: initial_model,
         cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         path_scan_cache: None,
-        current_pursuit: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
@@ -1381,6 +1365,8 @@ pub async fn run_tui(
         round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
+        queue_scroll: 0,
+        queue_modal_follow: true,
         help_scroll: 0,
         modal_keymap_open: false,
         pending_permission: None,
@@ -1475,6 +1461,7 @@ pub async fn run_tui(
             current_provider,
             current_model,
             context_tokens,
+            round_tps,
             harness,
             activity_status,
             pending_permission,
@@ -1626,22 +1613,6 @@ fn push_local_notice(
     text: impl Into<String>,
 ) {
     messages.push(TranscriptMessage::notice(severity, text));
-}
-
-/// Format an inline-transcript notice for a pursuit update, or `None` when the
-/// update carries nothing user-visible (a no-op re-broadcast of the same
-/// pursuit). The pursuit bar is gone from the footer; these notices are how pursuit
-/// changes now scroll with the transcript instead of living in a pinned bar.
-fn describe_pursuit_change(prev: Option<&Pursuit>, new: &Pursuit) -> Option<String> {
-    let summary = |prefix: &str| -> String { format!("{prefix} · {}", new.objective) };
-    if new.is_complete && prev.is_none_or(|p| !p.is_complete) {
-        return Some(summary("✓ pursuit complete"));
-    }
-    let prev = prev?;
-    if prev.objective != new.objective {
-        return Some(summary("pursue"));
-    }
-    None
 }
 
 /// Format a single inline-transcript notice for a task-list update. Task-list

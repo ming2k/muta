@@ -9,7 +9,7 @@ use super::common::{one_line, relative_time_compact, truncate_ellipsis};
 use crate::tui::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::tui::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
-    keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
+    keymap_page_footer_hints, keyvocab, modal_area, modal_frame, modal_header, render_body,
     render_modal_footer, render_modal_footer_with_more,
 };
 use crate::tui::view::Theme;
@@ -30,11 +30,11 @@ pub fn draw_sessions_modal(
     // Destructive delete: custom band 70 so it outlives plain secondaries
     // (it is a one-key destructive action the user must be able to find).
     let footer_hints: [FooterHint; 3] = [
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::primary("Enter", "open"),
-        FooterHint::always("Esc", "close"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::primary(keyvocab::ENTER, "open"),
+        FooterHint::always(keyvocab::ESC, "close"),
     ];
-    let extra: [FooterHintWithBand; 1] = [FooterHint::with_band("d", "delete", 70)];
+    let extra: [FooterHintWithBand; 1] = [FooterHint::with_band("D", "delete", 70)];
 
     if keymap_open {
         modal_header(frame, f.header, "Sessions · keybindings", theme);

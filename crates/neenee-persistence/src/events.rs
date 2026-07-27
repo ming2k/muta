@@ -10,8 +10,8 @@
 //! a monotonic sequence number, a wall-clock timestamp, and the event payload.
 
 use crate::fsutil;
-use crate::session::{ContextProjectionCheckpoint, PursuitCheckpoint};
-use neenee_core::{Message, Pursuit};
+use crate::session::ContextProjectionCheckpoint;
+use neenee_core::Message;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -38,10 +38,6 @@ pub enum SessionEvent {
     /// filesystem. Replayed by appending to `data.messages`; a `MessagesReplaced`
     /// later in the log supersedes it (snapshot semantics). See ADR-0035.
     MessagesAppended { messages: Vec<Message> },
-    /// The autonomous-loop checkpoint changed.
-    CheckpointSet {
-        checkpoint: Option<PursuitCheckpoint>,
-    },
     /// A model-context projection (tool-result pruning or summarizing compaction)
     /// archived originals and replaced the model-visible window. Aliases keep
     /// event logs written before the projection rename replayable.
@@ -70,17 +66,6 @@ pub enum SessionEvent {
     /// marks a user-set title (`/title <text>`) that AI generation must not
     /// overwrite; automatic and on-demand generation always set `manual = false`.
     TitleSet { title: Option<String>, manual: bool },
-    /// The per-session pursuit changed (ADR-0032). `pursuit = None` clears it.
-    /// Snapshot semantics, mirroring `TodosSet`: the full `Option<Pursuit>` is
-    /// stored on every change. Set by the `/pursue` slash command and the
-    /// harness completion path; read on resume to restore the active pursuit.
-    PursuitSet { pursuit: Option<Pursuit> },
-    /// The session-scoped stop-gate runtime view changed (ADR-0048 Phase 2).
-    /// `runtime = None` clears it. Snapshot semantics. Mirrors the armed flag
-    /// + iteration counter on `Agent::pursuit_state` so resume restores them.
-    PursuitRuntimeSet {
-        runtime: Option<crate::session::PursuitRuntime>,
-    },
     /// The session-level disabled-tool mask changed (ADR-0048 Phase 2).
     /// Snapshot semantics: the full set is stored on every change. Mirrors
     /// `Agent::disabled_tools` so a user toggle survives restart.

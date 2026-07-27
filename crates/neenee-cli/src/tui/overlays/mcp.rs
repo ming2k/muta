@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use super::common::{placeholder, truncate_ellipsis};
 use crate::tui::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::tui::components::modal::{ModalHeader, modal_body_width};
-use crate::tui::primitives::{ContentModalSpec, FooterHint};
+use crate::tui::primitives::{ContentModalSpec, FooterHint, keyvocab};
 use crate::tui::view::Theme;
 
 /// Draw the MCP manager modal: a centered, dismissable, selectable list of the
@@ -137,12 +137,12 @@ pub fn draw_mcp_modal(
             follow_selection,
             has_items: has_servers,
             item_footer_hints: &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("Space", "toggle"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
+                FooterHint::primary(keyvocab::SPACE, "toggle"),
                 FooterHint::primary("r", "reconnect"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ],
-            empty_footer_hints: &[FooterHint::always("Esc", "close")],
+            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
             extra_footer_hints: &[],
             keymap_open: false,
         },

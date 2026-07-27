@@ -15,7 +15,7 @@ use crate::tui::components::list::{SelectableListPage, draw_selectable_list_page
 use crate::tui::components::modal::{ModalHeader, modal_body_width};
 use crate::tui::components::options::{ChoiceTone, choice_style};
 use crate::tui::layout::Strategy;
-use crate::tui::primitives::{ContentModalSpec, FooterHint};
+use crate::tui::primitives::{ContentModalSpec, FooterHint, keyvocab};
 use crate::tui::view::Theme;
 
 /// One configurable category row in the config root modal.
@@ -136,11 +136,11 @@ pub fn draw_config_modal(
             follow_selection: true,
             has_items: !cats.is_empty(),
             item_footer_hints: &[
-                FooterHint::navigation("↑↓", "select"),
-                FooterHint::primary("Enter", "open"),
-                FooterHint::always("Esc", "close"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
+                FooterHint::primary(keyvocab::ENTER, "open"),
+                FooterHint::always(keyvocab::ESC, "close"),
             ],
-            empty_footer_hints: &[FooterHint::always("Esc", "close")],
+            empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
             extra_footer_hints: &[],
             keymap_open,
         },

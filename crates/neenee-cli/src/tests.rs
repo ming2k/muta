@@ -285,7 +285,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let session_id = session.id().await;
 
-    let completed = execute_round(
+    execute_round(
         RoundContext {
             agent,
             tx,
@@ -314,8 +314,6 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     )
     .await
     .unwrap();
-
-    assert!(!completed);
     assert!(
         session
             .model_window()
@@ -389,7 +387,7 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
     ));
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    let completed = execute_round(
+    execute_round(
         RoundContext {
             agent,
             tx,
@@ -418,8 +416,6 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
     )
     .await
     .unwrap();
-
-    assert!(!completed);
     assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
     assert!(
         session
@@ -463,7 +459,7 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
     ));
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    let completed = execute_round(
+    execute_round(
         RoundContext {
             agent,
             tx,
@@ -492,8 +488,6 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
     )
     .await
     .unwrap();
-
-    assert!(!completed);
     assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
     assert!(
         session

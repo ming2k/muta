@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dedicated todo bar.** The agent's live task list now has its own one-row
+  bar directly below the activity bar (and above the queue bar), showing
+  `todo · done/total · {current item}` with a `Ctrl+T expand` legend. It
+  replaces the `todos d/t` badge that used to ride on the activity bar, so
+  the activity bar is now purely transient (hidden while idle) and the task
+  list stays glanceable whenever it is non-empty. Clicking the bar or
+  pressing `Ctrl+T` opens the Activity modal on the Todos tab, as before.
+
+- **Unified key-display vocabulary.** A physical key now has two canonical
+  strings, both derived from one token table so they can never drift:
+  `Key::chord()` — the compact lowercase form (`ctrl+t`, `enter`, `esc`, `↑`)
+  used by Help prose rows — and `Key::display()` — the capitalized form
+  (`Ctrl+T`, `Enter`, `Esc`, `↑`) used by footer hint strips, the activity-bar
+  interrupt hint, and in-modal legends. A new `keyvocab` module owns the
+  repeated affordance glyphs (`keyvocab::ARROWS_UD`, `keyvocab::SPACE`,
+  `keyvocab::SHIFT_TAB`, …) plus the single-key display names
+  (`keyvocab::ESC`, …) as `&'static str` constants, so every footer literal
+  and every legend now references the vocabulary instead of typing the glyph
+  inline. Side effect: the activity bar's idle hint and the queue legend now
+  render in the same capitalized case as the footers (`ctrl+t` → `Ctrl+T`,
+  `esc`/`tab`/`F2` → `Esc`/`Tab`/`F2`), so every surface finally agrees on how
+  a key is spelled. The `FooterHint::key` field, the Help modal rows, and the
+  activity-bar keycaps all read from the same place.
+
 - **Standalone `neenee-server` binary and `neenee --attach` co-driving
   (ADR-0081).** A new headless session host (`neenee-server --project <path>
   [--session <id>] [--port <n>] [--public]`) hosts one session and serves it

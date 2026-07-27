@@ -10,7 +10,9 @@ use crate::tui::components::modal::{
 };
 use crate::tui::components::options::{ChoiceTone, choice_style};
 use crate::tui::components::scroll::ScrollBody;
-use crate::tui::primitives::{ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN};
+use crate::tui::primitives::{
+    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, keyvocab,
+};
 use crate::tui::view::{COLOR_SCHEMES, Theme};
 
 pub const ROW_COUNT: usize = COLOR_SCHEMES.len();
@@ -108,9 +110,9 @@ pub fn draw_config_theme_modal(
                 wrap: false,
             },
             footer_hints: &[
-                FooterHint::navigation("↑↓", "select"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary("Enter/Space", "apply or edit"),
-                FooterHint::always("Esc", "back"),
+                FooterHint::always(keyvocab::ESC, "back"),
             ],
             extra_footer_hints: &[],
             keymap_open,

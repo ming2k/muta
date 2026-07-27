@@ -2,15 +2,12 @@
 //!
 //! [`TokenUsage`] is reported by every provider turn and consumed by the core
 //! token ledger, the LLM client, the CLI usage meters, and the agent loop.
-//! It is not pursuit-specific (pursuit budgets book against it, but so does
-//! everything else), so it lives here rather than in [`crate::pursuit`].
 
 use serde::{Deserialize, Serialize};
 
 /// Token usage reported by a single turn.
 ///
-/// Per-turn telemetry. Pursuit accounting aggregates deltas from this value at
-/// stop-gate boundaries (ADR-0083); the value itself remains generic.
+/// Per-turn telemetry.
 ///
 /// `cache_creation_input_tokens` / `cache_read_input_tokens` carry prompt-cache
 /// counts. Anthropic reports both: its `input_tokens` is ONLY the uncached

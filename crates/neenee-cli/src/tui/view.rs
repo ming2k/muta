@@ -4,8 +4,10 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::tui::chrome::{HintBarView, draw_completion_menu, draw_hint_bar};
-pub use crate::tui::chrome::{draw_activity_bar, draw_state_bar};
+pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
+pub use crate::tui::chrome::{
+    HintBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_hint_bar, draw_queue_bar,
+};
 pub use crate::tui::composer::{
     INPUT_MSG_IDX, cursor_screen_pos, draw_composer, draw_composer_highlighted,
 };
@@ -15,9 +17,9 @@ pub(crate) use crate::tui::design::{
     BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
     COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
     COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS,
-    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS,
-    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATE_BAR_ROWS,
-    STATUS_BAR_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS,
+    TODO_BAR_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
     TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use crate::tui::disclosure::{StickyStep, draw_sticky_summary_if_needed};
@@ -34,13 +36,14 @@ use crate::tui::markdown_table::{build_table_render, shrink_column_widths};
 pub use crate::tui::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 pub use crate::tui::overlays::{
     ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, HelpBinding,
-    draw_activity_modal, draw_armed_toast, draw_config_layout_modal, draw_config_modal,
-    draw_config_theme_custom_modal, draw_config_theme_modal, draw_connections_modal,
-    draw_copy_toast, draw_custom_provider_editor, draw_help_modal, draw_history_modal,
-    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_oauth_pending,
-    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
-    draw_provider_template_chooser, draw_question_modal, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal, token_report_round_count,
+    QueueModalView, draw_activity_modal, draw_armed_toast, draw_config_layout_modal,
+    draw_config_modal, draw_config_theme_custom_modal, draw_config_theme_modal,
+    draw_connections_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
+    draw_history_modal, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
+    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
+    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
+    draw_queue_modal, draw_sessions_modal, draw_skills_modal, draw_token_report_modal,
+    draw_tools_modal, token_report_round_count,
 };
 use crate::tui::page_header::{PageHeader, draw_page_header};
 pub use crate::tui::primitives::recess_backdrop;
@@ -157,6 +160,11 @@ pub struct TranscriptView<'a> {
     pub byte_cursor: usize,
     /// When true, the hint bar and input box are hidden (overlay modal open).
     pub chrome_hidden: bool,
+    /// The persistent two-row outbox summary pinned below the transcript gap.
+    /// Its `items` slice is the viewed session's queued dispatches; an empty
+    /// slice renders a muted empty state so the bar is always present (the
+    /// permanent home for queue affordances).
+    pub queue_bar: QueueBarView<'a>,
     /// When set, the view is zoomed into an envoy task: a contextual page
     /// header is rendered and `messages` is the focused task's child stream.
     pub envoy_bar: Option<EnvoyBarInfo>,
@@ -164,11 +172,9 @@ pub struct TranscriptView<'a> {
     /// contextual page header is rendered with the coarse primary-session
     /// status and the return action.
     pub side_banner: Option<neenee_core::ParentStatus>,
-    /// Active pursuit, if any. Surfaced on the activity bar as a `⟴ <objective>`
-    /// badge so the user can tell at a glance the turn is part of a larger goal.
-    pub pursuit: Option<&'a neenee_core::Pursuit>,
-    /// Live unified task list, if any. Surfaced on the activity bar as
-    /// `plan d/t`. The full per-item breakdown lives in the Activity modal.
+    /// Live unified task list, if any. Surfaced on the todo bar (a one-row
+    /// summary: tag · progress · current item); the full per-item breakdown
+    /// lives in the Activity modal.
     pub todos: Option<&'a neenee_core::TodoList>,
     /// Session-review alert (ADR-0016), or empty when inactive. While
     /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
@@ -177,9 +183,6 @@ pub struct TranscriptView<'a> {
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,
-    /// Session-state flag rendered as `unattended` on the state bar directly
-    /// below the input box (the row appears only while on).
-    pub unattended: bool,
     /// Message index of the step (tool step or reasoning trace) whose header
     /// currently rests under the mouse pointer (inline or sticky pinned), so
     /// the next draw lights it up to the intermediate hover tone as a click
@@ -324,10 +327,14 @@ pub struct TranscriptRender {
     /// it open the Activity modal. `None` when no activity bar is shown (idle,
     /// streaming, envoy view, or chrome hidden).
     pub activity_rect: Option<Rect>,
-    /// Screen rect of the `todos d/t` segment on the activity bar, so a click
+    /// Screen rect of the todo bar (the one-row task-list summary), so a click
     /// on it opens the Activity modal directly on the Todos section. `None`
     /// when no todos are shown (empty task list or bar hidden).
     pub todos_rect: Option<Rect>,
+    /// Screen rect of the persistent queue bar (the two-row outbox summary),
+    /// so a click anywhere on it expands the full Queue modal. `None` when the
+    /// bar is hidden (chrome hidden or envoy zoom).
+    pub queue_rect: Option<Rect>,
     /// Total height (in lines) of the rendered message stream, ignoring the
     /// viewport clip. Used by the app loop to pin the view to the bottom.
     pub content_lines: usize,
@@ -366,13 +373,12 @@ pub fn draw_transcript(
         input,
         byte_cursor,
         chrome_hidden,
+        queue_bar,
         envoy_bar,
         side_banner,
-        pursuit,
         todos,
         review_alert,
         round_started_at,
-        unattended,
         hovered_step,
         focused_target,
         logo,
@@ -410,6 +416,7 @@ pub fn draw_transcript(
             hint_rect: Rect::default(),
             activity_rect: None,
             todos_rect: None,
+            queue_rect: None,
             content_lines: 0,
             view_height: 0,
             sticky: None,
@@ -443,22 +450,30 @@ pub fn draw_transcript(
     // one where the breathing dot's liveness signal matters most — and hidden
     // only when the harness is idle, so the row returns to the transcript.
     let status_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
-    // The persistent todos badge (right-pinned) keeps the activity row alive
-    // even when the harness is idle, so an active task list is always visible
-    // — not only while a turn is running.
-    let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
-    let activity_row_needed = status_active || (has_visible_todos && !chrome_hidden && !in_envoy);
+    // The activity bar is purely transient now: it shows only while a round is
+    // active and hides when idle, so the row returns to the transcript (the
+    // persistent task-list summary has its own bar below).
+    let activity_row_needed = status_active;
     let status_height: u16 = if activity_row_needed {
         STATUS_BAR_ROWS
     } else {
         0
     };
-    // The state bar owns persistent session-state indicators (unattended
-    // today). It gets its own row — never shared with transient activity —
-    // and appears exactly when at least one indicator is active, so an
-    // ordinary session pays zero vertical space for it.
-    let state_row_needed = unattended && !chrome_hidden && !in_envoy;
-    let state_height: u16 = if state_row_needed { STATE_BAR_ROWS } else { 0 };
+
+    // The todo bar surfaces the live task list — a `todo` tag, the done/total
+    // progress, and a preview of the current item. It is hidden only while an
+    // overlay owns the chrome, inside an envoy zoom, or when the list is empty.
+    let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
+    let todo_row_needed = !chrome_hidden && !in_envoy && has_visible_todos;
+    let todo_height: u16 = if todo_row_needed { TODO_BAR_ROWS } else { 0 };
+
+    // The queue bar surfaces pending outbox messages. It is hidden while the
+    // viewed session's queue is empty (the common idle case) so an ordinary
+    // session reclaims the two rows; it appears the moment a message is staged
+    // and stays up until the outbox drains, so the user always has a glanceable
+    // surface while there is pending work.
+    let queue_row_needed = !chrome_hidden && !in_envoy && !queue_bar.items.is_empty();
+    let queue_height: u16 = if queue_row_needed { QUEUE_BAR_ROWS } else { 0 };
 
     // The input box grows with its content: the typed text wraps onto new
     // lines and the box expands to fit, up to roughly half the terminal so the
@@ -489,12 +504,13 @@ pub fn draw_transcript(
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        // Order, top → bottom: gap, activity bar, input box, state bar, hint
-        // bar. The activity bar leads (transient liveness + todos); the input
-        // box follows; the persistent state bar (`unattended`) sits directly
-        // under the input so it reads as an attribute of the composer area;
-        // the hint bar caps the footer.
-        FOOTER_TOP_GAP_ROWS + status_height + input_box_height + state_height + hint_height
+        // Order, top → bottom: gap, activity bar, todo bar, queue bar, input
+        // box, hint bar. The activity bar leads (transient liveness); the
+        // persistent todo bar follows (the agent's live task list); then the
+        // queue bar (pending outbox); the input box; and the hint bar caps the
+        // footer (carrying the `unattended` flag that used to have its own row).
+        FOOTER_TOP_GAP_ROWS + status_height + todo_height + queue_height + input_box_height
+            + hint_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -649,73 +665,77 @@ pub fn draw_transcript(
 
     let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
 
-    // The transient activity bar sits directly above the input box. It stays
-    // up for the entire active round lifecycle (queued → responding → tool
-    // work → finalizing), including the streaming phase, and hides only when
-    // idle. Keeping it up during "responding" avoids a layout shift at the
-    // stream boundary and sustains the breathing-dot liveness anchor
-    // (ADR-0008) through the longest phase.
-    // Returns its rect so the event loop can hit-test clicks → Activity modal.
-    // `draw_activity_bar` returns an `ActivityBarHit` carrying both the full
-    // bar rect (→ `activity_rect`) and the `todos d/t` segment rect
-    // (→ `todos_rect`, so a click there opens the Todos section directly).
-    let (activity_rect, todos_rect) = if activity_row_needed {
+    // The transient activity bar leads the footer stack. It stays up for the
+    // entire active round lifecycle (queued → responding → tool work →
+    // finalizing), including the streaming phase, and hides only when idle.
+    // Keeping it up during "responding" avoids a layout shift at the stream
+    // boundary and sustains the breathing-dot liveness anchor (ADR-0008)
+    // through the longest phase. Returns its rect so the event loop can
+    // hit-test clicks → Activity modal.
+    let activity_rect = if activity_row_needed {
         draw_activity_bar(
             frame,
             Rect::new(footer_x, status_y, footer_w, STATUS_BAR_ROWS),
-            pursuit,
-            todos,
             &review_alert,
             round_started_at,
             activity,
             spinner_phase,
             theme,
         )
-        .map(|hit| (Some(hit.bar_rect), hit.todos_rect))
-        .unwrap_or((None, None))
     } else {
-        (None, None)
+        None
     };
 
-    // The input box sits directly below the activity bar (when active), or at
-    // the top of the footer otherwise.
+    // The persistent todo bar sits directly below the activity bar (or below
+    // the gap when the activity bar is idle). It surfaces the live task list —
+    // a `todo` tag, the done/total progress, and a preview of the current
+    // item — and is the click target that opens the Activity modal on the
+    // Todos section. Returns its rect for the event loop to hit-test.
+    let todos_rect = if todo_row_needed {
+        let rect = Rect::new(footer_x, status_y + status_height, footer_w, TODO_BAR_ROWS);
+        todos.map(|list| draw_todo_bar(frame, rect, list, theme))
+    } else {
+        None
+    };
+
+    // The persistent queue bar sits directly below the todo bar. It is a
+    // stable two-row outbox summary so pending messages never have to be
+    // inferred from the hint bar. The whole bar is the click target that
+    // expands the full Queue modal. Returns its rect for the event loop to
+    // hit-test.
+    let queue_rect = if queue_row_needed {
+        let rect = Rect::new(
+            footer_x,
+            status_y + status_height + todo_height,
+            footer_w,
+            QUEUE_BAR_ROWS,
+        );
+        Some(draw_queue_bar(frame, rect, queue_bar, theme))
+    } else {
+        None
+    };
+
+    // The input box sits directly below the queue bar.
     let input_rect = Rect::new(
         footer_x,
-        status_y + status_height,
+        status_y + status_height + todo_height + queue_height,
         footer_w,
         input_box_height,
     );
 
-    // The persistent state bar sits directly below the input box. It hosts
-    // session-state flags (`unattended` today; workspace and other ambient
-    // state later) that the activity bar and hint bar no longer have to
-    // carry, and renders only while at least one flag is active.
-    if state_row_needed {
-        draw_state_bar(
-            frame,
-            Rect::new(
-                footer_x,
-                status_y + status_height + input_box_height,
-                footer_w,
-                STATE_BAR_ROWS,
-            ),
-            unattended,
-            theme,
-        );
-    }
-
-    // The hint bar caps the footer, carrying the input action plus
-    // model/context info. Its rect is computed even though its draw call is
-    // delegated to the app loop (which owns the masked input state).
+    // The hint bar caps the footer, carrying the input action plus ambient
+    // model/context info (and the `unattended` flag, folded in from the old
+    // state bar). Its rect is computed even though its draw call is delegated
+    // to the app loop (which owns the masked input state).
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + status_height + input_box_height + state_height,
+            status_y + status_height + todo_height + queue_height + input_box_height,
             footer_w,
             hint_height,
         )
     } else {
-        Rect::new(0, 0, 0, 0)
+        Rect::default()
     };
 
     // Sticky pinned summary: if an expanded step's body covers the top of the
@@ -728,6 +748,7 @@ pub fn draw_transcript(
         hint_rect,
         activity_rect,
         todos_rect,
+        queue_rect,
         content_lines,
         view_height: transcript_area.height,
         sticky: sticky_info,
@@ -777,13 +798,15 @@ mod tests {
                         input: "hello",
                         byte_cursor: 5,
                         chrome_hidden: false,
+                        queue_bar: QueueBarView {
+                            items: &[],
+                            paused: false,
+                        },
                         envoy_bar: None,
                         side_banner: None,
-                        pursuit: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
-                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -810,13 +833,6 @@ mod tests {
                     f,
                     &mut layout_map,
                     &[
-                        crate::tui::completion::Completion {
-                            label: "/pursue".to_string(),
-                            description: "Pursue a pursuit".to_string(),
-                            replace_start: 0,
-                            replace_end: 0,
-                            kind: crate::tui::completion::CompletionItemKind::Slash,
-                        },
                         crate::tui::completion::Completion {
                             label: "/clear".to_string(),
                             description: "Clear".to_string(),
@@ -855,7 +871,6 @@ mod tests {
                 f,
                 &mut LayoutMap::new(),
                 &[],
-                false,
                 "mock",
                 "mock-model",
                 0,
@@ -1066,13 +1081,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -1102,17 +1119,19 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: Some(EnvoyBarInfo {
                         label: "explore the codebase".to_string(),
                         index: 1,
                         total: 1,
                     }),
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -1183,13 +1202,15 @@ mod tests {
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
+                        queue_bar: QueueBarView {
+                            items: &[],
+                            paused: false,
+                        },
                         envoy_bar: None,
                         side_banner: None,
-                        pursuit: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
-                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -1284,13 +1305,15 @@ mod tests {
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
+                        queue_bar: QueueBarView {
+                            items: &[],
+                            paused: false,
+                        },
                         envoy_bar: None,
                         side_banner: None,
-                        pursuit: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
-                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -1498,13 +1521,15 @@ mod tests {
                         input,
                         byte_cursor: input.len(),
                         chrome_hidden: false,
+                        queue_bar: QueueBarView {
+                            items: &[],
+                            paused: false,
+                        },
                         envoy_bar: None,
                         side_banner: None,
-                        pursuit: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
-                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -1563,13 +1588,15 @@ mod tests {
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
+                        queue_bar: QueueBarView {
+                            items: &[],
+                            paused: false,
+                        },
                         envoy_bar: None,
                         side_banner: None,
-                        pursuit: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
-                        unattended: false,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -1586,8 +1613,17 @@ mod tests {
                 transcript_height = rendered.view_height;
             });
 
-            assert_eq!(footer_anchor_y, 1 + transcript_height + FOOTER_TOP_GAP_ROWS);
-            let separator_y = footer_anchor_y - FOOTER_TOP_GAP_ROWS;
+            // The footer always begins after a permanent one-row gap below the
+            // transcript. The queue bar in this fixture is empty, so it is
+            // hidden; the anchor is whichever region leads the footer — the
+            // activity bar when responding, the input box when idle — both of
+            // which sit directly under the gap.
+            let expected_anchor = 1 + transcript_height + FOOTER_TOP_GAP_ROWS;
+            assert_eq!(footer_anchor_y, expected_anchor);
+            // The permanent one-row gap sits directly below the transcript,
+            // above whichever footer region leads (activity bar when
+            // responding, queue bar when idle).
+            let separator_y = 1 + transcript_height;
             let width = terminal.buffer().area().width as usize;
             let row_start = separator_y as usize * width;
             let separator = &terminal.buffer().content[row_start..row_start + width];
@@ -1627,13 +1663,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -1783,7 +1821,7 @@ mod tests {
     fn draw_composer_highlighted_accents_only_the_command_token() {
         let theme = Theme::default();
         let mut terminal = neenee_tui_engine::TestTerminal::new(30, 4);
-        let input = "/pursue keep going";
+        let input = "/repeat every minute";
         terminal.draw(|f| {
             draw_composer_highlighted(
                 f,
@@ -1797,14 +1835,14 @@ mod tests {
                 false,
                 &mut 0,
                 &SelectionState::None,
-                "/pursue".len(),
+                "/repeat".len(),
             );
         });
         let buf = terminal.buffer();
         let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
         let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
-        // Every glyph of `/pursue` is bold + brand-colored on the panel bg.
-        for (i, ch) in "/pursue".chars().enumerate() {
+        // Every glyph of `/repeat` is bold + brand-colored on the panel bg.
+        for (i, ch) in "/repeat".chars().enumerate() {
             let cell = buf.get(text_x + i as u16, text_y).expect("command cell");
             assert_eq!(cell.symbol(), ch.to_string());
             assert_eq!(cell.fg, theme.brand(), "command glyph {ch} lost the accent");
@@ -1813,10 +1851,10 @@ mod tests {
                 "command glyph {ch} lost bold"
             );
         }
-        // The argument tail (`keep going`) keeps the default text color.
-        let arg_start = text_x + "/pursue ".len() as u16;
+        // The argument tail (`every minute`) keeps the default text color.
+        let arg_start = text_x + "/repeat ".len() as u16;
         let cell = buf.get(arg_start, text_y).expect("argument cell");
-        assert_eq!(cell.symbol(), "k");
+        assert_eq!(cell.symbol(), "e");
         assert_eq!(cell.fg, theme.fg(), "argument text must not be accented");
     }
 
@@ -2230,13 +2268,15 @@ mod tests {
                     input: &long_input,
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -2375,13 +2415,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -2454,13 +2496,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -2903,13 +2947,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -2959,13 +3005,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -3024,13 +3072,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: Some(&logo),
@@ -3076,13 +3126,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -3153,13 +3205,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -3226,13 +3280,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,
@@ -3301,13 +3357,15 @@ mod tests {
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                    },
                     envoy_bar: None,
                     side_banner: None,
-                    pursuit: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
-                    unattended: false,
                     hovered_step: None,
                     focused_target: None,
                     logo: None,

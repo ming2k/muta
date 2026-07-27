@@ -10,7 +10,7 @@
 //! owns request preparation; only provider-supplied prompt hints cross the
 //! lower-layer contract boundary.
 
-use neenee_core::{InjectionKind, InjectionOrigin, Message, Pursuit, Role};
+use neenee_core::{InjectionKind, InjectionOrigin, Message, Role};
 
 /// Read-only view of the live turn state a section may draw on to render.
 ///
@@ -23,8 +23,6 @@ pub struct SystemPromptContext {
     /// The composed identity preamble sentence (name/mission/persona), empty
     /// for tests / when no identity is set.
     pub identity_preamble: String,
-    /// The active pursuit, if any.
-    pub pursuit: Option<Pursuit>,
     /// Names of the tools admitted this turn (e.g. `["ask_user", ...]`).
     pub tool_names: Vec<String>,
     /// Model-specific guidance from the resolved model. Empty for all
@@ -45,7 +43,7 @@ pub struct SystemPromptContext {
 
 impl SystemPromptContext {
     /// An all-empty context for registry-mechanics tests and for turns that
-    /// genuinely carry no identity / pursuit / tools.
+    /// genuinely carry no identity / tools.
     pub fn empty() -> Self {
         Self::default()
     }

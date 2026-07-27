@@ -3,8 +3,7 @@
 //! `neenee-core` holds the pure domain (types & traits), zero I/O. This
 //! crate sits one layer above it: the durable state and configuration a
 //! frontend needs to actually run a session — config loading, path
-//! resolution, the event-sourced session store (which carries the pursuit
-//! primitive per ADR-0032), blob storage, the embedding index, the
+//! resolution, the event-sourced session store, blob storage, the embedding index, the
 //! per-project advisory lock, model-usage telemetry, and the SQLite-backed
 //! repeat-cron (`repeat.db`) store. The repeat store lived in `neenee-core`
 //! before the ADR-0005 "zero-I/O core" boundary was enforced; it moved here

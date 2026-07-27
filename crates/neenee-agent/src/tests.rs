@@ -310,14 +310,6 @@ fn static_tool_identity_shadows_a_dynamic_collision() {
     assert_ne!(todos[0].description(), "caller-owned shadow");
 }
 
-fn active_pursuit(objective: &str) -> Pursuit {
-    Pursuit {
-        objective: objective.to_string(),
-        is_complete: false,
-        ..Default::default()
-    }
-}
-
 fn queued_user(id: &str, text: &str) -> neenee_core::QueuedUserInput {
     neenee_core::QueuedUserInput {
         id: id.to_string(),
@@ -372,20 +364,6 @@ async fn queued_user_input_is_admitted_as_visible_user_steer() {
                 .as_ref()
                 .is_some_and(|origin| origin.kind == InjectionKind::UserSteer)
     }));
-}
-
-#[test]
-fn pursuit_is_injected_into_system_prompt() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("ship the harness"));
-
-    // Drive the real placement path: rebuild the head system message from
-    // live agent state and read it back off the message list (ADR-0039).
-    let mut messages: Vec<Message> = Vec::new();
-    agent.prepare_request_messages_debug(&mut messages);
-    let prompt = messages[0].content.clone();
-
-    assert!(prompt.contains("ship the harness"));
 }
 
 #[test]
@@ -454,33 +432,29 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
 
 /// Golden layout test for ADR-0039 stage 2: the registry-assembled system
 /// message must reproduce the legacy `parts.join("\n")` layout byte-for-byte
-/// for a representative state (identity + pursuit set, no skills). The
-/// always-on conciseness and persistence sections compose in
-/// unconditionally. Sections that need a gap carry their own leading `\n`,
-/// so a single-`\n` join yields a stable, readable layout.
+/// for a representative state (identity set, no skills). The always-on
+/// conciseness and persistence sections compose in unconditionally. Sections
+/// that need a gap carry their own leading `\n`, so a single-`\n` join yields a
+/// stable, readable layout.
 #[test]
 fn system_prompt_registry_reproduces_legacy_layout() {
     let mut agent = agent();
     // The `agent()` helper ships an empty identity; give it one so the
     // preamble section is active and exercises the full layout.
     agent.identity = crate::AgentIdentity::new("neenee", "an expert AI coding assistant");
-    agent.set_pursuit(active_pursuit("ship the harness"));
 
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
 
-    // preamble \n\n persistence \n\n pursuit.
+    // preamble \n\n persistence.
     let expected = "You are neenee, an expert AI coding assistant.\n\
      \n\
      See the task through to a real result in this round. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \
      If a tool call fails or you hit a blocker, try to resolve it yourself before \
      yielding; only hand back to the user when the work is actually done or you \
-     genuinely need their input.\n\
-     \n\
-     Active harness pursuit (active):\n\
-     ship the harness";
+     genuinely need their input.";
     assert_eq!(
         prompt, expected,
         "registry output must match the composed layout"
@@ -499,177 +473,6 @@ fn retry_metadata_is_not_exposed_as_public_error_text() {
     let encoded = retryable_error("rate limited", Some(500));
     assert_eq!(public_error_message(&encoded), "rate limited");
     assert_eq!(public_error_message("plain"), "plain");
-}
-
-#[test]
-fn pursuit_lifecycle_is_explicit() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("verify behavior"));
-    assert!(!agent.get_pursuit().unwrap().is_complete);
-
-    let mut completed = active_pursuit("verify behavior");
-    completed.is_complete = true;
-    agent.set_pursuit(completed);
-    assert!(agent.get_pursuit().unwrap().is_complete);
-
-    agent.clear_pursuit();
-    assert_eq!(agent.get_pursuit(), None);
-}
-
-// ── Pursuit stop-gate ──────────────────────────────────────────────────
-
-#[test]
-fn pursuit_gate_is_inert_until_armed() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("ship"));
-    let resp = Message::new(Role::Assistant, "working".to_string());
-    assert!(!agent.is_pursuit_armed());
-    assert!(agent.pursuit_continuation(&resp).is_none());
-}
-
-#[test]
-fn pursuit_gate_returns_continuation_when_armed_and_active() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("ship the feature"));
-    agent.arm_pursuit();
-    assert!(agent.is_pursuit_armed());
-    assert_eq!(agent.pursuit_iterations(), 0);
-
-    let resp = Message::new(Role::Assistant, "I will keep working".to_string());
-    let prompt = agent
-        .pursuit_continuation(&resp)
-        .expect("armed + active pursuit + no marker => continue");
-    assert!(prompt.contains("ship the feature"));
-    // The predicate does not bump the counter; the turn loop does, on consume.
-    assert_eq!(agent.pursuit_iterations(), 0);
-}
-
-#[test]
-fn pursuit_gate_lets_round_end_on_completion_marker() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("ship"));
-    agent.arm_pursuit();
-    let resp = Message::new(
-        Role::Assistant,
-        format!("all done {}", crate::PURSUIT_COMPLETE_MARKER),
-    );
-    assert!(agent.pursuit_continuation(&resp).is_none());
-}
-
-#[test]
-fn pursuit_gate_lets_round_end_without_active_pursuit() {
-    let agent = agent();
-    agent.arm_pursuit();
-    let resp = Message::new(Role::Assistant, "working".to_string());
-    assert!(agent.pursuit_continuation(&resp).is_none());
-}
-
-#[test]
-fn pursuit_gate_lets_round_end_when_pursuit_already_complete() {
-    let agent = agent();
-    let mut done = active_pursuit("ship");
-    done.is_complete = true;
-    agent.set_pursuit(done);
-    agent.arm_pursuit();
-    let resp = Message::new(Role::Assistant, "working".to_string());
-    assert!(agent.pursuit_continuation(&resp).is_none());
-}
-
-#[tokio::test]
-async fn pursuit_pass_budget_stops_on_the_exact_boundary() {
-    let agent = agent();
-    let mut pursuit = active_pursuit("ship");
-    pursuit.budget = Some(neenee_core::PursuitBudget {
-        max_passes: Some(2),
-        ..Default::default()
-    });
-    agent.set_pursuit(pursuit);
-    agent.arm_pursuit();
-    let mut messages = vec![Message::new(Role::User, "start")];
-
-    let outcome = agent
-        .run_with_events(&mut messages, &CancellationToken::new(), |_| {})
-        .await
-        .expect("budget stop is a normal round outcome");
-
-    assert_eq!(outcome.message.content, "done");
-    assert_eq!(agent.pursuit_stats().passes, 2);
-    assert!(!agent.is_pursuit_armed());
-    assert_eq!(
-        agent.get_pursuit().unwrap().terminal_reason.as_deref(),
-        Some("pursuit pass budget reached (2/2)")
-    );
-}
-
-#[tokio::test]
-async fn superseding_owner_settles_and_persists_the_pursuit_attempt() {
-    let directory =
-        std::env::temp_dir().join(format!("neenee-pursuit-supersede-{}", uuid::Uuid::new_v4()));
-    let store = neenee_persistence::session::SessionStore::for_path(directory.join("session.json"));
-    let agent = agent();
-    let pursuit = active_pursuit("ship");
-    store.set_pursuit(Some(pursuit.clone())).await.unwrap();
-    store
-        .set_pursuit_runtime(Some(neenee_persistence::session::PursuitRuntime {
-            armed: true,
-            iterations: 3,
-            passes: 3,
-            tokens: 12_000,
-            wall_clock_ms: 4_000,
-        }))
-        .await
-        .unwrap();
-    crate::orchestration::restore_agent_pursuit(&agent, &store).await;
-    assert!(agent.is_pursuit_armed());
-    assert_eq!(agent.pursuit_iterations(), 3);
-    assert_eq!(agent.pursuit_stats().tokens, 12_000);
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-
-    assert!(
-        crate::orchestration::stop_superseded_pursuit(
-            &agent,
-            &store,
-            &tx,
-            "session",
-            "superseded by a new round",
-        )
-        .await
-    );
-
-    assert!(!agent.is_pursuit_armed());
-    assert_eq!(
-        store.pursuit().await.unwrap().terminal_reason.as_deref(),
-        Some("superseded by a new round")
-    );
-    let checkpoint = store.checkpoint().await.unwrap();
-    assert_eq!(
-        checkpoint.status,
-        neenee_persistence::session::PursuitCheckpointStatus::Interrupted
-    );
-    assert_eq!(checkpoint.iteration, 4);
-    assert_eq!(
-        checkpoint.max_iterations,
-        crate::MAX_PURSUIT_ITERATIONS as usize
-    );
-    let runtime = store.pursuit_runtime().await.unwrap();
-    assert!(!runtime.armed);
-    assert_eq!(runtime.iterations, 3);
-    assert_eq!(runtime.passes, 3);
-    assert_eq!(runtime.tokens, 12_000);
-    assert_eq!(runtime.wall_clock_ms, 4_000);
-
-    let _ = std::fs::remove_dir_all(directory);
-}
-
-#[test]
-fn disarm_pursuit_turns_the_gate_off() {
-    let agent = agent();
-    agent.set_pursuit(active_pursuit("ship"));
-    agent.arm_pursuit();
-    let resp = Message::new(Role::Assistant, "working".to_string());
-    assert!(agent.pursuit_continuation(&resp).is_some());
-    agent.disarm_pursuit();
-    assert!(agent.pursuit_continuation(&resp).is_none());
 }
 
 #[tokio::test]
@@ -1631,7 +1434,6 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::ToolCancelled { name, .. } => {
                 format!("tool-cancelled {name}")
             }
-            AgentEvent::PursuitUpdated(_) => "pursuit-updated".to_string(),
             AgentEvent::UnattendedChanged(enabled) => format!("unattended {enabled}"),
             AgentEvent::SessionReview { alert } => {
                 format!("session-review alert={alert:?}")

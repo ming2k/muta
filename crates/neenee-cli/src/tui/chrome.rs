@@ -1,9 +1,9 @@
-//! Transient chrome around the input box: the activity bar with an
-//! animated breathing-dot indicator shown above the input, the completion menu
-//! anchored above the input, and the persistent hint bar pinned below the
-//! input. The activity bar is also the click target that opens the Activity
-//! modal (pursuit + plan + live activity), replacing the old always-pinned pursuit
-//! bar and task panel.
+//! Transient chrome around the input box: the activity bar with an animated
+//! breathing-dot indicator, the one-row todo bar that surfaces the live task
+//! list, the completion menu anchored above the input, and the persistent hint
+//! bar pinned below the input. The activity bar (transient liveness) and the
+//! todo bar (the agent's live task list) are the click targets that open the
+//! Activity modal.
 
 use neenee_tui_engine::{
     Block as RtBlock, Clear, Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style,
@@ -15,7 +15,9 @@ use crate::tui::model::document::TranscriptMessage;
 use crate::tui::model::layout::LayoutMap;
 
 use super::Theme;
+use super::components::keycap::keycap_span;
 use super::design::{HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_SEGMENT_GAP};
+use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
 
 /// Number of distinct luminance steps in one breathing cycle. At the 100ms
@@ -99,336 +101,298 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
         .collect()
 }
 
-/// Hit-test information returned by [`draw_activity_bar`]. Carries the
-/// screen rect of the full bar plus an optional sub-rect covering the
-/// `todos d/t` segment so the event loop can route a click on the todos
-/// badge directly to the Todos section of the Activity modal.
-pub struct ActivityBarHit {
-    /// The full bar rect (click → Activity modal, Activity section).
-    pub bar_rect: Rect,
-    /// The `todos d/t` badge sub-rect (click → Activity modal, Todos section).
-    /// `None` when no todos are shown (empty task list).
-    pub todos_rect: Option<Rect>,
-}
-
-/// Draw the transient activity bar that sits directly above the input box.
+/// Draw the transient activity bar that sits directly above the todo bar.
 /// Replaces the old inline `┃ neenee ⟳ <status>` indicator: the brand prefix
 /// is dropped (the header already shows it) and the static `⟳` glyph is
 /// replaced by a breathing-dot indicator so the harness never looks frozen.
 ///
 /// Layout:
 /// ```text
-/// active:  <spinner> <status> (<elapsed> · Esc Esc to interrupt) [· » <pursuit>] [⚠ <alert>]      todos d/t
-/// idle:   ready                                                                     todos d/t
+/// <spinner> <status> (<elapsed> · Esc Esc to interrupt) [· » <pursuit>] [⚠ <alert>]
 /// ```
-/// The left half is transient (turn-scoped); the right-pinned todos badge is
-/// persistent and shows even while idle. Session-state flags such as
-/// `unattended` deliberately do not live here: they have their own state bar
-/// ([`draw_state_bar`]) so this row stays a pure activity surface.
+/// The whole bar is transient (turn-scoped): it shows only while a round is
+/// active and is hidden while idle, so the row returns to the transcript.
+/// Session-state flags such as `unattended` deliberately do not live here:
+/// they fold onto the hint bar's right cluster ([`draw_hint_bar`]) so this row
+/// stays a pure activity surface. The persistent task-list summary now lives
+/// on its own [`draw_todo_bar`] below this row.
 ///
 /// The bar surfaces what the user most wants to know mid-round — the live
 /// status, whether a pursuit/plan is in flight, and how long the round has
 /// run — and is the click target that opens the Activity modal for the full
-/// detail. Each segment is independently clickable: a click on the `todos`
-/// badge opens the Todos section directly, while a click anywhere else opens
-/// the Activity section. The structural counters (`round N · turn M ·
-/// <model>`) live in the modal: they change rarely and take space, while the
-/// bar is a glance surface. Segments are omitted when there is nothing to
-/// report:
+/// detail. The structural counters (`round N · turn M · <model>`) live in the
+/// modal: they change rarely and take space, while the bar is a glance
+/// surface. Segments are omitted when there is nothing to report:
 /// - pursuit badge only when a pursuit is armed (`⟴ <truncated objective>`);
 /// - elapsed only while the round timer is running;
-/// - the whole left half only while a round is active.
+/// - the whole bar only while a round is active.
 ///
 /// When the status string already carries a reason (e.g.
 /// `retry 1/4 in 3s · <message>`), it flows through unchanged as the lead.
 ///
-/// Returns `Some(ActivityBarHit)` when the bar is drawn so the event loop
-/// can hit-test clicks and open the Activity modal; `None` when the bar is
-/// hidden (no transient activity AND no todos).
+/// Returns `Some(rect)` when the bar is drawn so the event loop can hit-test
+/// clicks and open the Activity modal; `None` when the bar is hidden (idle).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_activity_bar(
     frame: &mut Frame,
     rect: Rect,
-    pursuit: Option<&neenee_core::Pursuit>,
-    todos: Option<&neenee_core::TodoList>,
     review_alert: &str,
     round_started_at: Option<Instant>,
     status: &str,
     spinner_phase: usize,
     theme: &Theme,
-) -> Option<ActivityBarHit> {
-    // The bar has two halves: a transient LEFT segment (spinner + shimmering
-    // status + elapsed/interrupt hint + pursuit + review alert) shown only
-    // while a turn is active, and a persistent RIGHT-pinned todos badge.
-    // If neither half has content, the bar is hidden entirely.
+) -> Option<Rect> {
+    // The bar is a single transient LEFT segment (spinner + shimmering status
+    // + elapsed/interrupt hint + pursuit + review alert) shown only while a
+    // turn is active. With nothing to report it is hidden entirely.
     let status_active = !status.is_empty() && status != "idle";
     let dim = Style::default().fg(theme.muted());
 
-    // ── Build the right-pinned todos badge ──
-    // `todos d/t`, always right-aligned so it reads as a persistent status
-    // chip distinct from the transient activity on the left.
-    let mut todos_rect: Option<Rect> = None;
-    let todos_badge: Option<(String, usize)> = todos.filter(|l| !l.items.is_empty()).map(|list| {
-        use neenee_core::TodoStatus;
-        let done = list.count(TodoStatus::Completed);
-        let total = list.items.len();
-        let badge = format!("todos {done}/{total}");
-        let w = UnicodeWidthStr::width(badge.as_str());
-        (badge, w)
-    });
-    let persistent_width = todos_badge.as_ref().map(|(_, width)| *width).unwrap_or(0);
-
-    // If there is nothing to show at all, hide the bar — no point painting a
-    // blank row.
-    if !status_active && persistent_width == 0 {
+    // If there is no transient activity, hide the bar — no point painting a
+    // blank row. (The persistent todo summary has its own bar below.)
+    if !status_active {
         return None;
     }
 
-    // ── Build the transient left segment ──
-    let mut spans: Vec<Span> = Vec::new();
-    if status_active {
-        let spinner = spinner_glyph();
-        let spinner_color = breathing_color(spinner_phase, theme.brand(), theme.surface());
-
-        let row_width = rect.width as usize;
-        // Keep one cell between transient activity and the persistent cluster,
-        // plus the cluster's one-cell right margin. The separation is allowed
-        // to disappear only when the terminal is too narrow to show any
-        // transient text at all.
-        let persistent_reserve = persistent_width + usize::from(persistent_width > 0) * 2;
-        let available_width = row_width.saturating_sub(persistent_reserve);
-        let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
-        let full_hint_width = elapsed
-            .as_ref()
-            .map(|value| {
-                UnicodeWidthStr::width(format!(" ({value} · Esc Esc to interrupt)").as_str())
-            })
-            .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc to interrupt)"));
-        let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc to interrupt)");
-        let tiny_interrupt_hint_width = UnicodeWidthStr::width(" Esc Esc");
-        let prefix_width = UnicodeWidthStr::width(" ● ");
-        const MIN_STATUS_WIDTH: usize = 4;
-        const MIN_TINY_STATUS_WIDTH: usize = 1;
-        let show_elapsed = elapsed.is_some()
-            && available_width >= prefix_width + full_hint_width + MIN_STATUS_WIDTH;
-        let show_interrupt_words = show_elapsed
-            || available_width >= prefix_width + interrupt_hint_width + MIN_STATUS_WIDTH;
-        let show_interrupt_keys = show_interrupt_words
-            || available_width >= prefix_width + tiny_interrupt_hint_width + MIN_TINY_STATUS_WIDTH;
-        let hint_width = if show_elapsed {
-            full_hint_width
-        } else if show_interrupt_words {
-            interrupt_hint_width
-        } else if show_interrupt_keys {
-            tiny_interrupt_hint_width
-        } else {
-            0
-        };
-        let status_width = available_width.saturating_sub(prefix_width + hint_width);
-        let status = truncate_for_bar(status, status_width);
-
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            spinner,
-            Style::default()
-                .fg(spinner_color)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        // Lead segment: the live status — the thing that changes frame to
-        // frame, so it receives the left-to-right shimmer. The structural
-        // counters (round/turn/model) are deliberately absent; they live in
-        // the Activity modal that this bar opens on click. Truncate this
-        // segment first so the interrupt affordance survives narrow widths.
-        spans.push(Span::raw(" "));
-        spans.extend(shimmer_spans(&status, spinner_phase, theme));
-
-        // Keep the interrupt instruction immediately after the live status,
-        // matching the place users look while waiting. Elapsed time is useful
-        // context, but it drops before the key hint on narrow terminals.
-        if show_interrupt_words {
-            spans.push(Span::styled(" (", dim));
-            if show_elapsed {
-                spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
-                spans.push(Span::styled(" · ", dim));
-            }
-            spans.push(Span::styled(
-                "Esc",
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(" ", dim));
-            spans.push(Span::styled(
-                "Esc",
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(" to interrupt)", dim));
-        } else if show_interrupt_keys {
-            // At the minimum supported terminal width, keep the actual keys
-            // and drop only the explanatory words. The Activity help entry
-            // supplies the long form if the user needs it.
-            spans.push(Span::styled(" ", dim));
-            spans.push(Span::styled(
-                "Esc",
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(" ", dim));
-            spans.push(Span::styled(
-                "Esc",
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ));
-        }
-
-        // Pursuit badge: shown only while a pursuit is armed, as
-        // `» <objective>`, so the user can tell at a glance that the turn is
-        // part of a larger goal. The objective is truncated to keep the
-        // single-line bar compact; the full text is one click away in the
-        // Activity modal.
-        if let Some(p) = pursuit.filter(|p| !p.is_complete) {
-            // `»` (Latin-1) rather than a rarer arrow glyph (the old `⟴`
-            // U+27F4 is absent from many terminal fonts and rendered as a
-            // tofu box); width is unambiguously 1 cell everywhere.
-            let objective = truncate_for_bar(&p.objective, 32);
-            let pursuit_width =
-                UnicodeWidthStr::width(" · » ") + UnicodeWidthStr::width(objective.as_str());
-            let used_width: usize = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum();
-            if used_width + pursuit_width <= available_width {
-                spans.push(Span::styled(" · » ", dim));
-                spans.push(Span::styled(objective, dim));
-            }
-        }
-
-        // Session-review alert (ADR-0016): surfaced when a periodic
-        // diagnostic judged the turn watch-worthy or stuck. Rendered with
-        // the same breathing luminance sweep as the running-indicator dot so
-        // the alert pulses gently rather than sitting as a flat warning chip
-        // — the motion draws the eye without being frantic. The persistent
-        // interrupt hint before it already tells the user how to stop the
-        // turn. Empty alert = clear (nothing rendered).
-        if !review_alert.is_empty() {
-            let warn = breathing_color(spinner_phase, theme.warning, theme.surface());
-            // U+FE0E (text presentation selector) forces the warning sign to
-            // render as a 1-cell text glyph; without it some terminals pick
-            // emoji presentation (2 cells) while `unicode-width` counts 1,
-            // leaving a stray cell / misaligned right-pin.
-            let alert = format!("⚠\u{FE0E} {review_alert}");
-            let alert_width = UnicodeWidthStr::width("  ") + UnicodeWidthStr::width(alert.as_str());
-            let used_width: usize = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum();
-            if used_width + alert_width <= available_width {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    alert,
-                    Style::default().fg(warn).add_modifier(Modifier::BOLD),
-                ));
-            }
-        }
+    let row_width = rect.width as usize;
+    let available_width = row_width;
+    let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
+    let full_hint_width = elapsed
+        .as_ref()
+        .map(|value| {
+            UnicodeWidthStr::width(format!(" ({value} · Esc Esc to interrupt)").as_str())
+        })
+        .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc to interrupt)"));
+    let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc to interrupt)");
+    let tiny_interrupt_hint_width = UnicodeWidthStr::width(" Esc Esc");
+    let prefix_width = UnicodeWidthStr::width(" ● ");
+    const MIN_STATUS_WIDTH: usize = 4;
+    const MIN_TINY_STATUS_WIDTH: usize = 1;
+    let show_elapsed = elapsed.is_some()
+        && available_width >= prefix_width + full_hint_width + MIN_STATUS_WIDTH;
+    let show_interrupt_words = show_elapsed
+        || available_width >= prefix_width + interrupt_hint_width + MIN_STATUS_WIDTH;
+    let show_interrupt_keys = show_interrupt_words
+        || available_width >= prefix_width + tiny_interrupt_hint_width + MIN_TINY_STATUS_WIDTH;
+    let hint_width = if show_elapsed {
+        full_hint_width
+    } else if show_interrupt_words {
+        interrupt_hint_width
+    } else if show_interrupt_keys {
+        tiny_interrupt_hint_width
     } else {
-        // A persistent right-side todos badge keeps this row alive while the
-        // agent is idle. Name that state explicitly so the row does not look
-        // like unexplained empty padding.
-        spans.push(Span::styled(" ready", dim));
+        0
+    };
+    let status_width = available_width.saturating_sub(prefix_width + hint_width);
+    let status = truncate_for_bar(status, status_width);
+
+    let mut spans: Vec<Span> = Vec::new();
+    let spinner = spinner_glyph();
+    let spinner_color = breathing_color(spinner_phase, theme.brand(), theme.surface());
+
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        spinner,
+        Style::default()
+            .fg(spinner_color)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    // Lead segment: the live status — the thing that changes frame to frame,
+    // so it receives the left-to-right shimmer. The structural counters
+    // (round/turn/model) are deliberately absent; they live in the Activity
+    // modal that this bar opens on click. Truncate this segment first so the
+    // interrupt affordance survives narrow widths.
+    spans.push(Span::raw(" "));
+    spans.extend(shimmer_spans(&status, spinner_phase, theme));
+
+    // Keep the interrupt instruction immediately after the live status,
+    // matching the place users look while waiting. Elapsed time is useful
+    // context, but it drops before the key hint on narrow terminals.
+    if show_interrupt_words {
+        spans.push(Span::styled(" (", dim));
+        if show_elapsed {
+            spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
+            spans.push(Span::styled(" · ", dim));
+        }
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        spans.push(Span::styled(" ", dim));
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        spans.push(Span::styled(" to interrupt)", dim));
+    } else if show_interrupt_keys {
+        // At the minimum supported terminal width, keep the actual keys and
+        // drop only the explanatory words. The Activity help entry supplies
+        // the long form if the user needs it.
+        spans.push(Span::styled(" ", dim));
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        spans.push(Span::styled(" ", dim));
+        spans.push(keycap_span(theme, Key::ESC.display()));
     }
 
-    // ── Right-pin the persistent todos badge ──
-    if persistent_width > 0 {
-        let left_w: usize = spans
+    // Session-review alert (ADR-0016): surfaced when a periodic diagnostic
+    // judged the turn watch-worthy or stuck. Rendered with the same breathing
+    // luminance sweep as the running-indicator dot so the alert pulses gently
+    // rather than sitting as a flat warning chip — the motion draws the eye
+    // without being frantic. The interrupt hint before it already tells the
+    // user how to stop the turn. Empty alert = clear (nothing rendered).
+    if !review_alert.is_empty() {
+        let warn = breathing_color(spinner_phase, theme.warning, theme.surface());
+        // U+FE0E (text presentation selector) forces the warning sign to
+        // render as a 1-cell text glyph; without it some terminals pick
+        // emoji presentation (2 cells) while `unicode-width` counts 1,
+        // leaving a stray cell / misaligned right-pin.
+        let alert = format!("⚠\u{FE0E} {review_alert}");
+        let alert_width = UnicodeWidthStr::width("  ") + UnicodeWidthStr::width(alert.as_str());
+        let used_width: usize = spans
             .iter()
-            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum();
-        let row_w = rect.width as usize;
-        // Right-pin margin, shared by the plain badge and the widened
-        // badge+hint below.
-        let right_margin = 1;
-
-        // While idle the transient left segment is just " ready", leaving
-        // the row otherwise empty — the best moment to nudge users toward
-        // the `ctrl+t` shortcut, since there is nothing competing for their
-        // attention. Once a turn is active, space is contested by the
-        // status/elapsed/interrupt hint, so the shortcut hint is dropped
-        // rather than fight the transient content for room.
-        const HINT_KEY: &str = "ctrl+t";
-        let hint_width =
-            UnicodeWidthStr::width(" ").saturating_add(UnicodeWidthStr::width(HINT_KEY));
-        let widened_width = persistent_width + hint_width;
-        let shows_hint = !status_active && left_w + widened_width + right_margin <= row_w;
-        let badge_width = if shows_hint {
-            widened_width
-        } else {
-            persistent_width
-        };
-
-        // Place the badge flush against the right edge with a 1-cell margin.
-        let gap = row_w.saturating_sub(left_w + badge_width + right_margin);
-        // The badge's absolute column = left_w + gap.
-        let badge_col = rect.x + (left_w + gap) as u16;
-        // Pad between the left segment and the badge. When idle the badge is
-        // the only content, so the same leading padding pushes it to the
-        // right edge rather than leaving it left-aligned.
-        spans.push(Span::raw(" ".repeat(gap)));
-        if let Some((badge, badge_w)) = todos_badge {
-            spans.push(Span::styled(badge, dim));
-            let mut hit_width = badge_w;
-            if shows_hint {
-                // Deliberately the same muted, unbolded style as the badge
-                // itself: this is a low-priority discoverability hint, not
-                // primary content, so it should read as part of the badge
-                // rather than draw the eye — there for users who go looking,
-                // not something that competes for attention.
-                spans.push(Span::styled(format!(" {HINT_KEY}"), dim));
-                hit_width += hint_width;
-            }
-            // The click target covers the hint too, so clicking the guide
-            // text opens Todos just like clicking the badge itself.
-            todos_rect = Some(Rect::new(badge_col, rect.y, hit_width as u16, 1));
+        if used_width + alert_width <= available_width {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                alert,
+                Style::default().fg(warn).add_modifier(Modifier::BOLD),
+            ));
         }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
-    Some(ActivityBarHit {
-        bar_rect: rect,
-        todos_rect,
-    })
+    Some(rect)
 }
 
-/// Draw the persistent state bar: one row directly below the input box that
-/// hosts session-state indicators staying on for minutes or the whole session.
-/// Today that is the unattended flag; the row is the designated home for
-/// future ambient state (workspace, and friends) so neither the activity bar
-/// above nor the hint bar below has to make room.
+/// The one-row todo summary pinned directly below the activity bar (and above
+/// the queue bar). It is the permanent home for task-list affordances: a fixed
+/// `todo` tag, the done/total progress, and a one-line preview of the current
+/// item — the `InProgress` one, or the first `Pending` when nothing is
+/// mid-flight (so the bar always points at "what is happening / what is next").
 ///
-/// Flags are left-aligned and joined by ` · `. The caller allocates zero
-/// rows when no flag is active, so an empty bar never consumes vertical
-/// space; this function simply renders whatever flags it is given.
-pub fn draw_state_bar(frame: &mut Frame, rect: Rect, unattended: bool, theme: &Theme) {
-    // Each active session-state indicator becomes one flag on the row. New
-    // indicators push onto this vec; the join below keeps the separator
-    // handling identical no matter how many flags exist.
-    let mut flags: Vec<Span> = Vec::new();
-    if unattended {
-        // The one flag that bypasses human oversight (no confirmations, no
-        // questions) gets a clear but quiet treatment on the row: lowercase,
-        // warning tone, bold.
-        flags.push(Span::styled(
-            "unattended",
-            Style::default()
-                .fg(theme.warn())
-                .add_modifier(Modifier::BOLD),
-        ));
+/// Layout:
+/// ```text
+/// todo · d/t · {current item preview…}        Ctrl+T expand
+/// ```
+/// The right-pinned `Ctrl+T expand` legend is the keyboard affordance that
+/// opens the Activity modal on the Todos section; it drops under width
+/// pressure (the `expand` label first, then the whole legend) so the identity
+/// and preview on the left always survive. The whole bar is the click target
+/// for the same destination.
+///
+/// Always one row tall. Parallels [`draw_queue_bar`] but lighter — one row
+/// instead of two — since a todo item is informational (the agent's plan)
+/// rather than directly actionable the way a queued dispatch is.
+///
+/// Returns the full bar rect so the event loop can hit-test clicks.
+pub fn draw_todo_bar(
+    frame: &mut Frame,
+    rect: Rect,
+    todos: &neenee_core::TodoList,
+    theme: &Theme,
+) -> Rect {
+    use neenee_core::{TodoItem, TodoStatus};
+
+    let bg = theme.surface();
+    let full_w = rect.width as usize;
+    let dim = Style::default().fg(theme.muted()).bg(bg);
+    let fg = Style::default().fg(theme.fg()).bg(bg);
+    let bold = Style::default()
+        .fg(theme.fg())
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+
+    let done = todos.count(TodoStatus::Completed);
+    let total = todos.items.len();
+    let progress = format!("{done}/{total}");
+
+    // Current item: the InProgress one, else the first Pending (next up).
+    let current: Option<&TodoItem> = todos
+        .items
+        .iter()
+        .find(|i| i.status == TodoStatus::InProgress)
+        .or_else(|| todos.items.iter().find(|i| i.status == TodoStatus::Pending));
+
+    // ── Left identity: `todo · d/t` ──
+    let mut left: Vec<Span<'static>> = Vec::new();
+    left.push(Span::styled("todo", bold));
+    left.push(Span::styled(" · ", dim));
+    left.push(Span::styled(progress, bold));
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+
+    // ── Right legend: `Ctrl+T expand`, dropping under width pressure ──
+    let mk_legend = |density: TodoLegendDensity| -> Vec<Span<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(keycap_span(theme, Key::CTRL_T.display()));
+        if matches!(density, TodoLegendDensity::Full) {
+            spans.push(Span::styled(" expand", dim));
+        }
+        spans
+    };
+    let legend_width =
+        |spans: &Vec<Span<'static>>| -> usize { spans.iter().map(|s| s.content.width()).sum() };
+
+    // Columns reserved between the identity and the legend: the ` · ` that
+    // leads the preview (only when there is one) plus the inter-cluster gap.
+    let content_sep = UnicodeWidthStr::width(" · ");
+    let gap_for = |legend_w: usize| if legend_w > 0 { HINT_BAR_GAP_MIN } else { 0 };
+    const MIN_PREVIEW_WIDTH: usize = 4;
+    let preview_budget = |legend_w: usize| {
+        let sep = if current.is_some() { content_sep } else { 0 };
+        full_w.saturating_sub(left_w + sep + legend_w + gap_for(legend_w))
+    };
+
+    let mut legend = mk_legend(TodoLegendDensity::Full);
+    if current.is_some() && preview_budget(legend_width(&legend)) < MIN_PREVIEW_WIDTH {
+        legend = mk_legend(TodoLegendDensity::Compact);
+    }
+    if current.is_some() && preview_budget(legend_width(&legend)) < MIN_PREVIEW_WIDTH {
+        legend.clear();
+    }
+    let legend_w = legend_width(&legend);
+    let gap = gap_for(legend_w);
+
+    let mut row: Vec<Span<'static>> = Vec::with_capacity(left.len() + 4 + legend.len());
+    row.extend(left);
+
+    if let Some(item) = current {
+        let budget = preview_budget(legend_w);
+        let one_line = crate::tui::overlays::common::one_line(item.content.trim());
+        let preview = if one_line.width() > budget {
+            crate::tui::overlays::common::truncate_ellipsis(&one_line, budget)
+        } else {
+            one_line
+        };
+        let preview_w = preview.width();
+        row.push(Span::styled(" · ", dim));
+        row.push(Span::styled(preview, fg));
+        let pad = full_w
+            .saturating_sub(left_w + content_sep + preview_w + gap + legend_w);
+        row.push(Span::styled(" ".repeat(pad), dim));
+    } else {
+        // No current item (e.g. everything terminal just before auto-clear):
+        // right-pin the legend directly.
+        let pad = full_w.saturating_sub(left_w + gap + legend_w);
+        row.push(Span::styled(" ".repeat(pad), dim));
     }
 
-    let mut spans: Vec<Span> = vec![Span::raw(" ")];
-    for (index, flag) in flags.into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(theme.muted())));
-        }
-        spans.push(flag);
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+    row.extend(legend);
+
+    // Paint a trailing fill so the surface background covers the full width.
+    let used_total: usize = row.iter().map(|s| s.content.width()).sum();
+    row.push(Span::styled(
+        " ".repeat(full_w.saturating_sub(used_total)),
+        dim,
+    ));
+
+    frame.render_widget(Paragraph::new(Line::from(row)), rect);
+    rect
+}
+
+/// How much of the todo bar's `Ctrl+T expand` legend survives under width
+/// pressure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TodoLegendDensity {
+    /// Key + label: `Ctrl+T expand`.
+    Full,
+    /// Key only: `Ctrl+T`.
+    Compact,
 }
 
 /// Truncate `s` to at most `max` display cells, appending `…` when cut, so a
@@ -659,15 +623,13 @@ pub struct HintBarView<'a> {
     /// step is focused. The left side explains the resulting Enter action in
     /// plain language instead of exposing an implementation-mode badge.
     pub shell_active: bool,
-    /// Busy-send target for the next Enter. `false` is the default insert at
-    /// the next safe boundary; `true` waits for a fresh round. Tab toggles it.
+    /// Busy-send disposition for the next Enter: the agent is mid-round, so
+    /// Enter stages the message in the queue rather than sending immediately.
     pub busy: bool,
-    pub send_next_round: bool,
-    /// Compact outbox counts for the viewed session. Pending content stays out
-    /// of scrollback; this fixed one-row summary is its persistent affordance.
-    pub pending_insert: usize,
-    pub pending_next_round: usize,
-    pub outbox_paused: bool,
+    /// Session-state flag folded onto the row (replaces the old dedicated state
+    /// bar): `unattended` shows as a right-aligned warning tag so the row the
+    /// user already reads also carries the one ambient flag.
+    pub unattended: bool,
     /// Session-scoped size of the AI-visible request context. Produced by the
     /// harness from provider API usage when available, otherwise from the
     /// projected `model_window`; it is deliberately unrelated to durable or
@@ -683,17 +645,14 @@ enum ActionDensity {
     Tiny,
 }
 
-/// Build the left side of the bottom row as an action sentence, not a mode
-/// badge. Density changes wording only; the selected Enter behavior never
-/// disappears. At the smallest density, secondary instructions yield to the
-/// current action and the number of messages waiting.
-#[allow(clippy::too_many_arguments)]
+/// Build the left side of the bottom row as a short action sentence. The
+/// detailed insert/next-round wording and the Tab alternative used to live
+/// here; the persistent queue bar now carries those affordances (with a
+/// keycap legend), so this stays a pure "what will Enter do" surface: send
+/// when idle, queue when the agent is mid-round, or run a shell command.
 fn input_action_spans(
     shell_active: bool,
     busy: bool,
-    send_next_round: bool,
-    pending_total: usize,
-    outbox_paused: bool,
     density: ActionDensity,
     theme: &Theme,
     bg: Color,
@@ -703,16 +662,8 @@ fn input_action_spans(
         .bg(bg)
         .add_modifier(Modifier::BOLD);
     let hint_style = Style::default().fg(theme.muted()).bg(bg);
-    let queue_style = Style::default()
-        .fg(if outbox_paused {
-            theme.warn()
-        } else {
-            theme.muted()
-        })
-        .bg(bg);
     let compact = matches!(density, ActionDensity::Compact | ActionDensity::Tiny);
-    let tiny = matches!(density, ActionDensity::Tiny);
-    let mut spans = vec![Span::styled("Enter", key_style)];
+    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
 
     if shell_active {
         spans.push(Span::styled(
@@ -720,48 +671,16 @@ fn input_action_spans(
             hint_style,
         ));
     } else if busy {
-        let action = match (send_next_round, compact) {
-            (true, false) => " send after current reply",
-            (true, true) => " send later",
-            (false, false) => " add to current reply",
-            (false, true) => " add now",
-        };
-        spans.push(Span::styled(action, hint_style));
-
-        // On a tiny row with queued work, keep the chosen action and queue
-        // count. The Tab alternative remains discoverable in Help and returns
-        // automatically as soon as there is enough horizontal space.
-        if !(tiny && pending_total > 0) {
-            spans.push(Span::styled(" · ", hint_style));
-            spans.push(Span::styled("Tab", key_style));
-            let alternative = match (send_next_round, compact) {
-                (true, false) => " add to current reply",
-                (true, true) => " add now",
-                (false, false) => " send after reply",
-                (false, true) => " send later",
-            };
-            spans.push(Span::styled(alternative, hint_style));
-        }
+        // The agent is mid-round: Enter stages the message in the queue (the
+        // queue bar below shows the staged item). The Tab toggle for insert vs
+        // next-round, and the recall/edit affordance, live in the queue bar's
+        // keycap legend rather than this sentence.
+        spans.push(Span::styled(
+            if compact { " queue" } else { " queue message" },
+            hint_style,
+        ));
     } else {
         spans.push(Span::styled(" send", hint_style));
-    }
-
-    if pending_total > 0 {
-        let state = if outbox_paused { "paused" } else { "waiting" };
-        let count = if pending_total > 99 {
-            "99+".to_string()
-        } else {
-            pending_total.to_string()
-        };
-        spans.push(Span::styled(format!(" · {count} {state}"), queue_style));
-        if !tiny {
-            spans.push(Span::styled(" · ", queue_style));
-            spans.push(Span::styled("↑", key_style));
-            spans.push(Span::styled(
-                if compact { " edit" } else { " edit latest" },
-                queue_style,
-            ));
-        }
     }
 
     spans
@@ -787,10 +706,7 @@ pub fn draw_hint_bar(
         reasoning_effort,
         shell_active,
         busy,
-        send_next_round,
-        pending_insert,
-        pending_next_round,
-        outbox_paused,
+        unattended,
         context_tokens,
     } = view;
 
@@ -799,19 +715,11 @@ pub fn draw_hint_bar(
 
     // --- Left cluster: one sentence describing what the next Enter does.
     // Keep product language here: users should not need to learn the internal
-    // round/turn distinction or decode transport arrows before sending.
-    let pending_total = pending_insert + pending_next_round;
+    // round/turn distinction or decode transport arrows before sending. The
+    // detailed insert/next-round wording, the Tab toggle, and the recall
+    // affordance all live in the persistent queue bar now, not here.
     let mut action_density = ActionDensity::Full;
-    let mut zone_spans = input_action_spans(
-        shell_active,
-        busy,
-        send_next_round,
-        pending_total,
-        outbox_paused,
-        action_density,
-        theme,
-        bg,
-    );
+    let mut zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
     let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
 
     // --- Right cluster: model name and context bar.
@@ -862,6 +770,26 @@ pub fn draw_hint_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
+    // Session-state tag: `unattended`. Folded onto this row from the old
+    // dedicated state bar. It is a safety flag, so it leads the right cluster
+    // (after the model name) and is the last ambient item to drop under width
+    // pressure — a warning tone so it reads as "on" at a glance.
+    let unattended_spans: Vec<Span<'static>> = if unattended {
+        vec![Span::styled(
+            "unattended",
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD)
+                .bg(bg),
+        )]
+    } else {
+        Vec::new()
+    };
+    let unattended_width = unattended_spans
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+
     // Context-usage segment: `89.2k (8%)`. Always shown when the model
     // reports a context window; the percentage takes the threshold color so
     // a nearly full window is unmissable.
@@ -881,11 +809,16 @@ pub fn draw_hint_bar(
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
+    let mut show_unattended = unattended_width > 0;
     let mut show_context = context_seg_width > 0;
-    let right_width_for = |model: bool, reasoning: bool, context: bool| {
-        let segment_count = usize::from(model) + usize::from(reasoning) + usize::from(context);
+    let right_width_for = |model: bool, reasoning: bool, unattended: bool, context: bool| {
+        let segment_count = usize::from(model)
+            + usize::from(reasoning)
+            + usize::from(unattended)
+            + usize::from(context);
         usize::from(model) * model_width
             + usize::from(reasoning) * reasoning_width
+            + usize::from(unattended) * unattended_width
             + usize::from(context) * context_seg_width
             + segment_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
     };
@@ -894,46 +827,36 @@ pub fn draw_hint_bar(
             <= full_w
     };
 
-    let mut right_width = right_width_for(show_model, show_reasoning, show_context);
+    let mut right_width =
+        right_width_for(show_model, show_reasoning, show_unattended, show_context);
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
-        zone_spans = input_action_spans(
-            shell_active,
-            busy,
-            send_next_round,
-            pending_total,
-            outbox_paused,
-            action_density,
-            theme,
-            bg,
-        );
+        zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
+    // Drop order under width pressure: reasoning first, then context, then the
+    // unattended safety flag, then the model name. The action on the left
+    // always wins last.
     if !fits(zone_pill_width, right_width) && show_reasoning {
         show_reasoning = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_unattended, show_context);
     }
     if !fits(zone_pill_width, right_width) && show_context {
         show_context = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_unattended, show_context);
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
-        zone_spans = input_action_spans(
-            shell_active,
-            busy,
-            send_next_round,
-            pending_total,
-            outbox_paused,
-            action_density,
-            theme,
-            bg,
-        );
+        zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
+    }
+    if !fits(zone_pill_width, right_width) && show_unattended {
+        show_unattended = false;
+        right_width = right_width_for(show_model, show_reasoning, show_unattended, show_context);
     }
     if !fits(zone_pill_width, right_width) && show_model {
         show_model = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_unattended, show_context);
     }
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
@@ -941,6 +864,7 @@ pub fn draw_hint_bar(
     for segment in [
         show_model.then_some(model_spans),
         show_reasoning.then_some(reasoning_spans),
+        show_unattended.then_some(unattended_spans),
         show_context.then_some(context_spans),
     ]
     .into_iter()
@@ -983,6 +907,230 @@ pub fn draw_hint_bar(
         context_rect = Some(Rect::new(x, rect.y, context_seg_width as u16, rect.height));
     }
     context_rect
+}
+
+/// One queued outbox item projected for the [`QueueBarView`] / queue modal. It
+/// is a small owned snapshot of the relevant fields of a
+/// [`crate::tui::app::QueuedDispatch`], so the renderers stay decoupled from
+/// the full dispatch state machine (images, pastes, lifecycle states) and
+/// borrowing the outbox does not entangle the view layer with the app's
+/// mutable state.
+#[derive(Clone)]
+pub struct QueueItemView {
+    /// What the next Enter does with this item: insert at the next safe
+    /// boundary, or wait for a fresh round. Surfaced as a modifier glyph.
+    pub target: crate::tui::app::SendTarget,
+    /// When the item was queued (epoch ms), rendered as a local `HH:MM`.
+    pub queued_at_ms: u64,
+    /// The user's literal prompt text (the first run is previewed in the bar).
+    pub text: String,
+}
+
+/// Inputs for [`draw_queue_bar`]: the persistent two-row outbox summary pinned
+/// below the transcript gap. This is the permanent home for queue affordances.
+pub struct QueueBarView<'a> {
+    /// Outbox items for the viewed session, in dispatch order (front pops
+    /// first). May be empty — the bar then renders a muted empty state.
+    pub items: &'a [QueueItemView],
+    /// `true` while next-round items are held back because the running round
+    /// has not yet naturally completed. Recolors the count so the user can see
+    /// the queue is paused, not forgotten.
+    pub paused: bool,
+}
+
+/// The persistent two-row outbox summary pinned below the transcript gap.
+///
+/// Layout:
+/// ```text
+/// queue · N · HH:MM        esc insert · tab next round · F2 expand
+/// {modifier} {preview…}
+/// ```
+/// - Row 1 carries the identity (a fixed `queue` tag, the total count, the
+///   send time of the *next item to pop*) on the left and a compact keycap
+///   legend on the right (what Enter/Tab do, and how to expand the full
+///   list). The legend is what the user used to infer from the hint bar's
+///   embedded counts.
+/// - Row 2 previews the next item to pop: a modifier glyph marking whether it
+///   inserts at the next boundary (`→`) or starts a fresh round (`⇥`), then as
+///   many characters of its text as the width allows (truncated with `…`).
+///
+/// Returns the full bar rect so the event loop can make the region clickable
+/// (click → expand the Queue modal).
+pub fn draw_queue_bar(
+    frame: &mut Frame,
+    rect: Rect,
+    view: QueueBarView<'_>,
+    theme: &Theme,
+) -> Rect {
+    let QueueBarView { items, paused } = view;
+
+    let bg = theme.surface();
+    let full_w = rect.width as usize;
+    // The bar spans two rows; reserve them up front.
+    let row_height = 1u16;
+
+    // ── Resolve the next item to pop ────────────────────────────────────────
+    // Dispatch order: Insert items ship as soon as the harness admits them
+    // (they were forwarded at enqueue time), so the *next to pop* is the
+    // front-most Waiting item of either kind — matches `recall_queued`'s LIFO
+    // undo view of "the newest staged" only for editing; for *popping* the
+    // front wins. We show the first item in dispatch order.
+    let next = items.first().cloned();
+
+    let count = items.len();
+    let dim = Style::default().fg(theme.muted()).bg(bg);
+    let fg = Style::default().fg(theme.fg()).bg(bg);
+    let count_color = if paused { theme.warn() } else { theme.fg() };
+    let count_style = Style::default()
+        .fg(count_color)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+    let key_style = Style::default()
+        .fg(theme.fg())
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
+
+    // ── Row 1: `queue · N · HH:MM`  …  `esc insert · tab next · F2 expand` ──
+    let mut left1: Vec<Span<'static>> = Vec::new();
+    left1.push(Span::styled("queue", key_style));
+    left1.push(Span::styled(" · ", dim));
+    let count_label = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+    left1.push(Span::styled(count_label, count_style));
+    left1.push(Span::styled(" · ", dim));
+    let time_label = next
+        .as_ref()
+        .map(|item| crate::tui::time::sent_time_label(item.queued_at_ms))
+        .unwrap_or_else(|| "--:--".to_string());
+    left1.push(Span::styled(time_label, dim));
+
+    // Right-side keycap legend. The keys explain the three outbox affordances
+    // the old hint-bar used to embed as prose:
+    //   Esc   — recall/dispatch the newest staged message immediately
+    //   Tab   — flip the next busy Enter between insert and next-round
+    //   F2    — expand the full queue list
+    // The right cluster drops under width pressure (F2 first, then Tab, then
+    // Esc), so the identity on the left always survives.
+    let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let sep = |spans: &mut Vec<Span<'static>>| {
+            spans.push(Span::styled(" · ", dim));
+        };
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        if matches!(density, LegendDensity::Full) {
+            spans.push(Span::styled(" insert now", dim));
+        }
+        if !matches!(density, LegendDensity::Tiny) {
+            sep(&mut spans);
+            spans.push(keycap_span(theme, Key::TAB.display()));
+            if matches!(density, LegendDensity::Full) {
+                spans.push(Span::styled(" next round", dim));
+            }
+        }
+        if !matches!(density, LegendDensity::Tiny) {
+            sep(&mut spans);
+            spans.push(keycap_span(theme, Key::F2.display()));
+            if matches!(density, LegendDensity::Full) {
+                spans.push(Span::styled(" expand", dim));
+            }
+        }
+        spans
+    };
+
+    let left1_w: usize = left1.iter().map(|s| s.content.width()).sum();
+    let fits = |left: usize, right: &[Span<'static>]| {
+        let rw: usize = right.iter().map(|s| s.content.width()).sum();
+        left + if rw > 0 { HINT_BAR_GAP_MIN } else { 0 } + rw <= full_w
+    };
+    let mut legend_density = LegendDensity::Full;
+    let mut right1 = mk_right(legend_density);
+    if !fits(left1_w, &right1) {
+        legend_density = LegendDensity::Compact;
+        right1 = mk_right(legend_density);
+    }
+    if !fits(left1_w, &right1) {
+        legend_density = LegendDensity::Tiny;
+        right1 = mk_right(legend_density);
+    }
+    if !fits(left1_w, &right1) && legend_density == LegendDensity::Tiny {
+        // Still too tight: drop the legend entirely and keep the identity.
+        right1.clear();
+    }
+    let right1_w: usize = right1.iter().map(|s| s.content.width()).sum();
+    let gap1 = full_w
+        .saturating_sub(left1_w + right1_w)
+        .max(if right1_w > 0 { HINT_BAR_GAP_MIN } else { 0 });
+
+    let mut row1: Vec<Span<'static>> = Vec::with_capacity(2 + left1.len() + right1.len());
+    row1.extend(left1);
+    row1.push(Span::styled(" ".repeat(gap1), dim));
+    row1.extend(right1);
+    let used1 = left1_w + gap1 + right1_w;
+    row1.push(Span::styled(" ".repeat(full_w.saturating_sub(used1)), dim));
+
+    let row1_rect = Rect::new(rect.x, rect.y, rect.width, row_height);
+    frame.render_widget(Paragraph::new(Line::from(row1)), row1_rect);
+
+    // ── Row 2: `{preview…}` with a right-pinned target badge ────────────────
+    // The arrow modifier glyphs were dropped; the send-target state is now a
+    // short coloured badge pinned to the right (`insert`/`next`), matching the
+    // tools modal's `[on]`/`[off]` pattern. Empty queue → muted hint.
+    let mut row2: Vec<Span<'static>> = Vec::new();
+    if let Some(item) = next.as_ref() {
+        let (badge, badge_color) = match item.target {
+            crate::tui::app::SendTarget::Insert => ("insert", theme.ok()),
+            crate::tui::app::SendTarget::NextRound => ("next", theme.info()),
+        };
+        let badge_w = badge.width();
+        // Reserve a 2-col gap before the right-pinned badge.
+        let preview_budget = full_w.saturating_sub(badge_w + 2);
+        // One-line, control-chars-collapsed preview; truncated to the budget
+        // with an ellipsis so a multi-line paste never wraps the bar.
+        let one_line = crate::tui::overlays::common::one_line(item.text.trim());
+        let preview = if one_line.width() > preview_budget {
+            crate::tui::overlays::common::truncate_ellipsis(&one_line, preview_budget)
+        } else {
+            one_line
+        };
+        let pad = full_w.saturating_sub(preview.width() + 2 + badge_w);
+        row2.push(Span::styled(preview, fg));
+        row2.push(Span::styled(" ".repeat(pad), dim));
+        row2.push(Span::styled("  ", dim));
+        row2.push(Span::styled(
+            badge.to_string(),
+            Style::default().fg(badge_color).bg(bg),
+        ));
+    } else {
+        let hint = "queue empty — press Enter while the agent runs to stage a message";
+        let hint_budget = full_w;
+        let hint_text = if hint.width() > hint_budget {
+            crate::tui::overlays::common::truncate_ellipsis(hint, hint_budget)
+        } else {
+            hint.to_string()
+        };
+        let pad = full_w.saturating_sub(hint_text.width());
+        row2.push(Span::styled(hint_text, dim));
+        row2.push(Span::styled(" ".repeat(pad), dim));
+    }
+
+    let row2_rect = Rect::new(rect.x, rect.y + row_height, rect.width, row_height);
+    frame.render_widget(Paragraph::new(Line::from(row2)), row2_rect);
+
+    rect
+}
+
+/// How much of the row-1 keycap legend survives under width pressure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegendDensity {
+    /// Keys + labels: `Esc insert now · Tab next round · F2 expand`.
+    Full,
+    /// Keys only: `Esc · Tab · F2`.
+    Compact,
+    /// Only the dispatch key: `Esc`.
+    Tiny,
 }
 
 /// Context-usage ratio at which the usage bar turns from green to yellow.
@@ -1063,8 +1211,6 @@ mod tests {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, width, 1),
-                None,
-                None,
                 "",
                 None,
                 status,
@@ -1112,68 +1258,23 @@ mod tests {
     }
 
     #[test]
-    fn state_bar_shows_the_unattended_flag_in_warning_bold() {
-        let theme = Theme::default();
-        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+    fn hint_bar_folds_the_unattended_flag_onto_the_right_cluster() {
+        // The unattended flag used to have its own state row; it now folds onto
+        // the hint bar's right cluster as a warning-toned tag.
+        let mut terminal = neenee_tui_engine::TestTerminal::new(120, 1);
         terminal.draw(|frame| {
-            draw_state_bar(frame, Rect::new(0, 0, 80, 1), true, &theme);
-        });
-        let buffer = terminal.buffer();
-        let text = buffer
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            text.trim_start().starts_with("unattended"),
-            "row was {text:?}"
-        );
-        let flag_cell = buffer
-            .content
-            .iter()
-            .find(|cell| cell.symbol() == "u")
-            .expect("unattended flag cell");
-        assert_eq!(flag_cell.fg, theme.warn());
-        assert!(flag_cell.style.add.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn state_bar_renders_blank_when_no_flag_is_active() {
-        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
-        terminal.draw(|frame| {
-            draw_state_bar(frame, Rect::new(0, 0, 80, 1), false, &Theme::default());
-        });
-        let text = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.trim().is_empty(), "row was {text:?}");
-    }
-
-    #[test]
-    fn idle_todos_badge_shows_ctrl_t_hint_when_there_is_room() {
-        let mut todos = neenee_core::TodoList::new();
-        todos.items.push(neenee_core::TodoItem {
-            id: neenee_core::TodoId(1),
-            content: "write the docs".to_string(),
-            status: neenee_core::TodoStatus::Pending,
-            created_at: 0,
-            updated_at: 0,
-        });
-        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
-        let mut hit = None;
-        terminal.draw(|frame| {
-            hit = draw_activity_bar(
+            draw_hint_bar(
                 frame,
-                Rect::new(0, 0, 80, 1),
-                None,
-                Some(&todos),
-                "",
-                None,
-                "",
-                0,
+                Rect::new(0, 0, 120, 1),
+                HintBarView {
+                    current_model: "mock",
+                    messages: &[],
+                    reasoning_effort: None,
+                    shell_active: false,
+                    busy: false,
+                    unattended: true,
+                    context_tokens: None,
+                },
                 &Theme::default(),
             );
         });
@@ -1183,31 +1284,96 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains("todos 0/1 ctrl+t"), "row was {text:?}");
-        assert!(text.ends_with("todos 0/1 ctrl+t "), "row was {text:?}");
-        // The click target grows to cover the hint text too.
-        let hit = hit.expect("bar hit");
-        let todos_rect = hit.todos_rect.expect("todos rect");
-        assert_eq!(todos_rect.width as usize, "todos 0/1 ctrl+t".len());
+        assert!(text.contains("unattended"), "flag missing: {text:?}");
+        // Without the flag the row must not show the tag.
+        let mut terminal2 = neenee_tui_engine::TestTerminal::new(120, 1);
+        terminal2.draw(|frame| {
+            draw_hint_bar(
+                frame,
+                Rect::new(0, 0, 120, 1),
+                HintBarView {
+                    current_model: "mock",
+                    messages: &[],
+                    reasoning_effort: None,
+                    shell_active: false,
+                    busy: false,
+                    unattended: false,
+                    context_tokens: None,
+                },
+                &Theme::default(),
+            );
+        });
+        let text2 = terminal2
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!text2.contains("unattended"), "flag leaked: {text2:?}");
     }
 
-    #[test]
-    fn active_todos_badge_omits_ctrl_t_hint_to_favor_transient_status() {
+    fn todo_list_with(item: &str, status: neenee_core::TodoStatus) -> neenee_core::TodoList {
         let mut todos = neenee_core::TodoList::new();
         todos.items.push(neenee_core::TodoItem {
             id: neenee_core::TodoId(1),
-            content: "write the docs".to_string(),
-            status: neenee_core::TodoStatus::Pending,
+            content: item.to_string(),
+            status,
             created_at: 0,
             updated_at: 0,
         });
+        todos
+    }
+
+    fn todo_row_text(todos: &neenee_core::TodoList, width: u16) -> String {
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 1);
+        terminal.draw(|frame| {
+            draw_todo_bar(frame, Rect::new(0, 0, width, 1), todos, &Theme::default());
+        });
+        terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn todo_bar_shows_tag_progress_current_item_and_legend() {
+        // InProgress item is the surfaced "current" content.
+        let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
+        let text = todo_row_text(&todos, 80);
+        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        assert!(text.contains("write the docs"), "row was {text:?}");
+        assert!(text.contains("Ctrl+T expand"), "row was {text:?}");
+    }
+
+    #[test]
+    fn todo_bar_falls_back_to_first_pending_when_nothing_is_in_progress() {
+        let todos = todo_list_with("write the docs", neenee_core::TodoStatus::Pending);
+        let text = todo_row_text(&todos, 80);
+        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        // The first Pending item reads as "next up" when nothing is mid-flight.
+        assert!(text.contains("write the docs"), "row was {text:?}");
+    }
+
+    #[test]
+    fn todo_bar_drops_legend_under_width_pressure() {
+        let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
+        // At 20 cols the `expand` label cannot fit alongside the preview.
+        let text = todo_row_text(&todos, 20);
+        assert!(text.contains("todo · 0/1"), "row was {text:?}");
+        assert!(!text.contains("expand"), "legend leaked: {text:?}");
+    }
+
+    #[test]
+    fn activity_bar_carries_no_todos_badge() {
+        // Decoupled: the activity bar is a pure liveness surface now and never
+        // embeds the `todos d/t` summary (that lives on its own bar below).
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, 80, 1),
-                None,
-                Some(&todos),
                 "",
                 None,
                 "Working",
@@ -1221,27 +1387,17 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(!text.contains("ctrl+t"), "row was {text:?}");
-        assert!(text.ends_with("todos 0/1 "), "row was {text:?}");
+        assert!(!text.contains("todos"), "badge leaked onto bar: {text:?}");
+        assert!(!text.contains("Ctrl+T"), "hint leaked onto bar: {text:?}");
     }
 
     #[test]
-    fn narrow_runtime_row_keeps_todos_and_interrupt_keys() {
-        let mut todos = neenee_core::TodoList::new();
-        todos.items.push(neenee_core::TodoItem {
-            id: neenee_core::TodoId(1),
-            content: "keep the status row useful".to_string(),
-            status: neenee_core::TodoStatus::Pending,
-            created_at: 0,
-            updated_at: 0,
-        });
+    fn narrow_runtime_row_keeps_interrupt_keys_without_todos_badge() {
         let mut terminal = neenee_tui_engine::TestTerminal::new(36, 1);
         terminal.draw(|frame| {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, 36, 1),
-                None,
-                Some(&todos),
                 "",
                 None,
                 "retrying a provider request after a detailed transient failure",
@@ -1256,11 +1412,11 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("Esc Esc"), "row was {text:?}");
-        assert!(text.contains("todos 0/1"), "row was {text:?}");
-        // Session-state flags live on the state bar now; the activity row
-        // never carries them, even when they would fit.
+        // The todos summary lives on the dedicated todo bar, not here.
+        assert!(!text.contains("todos"), "badge leaked: {text:?}");
+        // Session-state flags live on the hint bar; the activity row never
+        // carries them, even when they would fit.
         assert!(!text.contains("unattended"), "row was {text:?}");
-        assert!(text.ends_with("todos 0/1 "), "row was {text:?}");
     }
 
     #[test]
@@ -1298,10 +1454,7 @@ mod tests {
                     reasoning_effort: None,
                     shell_active: false,
                     busy: false,
-                    send_next_round: false,
-                    pending_insert: 0,
-                    pending_next_round: 0,
-                    outbox_paused: false,
+                    unattended: false,
                     context_tokens: None,
                 },
                 &theme,
@@ -1320,10 +1473,7 @@ mod tests {
                     reasoning_effort: None,
                     shell_active,
                     busy: false,
-                    send_next_round: false,
-                    pending_insert: 0,
-                    pending_next_round: 0,
-                    outbox_paused: false,
+                    unattended: false,
                     context_tokens: None,
                 };
                 draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
@@ -1343,7 +1493,11 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_keeps_busy_target_and_pending_counts_fixed() {
+    fn hint_bar_busy_shows_queue_action() {
+        // When the agent is mid-round, Enter stages the message in the queue
+        // (the queue bar below shows the staged item). The detailed
+        // insert/next-round wording and Tab alternative now live in the queue
+        // bar, not this sentence.
         let mut terminal = neenee_tui_engine::TestTerminal::new(120, 1);
         terminal.draw(|frame| {
             draw_hint_bar(
@@ -1355,10 +1509,7 @@ mod tests {
                     reasoning_effort: None,
                     shell_active: false,
                     busy: true,
-                    send_next_round: true,
-                    pending_insert: 2,
-                    pending_next_round: 1,
-                    outbox_paused: false,
+                    unattended: false,
                     context_tokens: None,
                 },
                 &Theme::default(),
@@ -1368,11 +1519,11 @@ mod tests {
         let text = (0..buffer.area().width as usize)
             .map(|x| buffer.content[x].symbol().to_string())
             .collect::<String>();
-        assert!(text.contains("Enter send after current reply"));
-        assert!(text.contains("Tab add to current reply"));
-        assert!(text.contains("3 waiting · ↑ edit latest"));
-        assert!(!text.contains("INSERT"));
-        assert!(!text.contains("NEXT"));
+        assert!(text.contains("Enter queue message"), "row was {text:?}");
+        // Queue affordances live in the queue bar, not the hint bar.
+        assert!(!text.contains("waiting"));
+        assert!(!text.contains("edit latest"));
+        assert!(!text.contains("Tab"));
     }
 
     #[test]
@@ -1388,10 +1539,7 @@ mod tests {
                     reasoning_effort: Some("high"),
                     shell_active: false,
                     busy: true,
-                    send_next_round: true,
-                    pending_insert: 2,
-                    pending_next_round: 1,
-                    outbox_paused: false,
+                    unattended: false,
                     context_tokens: None,
                 },
                 &Theme::default(),
@@ -1403,10 +1551,11 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains("Enter send later"), "row was {text:?}");
-        assert!(text.contains("3 waiting"), "row was {text:?}");
-        assert!(!text.contains("◆ high"), "row was {text:?}");
-        assert!(!text.contains("Tab"), "row was {text:?}");
+        // The shorter busy action ("queue message" vs the old insert/next-round
+        // sentence) leaves room for the reasoning tag at this width.
+        assert!(text.contains("Enter queue"), "row was {text:?}");
+        // Queue counts no longer live in the hint bar.
+        assert!(!text.contains("waiting"), "row was {text:?}");
     }
 
     #[test]
@@ -1426,10 +1575,7 @@ mod tests {
                         reasoning_effort: effort,
                         shell_active: false,
                         busy: false,
-                        send_next_round: false,
-                        pending_insert: 0,
-                        pending_next_round: 0,
-                        outbox_paused: false,
+                        unattended: false,
                         context_tokens: None,
                     },
                     &Theme::default(),
@@ -1463,8 +1609,8 @@ mod tests {
         let theme = Theme::default();
         let completions = vec![
             crate::tui::completion::Completion {
-                label: "/pursue".to_string(),
-                description: "Pursue a long-running objective".to_string(),
+                label: "/repeat".to_string(),
+                description: "Schedule a prompt on a cron".to_string(),
                 replace_start: 0,
                 replace_end: 2,
                 kind: crate::tui::completion::CompletionItemKind::Slash,
@@ -1631,11 +1777,90 @@ mod tests {
         let first = row_text(popup.y);
         // Label and description sit in plain padded columns — no `·` (or any
         // other ornament) between them; weight/brightness carry the hierarchy.
-        assert!(first.contains("/pursue"), "row was {first:?}");
+        assert!(first.contains("/repeat"), "row was {first:?}");
         assert!(
-            first.contains("Pursue a long-running objective"),
+            first.contains("Schedule a prompt on a cron"),
             "row was {first:?}"
         );
         assert!(!first.contains('·'), "row was {first:?}");
+    }
+
+    /// Read back a two-row region as joined text for assertion.
+    fn queue_row_text(view: QueueBarView<'_>, width: u16, theme: &Theme) -> String {
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 2);
+        terminal.draw(|f| {
+            draw_queue_bar(f, Rect::new(0, 0, width, 2), view, theme);
+        });
+        let buf = terminal.buffer();
+        let bw = buf.area().width as usize;
+        let mut out = String::new();
+        for y in 0..2usize {
+            for x in 0..width as usize {
+                out.push_str(buf.content[y * bw + x].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn queue_bar_empty_state_hints_how_to_stage() {
+        let text = queue_row_text(
+            QueueBarView {
+                items: &[],
+                paused: false,
+            },
+            70,
+            &Theme::default(),
+        );
+        // Identity + zero count on row 1.
+        assert!(text.contains("queue · 0 · --:--"), "row was {text:?}");
+        // Empty hint on row 2.
+        assert!(text.contains("queue empty"), "row was {text:?}");
+    }
+
+    #[test]
+    fn queue_bar_previews_next_item_with_badge_and_text() {
+        let item = QueueItemView {
+            target: crate::tui::app::SendTarget::NextRound,
+            queued_at_ms: 1_700_000_000_000,
+            text: "fix the flaky test in parser".to_string(),
+        };
+        let text = queue_row_text(
+            QueueBarView {
+                items: &[item],
+                paused: true,
+            },
+            70,
+            &Theme::default(),
+        );
+        // Count reflects the one item.
+        assert!(text.contains("queue · 1 ·"), "row was {text:?}");
+        // Right-pinned target badge + preview text on row 2 (no arrow glyph).
+        assert!(text.contains("next"), "next-round badge missing: {text:?}");
+        assert!(!text.contains('⇥'), "arrow glyph leaked: {text:?}");
+        assert!(
+            text.contains("fix the flaky test"),
+            "preview text missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn queue_bar_insert_target_uses_insert_badge() {
+        let item = QueueItemView {
+            target: crate::tui::app::SendTarget::Insert,
+            queued_at_ms: 1_700_000_000_000,
+            text: "add a comment".to_string(),
+        };
+        let text = queue_row_text(
+            QueueBarView {
+                items: &[item],
+                paused: false,
+            },
+            70,
+            &Theme::default(),
+        );
+        assert!(text.contains("insert"), "insert badge missing: {text:?}");
+        assert!(!text.contains('→'), "arrow glyph leaked: {text:?}");
     }
 }

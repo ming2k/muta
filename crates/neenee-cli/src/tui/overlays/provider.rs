@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use neenee_tui_engine::{
-    Color, Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
+    Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -14,21 +14,24 @@ use crate::tui::model::layout::LayoutMap;
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::tui::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
-    keymap_page_footer_hints, modal_area, modal_frame, modal_header, render_body,
+    keymap_page_footer_hints, keyvocab, modal_area, modal_frame, modal_header, render_body,
     render_modal_footer, render_modal_footer_with_more,
 };
 use crate::tui::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::tui::view::Theme;
 
 /// Draw the **Connections** modal — the provider-instance management surface
-/// (`/connections`). A ranked provider list (favorites → last-used → name)
-/// with a trailing "＋ Add connection" row; each row shows the provider, its
-/// favorite star, and its active model. Enter activates the provider's current
-/// model (or opens the template chooser from the add row); `*` favorites, `e`
-/// edits, `Shift+D` deletes a custom provider. Mirrors the input-history
-/// modal's two-mode (browse/search) design: `/` enters search, the header
-/// stays title-only, a dedicated search row appears beneath it, and rows
-/// highlight matched chars.
+/// (`/connections`). A ranked provider list (last-used → name); each row shows
+/// the instance name and its provider *type* (`· OpenAI`) — never the model
+/// name (models live in the Models picker). There is no per-row "current"
+/// state dot and no favorite concept here (favorite is model-level now,
+/// ADR-0046). Enter activates the provider's current model; `a` adds a new
+/// connection (opens the template chooser from the footer); `e` edits,
+/// `Shift+D` deletes a custom provider. When no instance exists, an empty-state
+/// hint prompts the user to press `a`. Mirrors the input-history modal's
+/// two-mode (browse/search) design: `/` enters search, the header stays
+/// title-only, a dedicated search row appears beneath it, and rows highlight
+/// matched chars.
 ///
 /// `providers` is the pre-computed row set; `modal_index` selects into it (the
 /// value `providers.len()` is the synthetic add row). `scroll` is read and
@@ -55,16 +58,16 @@ pub fn draw_connections_modal(
 
     let header_rect = f.header;
 
-    // The destructive `D delete` uses custom band 70 so it survives width
-    // collapse longer than plain secondaries — it is a one-key destructive
-    // action the user must be able to find.
+    // `D delete` is a one-key destructive action the user must always be able
+    // to find, so it rides a custom band (70) that survives width collapse
+    // longer than plain secondaries. `a add` opens the template chooser.
     let browse_hints: [FooterHint; 6] = [
-        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary("Enter", "activate"),
-        FooterHint::secondary("*", "favorite"),
+        FooterHint::primary(keyvocab::ENTER, "activate"),
+        FooterHint::secondary("a", "add"),
         FooterHint::secondary("e", "edit"),
-        FooterHint::always("Esc", "close"),
+        FooterHint::always(keyvocab::ESC, "close"),
     ];
     let browse_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
         key: "D",
@@ -73,9 +76,9 @@ pub fn draw_connections_modal(
     }];
     let search_hints: [FooterHint; 4] = [
         FooterHint::secondary("type", "filter"),
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::primary("Enter", "activate"),
-        FooterHint::always("Esc", "clear search"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::primary(keyvocab::ENTER, "activate"),
+        FooterHint::always(keyvocab::ESC, "clear search"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
         (&search_hints, &[])
@@ -109,9 +112,31 @@ pub fn draw_connections_modal(
         draw_picker_search_row(frame, search_rect, query, theme);
     }
 
-    // The provider list inserts a synthetic add row past the last provider, so
-    // the body builder reports the selected row's visual line.
-    let (body, follow_line) = provider_list_body(
+    // Empty state: no provider instance exists. Show a centered hint that
+    // points the user at the `a` footer shortcut to add one (browse mode only
+    // — in search mode the standard "no matches" body applies).
+    if providers.is_empty() && !search {
+        let body = connections_empty_body(theme);
+        render_body(
+            frame,
+            body_rect,
+            body,
+            scroll,
+            None,
+            SCROLL_EDGE_MARGIN,
+            false,
+            theme,
+        );
+        if let Some(fo) = f.footer {
+            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        }
+        return area;
+    }
+
+    // The provider list maps 1:1 to `modal_index` (no synthetic add row —
+    // adding is a footer shortcut now), so the selected visual line equals
+    // `modal_index`.
+    let body = provider_list_body(
         providers,
         current_provider,
         key_status,
@@ -120,7 +145,7 @@ pub fn draw_connections_modal(
         body_rect.width as usize,
     );
     let follow = if follow_selection {
-        Some(follow_line)
+        Some(modal_index)
     } else {
         None
     };
@@ -152,11 +177,12 @@ pub fn draw_connections_modal(
 
 /// Draw the **Models** modal — the flat (provider, model) picker
 /// (`Ctrl+M` / `/models`), the daily-driver switch surface. One row per pair
-/// across every provider, `● <model>  · <provider>`; Enter activates the
-/// highlighted pair, `e` opens its per-model settings (effort/thinking,
-/// ADR-0046), and `d` removes the highlighted model when its provider is
-/// user-defined (`highlighted_custom`, pre-computed by the caller). Same
-/// browse/search two-mode design as the Connections modal.
+/// across every provider, `★ <model>  · <provider>`: a favorite star, the model
+/// name, then a dim provider suffix. Enter activates the highlighted pair; `*`
+/// favorites the model (favorite is model-level, ADR-0046); `e` opens its
+/// per-model settings (effort/thinking). There is **no delete** here — models
+/// are served by their provider, so they cannot be removed from this surface.
+/// Same browse/search two-mode design as the Connections modal.
 ///
 /// `models` is the pre-computed flat row set; `modal_index` selects into it.
 /// `scroll` is read and written back so the offset stays consistent with the
@@ -167,7 +193,6 @@ pub fn draw_models_modal(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
     models: &[RankedModel],
-    highlighted_custom: bool,
     current_provider: &str,
     current_model: &str,
     modal_index: usize,
@@ -184,31 +209,24 @@ pub fn draw_models_modal(
 
     let header_rect = f.header;
 
-    // `d remove` (custom providers only) uses custom band 70 so it survives
-    // width collapse longer than plain secondaries — it is a one-key
-    // destructive action the user must be able to find.
-    let browse_hints: [FooterHint; 5] = [
-        FooterHint::navigation("↑↓", "navigate"),
+    // No destructive action here — models are served by their provider and
+    // cannot be removed from this surface. Favorite is model-level (ADR-0046).
+    let browse_hints: [FooterHint; 6] = [
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary("Enter", "activate"),
+        FooterHint::primary(keyvocab::ENTER, "activate"),
+        FooterHint::secondary("*", "favorite"),
         FooterHint::secondary("e", "settings"),
-        FooterHint::always("Esc", "close"),
+        FooterHint::always(keyvocab::ESC, "close"),
     ];
-    let remove_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
-        key: "d",
-        label: "remove",
-        rank: 70,
-    }];
     let search_hints: [FooterHint; 4] = [
         FooterHint::secondary("type", "filter"),
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::primary("Enter", "activate"),
-        FooterHint::always("Esc", "clear search"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::primary(keyvocab::ENTER, "activate"),
+        FooterHint::always(keyvocab::ESC, "clear search"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
         (&search_hints, &[])
-    } else if highlighted_custom {
-        (&browse_hints, &remove_extra)
     } else {
         (&browse_hints, &[])
     };
@@ -325,98 +343,104 @@ fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Th
     );
 }
 
-/// Build the **Connections** provider list body. Each row is
-/// `● ★ <provider…>  <model>`: a leading current-state dot, a favorite star,
-/// the provider name padded to a shared column, and an aligned active-model
-/// suffix. The cursor fills the whole row with the brand tone (no `›` arrow);
-/// the live provider is marked by a green `●`. Returns the body lines and the
-/// *visual* line index of the selected selectable row (`modal_index`).
+/// Build the **Connections** provider list body via the shared [`ListRow`]
+/// standard. Each row is a two-column layout: column 1 (fixed, after the
+/// gutter) is the instance name (bold, fuzzy-highlighted in search); column 2
+/// (midpoint) is the provider *type* label (dim), anchored at the horizontal
+/// center so the two columns spread across the width — no `·`, just the
+/// midpoint gap. The row fills the full `body_width` edge-to-edge. There is no
+/// leading dot or star here (favorite is model-level, ADR-0046); the model name
+/// is intentionally omitted.
 fn provider_list_body(
     providers: &[RankedProvider],
-    current_provider: &str,
+    _current_provider: &str,
     _key_status: &HashMap<String, bool>,
     modal_index: usize,
     theme: &Theme,
     body_width: usize,
-) -> (Vec<Line<'static>>, usize) {
-    // Fixed prefix: dot(1) + gap(1) + star(1) + gap(1) = 4 columns. The name
-    // occupies a shared column (longest name, capped) so every suffix lines up.
-    const PREFIX_COLS: usize = 4;
-    let avail = body_width.saturating_sub(PREFIX_COLS).max(1);
-    let longest_name = providers.iter().map(|p| p.name.width()).max().unwrap_or(0);
-    // Leave room for at least a short suffix; clamp the name column so wide
-    // terminals don't push the model far to the right.
-    let name_col = longest_name
-        .clamp(1, avail.saturating_sub(10).max(1))
-        .min(28);
+) -> Vec<Line<'static>> {
+    use crate::tui::components::options::{ChoiceTone, choice_style};
+    use crate::tui::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
 
-    let mut body: Vec<Line> = Vec::new();
-    let mut selected_visual = 0usize;
+    // Column 1 (instance name) is capped to half the width (minus the gutter
+    // and a little slack) so it never runs into the midpoint column 2.
+    let name_budget = (body_width / 2).saturating_sub(GUTTER + 1).max(1);
+
+    let mut body: Vec<Line<'static>> = Vec::new();
     for (sel, rp) in providers.iter().enumerate() {
-        if sel == modal_index {
-            selected_visual = body.len();
-        }
-
-        let is_current = rp.id == current_provider;
-        let g = PickerRowStyle::new(theme, sel == modal_index, rp.favorite, is_current);
-
-        // Suffix: the provider's active model display name (what Enter
-        // activates). Model counts stay out of the list; the Models picker
-        // shows the actual pairs.
-        let model_name = crate::tui::providers::model_display_name(&rp.model);
-        let suffix = model_name;
-
-        // Pad / truncate the name to the shared column so suffixes align.
-        let name = truncate_ellipsis(&rp.label, name_col);
-        let pad = name_col.saturating_sub(name.width());
-
+        let is_selected = sel == modal_index;
+        let style = choice_style(ChoiceTone::Filled, is_selected, theme);
         let matched = match_set(rp.m.as_ref());
-        let mut spans: Vec<Span> = Vec::new();
-        // Prefix: dot + gap + star + gap, each pre-painted with the row
-        // background so the cursor fill is unbroken edge to edge.
-        spans.push(Span::styled(format!("{} ", g.dot), g.dot_style));
-        spans.push(Span::styled(format!("{} ", g.star), g.star_style));
-        for (char_idx, c) in name.chars().enumerate() {
-            let style = if matched.contains(&char_idx) {
-                g.matched_style
-            } else {
-                g.name_style
-            };
-            spans.push(Span::styled(c.to_string(), style));
-        }
-        // Pad to the name column, then the aligned dim suffix.
-        spans.push(Span::styled(
-            format!("{}  {suffix}", " ".repeat(pad)),
-            g.dim_style,
-        ));
-        body.push(Line::from(spans));
-    }
 
-    // Trailing synthetic "＋ Add connection" row (selectable index == providers.len()).
-    if modal_index == providers.len() {
-        selected_visual = body.len();
+        // Column 1 (fixed): the instance name, one styled atom per char so
+        // fuzzy matches lift to the brand / contrast color.
+        let name = truncate_ellipsis(&rp.label, name_budget);
+        let mut identity = RowGroup::fixed();
+        for (char_idx, c) in name.chars().enumerate() {
+            let cs = if matched.contains(&char_idx) {
+                Style::default()
+                    .bg(style.bg)
+                    .fg(if is_selected { style.fg } else { theme.brand() })
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .bg(style.bg)
+                    .fg(style.fg)
+                    .add_modifier(Modifier::BOLD)
+            };
+            identity = identity.styled(
+                RowStyledAtom {
+                    text: c.to_string(),
+                    style: cs,
+                },
+                0,
+            );
+        }
+
+        let mut row = ListRow::new(style, body_width).group(identity);
+
+        // Column 2 (midpoint): the provider TYPE label, anchored at the
+        // horizontal center so the two columns spread across the width. Omitted
+        // for legacy instances with no recorded template.
+        if let Some(label) = crate::tui::providers::provider_type_label(&rp.template_id) {
+            row = row.group(RowGroup::midpoint().text(label, style.dim, 0));
+        }
+
+        body.push(row.finish());
     }
-    let add_selected = modal_index == providers.len();
-    let add_style = if add_selected {
-        Style::default()
-            .bg(theme.brand())
-            .fg(theme.brand().contrast_fg())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.brand())
-    };
-    body.push(Line::from(Span::styled(" ＋ Add connection", add_style)));
-    (body, selected_visual)
+    body
 }
 
-/// Build the **Models** flat model list body. Each row is
-/// `● <model display>  · <provider>`: the model name bold, then a dim provider
-/// suffix so identical model ids served by different instances stay
-/// distinguishable; the cursor fills the whole row (no `›` arrow), and the
-/// live (provider, model) pair is marked by a green `●`. In search mode the
-/// fuzzy-matched characters of the model label are highlighted (provider-name
-/// fallback rows carry no highlight). An optional reasoning tag
-/// (`◆ think on`) follows the label.
+/// The Connections empty-state body: shown when no provider instance exists.
+/// A centered hint that points the user at the `a` footer shortcut to add one.
+fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
+    vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            " No connections yet",
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Press a to add a provider connection",
+            Style::default().fg(theme.muted()),
+        )),
+    ]
+}
+
+/// Build the **Models** flat model list body via the shared [`ListRow`]
+/// standard. Each row is a two-column layout spread across the width:
+/// - a status group (fixed): the `●` current-state dot and the `★` favorite
+///   star;
+/// - column 1 (fixed): the model name (bold, fuzzy-highlighted in search);
+/// - column 2 (midpoint): the provider label (dim), anchored at the horizontal
+///   center so identical model ids served by different instances stay cleanly
+///   separated as a second column — no `·`;
+/// - an optional trailing reasoning tag (`◆ think on`), right-pinned.
+///
+/// The row fills the full `body_width` edge-to-edge. Favorite is model-level
+/// (ADR-0046).
 fn model_list_body(
     models: &[RankedModel],
     current_provider: &str,
@@ -425,63 +449,100 @@ fn model_list_body(
     theme: &Theme,
     body_width: usize,
 ) -> Vec<Line<'static>> {
+    use crate::tui::components::options::{ChoiceTone, choice_style};
+    use crate::tui::components::row::{GROUP_GAP, GUTTER, ListRow, RowGroup, RowStyledAtom};
+
     if models.is_empty() {
         return empty_body(theme);
     }
     let mut body: Vec<Line> = Vec::new();
     for (row, rm) in models.iter().enumerate() {
         let is_current = rm.provider_id == current_provider && rm.model == current_model;
-        // Favorite is provider-level and managed in the Connections modal, so
-        // the per-row star is suppressed here to keep the model list
-        // uncluttered.
-        let g = PickerRowStyle::new(theme, row == modal_index, false, is_current);
+        let is_selected = row == modal_index;
+        let style = choice_style(ChoiceTone::Filled, is_selected, theme);
 
-        // Prefix: dot(1) + gap(3) = 4 columns (matches the Connections list's
-        // 4-col prefix so the two pickers align vertically).
-        const PREFIX_COLS: usize = 4;
+        // Status group (fixed): the two independent state glyphs. The
+        // current-state dot borrows the `ok` tone (green = active); the
+        // favorite star borrows `warn` when set, else stays muted/blank.
+        let status = RowGroup::fixed()
+            .glyph(
+                if is_current { "●" } else { " " },
+                if is_current { theme.ok() } else { style.dim },
+                0,
+            )
+            .glyph(
+                if rm.favorite { "★" } else { " " },
+                if rm.favorite { theme.warn() } else { style.dim },
+                1,
+            );
 
         // The reasoning tag. ADR-0046: reasoning is opt-in, so a model only
-        // shows a tag when it has actually been turned on (thinking on). Then
-        // we show its effort level (or a bare "think on" when effort is the
-        // default). An unconfigured model — the common case — shows nothing,
-        // keeping the list quiet and making opted-in models stand out.
+        // shows a tag when it has actually been turned on (thinking on), then
+        // with its effort level. An unconfigured model shows nothing.
         let tag = match (rm.thinking, rm.effort.as_deref()) {
-            (Some(true), Some(effort)) => format!(" ◆ think on · {effort}"),
-            (Some(true), None) => " ◆ think on".to_string(),
+            (Some(true), Some(effort)) => format!("think on {effort}"),
+            (Some(true), None) => "think on".to_string(),
             _ => String::new(),
         };
-        let suffix = format!(" · {}", rm.provider_label);
-        let label_budget = body_width
-            .saturating_sub(PREFIX_COLS)
-            .saturating_sub(suffix.width())
-            .saturating_sub(tag.width())
-            .max(1);
-        let label = truncate_ellipsis(&rm.label, label_budget);
 
+        // Column 1 (model name) is capped to the left half so it never runs
+        // into the midpoint provider column. Reserve the status group width,
+        // its gutter + following GROUP_GAP, and the trailing tag if any.
+        let status_w = 4; // dot + gap + star
+        let tag_w = if tag.is_empty() { 0 } else { tag.width() + 2 }; // glyph + gap
+        let name_budget = (body_width / 2)
+            .saturating_sub(GUTTER + status_w + GROUP_GAP)
+            .saturating_sub(tag_w)
+            .max(1);
+        let name = truncate_ellipsis(&rm.label, name_budget);
+
+        // Column 1: the model name, one styled atom per char so fuzzy matches
+        // lift to the brand / contrast color.
         let matched = match_set(rm.m.as_ref());
-        let mut spans: Vec<Span> = Vec::new();
-        spans.push(Span::styled(format!("{}   ", g.dot), g.dot_style));
-        for (char_idx, c) in label.chars().enumerate() {
-            let style = if matched.contains(&char_idx) {
-                g.matched_style
+        let mut identity = RowGroup::fixed();
+        for (char_idx, c) in name.chars().enumerate() {
+            let cs = if matched.contains(&char_idx) {
+                Style::default()
+                    .bg(style.bg)
+                    .fg(if is_selected { style.fg } else { theme.brand() })
+                    .add_modifier(Modifier::BOLD)
             } else {
-                g.name_style
+                Style::default()
+                    .bg(style.bg)
+                    .fg(style.fg)
+                    .add_modifier(Modifier::BOLD)
             };
-            spans.push(Span::styled(c.to_string(), style));
+            identity = identity.styled(
+                RowStyledAtom {
+                    text: c.to_string(),
+                    style: cs,
+                },
+                0,
+            );
         }
-        // The dim provider suffix never participates in the fuzzy highlight.
-        spans.push(Span::styled(suffix, g.dim_style));
+
+        // Column 2 (midpoint): the provider label, anchored at the horizontal
+        // center so the two columns spread across the width.
+        let mut list_row = ListRow::new(style, body_width)
+            .group(status)
+            .group(identity)
+            .group(RowGroup::midpoint().text(rm.provider_label.as_str(), style.dim, 0));
+
+        // Optional trailing reasoning tag, right-pinned and info-toned. On a
+        // brand-filled selected row it lifts to the contrast foreground.
         if !tag.is_empty() {
-            // The reasoning tag dims onto the row; on a brand-filled cursor row
-            // it lifts to the contrast foreground so it stays legible.
-            let tag_fg = if row == modal_index {
-                g.fill_fg
+            let tag_fg = if is_selected {
+                list_row.fill_fg()
             } else {
                 theme.info()
             };
-            spans.push(Span::styled(tag, Style::default().bg(g.bg).fg(tag_fg)));
+            list_row = list_row.group(
+                RowGroup::trailing()
+                    .glyph("◆", tag_fg, 0)
+                    .text(tag, tag_fg, 1),
+            );
         }
-        body.push(Line::from(spans));
+        body.push(list_row.finish());
     }
     body
 }
@@ -501,87 +562,6 @@ fn empty_body(theme: &Theme) -> Vec<Line<'static>> {
 fn match_set(m: Option<&crate::tui::fuzzy::FuzzyMatch>) -> std::collections::HashSet<usize> {
     m.map(|m| m.positions.iter().copied().collect())
         .unwrap_or_default()
-}
-
-/// The resolved styling for one picker row, computed once from the row's
-/// selected / current state so both picker bodies paint consistently.
-///
-/// State is conveyed across **two independent visual axes**, never collapsed
-/// into a single glyph:
-///
-/// - **Cursor** (where `↑/↓` is): the whole row is filled with the brand tone
-///   (`ChoiceTone::Filled`) — a background fill, the strongest possible
-///   "the cursor is here" signal, and the same language every centered modal
-///   list (config/tools/sessions/…) already speaks. There is **no `›` arrow**:
-///   the arrow was a Flat-era crutch that spent a fixed column to mimic what a
-///   background fill says unambiguously.
-/// - **Current** (the live provider/model): a leading `●` status glyph in the
-///   `ok` tone. This is a *semantic state icon* (a filled radio dot), not a
-///   text decoration — it survives regardless of cursor position and reads as
-///   "this is the one running right now", exactly like a git branch's `*`.
-///   Replaces the old `UNDERLINED` name cue, which was too weak against bold
-///   text on a dark panel.
-///
-/// Fuzzy-match highlighting rides on top of both. On a brand-filled cursor
-/// row `theme.brand()` would vanish into the background, so matched characters
-/// switch to `contrast_fg(brand)` there (white/black by panel luminance) while
-/// keeping `BOLD`; on unselected rows they stay brand-colored bold as before.
-struct PickerRowStyle {
-    /// The row background (brand when selected, panel otherwise). Every span in
-    /// the row must paint this so the cursor fill is unbroken edge to edge.
-    bg: Color,
-    /// Style for the `●`/` ` current-state glyph (independent of cursor).
-    dot_style: Style,
-    /// Style for the `★`/` ` favorite-state glyph (independent of cursor).
-    star_style: Style,
-    /// Style for the row's name characters that are NOT fuzzy-matched.
-    name_style: Style,
-    /// Style for the row's name characters that ARE fuzzy-matched. Adjusted for
-    /// the row's background so matched chars stay readable on a brand fill.
-    matched_style: Style,
-    /// Style for the dim suffix (active model, provider name, etc.).
-    dim_style: Style,
-    /// Foreground of a brand-filled row, used to recolor trailing detail (e.g.
-    /// the reasoning tag) so it stays legible on the fill.
-    fill_fg: Color,
-    /// The current-state glyph: `●` when this is the live row, else a blank.
-    dot: &'static str,
-    /// The favorite-state glyph: `★` when favorited, else a blank.
-    star: &'static str,
-}
-
-impl PickerRowStyle {
-    fn new(theme: &Theme, is_selected: bool, favorite: bool, is_current: bool) -> Self {
-        // The cursor is a brand background fill — the TUI's canonical
-        // "selected row" treatment, shared with every centered modal list.
-        let s = crate::tui::components::options::choice_style(
-            crate::tui::components::options::ChoiceTone::Filled,
-            is_selected,
-            theme,
-        );
-        // On a brand-filled row the brand text color is invisible, so matched
-        // characters lift to the contrast foreground (white/black) + bold; on
-        // an unselected row they stay brand bold against the panel.
-        let matched_fg = if is_selected { s.fg } else { theme.brand() };
-        let bold = Modifier::BOLD;
-        Self {
-            bg: s.bg,
-            // The current-state glyph borrows the `ok` tone — green reads as
-            // "active/healthy" and is orthogonal to the brand cursor fill.
-            dot_style: Style::default().bg(s.bg).fg(theme.ok()).add_modifier(bold),
-            star_style: Style::default().bg(s.bg).fg(if favorite {
-                theme.warn()
-            } else {
-                theme.muted()
-            }),
-            name_style: Style::default().bg(s.bg).fg(s.fg).add_modifier(bold),
-            matched_style: Style::default().bg(s.bg).fg(matched_fg).add_modifier(bold),
-            dim_style: Style::default().bg(s.bg).fg(s.dim),
-            fill_fg: s.fg,
-            dot: if is_current { "●" } else { " " },
-            star: if favorite { "★" } else { " " },
-        }
-    }
 }
 
 /// Draw the provider key editor: a single **API key** field. The model is chosen
@@ -707,17 +687,17 @@ pub fn draw_model_editor(
 
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
-        hints.push(FooterHint::primary("Enter", "save"));
+        hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
         if effort.is_some() || thinking.is_some() {
-            hints.push(FooterHint::secondary("Tab", "field"));
+            hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
         }
         if effort.is_some() {
-            hints.push(FooterHint::secondary("←→", "effort"));
+            hints.push(FooterHint::secondary(keyvocab::ARROWS_LR, "effort"));
         }
         if thinking.is_some() {
-            hints.push(FooterHint::secondary("␣", "thinking"));
+            hints.push(FooterHint::secondary(keyvocab::SPACE, "thinking"));
         }
-        hints.push(FooterHint::always("Esc", "cancel"));
+        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
 
@@ -906,7 +886,7 @@ pub fn draw_oauth_pending(
                 hints.push(FooterHint::secondary("u", "copy url"));
             }
         }
-        hints.push(FooterHint::always("Esc", "cancel"));
+        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
     area
@@ -986,9 +966,9 @@ pub fn draw_provider_template_chooser(
             frame,
             fo,
             &[
-                FooterHint::navigation("↑↓", "navigate"),
-                FooterHint::primary("Enter", "select"),
-                FooterHint::always("Esc", "back"),
+                FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+                FooterHint::primary(keyvocab::ENTER, "select"),
+                FooterHint::always(keyvocab::ESC, "back"),
             ],
             theme,
         );
@@ -1178,15 +1158,15 @@ pub fn draw_custom_provider_editor(
     );
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
-        hints.push(FooterHint::secondary("Tab", "field"));
+        hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
         if model_focused {
             hints.push(FooterHint::secondary("type", "filter"));
-            hints.push(FooterHint::navigation("↑↓", "choose"));
+            hints.push(FooterHint::navigation(keyvocab::ARROWS_UD, "choose"));
         } else {
-            hints.push(FooterHint::navigation("↑↓", "scroll"));
+            hints.push(FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"));
         }
-        hints.push(FooterHint::primary("Enter", "save"));
-        hints.push(FooterHint::always("Esc", "cancel"));
+        hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
+        hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
         render_modal_footer(frame, fo, &hints, theme);
     }
 

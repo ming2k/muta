@@ -8,7 +8,7 @@ use super::common::caret_column;
 use crate::tui::model::layout::LayoutMap;
 use crate::tui::primitives::{
     FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines,
-    keymap_page_footer_hints, modal_area, modal_frame, render_body, render_modal_footer,
+    keymap_page_footer_hints, keyvocab, modal_area, modal_frame, render_body, render_modal_footer,
     render_modal_footer_with_more,
 };
 use crate::tui::view::Theme;
@@ -53,24 +53,24 @@ pub fn draw_history_modal(
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let preview_hints: [FooterHint; 4] = [
-        FooterHint::navigation("↑↓", "next entry"),
-        FooterHint::secondary("Tab", "list"),
-        FooterHint::primary("Enter", "insert"),
-        FooterHint::always("Esc", "close"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "next entry"),
+        FooterHint::secondary(keyvocab::TAB, "list"),
+        FooterHint::primary(keyvocab::ENTER, "insert"),
+        FooterHint::always(keyvocab::ESC, "close"),
     ];
     let search_hints: [FooterHint; 5] = [
         FooterHint::secondary("type", "filter"),
-        FooterHint::navigation("↑↓", "navigate"),
-        FooterHint::secondary("Tab", "preview"),
-        FooterHint::primary("Enter", "insert"),
-        FooterHint::always("Esc", "back"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::secondary(keyvocab::TAB, "preview"),
+        FooterHint::primary(keyvocab::ENTER, "insert"),
+        FooterHint::always(keyvocab::ESC, "back"),
     ];
     let browse_hints: [FooterHint; 5] = [
-        FooterHint::navigation("↑↓", "navigate"),
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::secondary("Tab", "preview"),
-        FooterHint::primary("Enter", "insert"),
-        FooterHint::always("Esc", "close"),
+        FooterHint::secondary(keyvocab::TAB, "preview"),
+        FooterHint::primary(keyvocab::ENTER, "insert"),
+        FooterHint::always(keyvocab::ESC, "close"),
     ];
     let hints: &[FooterHint] = if preview {
         &preview_hints
