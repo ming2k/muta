@@ -2,7 +2,7 @@
 
 One-row persistent summary of the agent's live task list, shown at the top of
 the footer stack — above the [queue bar](queue-bar.md) and the transient
-[activity bar](status-bar.md). It is the permanent home for task-list
+[activity bar](activity-bar.md). It is the permanent home for task-list
 affordances: the activity bar no longer embeds a todos badge, so the list is
 always glanceable while it is non-empty — even while the harness is idle.
 

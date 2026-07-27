@@ -64,10 +64,11 @@ pub(crate) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS
 pub(crate) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(crate) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
-/// Hint bar: a single-line status strip pinned directly below the input box
-/// that surfaces the next input action plus ambient model/context info. Always
-/// one row tall when visible (hidden only while an overlay modal replaces the
-/// chrome).
+/// Hint bar: a single-line strip pinned directly below the input box that
+/// surfaces only the next input action (left) plus the model and context-usage
+/// info (right). It intentionally does **not** carry long-lived session state —
+/// that lives on the status bar below it. Always one row tall when visible
+/// (hidden only while an overlay modal replaces the chrome).
 pub(crate) const HINT_BAR_ROWS: u16 = 1;
 /// Internal left indent of hint-bar content, matching the composer's prompt
 /// prefix feel.
@@ -78,7 +79,24 @@ pub(crate) const HINT_BAR_GAP_MIN: usize = 2;
 /// Gap between adjacent right-aligned hint segments.
 pub(crate) const HINT_BAR_SEGMENT_GAP: usize = 2;
 
+/// Activity bar: the transient liveness row (breathing-dot indicator + live
+/// status label + elapsed timer) shown directly above the input box while a
+/// round is active. Collapses to 0 when idle. Drawn by `draw_activity_bar`.
+pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
+/// Status bar: a single-line strip pinned at the bottom of the footer, below
+/// the hint bar. Dedicated to ambient **session** state — state that describes
+/// the whole session rather than the current input. The left side shows the
+/// workspace path (tilde-shortened, e.g. `~/projects/xx`); the right side
+/// shows session status flags such as `unattended`. Always one row tall when
+/// the footer is visible, so the workspace is always glanceable. Drawn by
+/// `draw_status_bar`.
 pub(crate) const STATUS_BAR_ROWS: u16 = 1;
+/// Internal left indent of status-bar content (matches the hint bar's prompt
+/// prefix feel so the two rows align on the left edge).
+pub(crate) const STATUS_BAR_INNER_PADDING: usize = 1;
+/// Minimum gap between the left workspace cluster and the right-aligned status
+/// cluster of the status bar.
+pub(crate) const STATUS_BAR_GAP_MIN: usize = 2;
 /// Todo bar: a one-line region that leads the footer stack (above the queue
 /// bar and the transient activity bar) and surfaces the live task list — a
 /// `📌 TODOS d/t` identity and a one-line preview of the current item (the

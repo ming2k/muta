@@ -1,96 +1,73 @@
-# Activity bar
+# Status bar
 
-Transient activity indicator shown in the footer stack, directly above the
-input box (below the ambient [todo bar](todo-bar.md) and queue bar). It
-unifies the live status label and the breathing-dot liveness anchor into one
-click-to-open bar. Long-lived session-state flags (`unattended` and friends)
-are deliberately absent — they fold onto the [hint bar](hint-line.md) — and
-the task-list summary lives on its own todo bar above.
+Single-row strip pinned at the bottom of the footer, directly below the
+[hint bar](hint-line.md). It is the dedicated home for ambient **session**
+state — state that describes the whole session rather than the current input.
+
+- **Left:** the workspace path the session is rooted at, tilde-shortened to its
+  `~/...` form (e.g. `~/projects/xx`).
+- **Right:** persistent session status flags, currently just `unattended`.
+
+Neither the [activity bar](activity-bar.md) above the input nor the hint bar
+below the input carries this kind of long-lived state: this row is its
+designated home, so both of those bars stay uncluttered and focused on their
+own concerns (transient liveness, and the next input action respectively).
+
+Unlike the older conditional state row this bar used to be, it is now
+**always present** whenever the footer chrome is visible — the workspace path
+is always glanceable, which is its reason to exist. The right cluster is built
+only from whatever flags are active.
 
 ## Appearance
 
-```text
- ● making edits (23s · Esc Esc to interrupt)
-```
-
-The bar surfaces what the user most wants to know mid-round: the **live
-status** (lead, shimmering muted → brand sweep) and the **elapsed** timer
-inside the interrupt hint. Segments are omitted when there is nothing to
-report, so a plain round reads simply:
+Unattended mode active:
 
 ```text
- ● making edits (3s · Esc Esc to interrupt)
+ ~/projects/xx                                                    unattended
 ```
 
-The structural counters — `round N · turn M · <model>` — no longer live on
-the bar. They take space and change rarely, so they moved into the
-**Activity modal** that this bar opens on click. The whole bar is a click
-target (and `Tab`/`Enter` opens the modal): one glance answers "what's
-happening, how long?", one click shows the full breakdown (Activity tab:
-current prompt, round/turn/model/elapsed; Todos tab: the task list).
+Ordinary session (no flag):
+
+```text
+ ~/projects/xx
+```
+
+On narrow terminals the workspace path is truncated from the right, keeping a
+`~/…`-style prefix plus its tail (the project directory is the meaningful
+part), and the right flag cluster drops before the workspace disappears. The
+row never overflows.
 
 | Attribute | Value |
 |-----------|-------|
-| Location | 1 row directly above the input box |
-| Glyph | `●` (`spinner_glyph`), BOLD |
-| Glyph color | `breathing_color(phase, theme.brand(), theme.surface())` — a cosine luminance sweep between brand and surface so the dot breathes at roughly 10 fps instead of cycling braille frames |
-| Status text color | `theme.brand()` + ITALIC |
-| Elapsed | `theme.muted()` |
+| Location | 1 row directly below the hint bar (bottom of the footer stack) |
+| Height | `STATUS_BAR_ROWS = 1` whenever chrome is visible (never conditionally hidden) |
+| Workspace | `text_muted`, tilde-shortened, truncated from the right (`~/…tail`) when it would collide with the right cluster |
+| `unattended` flag | lowercase, warning tone + BOLD, right-aligned, only while unattended mode is on |
 | Indent | 1 space |
+| Background | `surface` |
 
-The breathing sweep is the TUI's single liveness anchor — every other
-running indicator (tool step, thinking marker) holds a steady
-accent so this dot is the only thing in the user's peripheral vision that
-moves. See [ADR-0008](../../adr/0008-single-breathing-anchor.md).
+## Unattended mode
+
+When unattended mode is active (`--unattended` / `/unattended on`), the
+agent runs without human intervention — no confirmations, no questions.
+The status bar shows a lowercase `unattended` flag in the warning tone, bold,
+right-aligned. Plain text rather than a bracketed pill: it reads as a
+persistent session flag (always-on while the session is elevated) rather than
+a momentary input mode, so it carries its meaning without any chrome.
 
 ## Visibility
 
 | Condition | Visible? |
 |-----------|----------|
-| Idle | No — the row returns to the transcript (the task list lives on the [todo bar](todo-bar.md)) |
-| Streaming assistant text ("responding") | Yes — the bar stays up across the whole round lifecycle, sustaining the breathing-dot liveness anchor (ADR-0008) through the longest phase |
-| Running tool / queued / waiting | Yes |
-| Overlay modal open | No |
-
-The bar persists from round start (user submits) through every phase —
-`queued`, `responding`, tool work, `finalizing response` — and only
-disappears when the harness returns to idle. This keeps the breathing dot
-in peripheral vision for the entire active round and avoids a layout shift
-at the streaming boundary.
-
-## Round and turn
-
-The bar no longer shows the round/turn counters; they live in the Activity
-modal (click the bar) as a detail line `round N · turn M · <model> ·
-<elapsed>`. See [Rounds and turns](../../explanation/agent-design/rounds-and-turns.md)
-for the full concept; in short:
-
-| Counter | Meaning |
-|---------|---------|
-| `round N` | The user-perceived round number (1-indexed). Bumped once per submitted message. |
-| `turn M` | The model-request index within the current round (1-indexed). A turn spans one model request plus the tool work that follows. |
-
-The turn number resets each round; the round number resets only on a new
-session.
-
-## Activity labels
-
-| Tool / phase | Label |
-|--------------|-------|
-| Queued | `queued` |
-| Waiting for provider | `waiting for model` |
-| `read_file` / `list_dir` / `use_skill` | `exploring` |
-| `grep` | `searching codebase` |
-| `write_file` / `edit_file` | `making edits` |
-| `bash` | `running command` |
-| MCP tools (`mcp__*`) | `using MCP` |
-| Finalizing stream | `finalizing response` |
-| Provider retry | `retry 1/4 in 3s · <reason>` — the reason tail is the truncated error message |
+| Chrome visible (no overlay modal) | Yes (always) |
+| Overlay modal open | No (chrome hidden) |
+| Envoy zoom view | No (footer hidden) |
+| Permission sheet open | No — the sheet takes over the input-box, hint, and status rows |
 
 ## Source
 
-`draw_activity_bar` in `render/chrome.rs`. Glyph from `spinner_glyph`;
-luminance sweep from `breathing_color` in the same module. Spinner phase
-driven by `app.spinner_tick` incremented once per frame. Round and turn values
-are mirrored from the round-admission and turn-start events by the response
-listener.
+`draw_status_bar` / `StatusBarView` in `render/chrome.rs`. The workspace path
+is tilde-shortened by `tilde_home` (same module) from `App::cwd`, captured at
+startup. The row's height and placement are resolved in `draw_transcript`
+(`view.rs`) from `STATUS_BAR_ROWS` (`render/design.rs`); the `unattended` flag
+arrives through `App::unattended`.

@@ -434,7 +434,11 @@ impl Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Enter,
     };
-    /// The Tab key.
+    /// The Tab key. Kept for completeness alongside [`keyvocab::TAB`]; the
+    /// queue bar's Tab legend was removed when the insert/next-round toggle
+    /// was dropped, and the other Tab surfaces (history preview, provider
+    /// field cycling) render via `keyvocab::TAB` instead.
+    #[allow(dead_code)]
     pub const TAB: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::Tab,

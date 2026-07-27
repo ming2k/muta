@@ -274,19 +274,10 @@ pub(super) struct UiRuntime {
 }
 
 pub(super) enum OutboxSignal {
-    Inserted {
-        session_id: String,
-        input_id: String,
-    },
+    /// A staged next-round item failed to start its round (e.g. no provider
+    /// configured, or the addressed round is no longer accepting inserts).
+    /// Re-queue the dispatch so the user can recall it or let it retry.
     Unavailable {
-        session_id: String,
-        input_id: String,
-    },
-    Cancelled {
-        session_id: String,
-        input_id: String,
-    },
-    CancelFailed {
         session_id: String,
         input_id: String,
     },
@@ -535,6 +526,22 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
         app.permission_confirm_always = false;
         app.permission_show_details = false;
     }
+}
+
+/// Page step (rows) for a modal-body page scroll (`PageUp` / `PageDown` /
+/// `Ctrl+Up` / `Ctrl+Down`). Uses the last-rendered [`App::modal_body_height`]
+/// when known, falling back to the transcript `view_height` before the first
+/// render after a modal opens. Always at least 1 so a page key never no-ops on
+/// a zero-height capture. This is a free function (not a method) so it can be
+/// evaluated before the mutable borrow of the modal's scroll field without
+/// tripping the borrow checker.
+pub(crate) fn modal_page_step(app: &App) -> usize {
+    let h = if app.modal_body_height > 0 {
+        app.modal_body_height
+    } else {
+        app.view_height
+    };
+    h.saturating_sub(1).max(1) as usize
 }
 
 /// Owns the dedicated terminal-input reader thread used by [`run_app_loop`].
@@ -866,6 +873,11 @@ pub(super) async fn run_app_loop(
             {
                 app.active_modal = Modal::Sessions;
                 app.modal_index = 0;
+                // Reuse the Tools/Mcp/Skills body scroll slot so the picker is
+                // scrollable (PageUp/PageDown/Ctrl+↑↓/wheel) like the other
+                // list modals. Reset on open so a long list starts at the top.
+                app.session_scroll = 0;
+                app.session_modal_follow = true;
             }
             if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
                 match sig {
@@ -1025,11 +1037,7 @@ pub(super) async fn run_app_loop(
         // this side owns only compact outbox and composer state.
         while let Some(signal) = runtime.outbox_signals.lock().await.pop_front() {
             match signal {
-                OutboxSignal::Inserted {
-                    session_id,
-                    input_id,
-                }
-                | OutboxSignal::NextRoundStarted {
+                OutboxSignal::NextRoundStarted {
                     session_id,
                     input_id,
                 } => {
@@ -1038,25 +1046,7 @@ pub(super) async fn run_app_loop(
                 OutboxSignal::Unavailable {
                     session_id,
                     input_id,
-                } => app.promote_to_next_round(&session_id, &input_id),
-                OutboxSignal::Cancelled {
-                    session_id,
-                    input_id,
-                } => {
-                    if let Some(mut dispatch) = app.remove_dispatch(&session_id, &input_id) {
-                        if session_id == viewed_session_id && app.input.is_empty() {
-                            app.restore_dispatch(dispatch);
-                        } else {
-                            dispatch.target = crate::tui::app::SendTarget::NextRound;
-                            dispatch.state = crate::tui::app::QueuedDispatchState::Waiting;
-                            app.pending_dispatch.push_back(dispatch);
-                        }
-                    }
-                }
-                OutboxSignal::CancelFailed {
-                    session_id,
-                    input_id,
-                } => app.cancel_failed(&session_id, &input_id),
+                } => app.requeue_dispatch(&session_id, &input_id),
                 OutboxSignal::RoundCompleted { session_id } => {
                     app.naturally_completed_sessions.insert(session_id);
                 }
@@ -1105,7 +1095,6 @@ pub(super) async fn run_app_loop(
                 app.idle_sessions.contains(*session_id)
                     && app.pending_dispatch.iter().any(|item| {
                         item.session_id == session_id.as_str()
-                            && item.target == crate::tui::app::SendTarget::NextRound
                             && item.state == crate::tui::app::QueuedDispatchState::Waiting
                     })
             })
@@ -1322,7 +1311,6 @@ pub(super) async fn run_app_loop(
                     .iter()
                     .filter(|item| item.session_id == viewed_session_id)
                     .map(|item| view::QueueItemView {
-                        target: item.target,
                         queued_at_ms: item.queued_at_ms,
                         text: item.text.clone(),
                     })
@@ -1345,7 +1333,7 @@ pub(super) async fn run_app_loop(
                         chrome_hidden,
                         queue_bar: view::QueueBarView {
                             items: &queue_items,
-                            paused: app.pending_counts(&viewed_session_id).1 > 0
+                            paused: app.pending_count(&viewed_session_id) > 0
                                 && app.idle_sessions.contains(&viewed_session_id)
                                 && !app
                                     .naturally_completed_sessions
@@ -1367,6 +1355,7 @@ pub(super) async fn run_app_loop(
                 );
                 let input_rect = transcript_render.input_rect;
                 let hint_rect = transcript_render.hint_rect;
+                let status_rect = transcript_render.status_rect;
                 let activity_rect = transcript_render.activity_rect;
                 let todos_rect = transcript_render.todos_rect;
                 let queue_rect = transcript_render.queue_rect;
@@ -1418,13 +1407,36 @@ pub(super) async fn run_app_loop(
                                 && app.active_modal == Modal::None
                                 && app.input.starts_with('!'),
                             busy: app.running_sessions.contains(&viewed_session_id),
-                            unattended: app.unattended,
                             context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                         },
                         &app.theme,
                     );
                 } else {
                     app.hint_context_rect = None;
+                }
+
+                // The status bar caps the footer directly below the hint bar.
+                // It is the dedicated home for ambient session state: the
+                // workspace path on the left, session status flags (e.g.
+                // `unattended`) on the right. Drawn after the hint bar so its
+                // immutable borrow of `app.cwd` does not conflict with the
+                // composer's mutable borrow of `app.input_scroll` below. The
+                // permission sheet covers this row too, so suppress it while
+                // the sheet is open.
+                if !chrome_hidden
+                    && status_rect.height > 0
+                    && app.active_modal != Modal::Permission
+                {
+                    let workspace = crate::tui::chrome::tilde_home(&app.cwd);
+                    view::draw_status_bar(
+                        f,
+                        status_rect,
+                        view::StatusBarView {
+                            workspace: &workspace,
+                            unattended: app.unattended,
+                        },
+                        &app.theme,
+                    );
                 }
 
                 // The input box is only shown when no overlay modal is open. The
@@ -1436,13 +1448,14 @@ pub(super) async fn run_app_loop(
                 if !chrome_hidden {
                     if app.active_modal == Modal::Permission {
                         if let Some(request) = app.pending_permission.as_ref() {
-                            // Extend the slot down by the hint-line height so the
-                            // sheet also covers (replaces) the hint bar.
+                            // Extend the slot down by the hint-line and
+                            // status-line heights so the sheet also covers
+                            // (replaces) both bars below the input.
                             let permission_rect = neenee_tui_engine::Rect::new(
                                 input_rect.x,
                                 input_rect.y,
                                 input_rect.width,
-                                input_rect.height + hint_rect.height,
+                                input_rect.height + hint_rect.height + status_rect.height,
                             );
                             let max_scroll = view::draw_permission_sheet(
                                 f,
@@ -1826,6 +1839,8 @@ pub(super) async fn run_app_loop(
                         app.modal_index
                             .min(app.sessions_overview.len().saturating_sub(1)),
                         app.modal_keymap_open,
+                        &mut app.session_scroll,
+                        app.session_modal_follow,
                         &app.theme,
                     )),
                     Modal::TokenReport => {
@@ -1962,7 +1977,7 @@ pub(super) async fn run_app_loop(
                         f,
                         view::QueueModalView {
                             items: &queue_items,
-                            paused: app.pending_counts(&viewed_session_id).1 > 0
+                            paused: app.pending_count(&viewed_session_id) > 0
                                 && app.idle_sessions.contains(&viewed_session_id)
                                 && !app
                                     .naturally_completed_sessions
@@ -2026,6 +2041,28 @@ pub(super) async fn run_app_loop(
                 }
 
                 app.layout_map = layout_map;
+
+                // Capture the open modal's body height for page-scroll step
+                // sizing. The renderer returns the full panel rect; the body is
+                // that rect minus the header/footer/padding chrome. All
+                // centered modals that paint a scrollable body use the same
+                // `modal_frame(header, footer)` chrome, so the row count is the
+                // shared `modal_chrome_rows` for a header+footer spec. Stays 0
+                // for modals that return no rect (Permission sheet, which
+                // scrolls the transcript behind it via `view_height` instead),
+                // so the page step falls back to the transcript height there.
+                app.modal_body_height = drawn_modal_rect
+                    .map(|r| {
+                        r.height
+                            .saturating_sub(crate::tui::primitives::modal_chrome_rows(
+                                crate::tui::primitives::ModalSpec {
+                                    width_percent: 0,
+                                    header: true,
+                                    footer: true,
+                                },
+                            ))
+                    })
+                    .unwrap_or(0);
 
                 // Record the open modal's actual panel rect (when one is
                 // dismissable) so a click on the backdrop outside it can close it.
@@ -2302,9 +2339,6 @@ pub(super) async fn run_app_loop(
 
             match action {
                 input::InputAction::None => {}
-                input::InputAction::ToggleSendTarget => {
-                    app.send_target = app.send_target.toggled();
-                }
                 input::InputAction::TerminalResized => {
                     // A resize is the prime trigger for crossterm splitting an
                     // in-flight SGR mouse sequence across reads (issue #854).
@@ -2349,40 +2383,22 @@ pub(super) async fn run_app_loop(
                     if !text.is_empty() || has_images {
                         if app.running_sessions.contains(&viewed_session_id) {
                             // Busy sends live in the fixed outbox, not the
-                            // scrollback. NextRound is the default so a staged
-                            // message waits for the running round to finish
-                            // naturally before starting a new one (rather than
-                            // injecting mid-round at the next turn boundary);
-                            // Tab opts the next single send back into Insert.
+                            // scrollback. A staged message always waits for the
+                            // running round to finish naturally before starting a
+                            // new one (next-round only); there is no mid-round
+                            // insert path.
                             let id = uuid::Uuid::new_v4().to_string();
-                            let target = app.send_target;
                             let queued_at_ms = now_epoch_ms();
                             app.pending_dispatch
                                 .push_back(crate::tui::app::QueuedDispatch {
                                     id: id.clone(),
                                     session_id: viewed_session_id.clone(),
-                                    target,
                                     state: crate::tui::app::QueuedDispatchState::Waiting,
                                     text: text.clone(),
                                     queued_at_ms,
                                     images: images.clone(),
                                     text_pastes: text_pastes.clone(),
                                 });
-                            if target == crate::tui::app::SendTarget::Insert {
-                                let expanded =
-                                    composer_attachments::expand_paste_chips(&text, &text_pastes);
-                                let _ = app.tx.send(AgentRequest::InsertUserInput {
-                                    session_id: viewed_session_id.clone(),
-                                    input: neenee_core::QueuedUserInput {
-                                        id,
-                                        text: expanded,
-                                        display_text: Some(text.clone()),
-                                        images: images.clone(),
-                                        sent_at_ms: Some(queued_at_ms),
-                                    },
-                                });
-                            }
-                            app.send_target = crate::tui::app::SendTarget::NextRound;
                             app.record_input_history(text.clone());
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
@@ -2394,7 +2410,6 @@ pub(super) async fn run_app_loop(
                             // in the text as positional labels.
                             let expanded =
                                 composer_attachments::expand_paste_chips(&text, &text_pastes);
-                            app.send_target = crate::tui::app::SendTarget::NextRound;
                             if !app.in_side_view {
                                 runtime.is_responding.store(true, Ordering::SeqCst);
                                 *runtime.activity_status.lock().await = "queued".to_string();
@@ -3675,29 +3690,11 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ScrollUp => {
-                    if app.active_modal == Modal::Activity {
-                        app.activity_scroll = app.activity_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = app.help_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll = app.permissions_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = app.history_scroll.saturating_sub(1);
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = app.model_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = app.question_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::TokenReport {
-                        app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::CustomProvider {
-                        app.custom_scroll = app.custom_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = app.template_scroll.saturating_sub(1);
-                    } else if app.active_modal == Modal::OauthPending {
-                        app.oauth_scroll = app.oauth_scroll.saturating_sub(1);
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = scroll.saturating_sub(1);
                     } else {
                         // While a permission sheet is open the transcript stays
                         // scrollable, so the wheel / page keys drive the
@@ -3710,29 +3707,11 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ScrollDown => {
-                    if app.active_modal == Modal::Activity {
-                        app.activity_scroll = app.activity_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = app.help_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll = app.permissions_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = app.history_scroll.saturating_add(1);
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = app.model_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = app.question_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::TokenReport {
-                        app.token_report_scroll = app.token_report_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::CustomProvider {
-                        app.custom_scroll = app.custom_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = app.template_scroll.saturating_add(1);
-                    } else if app.active_modal == Modal::OauthPending {
-                        app.oauth_scroll = app.oauth_scroll.saturating_add(1);
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = scroll.saturating_add(1);
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(4).min(app.max_scroll);
@@ -3742,56 +3721,32 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ScrollPageUp => {
-                    let step = app.view_height.saturating_sub(1).max(1);
-                    if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll =
-                            app.permissions_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = app.history_scroll.saturating_sub(step as usize);
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = app.model_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = app.help_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::Activity {
-                        app.activity_scroll = app.activity_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = app.question_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = app.template_scroll.saturating_sub(step as usize);
-                    } else if app.active_modal == Modal::OauthPending {
-                        app.oauth_scroll = app.oauth_scroll.saturating_sub(step as usize);
+                    // Read the (Copy) page step up front so the subsequent
+                    // mutable borrow of the scroll field doesn't conflict.
+                    let step = modal_page_step(app);
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = scroll.saturating_sub(step);
                     } else {
+                        let step = app.view_height.saturating_sub(1).max(1);
                         app.follow_bottom = false;
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_sub(step);
                     }
                 }
                 input::InputAction::ScrollPageDown => {
-                    let step = app.view_height.saturating_sub(1).max(1);
-                    if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll =
-                            app.permissions_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = app.history_scroll.saturating_add(step as usize);
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = app.model_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = app.help_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::Activity {
-                        app.activity_scroll = app.activity_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = app.question_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = app.template_scroll.saturating_add(step as usize);
-                    } else if app.active_modal == Modal::OauthPending {
-                        app.oauth_scroll = app.oauth_scroll.saturating_add(step as usize);
+                    // Read the (Copy) page step up front so the subsequent
+                    // mutable borrow of the scroll field doesn't conflict.
+                    let step = modal_page_step(app);
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = scroll.saturating_add(step);
                     } else {
+                        let step = app.view_height.saturating_sub(1).max(1);
                         app.pin_summary_line = None;
                         app.scroll = app.scroll.saturating_add(step).min(app.max_scroll);
                         if app.scroll >= app.max_scroll {
@@ -3800,23 +3755,11 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::ScrollTop => {
-                    if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll = 0;
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = 0;
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = 0;
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = 0;
-                    } else if app.active_modal == Modal::Activity {
-                        app.activity_scroll = 0;
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = 0;
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = 0;
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = 0;
                     } else {
                         app.follow_bottom = false;
                         app.pin_summary_line = None;
@@ -3826,23 +3769,11 @@ pub(super) async fn run_app_loop(
                 input::InputAction::ScrollBottom => {
                     // Modal scroll bounds are clamped by render_body each
                     // frame, so a large number here just means "go to end".
-                    if app.active_modal == Modal::Permissions {
-                        app.permissions_scroll = usize::MAX;
-                    } else if app.active_modal == Modal::HistorySearch {
-                        app.history_modal_follow = false;
-                        app.history_scroll = usize::MAX;
-                    } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-                        app.model_modal_follow = false;
-                        app.model_scroll = usize::MAX;
-                    } else if app.active_modal == Modal::Help {
-                        app.help_scroll = usize::MAX;
-                    } else if app.active_modal == Modal::Activity {
-                        app.activity_scroll = usize::MAX;
-                    } else if app.active_modal == Modal::Question {
-                        app.question_modal_follow = false;
-                        app.question_scroll = usize::MAX;
-                    } else if app.active_modal == Modal::ProviderTemplate {
-                        app.template_scroll = usize::MAX;
+                    if let Some((scroll, follow)) = app.modal_scroll_field() {
+                        if let Some(f) = follow {
+                            *f = false;
+                        }
+                        *scroll = usize::MAX;
                     } else {
                         app.pin_summary_line = None;
                         app.scroll = app.max_scroll;
@@ -4211,12 +4142,6 @@ pub(super) async fn run_app_loop(
                         Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
                             app.restore_dispatch(dispatch);
                         }
-                        Some(crate::tui::app::RecallQueued::CancelInsert { input_id }) => {
-                            let _ = app.tx.send(AgentRequest::CancelInsertedInput {
-                                session_id: viewed_session_id.clone(),
-                                input_id,
-                            });
-                        }
                         None => {}
                     }
                 }
@@ -4299,6 +4224,9 @@ pub(super) async fn run_app_loop(
                         } else {
                             app.modal_index - 1
                         };
+                        // Re-engage body-follow so the moved selection stays on
+                        // screen (cleared again on manual page/wheel scroll).
+                        app.session_modal_follow = true;
                     }
                     Modal::Permissions => {
                         let count = app
@@ -4387,6 +4315,9 @@ pub(super) async fn run_app_loop(
                     Modal::Sessions => {
                         let count = app.sessions_overview.len().max(1);
                         app.modal_index = (app.modal_index + 1) % count;
+                        // Re-engage body-follow so the moved selection stays on
+                        // screen (cleared again on manual page/wheel scroll).
+                        app.session_modal_follow = true;
                     }
                     Modal::Permissions => {
                         let count = app

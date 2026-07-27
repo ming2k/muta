@@ -506,7 +506,8 @@ pub fn sessions() -> io::Result<()> {
             );
             let hint = " ↑↓ navigate · Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                draw_sessions_modal(f, &s.sessions, index, false, &theme);
+                let mut scroll = 0;
+                draw_sessions_modal(f, &s.sessions, index, false, &mut scroll, true, &theme);
             });
         },
         |s, key| -> ShowAction {

@@ -17,11 +17,18 @@ use crate::tui::view::Theme;
 /// Draw the sessions picker: each row shows the session overview plus its
 /// creation and last-interaction times. Enter opens the selected session.
 /// When `keymap_open` is true the body is replaced by the full keybindings list.
+/// `scroll` is read AND written back (clamped to the body height) so the modal
+/// is scrollable with `PageUp` / `PageDown` / `Ctrl+↑/↓` and the mouse wheel;
+/// `follow` keeps the selection on screen after `↑/↓` navigation (cleared on
+/// manual scroll, mirroring the other list modals).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_sessions_modal(
     frame: &mut Frame,
     sessions: &[neenee_core::SessionOverview],
     selected: usize,
     keymap_open: bool,
+    scroll: &mut usize,
+    follow: bool,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::SESSIONS);
@@ -43,7 +50,7 @@ pub fn draw_sessions_modal(
             frame,
             f.body,
             body,
-            &mut 0,
+            scroll,
             None,
             SCROLL_EDGE_MARGIN,
             false,
@@ -103,12 +110,13 @@ pub fn draw_sessions_modal(
         body.push(Line::from(spans));
     }
 
+    let follow_idx = if follow { Some(selected) } else { None };
     render_body(
         frame,
         f.body,
         body,
-        &mut 0,
-        Some(selected),
+        scroll,
+        follow_idx,
         SCROLL_EDGE_MARGIN,
         false,
         theme,

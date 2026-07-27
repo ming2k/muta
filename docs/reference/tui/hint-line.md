@@ -1,9 +1,12 @@
-# Hint line
+# Hint bar
 
-Single-row status strip below the input box. The left side states what
-the next `Enter` does; the right side carries the model name, an optional
-reasoning-effort tag, the context-usage indicator, and the persistent
-session-state flag `unattended` (a warning-toned tag when set).
+Single-row strip pinned directly below the input box. It is **input-focused**:
+the left side states what the next `Enter` does, and the right side carries the
+model name, an optional reasoning-effort tag, and the context-usage indicator.
+
+Long-lived **session** state (the workspace path, the `unattended` flag) does
+**not** live here — it has its own dedicated [status bar](status-bar.md) on the
+row directly below this one.
 
 ## Appearance
 
@@ -19,11 +22,10 @@ Non-reasoning model (effort tag absent):
  Enter send                 Kimi K2.7 Code   89.2k (8%)
 ```
 
-While a turn is running, the left side explains where the next message
-lands, offers the `Tab` alternative, and reports the queued outbox:
+While a turn is running, the left side explains where the next message lands:
 
 ```text
- Enter send after current reply · Tab add to current reply · 2 waiting · ↑ edit latest   Kimi K2.7 Code   89.2k (8%)
+ Enter queue message        Kimi K2.7 Code   89.2k (8%)
 ```
 
 With a `!`-prefixed shell command staged, the Enter action becomes
@@ -33,16 +35,15 @@ With a `!`-prefixed shell command staged, the Enter action becomes
  Enter run command          Kimi K2.7 Code   89.2k (8%)
 ```
 
-On narrow terminals the row degrades in a fixed order: the action
-sentence compacts first (`send later` / `add now`), then the reasoning
-tag and the context meter drop, then the action shrinks to its tiny form;
-the model name is the last ambient item to disappear. The Enter action
-itself never disappears.
+On narrow terminals the row degrades in a fixed order: the action sentence
+compacts first (`queue` / `run`), then the reasoning tag and the context meter
+drop, then the action shrinks to its tiny form; the model name is the last
+ambient item to disappear. The Enter action itself never disappears.
 
 | Attribute | Value |
 |-----------|-------|
-| Location | 1 row below the input box |
-| Left cluster | Next-Enter action sentence (`Enter …`), optional `Tab` alternative, outbox counts (`2 waiting` / `2 paused` + `↑ edit latest`) |
+| Location | 1 row below the input box, above the status bar |
+| Left cluster | Next-Enter action sentence (`Enter …`) |
 | Model name | `brand` + BOLD |
 | Reasoning effort | `◆ {effort}` in `info` + BOLD, only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
 | Context usage | `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); click opens the token-source report |
@@ -75,7 +76,7 @@ completion suggestion when one is open.
 ## Visibility
 
 Hidden when overlay modals are open, and suppressed while the permission
-sheet is open (the sheet takes over the input-box and hint rows).
+sheet is open (the sheet takes over the input-box, hint, and status rows).
 
 ## Source
 

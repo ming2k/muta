@@ -6,7 +6,8 @@
 
 pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::tui::chrome::{
-    HintBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_hint_bar, draw_queue_bar,
+    HintBarView, QueueBarView, QueueItemView, StatusBarView, draw_completion_menu, draw_hint_bar,
+    draw_queue_bar, draw_status_bar,
 };
 pub use crate::tui::composer::{
     INPUT_MSG_IDX, cursor_screen_pos, draw_composer, draw_composer_highlighted,
@@ -14,13 +15,14 @@ pub use crate::tui::composer::{
 // Design tokens are re-exported crate-visibility so the drawing leaves that
 // used to reach them via the old `paint` parent's namespace still resolve.
 pub(crate) use crate::tui::design::{
-    BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH,
-    COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
-    COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS,
-    HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS,
-    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS,
-    TODO_BAR_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
-    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
+    ACTIVITY_BAR_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP,
+    CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT,
+    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
+    FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS,
+    PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS, TODO_BAR_ROWS, STEP_MIN_WIDTH,
+    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
+    TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use crate::tui::disclosure::{StickyStep, draw_sticky_summary_if_needed};
 /// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
@@ -321,8 +323,12 @@ pub struct EnvoyBarInfo {
 pub struct TranscriptRender {
     /// The input box area.
     pub input_rect: Rect,
-    /// The hint-bar area pinned below the input box (zero-sized when hidden).
+    /// The hint-bar area pinned directly below the input box (zero-sized when
+    /// hidden).
     pub hint_rect: Rect,
+    /// The status-bar area pinned directly below the hint bar (zero-sized when
+    /// hidden). Carries session-level state (workspace path + status flags).
+    pub status_rect: Rect,
     /// Screen rect of the activity bar for the current frame, so clicks inside
     /// it open the Activity modal. `None` when no activity bar is shown (idle,
     /// streaming, envoy view, or chrome hidden).
@@ -414,6 +420,7 @@ pub fn draw_transcript(
         return TranscriptRender {
             input_rect: Rect::default(),
             hint_rect: Rect::default(),
+            status_rect: Rect::default(),
             activity_rect: None,
             todos_rect: None,
             queue_rect: None,
@@ -443,19 +450,19 @@ pub fn draw_transcript(
     // whose only chrome is its page header.
     let in_envoy = envoy_bar.is_some();
 
-    // The status bar (animated spinner + activity text) sits directly above the
+    // The activity bar (animated spinner + activity text) sits directly above the
     // input box, below the ambient todo/queue meta bars. It is shown for every
     // active phase — including streaming ("responding"), which is the longest
     // phase and the one where the breathing dot's liveness signal matters most
     // — and hidden only when the harness is idle, so the row returns to the
     // transcript.
-    let status_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
+    let activity_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
     // The activity bar is purely transient now: it shows only while a round is
     // active and hides when idle, so the row returns to the transcript (the
     // persistent task-list summary has its own bar above).
-    let activity_row_needed = status_active;
-    let status_height: u16 = if activity_row_needed {
-        STATUS_BAR_ROWS
+    let activity_row_needed = activity_active;
+    let activity_height: u16 = if activity_row_needed {
+        ACTIVITY_BAR_ROWS
     } else {
         0
     };
@@ -502,23 +509,32 @@ pub fn draw_transcript(
     } else {
         HINT_BAR_ROWS
     };
+    // The status bar caps the footer, directly below the hint bar. It is the
+    // dedicated home for ambient session state — the workspace path on the
+    // left, session status flags (e.g. `unattended`) on the right — so the hint
+    // bar above it stays focused on the next input action. Always present
+    // whenever the footer chrome is visible (it never conditionally hides),
+    // keeping the workspace always glanceable.
+    let status_height: u16 = if chrome_hidden || in_envoy { 0 } else { STATUS_BAR_ROWS };
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
         // Order, top → bottom: gap, todo bar, queue bar, activity bar, input
-        // box, hint bar. The ambient meta bars (todo = task list, queue =
-        // outbox) lead; the activity bar sits directly on top of the input box
-        // so the live status reads as part of the composer; the hint bar caps
-        // the footer (carrying the `unattended` flag that used to have its own
-        // row).
-        FOOTER_TOP_GAP_ROWS + status_height + todo_height + queue_height + input_box_height
+        // box, hint bar, status bar. The ambient meta bars (todo = task list,
+        // queue = outbox) lead; the activity bar sits directly on top of the
+        // input box so the live status reads as part of the composer; the hint
+        // bar carries the next input action + model/context; the status bar
+        // caps the footer with session-level state (workspace path + flags such
+        // as `unattended`, which used to have its own row above the input).
+        FOOTER_TOP_GAP_ROWS + activity_height + todo_height + queue_height + input_box_height
             + hint_height
+            + status_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),                // Transcript page
-            Constraint::Length(footer_height), // Status? + input box + hint bar
+            Constraint::Length(footer_height), // Activity? + input box + hint bar + status bar
         ])
         .split(size);
 
@@ -704,7 +720,12 @@ pub fn draw_transcript(
     let activity_rect = if activity_row_needed {
         draw_activity_bar(
             frame,
-            Rect::new(footer_x, status_y + todo_height + queue_height, footer_w, STATUS_BAR_ROWS),
+            Rect::new(
+                footer_x,
+                status_y + todo_height + queue_height,
+                footer_w,
+                ACTIVITY_BAR_ROWS,
+            ),
             &review_alert,
             round_started_at,
             activity,
@@ -718,21 +739,39 @@ pub fn draw_transcript(
     // The input box sits directly below the activity bar.
     let input_rect = Rect::new(
         footer_x,
-        status_y + todo_height + queue_height + status_height,
+        status_y + todo_height + queue_height + activity_height,
         footer_w,
         input_box_height,
     );
 
-    // The hint bar caps the footer, carrying the input action plus ambient
-    // model/context info (and the `unattended` flag, folded in from the old
-    // state bar). Its rect is computed even though its draw call is delegated
-    // to the app loop (which owns the masked input state).
+    // The hint bar sits directly below the input box, carrying the input action
+    // plus ambient model/context info. It no longer carries session-state flags
+    // — those moved to the status bar below it. Its rect is computed even though
+    // its draw call is delegated to the app loop (which owns the masked input
+    // state and the context-token source).
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + todo_height + queue_height + status_height + input_box_height,
+            status_y + todo_height + queue_height + activity_height + input_box_height,
             footer_w,
             hint_height,
+        )
+    } else {
+        Rect::default()
+    };
+
+    // The status bar caps the footer, directly below the hint bar. It is the
+    // dedicated home for ambient session state (workspace path on the left,
+    // status flags such as `unattended` on the right) so the hint bar above it
+    // stays focused on the next input action. Its draw call is delegated to the
+    // app loop (which owns the workspace path and the session-state flags).
+    let status_rect = if status_height > 0 {
+        Rect::new(
+            footer_x,
+            status_y + todo_height + queue_height + activity_height + input_box_height
+                + hint_height,
+            footer_w,
+            status_height,
         )
     } else {
         Rect::default()
@@ -746,6 +785,7 @@ pub fn draw_transcript(
     TranscriptRender {
         input_rect,
         hint_rect,
+        status_rect,
         activity_rect,
         todos_rect,
         queue_rect,
@@ -959,6 +999,8 @@ mod tests {
                 ],
                 0,
                 false,
+                &mut scroll,
+                true,
                 &theme,
             );
             let question_request = UserQuestionRequest {

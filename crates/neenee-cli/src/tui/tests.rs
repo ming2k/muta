@@ -986,6 +986,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         todos_rect: None,
         queue_rect: None,
         modal_rect: None,
+        modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
         focus_stack: Vec::new(),
@@ -1047,7 +1048,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
-        send_target: crate::tui::app::SendTarget::NextRound,
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),
@@ -1692,13 +1692,12 @@ fn manual_walk_returns_files_and_synthesized_dirs() {
     assert!(!entries.iter().any(|e| e.starts_with(".git")));
 }
 
-use crate::tui::app::{QueuedDispatch, QueuedDispatchState, RecallQueued, SendTarget};
+use crate::tui::app::{QueuedDispatch, QueuedDispatchState, RecallQueued};
 
-fn queued_dispatch(id: &str, session_id: &str, text: &str, target: SendTarget) -> QueuedDispatch {
+fn queued_dispatch(id: &str, session_id: &str, text: &str) -> QueuedDispatch {
     QueuedDispatch {
         id: id.to_string(),
         session_id: session_id.to_string(),
-        target,
         state: QueuedDispatchState::Waiting,
         text: text.to_string(),
         queued_at_ms: 0,
@@ -1715,7 +1714,6 @@ fn queued_dispatch_carries_text_and_images() {
     let d = QueuedDispatch {
         id: "message-1".to_string(),
         session_id: "session-a".to_string(),
-        target: SendTarget::Insert,
         state: QueuedDispatchState::Waiting,
         text: "hello".to_string(),
         queued_at_ms: 0,
@@ -1731,53 +1729,35 @@ fn queued_dispatch_carries_text_and_images() {
 }
 
 #[test]
-fn outbox_counts_and_fifo_dispatch_are_session_scoped() {
+fn outbox_count_and_fifo_dispatch_are_session_scoped() {
+    // Every staged message is a next-round item (the insert/next-round
+    // distinction was removed), so the outbox count is a single per-session
+    // tally and FIFO dispatch is driven purely by `Waiting` state + session.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(queued_dispatch(
-        "a-insert",
-        "session-a",
-        "insert",
-        SendTarget::Insert,
-    ));
-    app.pending_dispatch.push_back(queued_dispatch(
-        "b-next",
-        "session-b",
-        "other",
-        SendTarget::NextRound,
-    ));
-    app.pending_dispatch.push_back(queued_dispatch(
-        "a-next",
-        "session-a",
-        "follow up",
-        SendTarget::NextRound,
-    ));
+    app.pending_dispatch
+        .push_back(queued_dispatch("b-next", "session-b", "other"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("a-next", "session-a", "follow up"));
 
-    assert_eq!(app.pending_counts("session-a"), (1, 1));
-    assert_eq!(app.pending_counts("session-b"), (0, 1));
+    assert_eq!(app.pending_count("session-a"), 1);
+    assert_eq!(app.pending_count("session-b"), 1);
     let dispatch = app
         .begin_next_round_dispatch("session-a")
         .expect("session-a follow-up");
     assert_eq!(dispatch.id, "a-next");
-    assert_eq!(app.pending_dispatch[1].id, "b-next");
+    assert_eq!(app.pending_dispatch[0].id, "b-next");
 }
 
 #[test]
 fn recall_queued_is_lifo_and_restores_input() {
-    // Next-round entries are local-only, so recall can pop them immediately
-    // in LIFO order and restore them without touching transcript history.
+    // Every queued dispatch is a next-round item, so recall pops the newest
+    // staged message in LIFO order and restores it locally without an agent
+    // roundtrip (no insert to cancel).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(queued_dispatch(
-        "1",
-        "session-a",
-        "first",
-        SendTarget::NextRound,
-    ));
-    app.pending_dispatch.push_back(queued_dispatch(
-        "2",
-        "session-a",
-        "second",
-        SendTarget::NextRound,
-    ));
+    app.pending_dispatch
+        .push_back(queued_dispatch("1", "session-a", "first"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("2", "session-a", "second"));
 
     // First recall: most-recently-queued = "second".
     let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
@@ -1815,7 +1795,7 @@ fn recall_queued_restores_staged_images() {
         mime: "image/png".to_string(),
         data: "abc".to_string(),
     };
-    let mut dispatch = queued_dispatch("1", "session-a", "look at this", SendTarget::NextRound);
+    let mut dispatch = queued_dispatch("1", "session-a", "look at this");
     dispatch.images = vec![image.clone()];
     app.pending_dispatch.push_back(dispatch);
 
@@ -1833,23 +1813,24 @@ fn recall_queued_restores_staged_images() {
 }
 
 #[test]
-fn recall_insert_waits_for_authoritative_cancel() {
+fn recall_queued_always_restores_locally() {
+    // With the insert/next-round distinction gone there is no agent-side
+    // cancel to wait for: recall always pops the newest staged message and
+    // hands it back as a local `Restored` item (the event loop then feeds it
+    // to `restore_dispatch`), leaving the queue one item shorter.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(queued_dispatch(
-        "insert-1",
-        "session-a",
-        "queued",
-        SendTarget::Insert,
-    ));
+    app.pending_dispatch
+        .push_back(queued_dispatch("queued-1", "session-a", "queued"));
 
-    assert!(matches!(
-        app.recall_queued("session-a"),
-        Some(RecallQueued::CancelInsert { input_id }) if input_id == "insert-1"
-    ));
-    assert!(app.input.is_empty(), "cancel has not been acknowledged yet");
-    assert_eq!(
-        app.pending_dispatch.front().map(|item| item.state),
-        Some(QueuedDispatchState::Cancelling)
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore, not an agent cancel");
+    };
+    assert_eq!(dispatch.id, "queued-1");
+    app.restore_dispatch(dispatch);
+    assert_eq!(app.input, "queued");
+    assert!(
+        app.pending_dispatch.is_empty(),
+        "recalled item must be removed from the outbox"
     );
 }
 
@@ -1861,12 +1842,8 @@ fn recall_queued_latches_completion_dismissal() {
     // slash-completion popup — a spurious "complete" step the user never asked
     // for. Mirrors the latch in the history-navigation paths.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.pending_dispatch.push_back(queued_dispatch(
-        "1",
-        "session-a",
-        "/help",
-        SendTarget::NextRound,
-    ));
+    app.pending_dispatch
+        .push_back(queued_dispatch("1", "session-a", "/help"));
 
     let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
         panic!("expected local restore");
@@ -2358,4 +2335,105 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
     for m in not_owns {
         assert!(!m.owns_caret(), "{m:?} must not own the caret");
     }
+}
+
+/// `modal_scroll_field` is the single source of truth that every `Scroll*`
+/// action consults: it must resolve each scrollable modal to its own scroll
+/// offset (and the right follow-flag for list modals), and return `None` for
+/// the modals that don't scroll their own body. This is the event-loop half of
+/// "any modal should support scroll" — if a modal is missing here, a page key
+/// silently no-ops inside it.
+#[test]
+fn modal_scroll_field_resolves_every_scrollable_modal() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // Seed a few follow flags so we can assert the helper hands back the
+    // right one (and that mutating through it actually clears it).
+    app.session_modal_follow = true;
+    app.history_modal_follow = true;
+    app.queue_modal_follow = true;
+    app.model_modal_follow = true;
+    app.question_modal_follow = true;
+
+    // List modals return a follow-flag; clearing it must hit the right field.
+    app.active_modal = Modal::Queue;
+    {
+        let (scroll, follow) = app.modal_scroll_field().expect("queue scrolls");
+        *scroll = 5;
+        if let Some(f) = follow {
+            *f = false;
+        }
+    }
+    assert_eq!(app.queue_scroll, 5, "queue scroll mutated through helper");
+    assert!(!app.queue_modal_follow, "queue follow cleared through helper");
+
+    app.active_modal = Modal::Tools;
+    {
+        let (_, follow) = app.modal_scroll_field().expect("tools scrolls");
+        if let Some(f) = follow {
+            *f = false;
+        }
+    }
+    assert!(!app.session_modal_follow, "tools reuses session follow flag");
+
+    app.active_modal = Modal::Sessions;
+    {
+        let (_, follow) = app.modal_scroll_field().expect("sessions scrolls");
+        assert!(follow.is_some(), "sessions shares the session follow flag");
+    }
+
+    // Pure-content modals return a scroll ref but no follow flag.
+    for m in [Modal::Help, Modal::Activity, Modal::Permissions, Modal::Config] {
+        app.active_modal = m;
+        let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
+        assert!(f.is_none(), "{m:?} has no selection-follow flag");
+        // Mutating must hit a distinct field per modal (not all the same slot).
+        *s = 7;
+    }
+    assert_eq!(app.help_scroll, 7);
+    app.active_modal = Modal::Activity;
+    if let Some((s, _)) = app.modal_scroll_field() {
+        *s = 9;
+    }
+    assert_eq!(app.activity_scroll, 9);
+    assert_ne!(app.help_scroll, 9, "each modal has its own field");
+
+    // The non-scrolling modals resolve to None so the action falls through to
+    // the transcript / caret handling.
+    for m in [
+        Modal::None,
+        Modal::Permission,
+        Modal::ModelEditor,
+        Modal::InputInjection,
+    ] {
+        app.active_modal = m;
+        assert!(app.modal_scroll_field().is_none(), "{m:?} must not scroll its own body");
+    }
+}
+
+/// The page step follows the captured modal body height (when known) and
+/// falls back to the transcript `view_height` before the first render. It must
+/// always be at least 1 so a page key never no-ops on a zero capture.
+#[test]
+fn modal_page_step_tracks_body_height_and_floors_at_one() {
+    use crate::tui::event_loop::modal_page_step;
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // No body height captured yet → falls back to view_height, floored at 1.
+    app.view_height = 0;
+    app.modal_body_height = 0;
+    assert_eq!(modal_page_step(&app), 1);
+
+    // Transcript height known, modal not yet rendered → uses view_height - 1.
+    app.view_height = 24;
+    assert_eq!(modal_page_step(&app), 23);
+
+    // Once the modal body height is captured, it wins over view_height so a
+    // page advance matches the actual modal, not the transcript behind it.
+    app.modal_body_height = 10;
+    assert_eq!(modal_page_step(&app), 9, "modal body height takes precedence");
+
+    // A 1-row modal body still yields a step of 1 (never 0).
+    app.modal_body_height = 1;
+    assert_eq!(modal_page_step(&app), 1);
 }

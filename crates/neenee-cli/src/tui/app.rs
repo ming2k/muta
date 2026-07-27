@@ -35,31 +35,10 @@ use crate::tui::{ActivityTab, Modal};
 
 use std::collections::{HashMap, VecDeque};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SendTarget {
-    /// Admit at the next safe model/tool boundary of the running round
-    /// (mid-round, at the next turn). Opted into per-send via Tab when the
-    /// default `NextRound` is not what the user wants for the next message.
-    Insert,
-    /// Wait for the running round to finish naturally, then start a new one.
-    /// This is the default send target: a staged message waits for the round
-    /// rather than injecting mid-round at a turn boundary.
-    NextRound,
-}
-
-impl SendTarget {
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Insert => Self::NextRound,
-            Self::NextRound => Self::Insert,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedDispatchState {
     Waiting,
-    Cancelling,
     Dispatching,
 }
 
@@ -70,7 +49,6 @@ pub enum QueuedDispatchState {
 pub struct QueuedDispatch {
     pub id: String,
     pub session_id: String,
-    pub target: SendTarget,
     pub state: QueuedDispatchState,
     /// The user's literal prompt text, sent verbatim to the agent on dispatch.
     pub text: String,
@@ -86,9 +64,11 @@ pub struct QueuedDispatch {
     pub text_pastes: Vec<String>,
 }
 
+/// Outcome of [`App::recall_queued`]. Every queued dispatch is a next-round
+/// item, so recall always restores the newest staged message into the
+/// composer immediately (no agent roundtrip to cancel).
 pub enum RecallQueued {
     Restored(QueuedDispatch),
-    CancelInsert { input_id: String },
 }
 
 /// Which surface owns the terminal cursor right now — the single source of
@@ -227,6 +207,15 @@ pub struct App {
     /// the composer input and therefore must close through its own restore
     /// path (Provider / ModelEditor).
     pub modal_rect: Option<neenee_tui_engine::Rect>,
+    /// The body (scrollable content) height of the currently-open overlay
+    /// modal, captured each render from the rect the modal renderer paints
+    /// its body into. This is the per-modal equivalent of `view_height` (which
+    /// measures the transcript viewport) and is what `ScrollPageUp` /
+    /// `ScrollPageDown` use as the page step so a page advance always matches
+    /// the actual modal body rather than the transcript behind it. `0` when
+    /// no modal is open (or before the first render after one opens), in
+    /// which case page handlers fall back to `view_height`.
+    pub modal_body_height: u16,
     /// Screen rect of the provider-delete confirm overlay panel
     /// ([`App::pending_provider_delete`]), recorded each render so the
     /// mouse branch can detect outside-click dismissal (a press outside the
@@ -458,10 +447,9 @@ pub struct App {
     pub pending_text_pastes: Vec<String>,
     /// Session-affine compact outbox. Pending items are never appended to the
     /// transcript; the footer shows counts and ↑ recalls the newest item.
+    /// Every staged message waits for the running round to finish naturally
+    /// before starting a new one (next-round only).
     pub pending_dispatch: VecDeque<QueuedDispatch>,
-    /// Target used by the next busy Enter. It resets to `Insert` after send;
-    /// Tab is therefore a one-message modifier for the less-common path.
-    pub send_target: SendTarget,
     /// Sessions whose last interactive round reached its natural completion
     /// event and whose harness has subsequently reported idle. Both facts are
     /// tracked separately so errors/interrupts never auto-run follow-ups.
@@ -771,6 +759,62 @@ impl App {
         !self.selection.is_active() && self.caret_owner() != CaretOwner::None
     }
 
+    /// The modal body's scroll offset and (optional) follow-flag that a
+    /// `Scroll*` action should mutate, keyed off [`App::active_modal`].
+    ///
+    /// This is the single source of truth that the `ScrollUp` / `ScrollDown` /
+    /// `ScrollPageUp` / `ScrollPageDown` / `ScrollTop` / `ScrollBottom` actions
+    /// consult: every scrollable modal resolves to `Some((&mut scroll,
+    /// follow_flag))`, so a key press advances the right field without a
+    /// per-modal `if/else` chain duplicated across six action arms.
+    ///
+    /// The follow flag (`Some` only for list-style modals that auto-follow the
+    /// ↑/↓ selection) is cleared on any manual scroll so the user can browse a
+    /// long list freely until they navigate again — mirroring the established
+    /// per-modal behaviour. Returns `None` for modals that don't scroll their
+    /// own body (the inline permission sheet drives `permission_scroll` via a
+    /// separate action, and the caret-owning text editors have no body scroll).
+    pub(crate) fn modal_scroll_field(
+        &mut self,
+    ) -> Option<(&mut usize, Option<&mut bool>)> {
+        let modal = self.active_modal;
+        match modal {
+            Modal::Help => Some((&mut self.help_scroll, None)),
+            Modal::Activity => Some((&mut self.activity_scroll, None)),
+            Modal::Permissions => Some((&mut self.permissions_scroll, None)),
+            Modal::Config
+            | Modal::ConfigTheme
+            | Modal::ConfigThemeCustom
+            | Modal::ConfigLayout => Some((&mut self.config_scroll, None)),
+            Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
+            Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
+            Modal::ProviderTemplate => Some((&mut self.template_scroll, None)),
+            Modal::CustomProvider => Some((&mut self.custom_scroll, None)),
+            // List-style modals: clear the follow flag so manual scroll wins.
+            Modal::Tools | Modal::Mcp | Modal::Skills | Modal::Sessions => {
+                Some((&mut self.session_scroll, Some(&mut self.session_modal_follow)))
+            }
+            Modal::Queue => Some((&mut self.queue_scroll, Some(&mut self.queue_modal_follow))),
+            Modal::HistorySearch => {
+                Some((&mut self.history_scroll, Some(&mut self.history_modal_follow)))
+            }
+            Modal::Connections | Modal::Models => {
+                Some((&mut self.model_scroll, Some(&mut self.model_modal_follow)))
+            }
+            Modal::Question => {
+                Some((&mut self.question_scroll, Some(&mut self.question_modal_follow)))
+            }
+            // Permission drives its own body via PermissionDetailsUp/Down (and
+            // the transcript behind it scrolls when no step is focused); the
+            // caret-owning text editors have no body scroll. None => the
+            // Scroll* action falls through to the transcript fallback.
+            Modal::None
+            | Modal::Permission
+            | Modal::ModelEditor
+            | Modal::InputInjection => None,
+        }
+    }
+
     /// Reconcile [`App::pending_images`] / [`App::pending_text_pastes`]
     /// against the chips that currently survive in [`App::input`], and
     /// relabel the surviving chips so their `#N` matches their new 1-based
@@ -791,14 +835,14 @@ impl App {
         self.input = new_input;
     }
 
-    pub fn pending_counts(&self, session_id: &str) -> (usize, usize) {
+    /// How many staged messages are waiting in this session's outbox (front
+    /// pops first). All entries are next-round items; a busy Enter always
+    /// queues rather than injecting mid-round.
+    pub fn pending_count(&self, session_id: &str) -> usize {
         self.pending_dispatch
             .iter()
             .filter(|item| item.session_id == session_id)
-            .fold((0, 0), |(insert, next), item| match item.target {
-                SendTarget::Insert => (insert + 1, next),
-                SendTarget::NextRound => (insert, next + 1),
-            })
+            .count()
     }
 
     pub fn remove_dispatch(&mut self, session_id: &str, input_id: &str) -> Option<QueuedDispatch> {
@@ -809,18 +853,11 @@ impl App {
         self.pending_dispatch.remove(position)
     }
 
-    pub fn promote_to_next_round(&mut self, session_id: &str, input_id: &str) {
-        if let Some(item) = self
-            .pending_dispatch
-            .iter_mut()
-            .find(|item| item.session_id == session_id && item.id == input_id)
-        {
-            item.target = SendTarget::NextRound;
-            item.state = QueuedDispatchState::Waiting;
-        }
-    }
-
-    pub fn cancel_failed(&mut self, session_id: &str, input_id: &str) {
+    /// A staged next-round item failed to start its round (e.g. no provider
+    /// configured). Mark it `Waiting` again so the user can recall it or let
+    /// it auto-retry once the blocker clears. Replaces the old
+    /// insert-specific `promote_to_next_round` / `cancel_failed` paths.
+    pub fn requeue_dispatch(&mut self, session_id: &str, input_id: &str) {
         if let Some(item) = self
             .pending_dispatch
             .iter_mut()
@@ -835,27 +872,19 @@ impl App {
     /// therefore return it to `Waiting` without reconstructing user content.
     pub fn begin_next_round_dispatch(&mut self, session_id: &str) -> Option<QueuedDispatch> {
         let item = self.pending_dispatch.iter_mut().find(|item| {
-            item.session_id == session_id
-                && item.target == SendTarget::NextRound
-                && item.state == QueuedDispatchState::Waiting
+            item.session_id == session_id && item.state == QueuedDispatchState::Waiting
         })?;
         item.state = QueuedDispatchState::Dispatching;
         Some(item.clone())
     }
 
-    /// LIFO undo for the viewed session. Next-round items can be restored
-    /// immediately; inserts first ask the agent to cancel and are restored
-    /// only after the authoritative cancellation event wins the race.
+    /// LIFO undo for the viewed session. Every queued dispatch is a
+    /// next-round item, so recall pops the newest staged message and restores
+    /// it into the composer immediately — no agent roundtrip to cancel.
     pub fn recall_queued(&mut self, session_id: &str) -> Option<RecallQueued> {
         let position = self.pending_dispatch.iter().rposition(|item| {
             item.session_id == session_id && item.state == QueuedDispatchState::Waiting
         })?;
-        if self.pending_dispatch[position].target == SendTarget::Insert {
-            self.pending_dispatch[position].state = QueuedDispatchState::Cancelling;
-            return Some(RecallQueued::CancelInsert {
-                input_id: self.pending_dispatch[position].id.clone(),
-            });
-        }
         self.pending_dispatch
             .remove(position)
             .map(RecallQueued::Restored)

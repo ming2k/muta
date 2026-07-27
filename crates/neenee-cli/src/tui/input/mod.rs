@@ -146,6 +146,43 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
     )
 }
 
+/// Whether the active modal paints its own scrollable body — i.e. whether
+/// `PageUp` / `PageDown` / `Ctrl+Up` / `Ctrl+Down` should scroll the modal
+/// body (true) rather than fall through to transcript / caret handling
+/// (false). This is the key→action mirror of `App::modal_scroll_field`: the
+/// exact set of modals whose body scroll offset the event loop advances on a
+/// `Scroll*` action. Kept in sync with that helper so a page key never routes
+/// to a modal the loop can't scroll.
+///
+/// The inline permission sheet, the caret-owning text editors, and the
+/// no-modal baseline are excluded: `PageUp`/`PageDown` there either scroll the
+/// transcript behind the sheet or move the input caret, never a modal body.
+fn scrolls_own_body(modal: super::Modal) -> bool {
+    matches!(
+        modal,
+        super::Modal::Help
+            | super::Modal::Activity
+            | super::Modal::Permissions
+            | super::Modal::Config
+            | super::Modal::ConfigTheme
+            | super::Modal::ConfigThemeCustom
+            | super::Modal::ConfigLayout
+            | super::Modal::TokenReport
+            | super::Modal::OauthPending
+            | super::Modal::ProviderTemplate
+            | super::Modal::CustomProvider
+            | super::Modal::Tools
+            | super::Modal::Mcp
+            | super::Modal::Skills
+            | super::Modal::Sessions
+            | super::Modal::Queue
+            | super::Modal::HistorySearch
+            | super::Modal::Connections
+            | super::Modal::Models
+            | super::Modal::Question
+    )
+}
+
 /// Which OAuth pending-sheet field to copy: the device verification code (the
 /// value the user pastes at github.com/login/device) or the verification URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,9 +200,6 @@ pub enum InputAction {
     Quit,
     /// Send a chat message.
     SendChat(String),
-    /// Toggle busy-send semantics for the next message (insert ↔ next round).
-    /// The default is `NextRound`; Tab opts the next single send into `Insert`.
-    ToggleSendTarget,
     /// Send a slash command.
     SendSlash(String),
     /// Run a shell command directly (the `!` prefix path). The `!` is
@@ -1250,11 +1284,6 @@ pub fn process_event(
                         // entry. The fuzzy filter is a free-text field, so an
                         // alpha key would clash; Tab is the unambiguous gesture.
                         InputAction::HistoryTogglePreview
-                    } else if context.active_modal == super::Modal::None
-                        && context.is_responding
-                        && !context.has_focused_target
-                    {
-                        InputAction::ToggleSendTarget
                     } else {
                         // No completion open and no modal field to cycle: Tab
                         // is a no-op. (There is no zone switching: focus is
@@ -1866,6 +1895,27 @@ pub fn process_event(
                 {
                     InputAction::FocusNextTarget
                 }
+                // Ctrl+↑ / Ctrl+↓ inside a modal scroll the modal body by one
+                // page — the same gesture a pager or editor binds to a
+                // half-page jump. Mirrors PageUp / PageDown so users have both
+                // the dedicated keys and the chord (useful on keyboards without
+                // Page keys, and consistent with the transcript's Ctrl+↑/↓
+                // focus gesture on the no-modal baseline). Routed through the
+                // shared `Scroll*` actions so the same per-modal field advances
+                // as every other scroll input. Must precede the bare ↑/↓ arms
+                // because those match any modifier.
+                KeyCode::Up
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && scrolls_own_body(context.active_modal) =>
+                {
+                    InputAction::ScrollPageUp
+                }
+                KeyCode::Down
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && scrolls_own_body(context.active_modal) =>
+                {
+                    InputAction::ScrollPageDown
+                }
                 KeyCode::Up => {
                     // While the in-modal keymap page is open, ↑/↓ scroll it.
                     if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
@@ -1999,25 +2049,24 @@ pub fn process_event(
                         }
                     }
                 }
+                // PageUp / PageDown scroll by one viewport page. On the
+                // no-modal baseline and the inline permission sheet this means
+                // the transcript behind the prompt; for every modal that paints
+                // its own scrollable body it means that body. Modals that
+                // neither scroll the transcript nor own a body (the caret-
+                // owning text editors) fall through to caret / no-op handling
+                // via the `_` arm below.
                 KeyCode::PageUp
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None
-                            | super::Modal::Permission
-                            | super::Modal::Question
-                            | super::Modal::OauthPending
-                    ) =>
+                    if context.active_modal == super::Modal::None
+                        || context.active_modal == super::Modal::Permission
+                        || scrolls_own_body(context.active_modal) =>
                 {
                     InputAction::ScrollPageUp
                 }
                 KeyCode::PageDown
-                    if matches!(
-                        context.active_modal,
-                        super::Modal::None
-                            | super::Modal::Permission
-                            | super::Modal::Question
-                            | super::Modal::OauthPending
-                    ) =>
+                    if context.active_modal == super::Modal::None
+                        || context.active_modal == super::Modal::Permission
+                        || scrolls_own_body(context.active_modal) =>
                 {
                     InputAction::ScrollPageDown
                 }
@@ -3208,7 +3257,11 @@ mod tests {
     }
 
     #[test]
-    fn tab_toggles_busy_send_target_without_editing_the_draft() {
+    fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
+        // The Tab toggle for the insert/next-round send target was removed — a
+        // busy Enter always queues for the next round. With no completion,
+        // modal, or focused target, Tab must fall through to a no-op and leave
+        // the draft untouched.
         let mut input = String::from("follow up");
         let mut cursor = input.chars().count();
         let mut drag = SelectionDrag::default();
@@ -3241,7 +3294,7 @@ mod tests {
             },
             &mut drag,
         );
-        assert_eq!(action, InputAction::ToggleSendTarget);
+        assert_eq!(action, InputAction::None);
         assert_eq!(input, "follow up");
     }
 
@@ -3560,6 +3613,170 @@ mod tests {
             ),
             InputAction::ScrollPageDown
         );
+    }
+
+    /// Every modal that paints its own scrollable body must route PageUp /
+    /// PageDown to a body page-scroll action — not just the four modals the
+    /// old gate covered (None / Permission / Question / OauthPending). This
+    /// is the regression guard for "any modal should support scroll".
+    #[test]
+    fn page_keys_scroll_every_scrollable_modal_body() {
+        let scrollable = [
+            crate::tui::Modal::Help,
+            crate::tui::Modal::Activity,
+            crate::tui::Modal::Permissions,
+            crate::tui::Modal::Config,
+            crate::tui::Modal::ConfigTheme,
+            crate::tui::Modal::ConfigThemeCustom,
+            crate::tui::Modal::ConfigLayout,
+            crate::tui::Modal::TokenReport,
+            crate::tui::Modal::OauthPending,
+            crate::tui::Modal::ProviderTemplate,
+            crate::tui::Modal::CustomProvider,
+            crate::tui::Modal::Tools,
+            crate::tui::Modal::Mcp,
+            crate::tui::Modal::Skills,
+            crate::tui::Modal::Sessions,
+            crate::tui::Modal::Queue,
+            crate::tui::Modal::HistorySearch,
+            crate::tui::Modal::Connections,
+            crate::tui::Modal::Models,
+            crate::tui::Modal::Question,
+        ];
+        for modal in scrollable {
+            let mut input = String::new();
+            let mut cursor = 0;
+            assert_eq!(
+                run_key(&mut input, &mut cursor, KeyCode::PageUp, KeyModifiers::NONE, modal, false),
+                InputAction::ScrollPageUp,
+                "PageUp should page-scroll the {modal:?} modal body"
+            );
+            assert_eq!(
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::PageDown,
+                    KeyModifiers::NONE,
+                    modal,
+                    false
+                ),
+                InputAction::ScrollPageDown,
+                "PageDown should page-scroll the {modal:?} modal body"
+            );
+        }
+    }
+
+    /// Ctrl+↑ / Ctrl+↓ inside any scrollable modal advance the body by a page
+    /// — the chord a pager/editor binds to a page jump, useful on keyboards
+    /// without dedicated Page keys and consistent across every modal. Mirrors
+    /// PageUp / PageDown.
+    #[test]
+    fn ctrl_arrows_page_scroll_modal_body() {
+        let scrollable = [
+            crate::tui::Modal::Help,
+            crate::tui::Modal::Activity,
+            crate::tui::Modal::Config,
+            crate::tui::Modal::TokenReport,
+            crate::tui::Modal::Sessions,
+            crate::tui::Modal::Queue,
+            crate::tui::Modal::HistorySearch,
+            crate::tui::Modal::Models,
+            crate::tui::Modal::Connections,
+            crate::tui::Modal::Question,
+            crate::tui::Modal::Skills,
+        ];
+        for modal in scrollable {
+            let mut input = String::new();
+            let mut cursor = 0;
+            assert_eq!(
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::Up,
+                    KeyModifiers::CONTROL,
+                    modal,
+                    false
+                ),
+                InputAction::ScrollPageUp,
+                "Ctrl+Up should page-scroll the {modal:?} modal body"
+            );
+            assert_eq!(
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::Down,
+                    KeyModifiers::CONTROL,
+                    modal,
+                    false
+                ),
+                InputAction::ScrollPageDown,
+                "Ctrl+Down should page-scroll the {modal:?} modal body"
+            );
+        }
+    }
+
+    /// On the no-modal baseline, Ctrl+↑ / Ctrl+↓ still drive transcript item
+    /// focus (the established gesture), not page-scroll — the modal page-scroll
+    /// arms are gated on `scrolls_own_body`, so the baseline is untouched.
+    #[test]
+    fn ctrl_arrows_keep_transcript_focus_on_no_modal() {
+        let mut input = String::new();
+        let mut cursor = 0;
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::Up,
+                KeyModifiers::CONTROL,
+                crate::tui::Modal::None,
+                false
+            ),
+            InputAction::FocusPrevTarget
+        );
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::Down,
+                KeyModifiers::CONTROL,
+                crate::tui::Modal::None,
+                false
+            ),
+            InputAction::FocusNextTarget
+        );
+    }
+
+    /// The caret-owning text editors (ModelEditor, InputInjection) have no body
+    /// scroll, so PageUp / PageDown and Ctrl+↑ / Ctrl+↓ must be inert there
+    /// (no-op), not a stray page-scroll or transcript focus gesture.
+    #[test]
+    fn page_keys_are_inert_in_caret_editors() {
+        for modal in [crate::tui::Modal::ModelEditor, crate::tui::Modal::InputInjection] {
+            let mut input = String::new();
+            let mut cursor = 0;
+            assert_eq!(
+                run_key(&mut input, &mut cursor, KeyCode::PageUp, KeyModifiers::NONE, modal, false),
+                InputAction::None,
+                "PageUp should be a no-op in {modal:?}"
+            );
+            assert_eq!(
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::PageDown,
+                    KeyModifiers::NONE,
+                    modal,
+                    false
+                ),
+                InputAction::None,
+                "PageDown should be a no-op in {modal:?}"
+            );
+            assert_eq!(
+                run_key(&mut input, &mut cursor, KeyCode::Up, KeyModifiers::CONTROL, modal, false),
+                InputAction::None,
+                "Ctrl+Up should be a no-op in {modal:?}"
+            );
+        }
     }
 
     #[test]

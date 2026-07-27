@@ -417,24 +417,6 @@ pub async fn run_tui(
                                 .await
                                 .insert(session_id.clone(), snapshot);
                         }
-                        RoundEvent::UserInputInserted(input) => {
-                            let input_id = input.id.clone();
-                            let visible = input.display_text.unwrap_or(input.text);
-                            let mut message = TranscriptMessage::new(Role::User, visible)
-                                .with_origin(UserMessageOrigin::Insert);
-                            message.sent_at_ms = input.sent_at_ms;
-                            message.round = positions_by_session
-                                .get(&session_id)
-                                .copied()
-                                .map(|(round, _)| round);
-                            buf.write().await.push(message);
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::Inserted {
-                                    session_id,
-                                    input_id,
-                                },
-                            );
-                        }
                         RoundEvent::UserInputUnavailable { input_id } => {
                             outbox_signals_clone.lock().await.push_back(
                                 event_loop::OutboxSignal::Unavailable {
@@ -443,22 +425,17 @@ pub async fn run_tui(
                                 },
                             );
                         }
-                        RoundEvent::UserInputCancelled { input_id } => {
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::Cancelled {
-                                    session_id,
-                                    input_id,
-                                },
-                            );
-                        }
-                        RoundEvent::UserInputCancelFailed { input_id } => {
-                            outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::CancelFailed {
-                                    session_id,
-                                    input_id,
-                                },
-                            );
-                        }
+                        // The mid-round insert path is no longer reachable
+                        // from this frontend: a busy Enter always queues for
+                        // the next round, and there is no Tab to opt into
+                        // Insert. These variants remain in the core protocol
+                        // for other frontends / future use, so they are
+                        // handled here as deliberate no-ops rather than masked
+                        // by a catch-all (which would silently swallow any
+                        // genuinely new variant).
+                        RoundEvent::UserInputInserted(_) => {}
+                        RoundEvent::UserInputCancelled { .. } => {}
+                        RoundEvent::UserInputCancelFailed { .. } => {}
                         RoundEvent::NextRoundStarted(input) => {
                             let input_id = input.id.clone();
                             let visible = input.display_text.unwrap_or(input.text);
@@ -1324,6 +1301,7 @@ pub async fn run_tui(
         todos_rect: None,
         queue_rect: None,
         modal_rect: None,
+        modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
         focus_stack: Vec::new(),
@@ -1385,7 +1363,6 @@ pub async fn run_tui(
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
-        send_target: crate::tui::app::SendTarget::NextRound,
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),

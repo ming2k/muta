@@ -9,9 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Queue bar reference page.** `docs/reference/tui/queue-bar.md` documents the
+  two-row outbox summary pinned above the input box, mirroring the todo-bar
+  page.
+- **Status bar.** A new one-row strip caps the footer directly below the hint
+  bar, dedicated to ambient session state: the tilde-shortened workspace path
+  (e.g. `~/projects/xx`) on the left, and persistent status flags
+  (`unattended`) on the right. It is always present while chrome is visible,
+  so the workspace is always glanceable. `docs/reference/tui/status-bar.md`
+  documents it.
+- **Activity bar reference page.** The footer's transient breathing-dot
+  liveness row now has its own `docs/reference/tui/activity-bar.md` page
+  (formerly documented under `status-bar.md`, whose name is now used by the
+  new session-status bar).
+
 ### Changed
 
+- **Hint bar split into input-focused hint bar + session status bar.** The
+  bottom hint row no longer carries the `unattended` flag alongside the model
+  and context meter. It is now purely input-focused — next-`Enter` action on
+  the left, model + reasoning + context on the right — and a new
+  **status bar** sits one row below it carrying session-level state (workspace
+  path on the left, `unattended` on the right). The layout constant that
+  drives the transient activity bar was renamed `STATUS_BAR_ROWS` →
+  `ACTIVITY_BAR_ROWS` to free up the `STATUS_BAR_ROWS` name for the new bar.
+- **Queue bar gets a todos-style identity.** The persistent outbox bar now
+  leads with a `📤` tray glyph + a brand-coloured uppercase `QUEUE` label on a
+  raised surface, paralleling the todo bar's `📌 TODOS` treatment so it reads
+  as a distinct pinned panel rather than a plain footer strip. Row 1 is now
+  `📤 QUEUE N · HH:MM` (count, next-item send time) with a `Esc recall · F2
+  expand` legend; row 2 is the one-line next-item preview. The previous flat
+  `queue · N` tag and the right-pinned `insert`/`next` send-target badge are
+  gone.
+
 ### Removed
+
+- **Tab send-target toggle.** The `Tab` key no longer flips the next busy
+  `Enter` between injecting mid-round (`Insert`) and waiting for a fresh round
+  (`NextRound`). A busy `Enter` now always stages the message to wait for the
+  running round to finish naturally — the mid-round insert path was rarely used
+  and made the queue harder to reason about. The `Tab` keycap dropped out of
+  the queue legend accordingly (Tab still accepts completions and cycles
+  history/modal fields elsewhere). The core `InsertUserInput` capability
+  remains for other frontends; it is just no longer reachable from the TUI.
 
 ## [0.21.0] - 2026-07-27
 
