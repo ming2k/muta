@@ -152,5 +152,3 @@ three-strategy partition is load-bearing.
   modal. The cache fields defined here feed that ledger.
 - [Model context assembly](model-context.md) — why the system prompt is a
   single, stable, rank-ordered block (the shape that maximizes cache hits).
-- [Pursuits](pursuits.md) — pursuit budgets consume these cache counts for
-  cost-aware loop bounds.

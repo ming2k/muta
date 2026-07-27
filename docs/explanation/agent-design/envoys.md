@@ -52,7 +52,6 @@ and nothing else:
 | Conversation history | No | A fresh system + task prompt |
 | Tools | Snapshot, profile-filtered | The tools the bound [profile](#profiles) admits |
 | Write boundary | No | A `WriteScope` resolved from the profile's `write_paths` grant |
-| Pursuit state | No | An empty in-memory pursuit store |
 | Skills | No | No loaded skills |
 | Cancellation token | No | A fresh, independent token |
 | Session persistence | No | The envoy is never persisted |
@@ -202,7 +201,7 @@ The forwarded events carry the same shapes the parent stream does — streaming
 deltas, tool calls, tool results, activity, and (full-duplex) permission and
 `ask_user` requests — so the zoomed view renders through the same transcript
 pipeline as the top-level conversation. Parent-only events with no
-envoy meaning (pursuit updates) are dropped on the way through.
+envoy meaning are dropped on the way through.
 
 ### TUI zoom view
 
@@ -240,16 +239,13 @@ steps. No token needs to link the two — the parent dropping the future is
 enough. The registry entry for the child is removed on return, so it never
 holds a dead handle.
 
-Real token usage from the envoy is accumulated into the parent round's cost,
-so it flows up to the active [pursuit](pursuits.md) if one is set.
+Real token usage from the envoy is accumulated into the parent round's cost.
 
 ## See also
 
 - [`envoy`](../../reference/tools/envoy.md) — parameter reference.
 - [Rounds and turns](rounds-and-turns.md) — the request/response cycle the envoy runs
   internally.
-- [Pursuits](pursuits.md) — how envoy token cost flows up to a parent
-  pursuit.
 - [Harness architecture](harness.md) — the safety bounds that bound an envoy
   round.
 - [ADR-0011](../../adr/0011-subagent-profiles.md) — the capability-axis

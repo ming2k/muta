@@ -10,8 +10,7 @@ loop.
 
 This page is the design deep dive. For where hooks sit in the control plane
 see [Harness architecture](harness.md); for the events they share with other
-mechanisms see [Rounds and turns](rounds-and-turns.md),
-[Pursuits](pursuits.md), and
+mechanisms see [Rounds and turns](rounds-and-turns.md) and
 [Context compaction](context-compaction.md). For the configuration fields see
 [Configuration Reference](../../reference/configuration.md#hooks); for the
 decision history see [ADR-0025](../../adr/0025-lifecycle-event-hooks.md).
@@ -34,9 +33,8 @@ The distinguishing constraint is that hooks are **user-programmable
 lifecycle points**, not a second copy of the engines that already drive the
 agent. Context pressure, turn counting, and the clock are each already owned
 by a purpose-built mechanism — `CompactionPolicy` decides when to relieve
-pressure, `/pursue` drives within-round continuation, `/repeat` drives
-clock-based work. Hooks do not re-expose those as configurable axes; they
-expose the lifecycle events those engines fire on.
+pressure, `/repeat` drives clock-based work. Hooks do not re-expose those as
+configurable axes; they expose the lifecycle events those engines fire on.
 
 ## One event axis, implicit capability
 
@@ -170,12 +168,10 @@ tool call declared
                         └─ inject context? → hidden message on the next turn
 ```
 
-At round end, the `Stop` hook composes with the `/pursue` stop-gate. The
-pursuit gate is queried first (it owns its safety cap and completion signal);
-only when the pursuit lets the round stop do `Stop` hooks get a vote. The round
-ends only when **both** agree to stop. A `Stop` hook that denies forces one
-more turn with its reason fed back as a hidden user message — the same shape
-a pursuit uses, just driven by an external script instead of a condition.
+At round end, a `Stop` hook is the only thing that can refuse a round ending
+and force one more turn. A `Stop` hook that denies forces one more turn with
+its reason fed back as a hidden user message. If no `Stop` hook is configured
+(or none denies), the round ends on the model's natural stop.
 
 Around compaction, a `PreCompact` hook's injected context is folded into the
 summary prompt (so a hook can say "prefer keeping the test files" and have it
@@ -205,8 +201,6 @@ influence what the model summarizes), and `PostCompact` observes the result.
   and the permission broker a `PreToolUse` hook precedes
 - [Rounds and turns](rounds-and-turns.md) — the model/tool turn the per-tool
   events bracket
-- [Pursuits](pursuits.md) — the `/pursue` stop-gate a `Stop` hook composes
-  with at round end
 - [Context compaction](context-compaction.md) — the summarization the
   `PreCompact` / `PostCompact` events surround
 - [Configuration Reference](../../reference/configuration.md#hooks) — the

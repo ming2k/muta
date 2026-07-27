@@ -19,7 +19,7 @@
 
 ## Features
 
-- **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
+- **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
 - **Scheduled Prompts** — Schedule recurring prompts on a clock with `/repeat` so the agent can run unattended on a schedule.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
@@ -43,7 +43,7 @@ cd neenee
 cargo run --release
 ```
 
-On first launch, press `Ctrl+M` to pick a provider and enter your API key. Then just start typing.
+On first launch, press `Ctrl+M` to pick a model and enter your API key. Then just start typing.
 
 ## Key Bindings
 
@@ -51,7 +51,7 @@ On first launch, press `Ctrl+M` to pick a provider and enter your API key. Then 
 |-----|--------|
 | `Enter` | Send message |
 | `Tab` | Accept slash-command / `@path` completion |
-| `Ctrl+M` | Open provider picker |
+| `Ctrl+M` | Open the model picker |
 | `Ctrl+T` | Open todos |
 | `Ctrl+B` | Toggle between input and conversation stream |
 | `Ctrl+C` | Copy → interrupt → close modal → clear → quit |
@@ -61,7 +61,6 @@ On first launch, press `Ctrl+M` to pick a provider and enter your API key. Then 
 
 | Command | Description |
 |---------|-------------|
-| `/pursue <condition>` | Drive the agent until the condition is met (stop-gate) |
 | `/repeat <cron> <prompt>` | Schedule a prompt on a cron expression |
 | `/compact` | Compact context to free up space |
 | `/session list` | Browse and resume past sessions |

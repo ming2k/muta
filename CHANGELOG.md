@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+## [0.21.0] - 2026-07-27
+
+### Added
+
 - **Dedicated todo bar.** The agent's live task list now has its own one-row
   bar directly below the activity bar (and above the queue bar), showing
   `todo · done/total · {current item}` with a `Ctrl+T expand` legend. It
@@ -75,10 +83,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reaching any budget stops the loop with a named `terminal_reason` and a usage
   summary. `/pursue status` now shows live passes/tokens/elapsed, and a
   convergence reminder fires past 75% of a budget. The marker-based stop-gate
-  is preserved (no LLM judge). See
-  [ADR-0069](docs/adr/0069-pursuit-budgets-and-stats.md) and its accounting
-  refinement,
-  [ADR-0083](docs/adr/0083-crash-consistent-pursuit-attempt-accounting.md).
+  is preserved (no LLM judge). See ADR-0069 and its accounting refinement,
+  ADR-0083 — both superseded before a file was written, and folded into
+  [ADR-0082](docs/adr/0082-remove-pursuit-stop-gate.md).
 
 - **Configurable TUI color schemes.** The redesigned flat `/config` Settings
   overlay now includes live-previewed Zen, Midnight, Nord, Catppuccin, and
@@ -140,8 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pursuit pass and 50-pass safety limit. Runtime persistence includes
   pass/token/time budget counters; resuming a restored in-flight pursuit
   preserves them. Every non-completion path records a terminal reason, while
-  completion and re-arm clear stale reasons. See
-  [ADR-0083](docs/adr/0083-crash-consistent-pursuit-attempt-accounting.md).
+  completion and re-arm clear stale reasons. See ADR-0083, superseded
+  before a file was written and folded into
+  [ADR-0082](docs/adr/0082-remove-pursuit-stop-gate.md).
 
 - **Pursuit contained behind the stop-gate; pursuit module slimmed to its
   domain values (ADR-0082).** Pursuit now has a written containment
@@ -152,7 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `neenee_core::usage` (the `neenee_core::TokenUsage` re-export is
   unchanged), `RoundOutcome` moved into `neenee-agent` — leaving only
   `Pursuit` and `PursuitBudget`. No user-visible behavior change. See
-  [ADR-0082](docs/adr/0082-contain-pursuit-behind-the-stop-gate.md).
+  [ADR-0082](docs/adr/0082-remove-pursuit-stop-gate.md).
 
 - **Package renamed `neenee` → `neenee-cli`; the command stays `neenee`
   (ADR-0080).** With a second application binary (`neenee-server`), the
@@ -366,6 +374,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The `/pursue` command and the pursuit stop-gate primitive (ADR-0082).**
+  `/pursue <condition>` and all its subcommands (`status`, `stop`, `done`,
+  `clear`, `edit`, `budget`) are gone, along with the forced-continuation
+  stop-gate that drove a single turn until the model signaled completion, hit
+  a 50-pass cap, tripped a budget, or was interrupted. The default round model
+  is now the simplest one: **a round ends when the model stops calling tools,
+  and that is treated as completion.** Forced continuation is the model's
+  responsibility to need, not the client's to perform. For running unattended
+  on a schedule, use `/repeat`. The marker (`[NEENEE_PURSUIT_COMPLETE]`), the
+  durable `Pursuit`/`PursuitBudget`/checkpoint types, the `SessionData` fields,
+  and the `pursuit`/`pursuit_runtime`/`loop_checkpoint` session events are all
+  removed. See
+  [ADR-0082](docs/adr/0082-remove-pursuit-stop-gate.md).
+
 - **Dead pursuit types and the expired legacy pursuit migrations
   (ADR-0082).** The unused `RoundTimer` and `ThreadPursuit` types are
   deleted, and the one-shot migrations that folded a pre-ADR-0032
@@ -374,7 +396,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   releases) has closed. The old file and config keys are left on disk but
   never read; upgrading across the window means re-setting the objective
   with `/pursue`. See
-  [ADR-0082](docs/adr/0082-contain-pursuit-behind-the-stop-gate.md).
+  [ADR-0082](docs/adr/0082-remove-pursuit-stop-gate.md).
 
 - **Editor and quant products.** `neenee-editor`, `neenee-quant`,
   `neenee-quant-gui`, and `neenee-intelligence` are deleted; the repository
@@ -1791,7 +1813,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.20.3...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/ming2k/neenee/releases/tag/v0.21.0
 [0.20.3]: https://github.com/ming2k/neenee/releases/tag/v0.20.3
 [0.20.2]: https://github.com/ming2k/neenee/releases/tag/v0.20.2
 [0.20.1]: https://github.com/ming2k/neenee/releases/tag/v0.20.1

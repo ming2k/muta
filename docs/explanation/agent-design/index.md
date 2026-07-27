@@ -18,11 +18,11 @@ variation on these themes rather than a one-off mechanism.
 | Theme | What it means | Where it shows up |
 |-------|---------------|-------------------|
 | **Capability and access gating** | One permission surface (`ToolAccess`, ordered `Read < Execute < Write`) feeds two gates: the per-agent `WriteScope` boundary and the permission broker. A tool declares its access tier once; both gates consult it. | [Harness architecture](harness.md), [Rounds and turns](rounds-and-turns.md), [MCP servers](mcp.md) |
-| **Isolation boundaries** | Failure in one component must not topple the rest. Envoys are read-only; failed MCP servers are quarantined; pursuit state is per-thread. | [Envoys](envoys.md), [MCP servers](mcp.md), [Pursuits](pursuits.md) |
+| **Isolation boundaries** | Failure in one component must not topple the rest. Envoys are read-only; failed MCP servers are quarantined; each round's state is per-thread. | [Envoys](envoys.md), [MCP servers](mcp.md) |
 | **Durable vs ephemeral state** | The harness decides per concern what survives a restart. The durable session preserves the recoverable scene; the model context is a request-scoped projection; envoy context is fresh per call. | [Session persistence](session-persistence.md), [Model context](model-context.md), [Envoys](envoys.md) |
 | **Streaming and event propagation** | One event type (`AgentEvent`) flows from the agent through orchestration to the TUI; envoys re-emit the same shapes wrapped as `SubTaskEvent`. One pipeline renders everything. | [Envoys](envoys.md), [Harness architecture](harness.md) |
-| **Fallback and degradation** | Every ideal path has a defined degradation: native tool calls fall back to text parsing; a missing MCP `inputSchema` defaults to `{"type":"object"}`; pursuit completion is deferred while checklist work remains. The system never silently relies on the happy path. | [Rounds and turns](rounds-and-turns.md), [MCP servers](mcp.md), [Pursuits](pursuits.md) |
-| **Control plane vs domain** | The harness owns steering (mode, pursuit, retry, loop); providers and tools own I/O. `EnvoyTool` lives in the agent crate because spawning an envoy is steering, not a domain action. | [Harness architecture](harness.md), [Envoys](envoys.md) |
+| **Fallback and degradation** | Every ideal path has a defined degradation: native tool calls fall back to text parsing; a missing MCP `inputSchema` defaults to `{"type":"object"}`; the round ends on the model's natural stop unless a `Stop` hook says otherwise. The system never silently relies on the happy path. | [Rounds and turns](rounds-and-turns.md), [MCP servers](mcp.md) |
+| **Control plane vs domain** | The harness owns steering (mode, retry, loop); providers and tools own I/O. `EnvoyTool` lives in the agent crate because spawning an envoy is steering, not a domain action. | [Harness architecture](harness.md), [Envoys](envoys.md) |
 
 ## The canon, in reading order
 
@@ -47,8 +47,8 @@ model of one agent round.
    whole assembly auditable. Read after the structural map to see how every
    mechanism below feeds the model's context.
 4. [Session persistence](session-persistence.md) — the durable local scene:
-   model window, archived transcript, projection metadata, task and pursuit
-   state, and the resume contract that keeps pruning and compaction from being
+   model window, archived transcript, projection metadata, and task state,
+   and the resume contract that keeps pruning and compaction from being
    rediscovered after restart.
 5. [Model context](model-context.md) — the provider-facing request view:
    rebuilt system prompt, model-visible messages, tool schemas, assistant tool

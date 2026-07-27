@@ -249,7 +249,6 @@ dispatch, context pressure, and loop diagnostics.
 | Provider retry safety | Turn | A provider attempt is retryable only before a committed side effect |
 | Context projection | Turn boundary | Tool results may be pruned or compacted before the next model request |
 | Session review / optional hard stop | Turn sequence within a round | These policies observe progress through the ReAct loop |
-| Pursuit continuation and budget accounting | Turn boundary within one round | The stop-gate decides whether to inject another model turn |
 | Transcript durability | Both | Admission persists the round input; tool and continuation boundaries are mid-round save points; terminal commit closes the round |
 
 The rule of thumb: if a concern belongs to the user's request, it is
@@ -299,7 +298,6 @@ call, the round closes.
   splits in two (native vs fallback)
 - [Guided decoding](../guided-decoding.md) — the constrained-decoding
   layer that produces valid native calls
-- [Pursuits](pursuits.md) — stop-gate continuation and pursuit-pass accounting
 - [Envoys](envoys.md) — independent child rounds and turn sequences
   for child agents
 - [How to add a tool](../../how-to/add-a-tool.md) — adding a new tool

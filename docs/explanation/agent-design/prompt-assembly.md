@@ -18,7 +18,7 @@ in parallel:
 
 | Channel | What it carries | Rebuilt when | How it reaches the model |
 |---------|-----------------|--------------|--------------------------|
-| **System** | Identity, behavioral policy, and live state such as the pursuit | Every request, from scratch | A single head system message |
+| **System** | Identity, behavioral policy, and live state such as the active model | Every request, from scratch | A single head system message |
 | **User** | Genuine user input, plus harness-injected steering notes | Appended as the round proceeds | User-role messages |
 | **Tools** | Each tool's name, description, and parameter schema | Every request | The native function-calling `tools` field, outside the conversation |
 
@@ -50,9 +50,7 @@ section present only when its precondition holds:
    carry work through implementation and verification. An unattended session
    adds the stronger rule that no human is reachable and ambiguity must be
    resolved without waiting for input.
-4. **Active pursuit.** When a session has an active pursuit, its objective is
-   inlined into the system message as live context. See [Pursuits](pursuits.md).
-5. **Conditional workflow guidance.** Tool schemas are declared natively (see
+4. **Conditional workflow guidance.** Tool schemas are declared natively (see
    [Tools](#tools-declared-not-described)), but cross-tool workflow policy may
    exceed what one schema can express. Delegation and dedicated file-editing
    guidance appear only when a matching capability is admitted.
@@ -83,8 +81,6 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 
 | Injection | Trigger | Intent |
 |-----------|---------|--------|
-| **Pursuit continuation** | The `/pursue` stop-gate forces another turn because the pursuit is not yet complete | Re-anchor the model on the objective and define what counts as completion; the prompt marks the objective as untrusted user data and sets rigorous completion-audit criteria so the model does not declare victory prematurely |
-| **Pursuit objective updated** | The user edits the active pursuit mid-flight | Tell the model the objective changed and to drop work that only served the old one |
 | **Doom-loop block note** | The optional deterministic guard blocks a repeated watched tool signature before execution | Tell the model the call was refused and require a different command, file, query, or an explicit `abort` |
 | **Compaction checkpoint** | Context pressure triggers compaction | Wrap a model-written summary of archived rounds under a stable header that flags it as durable context, not a new request. See [Context compaction](context-compaction.md) |
 | **Implicit skill** | The latest user message mentions a skill name | Load the skill body so the model behaves as if it had explicitly invoked it. See [Skills](skills.md) |
@@ -99,14 +95,10 @@ judgement. Its normalization is deliberately conservative, so it remains an
 advanced, default-off policy rather than an always-on heuristic. See the
 [Configuration Reference](../../reference/configuration.md#agent-behavior).
 
-The injected prompts follow a consistent design. Pursuit-related prompts wrap
-user-supplied text in an XML sentinel (`<objective>` / `<untrusted_objective>`)
-and explicitly label it as user data, not higher-priority instructions — a
-prompt-injection guard that treats the objective as the task to pursue, never as
-authority to override the system message. They also encode fidelity and
-completion-audit rules in prose: optimize for movement toward the requested end
-state, do not substitute a narrower easier task, and treat completion as
-unproven until current evidence proves every requirement.
+The injected prompts follow a consistent provenance design. Every harness
+injection carries a structured record of *what* it is and *why* it is here, so
+the transcript stays reconstructible: resume, replay, and audit can answer
+"what was injected, when, and why" without fragile string-sniffing.
 
 ## The user channel: genuine versus injected
 
@@ -195,8 +187,7 @@ event-driven user context carries the kind specific to its lifecycle source.
 
 ## Adjacent layers
 
-Each injection mechanism has a deep-dive of its own: [Pursuits](pursuits.md)
-for the continuation and objective-update prompts, [Context
+Each injection mechanism has a deep-dive of its own: [Context
 compaction](context-compaction.md) for the checkpoint, [Skills](skills.md) for
 implicit loading, [Lifecycle hooks](hooks.md) for hook-driven context, and
 [Envoys](envoys.md) for inter-agent steering. The protocol contract that

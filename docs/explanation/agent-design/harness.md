@@ -120,7 +120,7 @@ bounded exponential backoff using `provider_retry_base_ms` and
 `provider_retry_max_ms`.
 
 The TUI shows the next attempt and countdown without adding transcript noise.
-`Esc`, `/pursue stop`, session switching, or a newer request cancels the wait.
+`Esc`, session switching, or a newer request cancels the wait.
 Partial streamed assistant text is withdrawn before retry. A completed
 tool-bearing turn is a checkpoint: its results stay in history while only the
 pending provider request is retried. Request preparation, turn-start hooks, and tools
