@@ -528,6 +528,7 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 queue_bar: QueueBarView {
                     items: &[],
                     paused: false,
+                    blocked: false,
                 },
                 envoy_bar: None,
                 side_banner: None,

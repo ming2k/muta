@@ -450,6 +450,14 @@ pub struct App {
     /// Every staged message waits for the running round to finish naturally
     /// before starting a new one (next-round only).
     pub pending_dispatch: VecDeque<QueuedDispatch>,
+    /// Sessions whose outbox is hard-blocked by the user. While a session is
+    /// blocked, no queued message auto-drains — not even after its round
+    /// reaches natural completion and the harness goes idle. The queue modal
+    /// blocks a session on open (so items can be managed safely) and resumes
+    /// on close; `F3` toggles the block from the bar without opening the modal.
+    /// Independent of the transient "paused" coloring: a session can be idle
+    /// (visibly paused) without being blocked, and vice versa.
+    pub queue_blocked_sessions: std::collections::HashSet<String>,
     /// Sessions whose last interactive round reached its natural completion
     /// event and whose harness has subsequently reported idle. Both facts are
     /// tracked separately so errors/interrupts never auto-run follow-ups.
@@ -853,6 +861,103 @@ impl App {
         self.pending_dispatch.remove(position)
     }
 
+    /// Is this session's outbox hard-blocked by the user? While blocked, no
+    /// queued message auto-drains — not even after natural completion + idle.
+    /// The queue modal blocks on open and resumes on close; `F3` toggles from
+    /// the bar. A no-op (and leaves the block off) for a session with no
+    /// staged items.
+    pub fn is_queue_blocked(&self, session_id: &str) -> bool {
+        self.queue_blocked_sessions.contains(session_id)
+    }
+
+    /// Toggle the user block on the viewed session's outbox. Mirrors `F3` /
+    /// the queue modal's block control. Returns the new state so the caller
+    /// can reflect it in the render snapshot.
+    pub fn toggle_queue_block(&mut self, session_id: &str) -> bool {
+        if !self.queue_blocked_sessions.insert(session_id.to_string()) {
+            // Already present → remove it (toggle off).
+            self.queue_blocked_sessions.remove(session_id);
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Force the block on, regardless of its current state. Used when the
+    /// queue modal opens so items can be managed safely (delete / reorder /
+    /// re-edit) without one auto-draining mid-edit.
+    pub fn block_queue(&mut self, session_id: &str) {
+        self.queue_blocked_sessions.insert(session_id.to_string());
+    }
+
+    /// Force the block off. Used when the queue modal closes (auto-resume), so
+    /// the outbox returns to its normal auto-drain behavior the moment the
+    /// user stops managing it — unless they explicitly blocked it with `F3`
+    /// outside the modal (that toggle is honored because the modal close path
+    /// only resumes what its own open path blocked).
+    pub fn resume_queue(&mut self, session_id: &str) {
+        self.queue_blocked_sessions.remove(session_id);
+    }
+
+    /// Remove the viewed session's outbox item at display index `idx`. Used by
+    /// the queue modal's `D` delete. Returns the removed dispatch (mostly for
+    /// tests).
+    pub fn remove_queued_at(
+        &mut self,
+        session_id: &str,
+        idx: usize,
+    ) -> Option<QueuedDispatch> {
+        let position = self
+            .pending_dispatch
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.session_id == session_id)
+            .nth(idx)
+            .map(|(pos, _)| pos)?;
+        self.pending_dispatch.remove(position)
+    }
+
+    /// Move the viewed session's outbox item at display index `idx` by `delta`
+    /// slots within the session's slice (`delta < 0` toward the front / next
+    /// to pop, `delta > 0` toward the tail). Other items in the slice shift to
+    /// make room (a true reorder, not a swap). Clamped at the slice boundaries
+    /// so an item can never escape into another session's region of the deque.
+    pub fn move_queued(&mut self, session_id: &str, idx: usize, delta: i32) {
+        // Collect the positions (into the global deque) of this session's
+        // items in display order.
+        let positions: Vec<usize> = self
+            .pending_dispatch
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.session_id == session_id)
+            .map(|(pos, _)| pos)
+            .collect();
+        let count = positions.len();
+        if count == 0 {
+            return;
+        }
+        let clamped_idx = idx.min(count - 1);
+        let new_idx = (clamped_idx as i32 + delta)
+            .clamp(0, count as i32 - 1) as usize;
+        if new_idx == clamped_idx {
+            return;
+        }
+        let from = positions[clamped_idx];
+        let target = positions[new_idx];
+        // Remove the item, then re-insert at `target`. This lands the item at
+        // the destination slot while the displaced neighbors shift to fill the
+        // gap — a true reorder, not a swap. The single `target` works for both
+        // directions: when moving toward the tail, removal of `from` (before
+        // `target`) shifts `target` down by one, exactly offset by inserting
+        // one past the neighbor; when moving toward the front, no shift occurs
+        // and the item lands just before the neighbor. `from` is a valid index
+        // by construction (enumerated from the deque above), so the remove is
+        // guarded rather than `expect`-ed.
+        if let Some(item) = self.pending_dispatch.remove(from) {
+            self.pending_dispatch.insert(target, item);
+        }
+    }
+
     /// A staged next-round item failed to start its round (e.g. no provider
     /// configured). Mark it `Waiting` again so the user can recall it or let
     /// it auto-retry once the blocker clears. Replaces the old
@@ -885,6 +990,31 @@ impl App {
         let position = self.pending_dispatch.iter().rposition(|item| {
             item.session_id == session_id && item.state == QueuedDispatchState::Waiting
         })?;
+        self.pending_dispatch
+            .remove(position)
+            .map(RecallQueued::Restored)
+    }
+
+    /// Recall a specific outbox item by display index (front-of-queue = 0).
+    /// Used by the queue modal's `Enter` re-edit, which keys off the `↑/↓`
+    /// selection rather than always targeting the newest — so a mid-queue item
+    /// can be pulled back to the composer too. The item is removed from the
+    /// outbox, exactly like [`Self::recall_queued`].
+    pub fn recall_queued_at(
+        &mut self,
+        session_id: &str,
+        idx: usize,
+    ) -> Option<RecallQueued> {
+        let position = self
+            .pending_dispatch
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.session_id == session_id
+                    && item.state == QueuedDispatchState::Waiting
+            })
+            .nth(idx)
+            .map(|(pos, _)| pos)?;
         self.pending_dispatch
             .remove(position)
             .map(RecallQueued::Restored)

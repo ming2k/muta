@@ -56,6 +56,7 @@ pub fn run() -> io::Result<()> {
                     queue_bar: crate::tui::chrome::QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,

@@ -1088,11 +1088,15 @@ pub(super) async fn run_app_loop(
         // A next-round item auto-runs only after both a natural-completion
         // event and the matching session's idle snapshot. Error, interrupt,
         // blocked-hook and vanished-session paths leave it visibly paused.
+        // A user block (`F3` / queue-modal-open) holds items back even from a
+        // ready session — the block is the explicit "don't send anything"
+        // override.
         let ready_session = app
             .naturally_completed_sessions
             .iter()
             .find(|session_id| {
                 app.idle_sessions.contains(*session_id)
+                    && !app.queue_blocked_sessions.contains(session_id.as_str())
                     && app.pending_dispatch.iter().any(|item| {
                         item.session_id == session_id.as_str()
                             && item.state == crate::tui::app::QueuedDispatchState::Waiting
@@ -1338,6 +1342,8 @@ pub(super) async fn run_app_loop(
                                 && !app
                                     .naturally_completed_sessions
                                     .contains(&viewed_session_id),
+                            blocked: app.pending_count(&viewed_session_id) > 0
+                                && app.is_queue_blocked(&viewed_session_id),
                         },
                         envoy_bar,
                         side_banner,
@@ -1629,7 +1635,6 @@ pub(super) async fn run_app_loop(
                             &providers,
                             &app.current_provider,
                             app.modal_index,
-                            &app.key_status,
                             &app.input,
                             app.cursor_position,
                             &mut app.model_scroll,
@@ -1982,6 +1987,8 @@ pub(super) async fn run_app_loop(
                                 && !app
                                     .naturally_completed_sessions
                                     .contains(&viewed_session_id),
+                            blocked: app.pending_count(&viewed_session_id) > 0
+                                && app.is_queue_blocked(&viewed_session_id),
                         },
                         app.modal_index,
                         &mut app.queue_scroll,
@@ -2626,28 +2633,21 @@ pub(super) async fn run_app_loop(
                     let _ = app.tx.send(AgentRequest::ShellCommand { command });
                 }
                 input::InputAction::ProviderPickerActivate => {
-                    // Resolve the activation target. Connections: the
-                    // highlighted provider's current model. Models: the
-                    // highlighted flat (provider, model) pair. Both then
-                    // share one activation path (key-ready / OAuth / key
-                    // editor) via `activate_picked_model`. (Adding a connection
-                    // is a separate `a` footer shortcut, not an activate path.)
+                    // Activate is a Models-only action: the flat (provider,
+                    // model) pair under the highlight. The Connections list has
+                    // no activate concept — it only manages instances, so Enter
+                    // never produces this action there. Both the Models picker
+                    // and the key editor share one activation path (key-ready /
+                    // OAuth / key editor) via `activate_picked_model`.
                     let key_ready =
                         |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
-                    let target = match app.active_modal {
-                        Modal::Connections => {
-                            let rows = app.providers_filtered();
-                            rows.get(app.modal_index)
-                                .or_else(|| rows.first())
-                                .map(|row| (row.id.clone(), row.model.clone()))
-                        }
-                        Modal::Models => {
-                            let rows = app.models_flat_filtered();
-                            rows.get(app.modal_index)
-                                .or_else(|| rows.first())
-                                .map(|row| (row.provider_id.clone(), row.model.clone()))
-                        }
-                        _ => None,
+                    let target = if app.active_modal == Modal::Models {
+                        let rows = app.models_flat_filtered();
+                        rows.get(app.modal_index)
+                            .or_else(|| rows.first())
+                            .map(|row| (row.provider_id.clone(), row.model.clone()))
+                    } else {
+                        None
                     };
                     if let Some((id, model)) = target {
                         let ready = key_ready(app, &id);
@@ -3640,6 +3640,16 @@ pub(super) async fn run_app_loop(
                             app.input.clear();
                             app.set_cursor(0);
                         }
+                        // The queue modal auto-blocked the outbox on open so
+                        // items could be managed safely; closing it resumes
+                        // normal auto-drain. (A persistent block set via `F3`
+                        // at the top level is unaffected, since the modal's
+                        // own open/close latch is what's being released here —
+                        // but to keep this simple and predictable we always
+                        // resume on close; the user can re-block with F3.)
+                        if app.active_modal == Modal::Queue {
+                            app.resume_queue(&viewed_session_id);
+                        }
                         app.modal_keymap_open = false;
                         app.active_modal = return_to.unwrap_or(Modal::None);
                     }
@@ -3878,6 +3888,15 @@ pub(super) async fn run_app_loop(
                     // the persistent queue bar previews. The selection starts
                     // at the front (the next item to pop). This mirrors a
                     // click on the queue bar.
+                    //
+                    // Opening the modal auto-blocks the viewed session's
+                    // outbox so items can be managed safely (delete / reorder
+                    // / re-edit) without one auto-draining mid-edit. Closing
+                    // the modal (Esc / outside-click) resumes auto-drain —
+                    // the block here is an editing safety latch, not a
+                    // persistent user choice (that's `F3`). See the
+                    // `CloseModal` / outside-click paths for the matching
+                    // resume.
                     app.active_modal = Modal::Queue;
                     app.modal_keymap_open = false;
                     app.modal_index = 0;
@@ -3886,6 +3905,7 @@ pub(super) async fn run_app_loop(
                     app.selection = SelectionState::None;
                     app.focused_target = None;
                     app.drag.cancel();
+                    app.block_queue(&viewed_session_id);
                 }
                 input::InputAction::FocusNextTarget => {
                     // Ctrl+↓ (or ↓ while focused): advance to the next step.
@@ -4132,17 +4152,72 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::RecallQueued => {
-                    // The Queue modal's `Enter` recalls the newest staged item
-                    // into the composer; close the modal so the user lands back
-                    // in the input ready to edit.
-                    if app.active_modal == Modal::Queue {
-                        app.active_modal = Modal::None;
-                    }
+                    // Top-level `↑` (in an empty composer while the queue is
+                    // non-empty) recalls the newest staged item into the
+                    // composer for editing. Purely local — no modal is open,
+                    // no block state changes.
                     match app.recall_queued(&viewed_session_id) {
                         Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
                             app.restore_dispatch(dispatch);
                         }
                         None => {}
+                    }
+                }
+                input::InputAction::RecallQueuedSelected => {
+                    // The queue modal's `Enter` recalls the *selected* item
+                    // (the `↑/↓` highlight, not always the newest) into the
+                    // composer and closes the modal. Closing resumes the
+                    // auto-block the modal set on open.
+                    let idx = app.modal_index;
+                    app.active_modal = Modal::None;
+                    app.resume_queue(&viewed_session_id);
+                    match app.recall_queued_at(&viewed_session_id, idx) {
+                        Some(crate::tui::app::RecallQueued::Restored(dispatch)) => {
+                            app.restore_dispatch(dispatch);
+                        }
+                        None => {}
+                    }
+                }
+                input::InputAction::QueueToggleBlock => {
+                    // `F3` (top-level or inside the queue modal): toggle the
+                    // hard block on the viewed session's outbox. While blocked
+                    // no queued message auto-drains, even after the round
+                    // completes. This is the persistent user choice, distinct
+                    // from the modal's editing-safety auto-block.
+                    app.toggle_queue_block(&viewed_session_id);
+                }
+                input::InputAction::QueueDelete => {
+                    // `Shift+D` in the queue modal: remove the highlighted
+                    // item outright. The queue is auto-blocked on open, so the
+                    // index can't drift under us. Clamp the selection to the
+                    // now-shorter list.
+                    if app.active_modal == Modal::Queue {
+                        let idx = app.modal_index;
+                        app.remove_queued_at(&viewed_session_id, idx);
+                        let count = app.pending_count(&viewed_session_id);
+                        if count == 0 {
+                            app.modal_index = 0;
+                        } else if app.modal_index >= count {
+                            app.modal_index = count - 1;
+                        }
+                        app.queue_modal_follow = true;
+                    }
+                }
+                input::InputAction::QueueMoveItem { delta } => {
+                    // `K`/`J` in the queue modal: reorder the highlighted item
+                    // toward the front (next to pop) or the tail. Clamp at the
+                    // session slice boundaries so it can't escape into another
+                    // session's items.
+                    if app.active_modal == Modal::Queue {
+                        let idx = app.modal_index;
+                        app.move_queued(&viewed_session_id, idx, delta);
+                        // Follow the moved item if it changed position.
+                        let count = app.pending_count(&viewed_session_id);
+                        if count > 0 {
+                            app.modal_index =
+                                (idx as i32 + delta).clamp(0, count as i32 - 1) as usize;
+                            app.queue_modal_follow = true;
+                        }
                     }
                 }
                 input::InputAction::HistoryNext => {
@@ -4620,6 +4695,12 @@ pub(super) async fn run_app_loop(
                             if app.active_modal == Modal::HistorySearch {
                                 app.restore_history_draft();
                             }
+                            // The queue modal auto-blocked on open; an
+                            // outside-click closes it like Esc, so resume
+                            // auto-drain to match.
+                            if app.active_modal == Modal::Queue {
+                                app.resume_queue(&viewed_session_id);
+                            }
                             app.active_modal = Modal::None;
                         }
                         app.selection = SelectionState::None;
@@ -4664,7 +4745,9 @@ pub(super) async fn run_app_loop(
                     {
                         // Click anywhere on the persistent queue bar → expand
                         // the full Queue modal. Selection starts at the front
-                        // (the next item to pop).
+                        // (the next item to pop). Auto-blocks the outbox for
+                        // safe editing (mirrors the F2 open path); closing the
+                        // modal resumes.
                         app.active_modal = Modal::Queue;
                         app.modal_keymap_open = false;
                         app.modal_index = 0;
@@ -4673,6 +4756,7 @@ pub(super) async fn run_app_loop(
                         app.selection = SelectionState::None;
                         app.focused_target = None;
                         app.drag.cancel();
+                        app.block_queue(&viewed_session_id);
                     } else if app.active_modal == Modal::None
                         && app.hint_context_rect.is_some_and(|r| {
                             r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height

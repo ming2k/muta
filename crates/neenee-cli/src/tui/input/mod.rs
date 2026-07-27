@@ -206,10 +206,11 @@ pub enum InputAction {
     /// stripped and the remaining text is executed through the `bash` tool
     /// without an LLM roundtrip.
     SendShell(String),
-    /// Activate the highlighted row of the Models or Connections picker: a
-    /// flat (provider, model) pair in Models, the highlighted provider's
-    /// current model in Connections. Falls through to the API-key setup modal
-    /// when the target has no key.
+    /// Activate the highlighted row of the **Models** picker: a flat
+    /// (provider, model) pair. Falls through to the API-key setup modal when
+    /// the target has no key. The Connections list has no activate concept —
+    /// it only manages instances (`a`/`e`/`D`), leaving provider switching to
+    /// this picker.
     ProviderPickerActivate,
     /// Toggle the favorite flag on the highlighted Models row (model-level,
     /// ADR-0046). The Connections list has no favorite concept.
@@ -453,6 +454,24 @@ pub enum InputAction {
     /// images) back into the input box for editing. Only dispatched while
     /// the queue is non-empty; otherwise `HistoryPrev` is used.
     RecallQueued,
+    /// Re-edit the queue modal's *selected* item (not always the newest):
+    /// recall it into the composer and close the modal. Bound to `Enter`
+    /// inside the queue modal. The queue is auto-blocked on modal open, so
+    /// this is always safe.
+    RecallQueuedSelected,
+    /// Toggle the user block on the viewed session's outbox. While blocked,
+    /// no queued message auto-drains — not even after the round completes.
+    /// Reachable from `F3` (bar, no modal) and the queue modal's block
+    /// control.
+    QueueToggleBlock,
+    /// Delete the queue modal's selected item. Bound to `D` inside the queue
+    /// modal (matching the destructive-delete convention in Connections /
+    /// Sessions).
+    QueueDelete,
+    /// Move the queue modal's selected item one slot. `delta = -1` toward the
+    /// front (next to pop), `delta = 1` toward the tail. Bound to `K` / `J`
+    /// (vim convention) inside the queue modal.
+    QueueMoveItem { delta: i32 },
     /// Accept the focused entry in the Ctrl+R history modal (Enter, in either
     /// browse or search mode): insert it into the input box and close the modal.
     /// The message is not sent — the user can edit and press Enter again to ship
@@ -1128,6 +1147,17 @@ pub fn process_event(
                 // F1 is a declared global binding (registry → OpenHelp) and
                 // only reaches this arm inside a modal, where it is a no-op.
                 KeyCode::F(1) => InputAction::None,
+                // F3 is a declared global binding (registry →
+                // ToggleQueueBlock) at the top level. Inside the Queue modal
+                // it also toggles the block so the user can resume without
+                // closing the list. Inside any other modal it is a no-op.
+                KeyCode::F(3) => {
+                    if context.active_modal == super::Modal::Queue {
+                        InputAction::QueueToggleBlock
+                    } else {
+                        InputAction::None
+                    }
+                }
                 // Ctrl+H opens help only when the Kitty enhanced-keyboard
                 // protocol is active (enabled in `run_tui`). In a raw
                 // terminal Ctrl+H is byte-identical to Backspace (0x08), so
@@ -1168,9 +1198,13 @@ pub fn process_event(
                         return InputAction::ToggleModalKeymap;
                     }
                     match context.active_modal {
-                        super::Modal::Models | super::Modal::Connections => {
-                            InputAction::ProviderPickerActivate
-                        }
+                        super::Modal::Models => InputAction::ProviderPickerActivate,
+                        // Connections is a pure management surface: Enter is
+                        // inert here (no activate concept — switching the
+                        // active provider is the Models picker's job). `a`/`e`/
+                        // `D` are the management shortcuts, handled as printable
+                        // chars below.
+                        super::Modal::Connections => InputAction::None,
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                         super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
                         super::Modal::OauthPending => InputAction::None,
@@ -1185,7 +1219,7 @@ pub fn process_event(
                         super::Modal::Mcp => InputAction::CloseModal,
                         super::Modal::Skills => InputAction::SkillsToggleDetail,
                         super::Modal::Permissions => InputAction::CloseModal,
-                        super::Modal::Queue => InputAction::RecallQueued,
+                        super::Modal::Queue => InputAction::RecallQueuedSelected,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::ConfigTheme => InputAction::ConfigThemeActivate,
                         super::Modal::ConfigThemeCustom => InputAction::ConfigThemeCustomSave,
@@ -1681,6 +1715,22 @@ pub fn process_event(
                         InputAction::DeleteProvider
                     } else if context.active_modal == super::Modal::Sessions && c == 'd' {
                         InputAction::DeleteSelectedSession
+                    } else if context.active_modal == super::Modal::Queue && c == 'D' {
+                        // Queue modal: `Shift+D` deletes the highlighted item
+                        // outright (the queue is auto-blocked on open, so a
+                        // mid-delete auto-drain can't race the user). No
+                        // confirm step — recall from history recovers the
+                        // text, and the queue is a staging surface, not
+                        // permanent storage.
+                        InputAction::QueueDelete
+                    } else if context.active_modal == super::Modal::Queue && c == 'K' {
+                        // Queue modal: `K` moves the highlighted item toward
+                        // the front (next to pop). Vim convention.
+                        InputAction::QueueMoveItem { delta: -1 }
+                    } else if context.active_modal == super::Modal::Queue && c == 'J' {
+                        // Queue modal: `J` moves the highlighted item toward
+                        // the tail. Vim convention.
+                        InputAction::QueueMoveItem { delta: 1 }
                     } else if context.active_modal == super::Modal::Permissions && c == 'c' {
                         InputAction::PermissionsClearAll
                     } else if c == ' '
@@ -2865,6 +2915,43 @@ mod tests {
             &mut drag,
         );
         assert_eq!(action, InputAction::OpenProviderTemplate);
+    }
+
+    #[test]
+    fn enter_in_connections_modal_is_inert_no_activate_concept() {
+        // Connections is a pure management surface: it has no activate concept
+        // (switching the active provider is the Models picker's job), so Enter
+        // must not map to `ProviderPickerActivate`. It is inert in browse mode.
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Connections,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        );
+        assert_eq!(action, InputAction::None);
     }
 
     #[test]
@@ -4797,6 +4884,115 @@ mod tests {
         // Once the queue drains (or was never populated), ↑ resumes its
         // normal role of walking the input history.
         assert_eq!(up_with_queued(false), InputAction::HistoryPrev);
+    }
+
+    /// Helper: send a printable char inside the Queue modal. The queue modal
+    /// is a pure browse/manage surface (no text field), so printable chars
+    /// route to its management verbs rather than into a borrowed input.
+    fn queue_modal_char(c: char) -> InputAction {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        process_event(
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::SHIFT,
+            )),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Queue,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: true,
+                history_searching: false,
+                model_searching: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        )
+    }
+
+    /// Helper: send a bare (no-modifier) key inside the Queue modal. Used for
+    /// Enter (re-edit) and F3 (block toggle) routing.
+    fn queue_modal_key(code: KeyCode) -> InputAction {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        process_event(
+            Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::Queue,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: true,
+                history_searching: false,
+                model_searching: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+            },
+            &mut drag,
+        )
+    }
+
+    #[test]
+    fn queue_modal_enter_recalls_selected_not_newest() {
+        // Enter in the Queue modal re-edits the *selected* item (the ↑/↓
+        // highlight), so it routes to the dedicated RecallQueuedSelected
+        // action rather than the top-level RecallQueued (newest) one.
+        assert_eq!(queue_modal_key(KeyCode::Enter), InputAction::RecallQueuedSelected);
+    }
+
+    #[test]
+    fn queue_modal_shift_d_deletes_selected() {
+        // `Shift+D` deletes the highlighted item (the queue modal
+        // auto-blocks on open, so the index can't drift mid-delete).
+        assert_eq!(queue_modal_char('D'), InputAction::QueueDelete);
+    }
+
+    #[test]
+    fn queue_modal_k_and_j_reorder() {
+        // Vim convention: `K` toward the front (next to pop), `J` toward the
+        // tail. Routes through QueueMoveItem with the signed delta.
+        assert_eq!(
+            queue_modal_char('K'),
+            InputAction::QueueMoveItem { delta: -1 }
+        );
+        assert_eq!(
+            queue_modal_char('J'),
+            InputAction::QueueMoveItem { delta: 1 }
+        );
+    }
+
+    #[test]
+    fn queue_modal_f3_toggles_block() {
+        // F3 is NoModal-gated in the registry, so inside the modal it falls
+        // through to the contextual arm — which honors it only in the Queue
+        // modal so the user can resume without closing the list.
+        assert_eq!(queue_modal_key(KeyCode::F(3)), InputAction::QueueToggleBlock);
     }
 
     #[test]

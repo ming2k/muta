@@ -77,8 +77,6 @@ use crate::tui::model::layout::{InteractiveTarget, LayoutMap};
 use crate::tui::model::selection::{CellDragInfo, SelectionState};
 #[cfg(test)]
 use neenee_core::{PermissionRequest, UserQuestionRequest};
-#[cfg(test)]
-use std::collections::HashMap;
 
 /// Inner rect of a transcript-area region after reserving the uniform
 /// [`TRANSCRIPT_H_INSET`] left+right `app_bg` gutters. This is the **single
@@ -841,6 +839,7 @@ mod tests {
                         queue_bar: QueueBarView {
                             items: &[],
                             paused: false,
+                            blocked: false,
                         },
                         envoy_bar: None,
                         side_banner: None,
@@ -898,7 +897,6 @@ mod tests {
                 &[],
                 "mock",
                 0,
-                &HashMap::new(),
                 "",
                 0,
                 &mut 0,
@@ -1126,6 +1124,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -1164,6 +1163,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: Some(EnvoyBarInfo {
                         label: "explore the codebase".to_string(),
@@ -1247,6 +1247,7 @@ mod tests {
                         queue_bar: QueueBarView {
                             items: &[],
                             paused: false,
+                            blocked: false,
                         },
                         envoy_bar: None,
                         side_banner: None,
@@ -1350,6 +1351,7 @@ mod tests {
                         queue_bar: QueueBarView {
                             items: &[],
                             paused: false,
+                            blocked: false,
                         },
                         envoy_bar: None,
                         side_banner: None,
@@ -1566,6 +1568,7 @@ mod tests {
                         queue_bar: QueueBarView {
                             items: &[],
                             paused: false,
+                            blocked: false,
                         },
                         envoy_bar: None,
                         side_banner: None,
@@ -1633,6 +1636,7 @@ mod tests {
                         queue_bar: QueueBarView {
                             items: &[],
                             paused: false,
+                            blocked: false,
                         },
                         envoy_bar: None,
                         side_banner: None,
@@ -1708,6 +1712,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -2313,6 +2318,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -2460,6 +2466,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -2541,6 +2548,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -2992,6 +3000,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3050,6 +3059,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3117,6 +3127,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3171,6 +3182,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3250,6 +3262,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3325,6 +3338,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,
@@ -3402,6 +3416,7 @@ mod tests {
                     queue_bar: QueueBarView {
                         items: &[],
                         paused: false,
+                        blocked: false,
                     },
                     envoy_bar: None,
                     side_banner: None,

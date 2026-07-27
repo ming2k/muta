@@ -4,9 +4,13 @@
 //! of the next staged message; this modal is its expand surface, opened by
 //! clicking that bar or pressing `F2`. It lists every queued dispatch for the
 //! viewed session in dispatch order (front pops first), each with its queued
-//! time and (truncated) text. `↑`/`↓` move the highlight; `Enter` recalls the
-//! newest staged item into the composer for editing (then closes); `Esc` /
-//! outside-click closes.
+//! time and (truncated) text.
+//!
+//! Opening the modal **auto-blocks** the outbox (no message auto-drains) so
+//! the list can be managed safely: `↑`/`↓` move the highlight, `Enter` re-edits
+//! the *selected* item (pulls it back to the composer), `D` deletes it, `J`/`K`
+//! reorder it, and `F3` toggles the persistent block. Closing the modal (Esc /
+//! outside-click) resumes normal auto-drain. `Esc` / outside-click close.
 
 use neenee_tui_engine::{
     Frame, {Line, Span},
@@ -25,12 +29,17 @@ use unicode_width::UnicodeWidthStr;
 pub struct QueueModalView<'a> {
     pub items: &'a [QueueItemView],
     pub paused: bool,
+    /// `true` while the outbox is hard-blocked (the modal auto-blocks on open
+    /// for safe editing; `F3` toggles a persistent block). Surfaced as a
+    /// `blocked` tag in the header so the held-back state is explicit.
+    pub blocked: bool,
 }
 
 /// Draw the queue overview modal. Each row carries the queued-at time and the
 /// item text truncated to the row budget (every staged message waits for the
 /// next round, so there is no per-row target badge). The header shows the
-/// total count (and a "paused" tag when items are held back).
+/// total count plus a `blocked` (user override) or `paused` (round not done)
+/// tag when items are held back.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_queue_modal(
     frame: &mut Frame,
@@ -43,17 +52,27 @@ pub fn draw_queue_modal(
     let body_width =
         crate::tui::components::modal::modal_body_width(frame, ContentModalSpec::QUEUE);
 
-    let QueueModalView { items, paused } = view;
+    let QueueModalView {
+        items,
+        paused,
+        blocked,
+    } = view;
 
     // Header title carries the live count so the bar's summary is echoed and
-    // extended here: `Queue · 3` (or `Queue · 3 · paused`).
+    // extended here: `Queue · 3` (plus `· blocked` / `· paused` tags). A user
+    // block is shown before the natural-pause tag because it is the stronger,
+    // explicit override.
     let count = items.len();
     let title = if count == 0 {
         "Queue".to_string()
-    } else if paused {
-        format!("Queue · {count} · paused")
     } else {
-        format!("Queue · {count}")
+        let mut s = format!("Queue · {count}");
+        if blocked {
+            s.push_str(" · blocked");
+        } else if paused {
+            s.push_str(" · paused");
+        }
+        s
     };
 
     let mut body: Vec<Line> = Vec::new();
@@ -127,11 +146,16 @@ pub fn draw_queue_modal(
             has_items,
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
-                FooterHint::primary(keyvocab::ENTER, "edit latest"),
+                FooterHint::primary(keyvocab::ENTER, "edit"),
                 FooterHint::always(keyvocab::ESC, "close"),
+                FooterHint::secondary("J/K", "reorder"),
+                FooterHint::secondary("F3", if blocked { "resume" } else { "block" }),
             ],
             empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
-            extra_footer_hints: &[],
+            // Destructive delete sits at band 70 (outlives secondaries, never
+            // the always-keep close) — the same convention as Connections /
+            // Sessions.
+            extra_footer_hints: &[FooterHint::with_band("D", "delete", 70)],
             keymap_open: false,
         },
         theme,

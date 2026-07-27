@@ -126,15 +126,18 @@ is the reliable trigger.
 ## Connections modal
 
 Provider-instance management surface. Rows are the configured provider
-instances, ranked favorites-first, then last-used, then name, with a
-trailing `＋ Add connection` row that opens the template chooser.
+instances, ranked last-used → name; each row shows the instance name and its
+provider *type* (`· OpenAI`). This surface only *manages* instances — it has
+no activate concept, so switching the active provider is done from the Models
+picker. When no instance exists, an empty-state hint prompts the user to press
+`a`.
 
 | Key | Effect |
 |-----|--------|
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
-| `Enter` | Activate the provider's current model (add row: open the template chooser) |
-| `*` | Toggle favorite on the highlighted provider |
+| `/` | Enter the search sub-layer (`Esc` clears it) |
+| `a` | Add a connection — open the provider-template chooser |
 | `e` | Edit — API key for built-ins, full meta editor for custom providers |
 | `D` | Delete a custom provider (confirm overlay) |
 | `Esc` | Close |

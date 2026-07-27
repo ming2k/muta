@@ -5,7 +5,6 @@
 //! state struct + key handler. Several are navigation-only (up/down/tab).
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::io;
 
 use crossterm::event::KeyCode;
@@ -33,7 +32,6 @@ struct ProviderState {
     scroll: usize,
     search: bool,
     picker: ProviderPickerSnapshot,
-    key_status: HashMap<String, bool>,
 }
 
 pub fn provider() -> io::Result<()> {
@@ -83,12 +81,6 @@ pub fn provider() -> io::Result<()> {
             ),
         ],
     };
-    let key_status: HashMap<String, bool> = picker
-        .rows
-        .iter()
-        .map(|r| (r.id.clone(), r.key_ready))
-        .collect();
-
     let mut state = ProviderState {
         index: 0,
         query: String::new(),
@@ -96,7 +88,6 @@ pub fn provider() -> io::Result<()> {
         scroll: 0,
         search: false,
         picker,
-        key_status,
     };
 
     common::run_showcase(
@@ -121,7 +112,6 @@ pub fn provider() -> io::Result<()> {
                     &ranked,
                     &s.picker.default_id,
                     s.index,
-                    &s.key_status,
                     &s.query,
                     s.cursor,
                     &mut scroll,
@@ -236,7 +226,6 @@ pub fn models() -> io::Result<()> {
         scroll: 0,
         search: false,
         picker,
-        key_status: HashMap::new(),
     };
 
     common::run_showcase(

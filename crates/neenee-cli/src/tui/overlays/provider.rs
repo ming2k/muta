@@ -2,8 +2,6 @@
 //! provider/model picker) modals, the API-key / model-id editor, and the
 //! custom-provider editor modals.
 
-use std::collections::HashMap;
-
 use neenee_tui_engine::{
     Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
 };
@@ -25,11 +23,12 @@ use crate::tui::view::Theme;
 /// the instance name and its provider *type* (`· OpenAI`) — never the model
 /// name (models live in the Models picker). There is no per-row "current"
 /// state dot and no favorite concept here (favorite is model-level now,
-/// ADR-0046). Enter activates the provider's current model; `a` adds a new
-/// connection (opens the template chooser from the footer); `e` edits,
-/// `Shift+D` deletes a custom provider. When no instance exists, an empty-state
-/// hint prompts the user to press `a`. Mirrors the input-history modal's
-/// two-mode (browse/search) design: `/` enters search, the header stays
+/// ADR-0046), and no activation concept either — switching the active provider
+/// is the Models picker's job, so this surface only *manages* instances: `a`
+/// adds a new connection (opens the template chooser from the footer), `e`
+/// edits, `Shift+D` deletes a custom provider. When no instance exists, an
+/// empty-state hint prompts the user to press `a`. Mirrors the input-history
+/// modal's two-mode (browse/search) design: `/` enters search, the header stays
 /// title-only, a dedicated search row appears beneath it, and rows highlight
 /// matched chars.
 ///
@@ -44,7 +43,6 @@ pub fn draw_connections_modal(
     providers: &[RankedProvider],
     current_provider: &str,
     modal_index: usize,
-    key_status: &HashMap<String, bool>,
     query: &str,
     cursor_position: usize,
     scroll: &mut usize,
@@ -60,11 +58,12 @@ pub fn draw_connections_modal(
 
     // `D delete` is a one-key destructive action the user must always be able
     // to find, so it rides a custom band (70) that survives width collapse
-    // longer than plain secondaries. `a add` opens the template chooser.
-    let browse_hints: [FooterHint; 6] = [
+    // longer than plain secondaries. `a add` opens the template chooser. There
+    // is no `Enter activate` here — switching the active provider is the Models
+    // picker's job; this surface only manages instances.
+    let browse_hints: [FooterHint; 5] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary(keyvocab::ENTER, "activate"),
         FooterHint::secondary("a", "add"),
         FooterHint::secondary("e", "edit"),
         FooterHint::always(keyvocab::ESC, "close"),
@@ -74,10 +73,9 @@ pub fn draw_connections_modal(
         label: "delete",
         rank: 70,
     }];
-    let search_hints: [FooterHint; 4] = [
+    let search_hints: [FooterHint; 3] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "activate"),
         FooterHint::always(keyvocab::ESC, "clear search"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
@@ -139,7 +137,6 @@ pub fn draw_connections_modal(
     let body = provider_list_body(
         providers,
         current_provider,
-        key_status,
         modal_index,
         theme,
         body_rect.width as usize,
@@ -354,7 +351,6 @@ fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Th
 fn provider_list_body(
     providers: &[RankedProvider],
     _current_provider: &str,
-    _key_status: &HashMap<String, bool>,
     modal_index: usize,
     theme: &Theme,
     body_width: usize,

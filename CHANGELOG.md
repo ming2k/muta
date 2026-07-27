@@ -37,10 +37,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leads with a `📤` tray glyph + a brand-coloured uppercase `QUEUE` label on a
   raised surface, paralleling the todo bar's `📌 TODOS` treatment so it reads
   as a distinct pinned panel rather than a plain footer strip. Row 1 is now
-  `📤 QUEUE N · HH:MM` (count, next-item send time) with a `Esc recall · F2
+  `📤 QUEUE N · HH:MM` (count, next-item send time) with a `F3 block · F2
   expand` legend; row 2 is the one-line next-item preview. The previous flat
   `queue · N` tag and the right-pinned `insert`/`next` send-target badge are
   gone.
+- **Queue block/resume (`F3`) and modal outbox management.** The queue bar's
+  `Esc recall` affordance never worked as advertised — `Esc` outside the modal
+  didn't recall — so it was replaced with a real block/resume model. `F3`
+  hard-blocks the viewed session's outbox: while blocked, **no** queued message
+  auto-drains, not even after the round completes and the harness goes idle.
+  The count turns error-coloured and gains a `blocked` tag; the legend flips to
+  `F3 resume`. Opening the Queue modal (`F2`) auto-blocks the outbox for safe
+  editing; closing it (Esc / outside-click) resumes normal auto-drain. Inside
+  the modal, `↑`/`↓` select, `Enter` re-edits the **selected** item (not always
+  the newest), `D` deletes it, and `J`/`K` reorder it toward the front or tail.
 
 ### Removed
 
@@ -52,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queue legend accordingly (Tab still accepts completions and cycles
   history/modal fields elsewhere). The core `InsertUserInput` capability
   remains for other frontends; it is just no longer reachable from the TUI.
+- **`Esc recall` queue-bar legend.** The bar advertised `Esc` as a recall
+  shortcut, but `Esc` outside the modal did not recall (it only worked inside
+  the open Queue modal, and via `↑` in an empty composer). The misleading
+  legend was removed; recall is now done by selecting an item in the Queue
+  modal and pressing `Enter`, or by `↑` in the empty composer (unchanged).
+  The modal's `Esc`/`Enter` always-recall-newest behavior became `Enter`
+  recalls-the-selected.
 
 ## [0.21.0] - 2026-07-27
 

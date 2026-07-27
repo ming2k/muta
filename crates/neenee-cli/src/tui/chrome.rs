@@ -1110,6 +1110,11 @@ pub struct QueueBarView<'a> {
     /// has not yet naturally completed. Recolors the count so the user can see
     /// the queue is paused, not forgotten.
     pub paused: bool,
+    /// `true` while the user has hard-blocked the outbox (`F3`, or the queue
+    /// modal being open). While blocked, no message auto-drains even after the
+    /// round completes. Surfaced as a distinct `blocked` tag + the legend key
+    /// flipping to `F3 resume`, so it never reads as an ordinary pause.
+    pub blocked: bool,
 }
 
 /// The persistent two-row outbox summary pinned below the transcript gap.
@@ -1122,20 +1127,21 @@ pub struct QueueBarView<'a> {
 ///
 /// Layout:
 /// ```text
-/// 📤 QUEUE N · HH:MM           Esc recall · F2 expand
+/// 📤 QUEUE N · HH:MM           F3 block · F2 expand
 /// {next item preview…}
 /// ```
 /// - Row 1 carries the identity (the tray glyph, the `QUEUE` label, the total
 ///   count, the send time of the *next item to pop*) on the left and a compact
-///   keycap legend on the right (`Esc` to recall/dispatch the newest staged
-///   message, `F2` to expand the full list). The legend drops under width
-///   pressure (F2 first, then the labels, then Esc) so the identity always
-///   survives.
+///   keycap legend on the right (`F3` to block/resume the outbox, `F2` to
+///   expand the full list). The legend drops under width pressure (F2 first,
+///   then the labels, then F3) so the identity always survives.
 /// - Row 2 previews the next item to pop: as many characters of its text as
 ///   the width allows (truncated with `…`). Empty queue → muted hint.
 ///
 /// `paused` recolors the count (warn) so the user can see the queue is held
-/// back because the running round has not yet completed, not forgotten.
+/// back because the running round has not yet completed, not forgotten. A user
+/// `blocked` state (error color + `blocked` tag + the legend's `F3 resume`)
+/// is the explicit "send nothing even after the round ends" override.
 ///
 /// Returns the full bar rect so the event loop can make the region clickable
 /// (click → expand the Queue modal).
@@ -1145,7 +1151,11 @@ pub fn draw_queue_bar(
     view: QueueBarView<'_>,
     theme: &Theme,
 ) -> Rect {
-    let QueueBarView { items, paused } = view;
+    let QueueBarView {
+        items,
+        paused,
+        blocked,
+    } = view;
 
     // Distinct pinned surface — mirrors the todo bar — so the row reads as a
     // panel rather than a plain footer strip. Every span carries this bg so
@@ -1163,7 +1173,16 @@ pub fn draw_queue_bar(
     let count = items.len();
     let dim = Style::default().fg(theme.muted()).bg(bg);
     let fg = Style::default().fg(theme.fg()).bg(bg);
-    let count_color = if paused { theme.warn() } else { theme.fg() };
+    // Blocked outranks paused outranks normal: a user block is the strongest
+    // "nothing sends" signal, so it wears the error color; a natural pause
+    // (round not done) stays the gentler warning.
+    let count_color = if blocked {
+        theme.err()
+    } else if paused {
+        theme.warn()
+    } else {
+        theme.fg()
+    };
     let count_style = Style::default()
         .fg(count_color)
         .bg(bg)
@@ -1177,7 +1196,7 @@ pub fn draw_queue_bar(
         .bg(bg)
         .add_modifier(Modifier::BOLD);
 
-    // ── Row 1: `📤 QUEUE N · HH:MM`  …  `Esc recall · F2 expand` ───────────
+    // ── Row 1: `📤 QUEUE N · HH:MM`  …  `F3 block · F2 expand` ───────────
     let mut left1: Vec<Span<'static>> = vec![
         Span::styled(QUEUE_GLYPH, pin_style),
         Span::styled(" ", dim),
@@ -1196,20 +1215,30 @@ pub fn draw_queue_bar(
         .map(|item| crate::tui::time::sent_time_label(item.queued_at_ms))
         .unwrap_or_else(|| "--:--".to_string());
     left1.push(Span::styled(time_label, dim));
+    // When blocked, append an explicit `· blocked` tag in the error color so
+    // the held-back state never reads as an ordinary pause — the count is
+    // already error-colored, and this label spells out why.
+    if blocked {
+        left1.push(Span::styled(" · ", dim));
+        left1.push(Span::styled("blocked", count_style));
+    }
 
     // Right-side keycap legend. The keys explain the two outbox affordances:
-    //   Esc   — recall/dispatch the newest staged message immediately
+    //   F3    — block / resume the outbox (toggles; label flips with state)
     //   F2    — expand the full queue list
     // The right cluster drops under width pressure (F2 first, then the labels,
-    // then Esc), so the identity on the left always survives.
+    // then F3), so the identity on the left always survives.
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let sep = |spans: &mut Vec<Span<'static>>| {
             spans.push(Span::styled(" · ", dim));
         };
-        spans.push(keycap_span(theme, Key::ESC.display()));
+        spans.push(keycap_span(theme, Key::F3.display()));
         if matches!(density, LegendDensity::Full | LegendDensity::Compact) {
-            spans.push(Span::styled(" recall", dim));
+            spans.push(Span::styled(
+                if blocked { " resume" } else { " block" },
+                dim,
+            ));
         }
         if !matches!(density, LegendDensity::Tiny) {
             sep(&mut spans);
@@ -1301,11 +1330,11 @@ const QUEUE_GLYPH: &str = "📤";
 /// How much of the row-1 keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `Esc recall · F2 expand`.
+    /// Keys + labels: `F3 block · F2 expand`.
     Full,
-    /// Keys + first label: `Esc recall · F2`.
+    /// Keys + first label: `F3 block · F2`.
     Compact,
-    /// Only the recall key: `Esc`.
+    /// Only the block key: `F3`.
     Tiny,
 }
 
@@ -2097,6 +2126,7 @@ mod tests {
             QueueBarView {
                 items: &[],
                 paused: false,
+                blocked: false,
             },
             70,
             &Theme::default(),
@@ -2118,6 +2148,7 @@ mod tests {
             QueueBarView {
                 items: &[item],
                 paused: true,
+                blocked: false,
             },
             70,
             &Theme::default(),
@@ -2147,6 +2178,7 @@ mod tests {
             QueueBarView {
                 items: &[item],
                 paused: false,
+                blocked: false,
             },
             70,
             &Theme::default(),

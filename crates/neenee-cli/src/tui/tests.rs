@@ -1048,6 +1048,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
+        queue_blocked_sessions: std::collections::HashSet::new(),
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),
         running_sessions: std::collections::HashSet::new(),
@@ -1864,6 +1865,185 @@ fn recall_queued_latches_completion_dismissal() {
         !app.completions().is_empty(),
         "`/help` should have candidates"
     );
+}
+
+#[test]
+fn toggle_queue_block_flips_state_and_blocks_dispatch() {
+    // `F3` / queue-modal block is the hard "send nothing" override. While a
+    // session is blocked, `begin_next_round_dispatch` must yield nothing —
+    // even though the item is `Waiting`. The event loop relies on
+    // `is_queue_blocked` (and the app-side gate is its mirror) so a blocked
+    // outbox can't slip through.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("1", "session-a", "first"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("2", "session-a", "second"));
+
+    // Not blocked initially.
+    assert!(!app.is_queue_blocked("session-a"));
+    assert_eq!(app.pending_count("session-a"), 2);
+
+    // Toggle on.
+    assert!(
+        app.toggle_queue_block("session-a"),
+        "first toggle should block"
+    );
+    assert!(app.is_queue_blocked("session-a"));
+
+    // The block is persistent and session-scoped: another session is
+    // unaffected.
+    app.pending_dispatch
+        .push_back(queued_dispatch("3", "session-b", "other"));
+    assert!(!app.is_queue_blocked("session-b"));
+
+    // Toggle off.
+    assert!(
+        !app.toggle_queue_block("session-a"),
+        "second toggle should resume"
+    );
+    assert!(!app.is_queue_blocked("session-a"));
+}
+
+#[test]
+fn block_and_resume_helpers_are_idempotent() {
+    // `block_queue` forces the block on; `resume_queue` forces it off. Both
+    // must be safe to call repeatedly. The queue modal's open/close path
+    // relies on this: open always blocks, close always resumes.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("1", "session-a", "x"));
+
+    app.block_queue("session-a");
+    assert!(app.is_queue_blocked("session-a"));
+    app.block_queue("session-a"); // idempotent
+    assert!(app.is_queue_blocked("session-a"));
+
+    app.resume_queue("session-a");
+    assert!(!app.is_queue_blocked("session-a"));
+    app.resume_queue("session-a"); // idempotent
+    assert!(!app.is_queue_blocked("session-a"));
+}
+
+#[test]
+fn recall_queued_at_targets_selected_index_not_newest() {
+    // The queue modal's `Enter` re-edits the *selected* item (the ↑/↓
+    // highlight), so a mid-queue item can be pulled back rather than always
+    // the newest. `recall_queued_at(idx=0)` returns the front (next to pop),
+    // distinct from `recall_queued` which is LIFO/newest.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("front", "session-a", "first"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("back", "session-a", "second"));
+
+    // idx 0 = front = "first".
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued_at("session-a", 0) else {
+        panic!("expected restore of selected item");
+    };
+    assert_eq!(dispatch.id, "front");
+    app.restore_dispatch(dispatch);
+    assert_eq!(app.input, "first");
+    assert_eq!(
+        app.pending_count("session-a"),
+        1,
+        "recalled item must leave the outbox"
+    );
+
+    // Now the only remaining item is "second"; idx 0 still works.
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued_at("session-a", 0) else {
+        panic!("expected restore");
+    };
+    assert_eq!(dispatch.id, "back");
+
+    // Out of range is a no-op (returns None), leaving the (now empty) queue
+    // untouched.
+    assert!(app.recall_queued_at("session-a", 0).is_none());
+}
+
+#[test]
+fn remove_queued_at_deletes_by_index_and_clamps() {
+    // `D` in the queue modal deletes the highlighted item. The event loop
+    // clamps `modal_index` after a delete; here we verify the core removal is
+    // index-keyed and session-scoped.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "one"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("b", "session-b", "two"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("c", "session-a", "three"));
+
+    // session-a has two items: idx 0 = "a", idx 1 = "c". Delete idx 1.
+    let removed = app
+        .remove_queued_at("session-a", 1)
+        .expect("should remove idx 1");
+    assert_eq!(removed.id, "c");
+    assert_eq!(app.pending_count("session-a"), 1);
+    assert_eq!(app.pending_count("session-b"), 1, "other session untouched");
+
+    // Out of range → None, nothing removed.
+    assert!(app.remove_queued_at("session-a", 5).is_none());
+    assert_eq!(app.pending_count("session-a"), 1);
+}
+
+#[test]
+fn move_queued_swaps_within_session_and_clamps_at_edges() {
+    // `J`/`K` in the queue modal reorder the highlighted item. Moving toward
+    // the front (delta -1) makes it the next to pop; toward the tail (delta 1)
+    // pushes it back. Reorder is clamped to the session slice so it can't
+    // escape into another session's items.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "one"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("x", "session-b", "intruder"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("b", "session-a", "two"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("c", "session-a", "three"));
+
+    // session-a display order: [a, b, c]. Move idx 0 (a) toward the tail by 2:
+    // clamped to the last position → order becomes [b, c, a].
+    app.move_queued("session-a", 0, 2);
+    let order: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-a")
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(order, vec!["b", "c", "a"]);
+
+    // The intruder session-b item is untouched: reorder never crossed session
+    // boundaries (session-b still has exactly one item, the same one).
+    let session_b: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-b")
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(session_b, vec!["x"]);
+
+    // Move the now-front item (b) toward the front by 5: clamped to 0 →
+    // stays put. Order unchanged.
+    app.move_queued("session-a", 0, -5);
+    let order: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-a")
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(order, vec!["b", "c", "a"]);
+
+    // Move idx 1 (c) toward the front by 1: swaps with b → [c, b, a].
+    app.move_queued("session-a", 1, -1);
+    let order: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-a")
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(order, vec!["c", "b", "a"]);
 }
 
 #[test]

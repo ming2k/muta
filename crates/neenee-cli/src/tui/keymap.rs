@@ -454,6 +454,11 @@ impl Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::F(2),
     };
+    /// F3 (block/resume queue) — surfaced in the queue legend.
+    pub const F3: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(3),
+    };
 }
 
 /// The precondition under which a binding is active.
@@ -491,6 +496,9 @@ pub enum Action {
     OpenTodos,
     /// Open the queue overview modal.
     OpenQueue,
+    /// Toggle the user block on the viewed session's outbox. While blocked, no
+    /// queued message auto-drains (not even after the round completes).
+    ToggleQueueBlock,
     /// Copy the current selection (or clear input / arm quit — resolved by the
     /// app loop).
     CopyOrClear,
@@ -532,6 +540,15 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             gate: Gate::NoModal,
             action: Action::OpenQueue,
             description: "open queue (outbox)",
+        },
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::F(3),
+            },
+            gate: Gate::NoModal,
+            action: Action::ToggleQueueBlock,
+            description: "block/resume queue",
         },
         Binding {
             key: Key {
@@ -639,6 +656,7 @@ impl Registry {
                 Action::OpenModels => InputAction::OpenModels,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
+                Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
                 Action::CopyOrClear => InputAction::CtrlC,
                 Action::CopySelection => InputAction::CopySelection,
             });
@@ -707,6 +725,26 @@ mod tests {
     fn f2_does_not_fire_while_a_modal_is_open() {
         let registry = Registry::new();
         let action = registry.resolve(key(KeyCode::F(2), KeyModifiers::NONE), Modal::Help);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn f3_toggles_queue_block_from_top_level() {
+        // F3 is the global binding for the queue block/resume override. It is
+        // gated NoModal: inside a modal the contextual input handler routes
+        // it instead (only the Queue modal honors it there).
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::F(3), KeyModifiers::NONE), Modal::None);
+        assert_eq!(action, Some(InputAction::QueueToggleBlock));
+    }
+
+    #[test]
+    fn f3_does_not_fire_via_registry_while_a_modal_is_open() {
+        // The global registry is NoModal-gated, so F3 resolves to None inside
+        // any modal. (The Queue modal routes F3 through its contextual arm;
+        // other modals treat it as a no-op.)
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::F(3), KeyModifiers::NONE), Modal::Help);
         assert_eq!(action, None);
     }
 
