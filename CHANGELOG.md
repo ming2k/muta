@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+## [0.21.1] - 2026-07-27
+
+### Added
+
 - **Queue bar reference page.** `docs/reference/tui/queue-bar.md` documents the
   two-row outbox summary pinned above the input box, mirroring the todo-bar
   page.
@@ -23,7 +31,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (formerly documented under `status-bar.md`, whose name is now used by the
   new session-status bar).
 
+- **Resume is a hard error on a missing target, with an exit hint.**
+  `neenee resume <id>` for a session id that does not exist now fails loudly
+  instead of warning and silently starting a fresh session, so the operator
+  learns the resume never happened. `neenee resume` with no id opens the
+  sessions picker overlay (the same as before). When the TUI exits cleanly,
+  it now prints `Session <id> ended. To continue it later, run: neenee resume
+  <id>` — but only if the session actually gained content, so empty
+  conversations don't advertise resuming.
+
 ### Changed
+
+- **Tiered recursive-`rm` policy.** The bash policy's single `rm -rf /` deny
+  rule and blanket `recursive force remove` confirm treated every recursive
+  `rm` alike, so routine project cleanup (`rm -rf target/`) hit the same
+  confirm as wiping a sibling repo. The built-in rules are now split into
+  three tiers: **deny** (recursive `rm` of `/`, the home directory, or a
+  system directory like `/etc`/`/usr`), **confirm** (recursive `rm` of any
+  other absolute path or a parent-traversal target like `../sibling` — i.e.
+  anything leaving the cwd), and **allow** (recursive `rm` of a relative path
+  inside the cwd, plus `/tmp`). A built-in allow never overrides a built-in
+  deny. The matchers require a real path token after the flags, so a quoted
+  `"rm -rf"` substring inside another command (e.g. an `rg` pattern) no longer
+  trips the rule. The permission chain's deny contract was also simplified:
+  the `PolicyDecision::Deny` `collective` flag (and the unused
+  `PermissionContext::unattended`) were dropped — collective-abort of a
+  parked batch is owned by the permission store's `reply`, keyed on a
+  `PermissionDecision::Reject`.
 
 - **Hint bar split into input-focused hint bar + session status bar.** The
   bottom hint row no longer carries the `unattended` flag alongside the model
@@ -62,6 +96,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queue legend accordingly (Tab still accepts completions and cycles
   history/modal fields elsewhere). The core `InsertUserInput` capability
   remains for other frontends; it is just no longer reachable from the TUI.
+- **`/repeat` moved onto the session and the `rusqlite` dependency dropped.**
+  The `/repeat` cron-job schedule moved out of a standalone SQLite-backed
+  `RepeatStore` and onto the session itself, persisted through its event log
+  (`SessionEvent::RepeatJobsSet`, session-schema v8) alongside todos and the
+  provider pin. A job is now owned by the session that created it, so
+  resume/fork carries the schedule; the background scheduler polls the live
+  `SessionStore` instead of a separate database. This removes the last SQL
+  surface from the workspace: `neenee-persistence::repeat` (`RepeatStore`)
+  and `db` (migration helpers) are deleted, `rusqlite` is dropped from the
+  workspace and `neenee-persistence` manifests, and bootstrap no longer opens
+  `repeat.db`. No data migration — `/repeat` jobs are rebuildable scheduler
+  state.
 - **`Esc recall` queue-bar legend.** The bar advertised `Esc` as a recall
   shortcut, but `Esc` outside the modal did not recall (it only worked inside
   the open Queue modal, and via `↑` in an empty composer). The misleading
@@ -1870,7 +1916,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/ming2k/neenee/releases/tag/v0.21.1
 [0.21.0]: https://github.com/ming2k/neenee/releases/tag/v0.21.0
 [0.20.3]: https://github.com/ming2k/neenee/releases/tag/v0.20.3
 [0.20.2]: https://github.com/ming2k/neenee/releases/tag/v0.20.2

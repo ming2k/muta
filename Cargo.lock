@@ -1399,7 +1399,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "neenee-agent"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-cli"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-core"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-llm-client"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-persistence"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "chrono",
  "crc32c",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-providers"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "base64",
  "futures",
@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-server"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "neenee-agent",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-skills"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "dirs",
@@ -1570,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tool-derive"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-transport"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "neenee-tui-engine"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "bitflags",
  "crossterm",
