@@ -9,7 +9,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`[principal] skip_interactive_input` config option.** When a `bash` command
+  the interactive classifier matches (`sudo`/`gpg`/`passwd`/TUI editors/`read`/…)
+  needs stdin, neenee normally pops an inline input panel (the command + a
+  masked/plain field) to collect the response. Set `skip_interactive_input = true`
+  under `[principal]` to **never** pop that panel: the command runs with stdin
+  closed instead, reads EOF immediately, and fails fast with the existing
+  non-interactive remedy hint — exactly as under unattended mode, but without
+  turning the principal itself unattended (ordinary tool confirmations still
+  apply). For users who find the prompt disruptive and prefer to retry the
+  command themselves (or let the model retry with a non-interactive form). Added
+  in `crates/neenee-persistence/src/config.rs` (`PrincipalConfig`), mirrored in
+  `neenee_core::PrincipalRuntimeConfig`, threaded through `Agent` as an
+  `AtomicBool` consulted by `decide_bash_stdin`, seeded in bootstrap and
+  `apply_principal_profile`; documented in `docs/reference/configuration.md`.
+
+- **`[tui] click_outside_dismiss` config option.** Clicking outside a modal to
+  close it (mirroring Esc) is now off by default — a stray click no longer
+  dismisses a modal, and for the `neenee resume` startup picker no longer quits
+  the program; Esc / Ctrl+C are the deliberate exit path. Set
+  `click_outside_dismiss = true` under `[tui]` to restore click-outside-to-
+  dismiss. Added in `crates/neenee-persistence/src/config.rs` (`TuiConfig`),
+  surfaced onto `App`, and gated in the event-loop click handler; documented in
+  `docs/reference/configuration.md`.
+
+- **Session-info sub-view (`i`).** Pressing `i` in the `/sessions` picker (or
+  the `neenee resume` startup picker) drills into a read-only detail view of
+  the highlighted session, showing the breadcrumb header `Sessions › Info`: its
+  id, stored title (if any), absolute creation and last-active timestamps,
+  message count, active-state, and the **complete** last effective user prompt
+  (not the truncated preview). The detail is fetched on demand
+  (`QuerySessionDetail`) so it carries the full prompt without leaking the
+  whole transcript to the TUI; `Esc` backs out to the list (a second `Esc`
+  closes the modal). The list-only keys (`d`/`n`/`i`) are inert while in the
+  sub-view. Added across `neenee-core` (`SessionDetail`, request/response
+  variants), `neenee-persistence` (`SessionStore::detail`),
+  `neenee-transport` (dispatch + handler), and `neenee-cli` (input, event loop,
+  `App` state, and the `draw_sessions_modal` detail branch).
+
 ### Changed
+
+- **Sessions are not persisted until they gain real content.** A session is
+  now deferred to disk until the user sends their first message or runs a
+  command — opening a session and exiting (e.g. via `neenee resume`, viewing
+  `/sessions`, switching a provider, or a no-op `/clear`) no longer creates an
+  empty session record that pollutes the history. Previously several metadata
+  mutators (`set_title`, `set_provider_selection`, `replace_messages`,
+  `mutate_messages`) wrote a brand-new empty session to disk unconditionally,
+  so `set_provider_selection` (triggered by `/models`) was the common cause of
+  empty-session litter. All write paths now carry the `empty_unpersisted` guard
+  (skip persist when the session is empty AND never yet on disk); the
+  `load_or_seed` constructor no longer seeds a `.jsonl` for a missing snapshot
+  either. The first real message or command echo persists as before. Changed
+  in `crates/neenee-persistence/src/session/mod.rs`.
+
+- **Unified hierarchical (breadcrumb) modal headers.** Drill-in sub-pages now
+  share one component-level convention instead of ad-hoc per-modal styling. A
+  new `breadcrumb_parts(parent, child)` primitive (with a centralized ` › `
+  separator) renders the standard `Parent › Child` header — a muted parent, the
+  separator, then a bold child — and documents the modal-hierarchy rule it
+  encodes: a sub-page keeps the *same* `Modal` variant as its parent (one modal
+  drilling into a secondary view), the breadcrumb is how the user sees where
+  they are, and `Esc` navigates one level up. Applied to `Sessions › Info` and
+  used to align the existing Config sub-pages (`Settings › Layout`,
+  `Settings › Appearance`, `Appearance › Custom palette`), which previously
+  used a hand-written `"Settings  /  "` prefix with a different glyph. Changed
+  in `crates/neenee-cli/src/tui/primitives.rs` (`breadcrumb_parts`,
+  `BREADCRUMB_SEP`) and the `overlays/{session,config_layout,config_theme,
+  config_theme_custom}.rs` headers.
+
+- **Session delete / picker no longer re-parses every transcript on disk.**
+  Deleting a session from the `/sessions` picker (and refreshing the picker
+  after each delete) used to read and *fully deserialize* every session file —
+  the whole recursive transcript (envoy `children`, tool calls, content blobs,
+  provider meta, …) — just to extract a header row. On a project with hundreds
+  of multi-megabyte sessions that was seconds of work per delete, so rapid
+  deletes piled up and the picker visibly lagged or froze. Two fixes:
+
+  - `SessionStore::list` now parses session snapshots with deferred
+    `Box<RawValue>` message bodies — it records each message array's byte range
+    but only decodes the one field it needs (the first user message's `content`
+    for the preview) and counts the rest without allocating it. The picker now
+    scales with the *number* of sessions, not their total content size.
+  - `SessionStore::resolve_session` (called by every `delete` and `/session
+    open`) now resolves an id prefix by matching directory **filenames** — a
+    session's filename *is* its id under ADR-0018 — so it opens zero files on
+    the common path. The old code fully deserialized every session's
+    `SessionData` on each resolve. Legacy snapshots whose stored `id` differs
+    from their filename are still reachable via an id-only fallback deserialize.
+
+  Measured on a 618-session / ~2 GB project: per-delete resolve dropped from
+  ~1.4 s (full parse of all files) to ~0 ms (filename match, no I/O), and the
+  picker `list` from ~1.1 s to ~0.5 s. Changed in
+  `crates/neenee-persistence/src/session/mod.rs` (`SessionHeader`,
+  `SessionStore::list`, `SessionStore::resolve_session`); the `raw_value`
+  serde_json feature is now enabled for `neenee-persistence`.
+
+- **Sessions picker preview is the last real prompt, and the row shows only the
+  active time.** Two related refinements to what each picker row displays:
+
+  - The left-hand preview is now the **last effective user prompt** — the most
+    recent user turn that is *not* a non-driving command echo. Slash commands
+    (`/unattended on`, `/session open …`) and `!shell` passthroughs (ADR-0050)
+    are agent operations, not AI-conversation turns, so a row like
+    `/unattended on` was meaningless as a preview; it is now excluded. The
+    deferred header parse was extended to read each message's `origin` (it
+    previously decoded only role + content) so echoes are filtered by their
+    `CommandEcho` provenance, not by fragile `/` string-sniffing.
+  - The row meta now shows only the **active** time (compact relative form),
+    dropping the duplicate `created` column — the full creation timestamp lives
+    in the new `i` info sub-view.
+
+  Changed in `crates/neenee-persistence/src/session/mod.rs`
+  (`session_overview_header`, `last_effective_prompt`, `MessagePreview`) and
+  `crates/neenee-cli/src/tui/overlays/session.rs`.
 
 - **Write/operation-scope gate is soft when attended.** An out-of-scope tool
   call is no longer blocked outright when a user is reachable; it falls
@@ -21,6 +134,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ScopeGatePolicy`); docs updated in
   `docs/explanation/agent-design/{unattended,rounds-and-turns,harness}.md` and
   `docs/reference/glossary.md`.
+
+### Fixed
+
+- **Ctrl+C at the `neenee resume` startup picker quits instead of dropping
+  into an empty session.** Esc and an outside click already quit the program
+  when the startup picker is showing (there is no conversation behind it), but
+  Ctrl+C took its own arm that only cleared the modal (`active_modal = None`)
+  and never set `should_quit` — landing the user in a bare empty chat. Ctrl+C
+  now quits at the startup picker too, matching Esc / outside click. Fixed in
+  `crates/neenee-cli/src/tui/event_loop.rs` (`CtrlC` arm).
+
+- **Empty sessions are no longer persisted by a provider pin.** Pinning a
+  provider/model on an otherwise message-less session (`/models` switch) used
+  to write the snapshot, surfacing empty sessions in the picker. This was the
+  common path: Ctrl+C at the startup picker dropped into an empty session (see
+  above), and opening `/models` then persisted it. `set_provider_selection`
+  now carries the same `empty_unpersisted` guard the other metadata mutators
+  (`set_todos`, `set_disabled_tools`, …) already had, so a brand-new empty
+  session stays unpersisted until it gains real content. Fixed in
+  `crates/neenee-persistence/src/session/mod.rs`.
+
+- **Footer `? help` chip never hides its label.** Under width pressure the
+  modal footer chip used to degrade `? help` → `? …` → `?`, hiding the "help"
+  label so the user could not tell what the chip offered (it is the only way to
+  discover the hidden keymap). The label is now non-negotiable: another hint is
+  dropped to make room for the full `? help` rather than truncating the label.
+  Only a terminal narrower than `? help` itself (under ~6 columns) collapses to
+  `…`. Fixed in `crates/neenee-cli/src/tui/components/footer.rs`.
+
+- **Sessions picker keeps the cursor on the same line after a delete.**
+  Deleting a row used to snap the selection back to the top of the list. The
+  delete handler already removed the row optimistically and kept `modal_index`
+  on the same line, but the backend then pushed a fresh sessions overview whose
+  "open the picker" signal reset `modal_index` to 0 and `session_scroll` to 0 —
+  fighting the optimistic update on every delete. The refresh path now resets
+  the cursor/scroll only when the modal is genuinely *opening* (transitioning
+  into the sessions picker); a data refresh while it is already open (such as
+  the post-delete overview) preserves the cursor and scroll. Fixed in
+  `crates/neenee-cli/src/tui/event_loop.rs` (sessions-overview refresh branch).
+
+- **Sessions picker no longer hitches / freezes while open on large projects.**
+  On a project with hundreds of sessions the picker did O(n) work on the
+  render thread *every drawn frame*, and an unconditional per-frame clone of
+  the whole overview — so navigating or deleting felt laggy and the UI could
+  stall briefly. The delete path itself was already offloaded to background
+  threads; the bottleneck was synchronous per-frame work on the event loop.
+  Three fixes, all in `crates/neenee-cli/src/tui/`:
+
+  - **Windowed row rendering.** `draw_sessions_modal` (`overlays/session.rs`)
+    used to build a styled `Line` (several allocations each) for *every*
+    session on disk every frame, even though only ~20–40 rows are visible.
+    It now resolves the scroll against the true list length (factored into
+    `primitives::resolve_scroll`) and builds only the visible window; the
+    scrollbar still reflects the full list via the resolved `max_scroll`.
+    Cost drops from ~n rows/frame to ~visible-rows/frame.
+  - **Revision-gated overview clone.** The event loop mirrored the shared
+    `sessions_overview` into `App` with a deep `Vec::clone()` (two `String`s
+    per row) *every iteration*, whether or not it had changed. A new
+    `sessions_overview_rev` counter (bumped by the response listener on each
+    replacement) gates the clone so it happens only when the picker data
+    actually changed. (`event_loop.rs`, `tui/mod.rs`.)
+  - **One wall-clock read per frame.** Each picker row formatted its relative
+    time with its own `SystemTime::now()` syscall (≈600 syscalls/frame on a
+    large project). The now-computed-once value is threaded through a new
+    `relative_time_at(ts, now)` (`overlays/common.rs`), replacing the
+    per-row `relative_time_compact`.
 
 ### Removed
 

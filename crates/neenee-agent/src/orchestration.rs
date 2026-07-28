@@ -1400,6 +1400,7 @@ pub async fn run_repeat_tick(
 ) -> Result<usize, String> {
     let cutoff = now - chrono::Duration::days(DEFAULT_MAX_AGE_DAYS);
     let mut jobs = session.repeat_jobs().await;
+    let initial_len = jobs.len();
     // Prune expired jobs (created too long ago) in place.
     jobs.retain(|j| j.created_at >= cutoff);
 
@@ -1430,8 +1431,10 @@ pub async fn run_repeat_tick(
         });
         dispatched += 1;
     }
-    // Persist the mutated schedule (pruned + advanced) in one shot.
-    session.set_repeat_jobs(jobs).await?;
+    // Only persist if the schedule actually mutated (job pruned or fired).
+    if initial_len != jobs.len() || dispatched > 0 {
+        session.set_repeat_jobs(jobs).await?;
+    }
     Ok(dispatched)
 }
 

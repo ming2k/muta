@@ -50,6 +50,11 @@ pub struct PrincipalRuntimeConfig {
     /// Mirrors `[principal] allow_model_stdin` and
     /// `Agent::set_allow_model_stdin`. Default `false`.
     pub allow_model_stdin: bool,
+    /// Whether an interactive `bash` command skips the inline input panel and
+    /// instead runs with stdin closed (fast failure + non-interactive remedy).
+    /// Mirrors `[principal] skip_interactive_input` and
+    /// `Agent::set_skip_interactive_input`. Default `false`.
+    pub skip_interactive_input: bool,
 }
 
 /// A declarative principal role: an identity, the capability scope it admits,
@@ -157,6 +162,7 @@ mod tests {
         // default runtime config
         assert_eq!(p.config.hard_stop_turns, 0);
         assert!(!p.config.allow_model_stdin);
+        assert!(!p.config.skip_interactive_input);
         assert_eq!(p.config.nudge, crate::DoomGuardConfig::default());
     }
 

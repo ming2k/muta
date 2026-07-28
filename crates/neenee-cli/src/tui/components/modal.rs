@@ -47,7 +47,7 @@ pub(crate) struct ModalPage<'a> {
     /// `footer_hints` + `extra_footer_hints`, and the footer becomes
     /// `↑↓ scroll · Esc back` (in-modal `?` expand — not a nested modal).
     pub keymap_open: bool,
-    /// When true, a collapsed footer appends `? more` (list modals that wire
+    /// When true, a collapsed footer appends `? help` (list modals that wire
     /// in-modal keymap expand). Help / pure info pages leave this false.
     pub show_more: bool,
 }
@@ -105,7 +105,7 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
         }
         .render(frame, f.body, theme);
         if let Some(footer) = f.footer {
-            // No recursive `? more` while already on the keymap page.
+            // No recursive `? help` while already on the keymap page.
             render_modal_footer(frame, footer, &keymap_page_footer_hints(), theme);
         }
     } else {

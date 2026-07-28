@@ -11,7 +11,7 @@ use crate::tui::components::modal::{
 use crate::tui::components::options::{ChoiceTone, choice_style};
 use crate::tui::components::scroll::ScrollBody;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, keyvocab,
+    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, breadcrumb_parts, keyvocab,
 };
 use crate::tui::view::{COLOR_SCHEMES, Theme};
 
@@ -90,13 +90,7 @@ pub fn draw_config_theme_modal(
         ]));
     }
 
-    let header = [
-        HeaderPart::Text {
-            text: "Settings  /  ",
-            accent: false,
-        },
-        HeaderPart::title("Appearance"),
-    ];
+    let header = breadcrumb_parts("Settings", "Appearance");
     draw_modal_page(
         frame,
         ModalPage {

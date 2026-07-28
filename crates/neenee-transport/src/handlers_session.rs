@@ -36,6 +36,24 @@ pub async fn delete(
     }
 }
 
+/// `AgentRequest::QuerySessionDetail` — full detail for one session (complete
+/// last prompt, title, timestamps). Reply with [`AgentResponse::SessionDetail`]
+/// for the session-info sub-view, or surface the storage error.
+pub async fn detail(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    id: String,
+) {
+    match session.detail(&id).await {
+        Ok(detail) => {
+            let _ = resp_tx.send(AgentResponse::SessionDetail(detail));
+        }
+        Err(error) => {
+            let _ = resp_tx.send(AgentResponse::Error(error));
+        }
+    }
+}
+
 /// `AgentRequest::QuerySessionContext` — build and push the
 /// model/tools/permissions/skills/mcp snapshot for the Tools / Mcp / Skills /
 /// Permissions manager modals.

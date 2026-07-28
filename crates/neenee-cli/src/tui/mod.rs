@@ -191,6 +191,7 @@ pub async fn run_tui(
     tui_config: config::TuiConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
+    startup_picker: bool,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -301,6 +302,10 @@ pub async fn run_tui(
     let provider_picker_clone = provider_picker.clone();
     let sessions_overview = Arc::new(Mutex::new(Vec::<SessionOverview>::new()));
     let sessions_overview_clone = sessions_overview.clone();
+    let sessions_overview_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let sessions_overview_rev_clone = sessions_overview_rev.clone();
+    let session_detail = Arc::new(tokio::sync::Mutex::new(None::<neenee_core::SessionDetail>));
+    let session_detail_clone = session_detail.clone();
     let open_sessions = Arc::new(AtomicBool::new(false));
     let open_sessions_clone = open_sessions.clone();
     let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
@@ -1159,7 +1164,14 @@ pub async fn run_tui(
                 }
                 AgentResponse::SessionsOverview(sessions) => {
                     *sessions_overview_clone.lock().await = sessions;
+                    // Bump the revision so the loop's per-iteration mirror can
+                    // skip the deep clone when the overview is unchanged.
+                    sessions_overview_rev_clone
+                        .fetch_add(1, std::sync::atomic::Ordering::Release);
                     open_sessions_clone.store(true, Ordering::SeqCst);
+                }
+                AgentResponse::SessionDetail(detail) => {
+                    *session_detail_clone.lock().await = Some(detail);
                 }
                 AgentResponse::SessionContext(snapshot) => {
                     *session_context_clone.lock().await = Some(snapshot);
@@ -1314,13 +1326,20 @@ pub async fn run_tui(
         custom_commands,
         cursor_position: 0,
         input_scroll: 0,
-        active_modal: Modal::None,
+        active_modal: if startup_picker {
+            Modal::Sessions
+        } else {
+            Modal::None
+        },
         modal_index: 0,
         last_input_rect: neenee_tui_engine::Rect::default(),
         cursor_sync_pending: false,
         cursor_visible: true,
         session_scroll: 0,
         session_modal_follow: true,
+        session_info_detail: false,
+        session_detail: None,
+        session_info_scroll: 0,
         permissions_scroll: 0,
         config_scroll: 0,
         skills_expanded: None,
@@ -1353,6 +1372,7 @@ pub async fn run_tui(
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        startup_picker,
         permission_confirm_always: false,
         permission_show_details: false,
         permission_scroll: 0,
@@ -1378,6 +1398,7 @@ pub async fn run_tui(
         color_scheme: Theme::normalize_color_scheme(&tui_config.color_scheme).to_string(),
         custom_color_scheme: tui_config.custom_color_scheme.clone(),
         custom_color_draft: tui_config.custom_color_scheme.clone(),
+        click_outside_dismiss: tui_config.click_outside_dismiss,
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),
@@ -1457,6 +1478,8 @@ pub async fn run_tui(
             key_status,
             provider_picker,
             sessions_overview,
+            sessions_overview_rev,
+            session_detail,
             open_sessions,
             oauth_add_signal,
             awaiting_oauth_add,
@@ -1503,6 +1526,7 @@ pub async fn start_tui(
     tui_config: config::TuiConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
+    startup_picker: bool,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     run_tui(
         tx,
@@ -1516,6 +1540,7 @@ pub async fn start_tui(
         tui_config,
         session,
         token_ledger,
+        startup_picker,
     )
     .await
 }

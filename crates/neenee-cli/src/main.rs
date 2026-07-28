@@ -64,6 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stores, provider/skills/toolset wiring, agent, MCP, restores, and the
     // `SessionDriver` — shared with every frontend binary. This binary
     // supplies its identity, coding principal, and clipboard bridge.
+    // `neenee resume` (no id) opens the sessions picker at startup *instead
+    // of* loading any session, so closing it must quit rather than drop into
+    // an empty chat. Captured here because `startup` moves into `assemble`.
+    let startup_picker = matches!(startup, StartupMode::Picker);
     let boot = bootstrap::assemble(BootstrapParams {
         identity: neenee_identity(),
         principal: principal_code(),
@@ -114,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tui_config,
         crate::tui::SessionSource::Local(session),
         Some(token_ledger),
+        startup_picker,
     )
     .await
     {
@@ -182,6 +187,9 @@ async fn run_attached(
         // Token accounting lives server-side; the client installs no ledger
         // (the TokenReport modal surfaces a notice instead of an empty report).
         None,
+        // Attach mode connects to a hosted session; the sessions picker is
+        // never the entry, so closing a `/sessions` modal just dismisses it.
+        false,
     )
     .await?;
     // No SessionEnd hooks: the client never owned the session. The composer

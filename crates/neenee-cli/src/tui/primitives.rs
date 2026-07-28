@@ -384,6 +384,44 @@ pub(crate) fn modal_header_parts(
     frame.render_widget(Paragraph::new(Line::from(spans)), h);
 }
 
+/// The single separator glyph for a hierarchical (breadcrumb) modal header.
+/// Keeps every drill-in sub-page — `Sessions › Info`, `Settings › Layout`,
+/// `Settings › Appearance` — visually identical. Centralized (and `'static`)
+/// so the glyph and spacing never drift between modals.
+pub(crate) const BREADCRUMB_SEP: &str = " › ";
+
+/// The standard hierarchical (breadcrumb) header for a modal sub-page: a muted
+/// parent label, the [`BREADCRUMB_SEP`] separator, then the bold child title.
+/// This is the component-level convention for **modal hierarchy**:
+///
+/// - A sub-page keeps the *same* `Modal` variant as its parent (it is one modal
+///   drilling into a secondary view, not a separate modal), so the breadcrumb is
+///   how the user sees where they are. Example: a Sessions picker drilled into
+///   its info view renders `Sessions › Info`.
+/// - `Esc` navigates one level up (handled in the event loop's `CloseModal`
+///   arm): the first `Esc` returns from a sub-page to its parent view, a second
+///   `Esc` closes the modal. The header flips back to the parent title on
+///   back-out.
+///
+/// Pass the returned slice to `modal_header_parts`. All three segments borrow
+/// their input `&str`s (the separator is a `'static` const), so no allocation.
+pub(crate) fn breadcrumb_parts<'a>(
+    parent: &'a str,
+    child: &'a str,
+) -> [HeaderPart<'a>; 3] {
+    [
+        HeaderPart::Text {
+            text: parent,
+            accent: false,
+        },
+        HeaderPart::Text {
+            text: BREADCRUMB_SEP,
+            accent: false,
+        },
+        HeaderPart::title(child),
+    ]
+}
+
 /// Paint the unified modal chrome and split the content area into sections.
 ///
 /// Every centered modal goes through this so the panel style lives in one
@@ -460,19 +498,21 @@ pub(crate) fn modal_frame(
 /// question / permission sheets) or that scroll manually (help / activity),
 /// where edge-pinning reads better. A viewport too short for the band falls
 /// back to edge-pinning in either case.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn render_body(
-    frame: &mut Frame,
-    body_rect: Rect,
-    lines: Vec<Line<'static>>,
+/// Resolve the effective scroll offset for a body of `total` lines in a
+/// viewport `visible` rows tall, honoring an optional follow index and the
+/// same edge-margin band logic [`render_body`] applies. Returns `(scroll,
+/// max_scroll)`. This is the pure scroll-resolution half of [`render_body`],
+/// factored out so a caller can compute the visible window *before* building
+/// lines — letting list modals build only the rows that will actually be
+/// painted instead of the whole list every frame.
+pub(crate) fn resolve_scroll(
     scroll: &mut usize,
+    visible: usize,
+    total: usize,
     follow: Option<usize>,
     edge_margin: usize,
-    wrap: bool,
-    theme: &Theme,
-) {
-    let visible = body_rect.height as usize;
-    let max_scroll = lines.len().saturating_sub(visible);
+) -> (usize, usize) {
+    let max_scroll = total.saturating_sub(visible);
     *scroll = (*scroll).min(max_scroll);
     if let Some(idx) = follow
         && visible > 0
@@ -499,6 +539,23 @@ pub(crate) fn render_body(
         // the viewport, or when `idx` is near the very end.
         *scroll = (*scroll).min(max_scroll);
     }
+    (*scroll, max_scroll)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_body(
+    frame: &mut Frame,
+    body_rect: Rect,
+    lines: Vec<Line<'static>>,
+    scroll: &mut usize,
+    follow: Option<usize>,
+    edge_margin: usize,
+    wrap: bool,
+    theme: &Theme,
+) {
+    let visible = body_rect.height as usize;
+    let (_, max_scroll) =
+        resolve_scroll(scroll, visible, lines.len(), follow, edge_margin);
 
     let mut para = Paragraph::new(lines).scroll(*scroll as u16, 0);
     if wrap {
@@ -525,7 +582,7 @@ pub(crate) const SCROLL_EDGE_MARGIN: usize = 3;
 /// `scroll / max_scroll` ratio, plus `▲` / `▼` caps when more content lies
 /// above / below. The thumb uses `theme.muted()`; the caps use `theme.dim()`
 /// so the bar reads as a subtle affordance, not a focal element.
-fn draw_scrollbar(frame: &mut Frame, body: Rect, scroll: usize, max_scroll: usize, theme: &Theme) {
+pub(crate) fn draw_scrollbar(frame: &mut Frame, body: Rect, scroll: usize, max_scroll: usize, theme: &Theme) {
     if max_scroll == 0 || body.width == 0 || body.height < 2 {
         return;
     }
@@ -807,5 +864,24 @@ mod tests {
                 "modal body width must be even at {cols} cols (was {body_w})"
             );
         }
+    }
+
+    #[test]
+    fn breadcrumb_parts_composes_parent_separator_child() {
+        // The single breadcrumb convention for hierarchical modal headers.
+        // A drill-in sub-page renders `Parent › Child`: muted parent, the
+        // centralized `›` separator, bold child. Pins both the order/kind of
+        // the parts and the exact separator glyph so all sub-pages stay uniform.
+        let parts = breadcrumb_parts("Sessions", "Info");
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            parts[0],
+            HeaderPart::Text { text: "Sessions", accent: false }
+        ));
+        assert!(matches!(
+            parts[1],
+            HeaderPart::Text { text: " › ", accent: false }
+        ));
+        assert!(matches!(parts[2], HeaderPart::Title("Info")));
     }
 }

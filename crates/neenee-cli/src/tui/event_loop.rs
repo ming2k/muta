@@ -230,6 +230,16 @@ pub(super) struct UiRuntime {
     pub provider_picker: Arc<Mutex<ProviderPickerSnapshot>>,
     /// Sessions picker rows + a one-shot request to open the picker modal.
     pub sessions_overview: Arc<Mutex<Vec<SessionOverview>>>,
+    /// Monotonic revision bumped by the response listener every time it
+    /// replaces `sessions_overview`. The event loop reads it to skip the deep
+    /// `Vec` clone (`~2 strings × every row`) when nothing changed — with a
+    /// large project (hundreds of sessions) the unconditional per-iteration
+    /// clone dominated the loop and made the picker hitch on every redraw.
+    pub sessions_overview_rev: Arc<std::sync::atomic::AtomicU64>,
+    /// Latest full detail for one session, written by the listener from
+    /// [`AgentResponse::SessionDetail`] and read into [`App::session_detail`]
+    /// for the session-info sub-view.
+    pub session_detail: Arc<Mutex<Option<neenee_core::SessionDetail>>>,
     pub open_sessions: Arc<AtomicBool>,
     /// Live OAuth-add UI updates from the response listener.
     pub oauth_add_signal: Arc<Mutex<Option<OauthAddSignal>>>,
@@ -746,6 +756,13 @@ pub(super) async fn run_app_loop(
     // ends, a toast/armed timer expires) we still owe one final draw to clear
     // its last visual, so a true→false transition forces exactly one more frame.
     let mut was_animating = true;
+    // Last `sessions_overview_rev` the loop mirrored into `App`. The listener
+    // bumps the revision whenever it replaces the shared overview, so the loop
+    // can skip the deep `Vec<SessionOverview>` clone (two `String`s per row)
+    // on the vast majority of iterations where the picker data is unchanged.
+    // Without this gate a large project (hundreds of sessions) re-cloned the
+    // whole list every frame, a major contributor to picker hitches.
+    let mut sessions_overview_rev_seen: u64 = 0;
 
     loop {
         if app.should_quit.load(Ordering::SeqCst) {
@@ -867,17 +884,46 @@ pub(super) async fn run_app_loop(
                 }
             }
             // Sessions picker: refresh rows and open the modal on request.
-            app.sessions_overview = runtime.sessions_overview.lock().await.clone();
+            // Sessions picker: refresh rows (only when the listener actually
+            // changed them) and open the modal on request. The revision gate
+            // avoids cloning the full overview Vec every iteration — the
+            // listener bumps `sessions_overview_rev` on every replacement.
+            {
+                let rev = runtime
+                    .sessions_overview_rev
+                    .load(Ordering::Acquire);
+                if rev != sessions_overview_rev_seen {
+                    app.sessions_overview = runtime.sessions_overview.lock().await.clone();
+                    sessions_overview_rev_seen = rev;
+                }
+            }
             if runtime.open_sessions.swap(false, Ordering::SeqCst)
                 && app.active_modal != Modal::Permission
             {
+                // Only reset the selection/scroll when the modal is actually
+                // being *opened* — transitioning from some other state into the
+                // sessions picker. When the picker is already open this signal
+                // is just a data refresh (e.g. the overview the backend pushes
+                // right after a delete), and resetting the cursor there would
+                // snap the selection back to the top on every delete, fighting
+                // the optimistic local removal the delete handler already did.
+                let opening = app.active_modal != Modal::Sessions;
                 app.active_modal = Modal::Sessions;
-                app.modal_index = 0;
-                // Reuse the Tools/Mcp/Skills body scroll slot so the picker is
-                // scrollable (PageUp/PageDown/Ctrl+↑↓/wheel) like the other
-                // list modals. Reset on open so a long list starts at the top.
-                app.session_scroll = 0;
-                app.session_modal_follow = true;
+                if opening {
+                    app.modal_index = 0;
+                    // Reuse the Tools/Mcp/Skills body scroll slot so the picker is
+                    // scrollable (PageUp/PageDown/Ctrl+↑↓/wheel) like the other
+                    // list modals. Reset on open so a long list starts at the top.
+                    app.session_scroll = 0;
+                    app.session_modal_follow = true;
+                }
+            }
+            // Mirror the on-demand session detail (info sub-view) when the
+            // listener has a fresh one. Replacing `None` with `None` is a
+            // no-op, so this is cheap when the sub-view is closed.
+            if let Some(detail) = runtime.session_detail.lock().await.take() {
+                app.session_detail = Some(detail);
+                app.session_info_scroll = 0;
             }
             if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
                 match sig {
@@ -1231,6 +1277,50 @@ pub(super) async fn run_app_loop(
         if needs_draw {
             let render_frame = |f: &mut neenee_tui_engine::Frame<'_>| {
                 let mut layout_map = LayoutMap::new();
+
+                if app.startup_picker && app.active_modal == Modal::Sessions {
+                    // `neenee resume` (no id): initial launch opens ONLY the sessions picker
+                    // on a clean background. Do not open/render the chat interface, empty state,
+                    // composer input box, status bar, or header components until a session is selected.
+                    f.render_widget(
+                        neenee_tui_engine::widgets::Block::default()
+                            .style(neenee_tui_engine::Style::default().bg(app.theme.app_bg)),
+                        f.area(),
+                    );
+
+                    let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
+                    let drawn_modal_rect = view::draw_sessions_modal(
+                        f,
+                        &app.sessions_overview,
+                        app.modal_index
+                            .min(app.sessions_overview.len().saturating_sub(1)),
+                        app.modal_keymap_open,
+                        &mut app.session_scroll,
+                        app.session_modal_follow,
+                        &app.theme,
+                        app.startup_picker,
+                        spinner_phase,
+                        app.session_info_detail,
+                        app.session_detail.as_ref(),
+                        &mut app.session_info_scroll,
+                    );
+
+                    app.layout_map = layout_map;
+                    app.modal_body_height = drawn_modal_rect.height.saturating_sub(
+                        crate::tui::primitives::modal_chrome_rows(crate::tui::primitives::ModalSpec {
+                            width_percent: 0,
+                            header: true,
+                            footer: true,
+                        }),
+                    );
+                    app.modal_rect = if app.active_modal.dismissable_by_outside_click() {
+                        Some(drawn_modal_rect)
+                    } else {
+                        None
+                    };
+                    return;
+                }
+
                 app.modal_hit_map.clear();
                 // Borrow the height cache out of `app` for the duration of the draw:
                 // `view_messages` borrows `app` immutably below, so the cache cannot
@@ -1625,6 +1715,8 @@ pub(super) async fn run_app_loop(
                 // recessed background.
                 view::recess_backdrop(f, recess, &app.theme);
 
+                let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
+
                 // Modals
                 let drawn_modal_rect = match app.active_modal {
                     Modal::Connections => {
@@ -1847,6 +1939,11 @@ pub(super) async fn run_app_loop(
                         &mut app.session_scroll,
                         app.session_modal_follow,
                         &app.theme,
+                        app.startup_picker,
+                        spinner_phase,
+                        app.session_info_detail,
+                        app.session_detail.as_ref(),
+                        &mut app.session_info_scroll,
                     )),
                     Modal::TokenReport => {
                         // Snapshot the shared ledger; render an empty report
@@ -2265,6 +2362,7 @@ pub(super) async fn run_app_loop(
                     &mut app.cursor_position,
                     input::InputContext {
                         active_modal: app.active_modal,
+                        session_info_detail: app.session_info_detail,
                         is_responding: app.running_sessions.contains(&viewed_session_id),
                         completion_kind,
                         suggestion_count,
@@ -3566,26 +3664,78 @@ pub(super) async fn run_app_loop(
                         let id = session.id.clone();
                         app.active_modal = Modal::None;
                         app.modal_index = 0;
+                        // A session was chosen from the startup picker, so a
+                        // real conversation now backs the view: subsequent
+                        // `/sessions` modals should behave as ordinary
+                        // transient overlays (Esc = dismiss, not quit).
+                        app.startup_picker = false;
                         let _ = app
                             .tx
                             .send(AgentRequest::SlashCommand(format!("/session open {}", id)));
                     }
                 }
                 input::InputAction::DeleteSelectedSession => {
+                    let idx = app
+                        .modal_index
+                        .min(app.sessions_overview.len().saturating_sub(1));
+                    if idx < app.sessions_overview.len() {
+                        let deleted = app.sessions_overview.remove(idx);
+                        app.modal_index = app
+                            .modal_index
+                            .min(app.sessions_overview.len().saturating_sub(1));
+                        let _ = app.tx.send(AgentRequest::DeleteSession { id: deleted.id });
+                    }
+                }
+                input::InputAction::CreateNewSession => {
+                    app.startup_picker = false;
+                    app.active_modal = Modal::None;
+                    let _ = app
+                        .tx
+                        .send(AgentRequest::SlashCommand("/session new".to_string()));
+                }
+                input::InputAction::OpenSessionInfo => {
+                    // Drill into the session-info sub-view for the highlighted
+                    // row. Request the full detail (complete last prompt,
+                    // timestamps) on demand — the picker rows only carry a
+                    // truncated preview. While the round-trip is in flight the
+                    // body shows a loading state.
                     if let Some(session) = app.sessions_overview.get(
                         app.modal_index
                             .min(app.sessions_overview.len().saturating_sub(1)),
                     ) {
-                        let id = session.id.clone();
-                        let _ = app.tx.send(AgentRequest::DeleteSession { id });
+                        app.session_info_detail = true;
+                        app.session_detail = None;
+                        app.session_info_scroll = 0;
+                        let _ = app
+                            .tx
+                            .send(AgentRequest::QuerySessionDetail { id: session.id.clone() });
                     }
                 }
                 input::InputAction::CloseModal => {
+                    // Sub-page back-out is checked FIRST (deepest level wins),
+                    // so Esc from a drill-in always returns to its parent view
+                    // before any close/quit logic runs — otherwise pressing Esc
+                    // in e.g. the Sessions › Info sub-view at startup would quit
+                    // the program instead of dropping back to the sessions list.
                     if app.active_modal == Modal::TokenReport && app.token_report_detail {
                         // First Esc returns from the turn breakdown to the round list;
                         // a second Esc closes the modal.
                         app.token_report_detail = false;
                         app.token_report_scroll = 0;
+                    } else if app.active_modal == Modal::Sessions && app.session_info_detail {
+                        // First Esc returns from the session-info sub-view to
+                        // the sessions list; a second Esc closes the modal.
+                        app.session_info_detail = false;
+                        app.session_detail = None;
+                        app.session_info_scroll = 0;
+                    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+                        // `neenee resume` (no id) opened the picker at startup
+                        // instead of loading any session: there is no real
+                        // conversation behind the modal, so closing the *list*
+                        // (not a sub-view — those are handled above) must quit
+                        // the program rather than drop into an empty chat.
+                        tracing::info!(reason = "startup_picker_cancelled", "app exiting");
+                        app.should_quit.store(true, Ordering::SeqCst);
                     } else {
                         // Most modals close straight to chat. The model editor
                         // and the custom-provider editor instead step back to
@@ -3825,6 +3975,19 @@ pub(super) async fn run_app_loop(
                         // query and sub-flags too).
                         app.restore_history_draft();
                         app.active_modal = Modal::None;
+                    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+                        // `neenee resume` (no id) opened the picker at startup:
+                        // there is no conversation behind it, so Ctrl+C — like
+                        // Esc and an outside click — quits the program rather
+                        // than dropping into an empty session. Without this,
+                        // Ctrl+C used to close the modal and land the user in a
+                        // bare empty chat (which a stray /models then persisted
+                        // as an empty-session file).
+                        tracing::info!(
+                            reason = "startup_picker_cancelled",
+                            "app exiting"
+                        );
+                        app.should_quit.store(true, Ordering::SeqCst);
                     } else if app.active_modal != Modal::None
                         && app.active_modal != Modal::Permission
                     {
@@ -4676,7 +4839,7 @@ pub(super) async fn run_app_loop(
                         app.selection = SelectionState::None;
                         app.focused_target = None;
                         app.drag.cancel();
-                    } else if let Some(r) = app.modal_rect {
+                    } else if app.active_modal.dismissable_by_outside_click() {
                         // Click-to-dismiss: while a dismissable overlay modal is
                         // open, the full-screen backdrop owns the click — a press
                         // outside the panel closes the modal (mirroring Esc), and a
@@ -4689,19 +4852,69 @@ pub(super) async fn run_app_loop(
                         // API key. HistorySearch *is* dismissable: its filter is
                         // ephemeral and the draft is parked, so an outside click
                         // restores the draft (mirroring Esc / CloseModal).
-                        let inside =
-                            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height;
-                        if !inside {
-                            if app.active_modal == Modal::HistorySearch {
-                                app.restore_history_draft();
+                        //
+                        // The close decision mirrors the `CloseModal` arm
+                        // exactly, *including the deepest-level-first ordering*:
+                        // an outside click while inside a drill-in sub-view (e.g.
+                        // Sessions › Info) backs out to the parent view, not out
+                        // to chat / quit — so the hierarchy is consistent between
+                        // Esc and outside-click.
+                        let inside = app.modal_rect.map_or(false, |r| {
+                            r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
+                        });
+                        if !inside && app.click_outside_dismiss {
+                            // Only dismiss when `[tui] click_outside_dismiss` is
+                            // on (default off): a stray click outside the panel
+                            // should never close a modal, and — for the `neenee
+                            // resume` startup picker — never quit the program;
+                            // Esc / Ctrl+C are the deliberate exit path. When
+                            // the flag is off the click is still consumed (this
+                            // whole branch owns it) so it does not fall through
+                            // to the transcript behind the backdrop.
+                            //
+                            // The close decision mirrors the `CloseModal` arm
+                            // exactly, including the deepest-level-first
+                            // ordering: an outside click while inside a drill-in
+                            // sub-view (e.g. Sessions › Info) backs out to the
+                            // parent view, not out to chat / quit — so the
+                            // hierarchy is consistent between Esc and outside-
+                            // click.
+                            if app.active_modal == Modal::Sessions && app.session_info_detail {
+                                // Outside-click from the info sub-view → back to
+                                // the sessions list (mirrors Esc).
+                                app.session_info_detail = false;
+                                app.session_detail = None;
+                                app.session_info_scroll = 0;
+                            } else if app.active_modal == Modal::TokenReport
+                                && app.token_report_detail
+                            {
+                                // Outside-click from the turn breakdown → back to
+                                // the round list (mirrors Esc).
+                                app.token_report_detail = false;
+                                app.token_report_scroll = 0;
+                            } else {
+                                if app.active_modal == Modal::HistorySearch {
+                                    app.restore_history_draft();
+                                }
+                                // The queue modal auto-blocked on open; an
+                                // outside-click closes it like Esc, so resume
+                                // auto-drain to match.
+                                if app.active_modal == Modal::Queue {
+                                    app.resume_queue(&viewed_session_id);
+                                }
+                                // `neenee resume` (no id): the startup picker has
+                                // no conversation behind it, so a click-outside
+                                // (mirroring Esc) quits instead of landing in an
+                                // empty chat.
+                                if app.startup_picker {
+                                    tracing::info!(
+                                        reason = "startup_picker_cancelled",
+                                        "app exiting"
+                                    );
+                                    app.should_quit.store(true, Ordering::SeqCst);
+                                }
+                                app.active_modal = Modal::None;
                             }
-                            // The queue modal auto-blocked on open; an
-                            // outside-click closes it like Esc, so resume
-                            // auto-drain to match.
-                            if app.active_modal == Modal::Queue {
-                                app.resume_queue(&viewed_session_id);
-                            }
-                            app.active_modal = Modal::None;
                         }
                         app.selection = SelectionState::None;
                         app.focused_target = None;

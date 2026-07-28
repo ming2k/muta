@@ -91,8 +91,8 @@ pub use events::{
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
     ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    RoundSummary, SessionContextSnapshot, SessionOverview, SkillInfo, ToolInfo, UserQuestion,
-    UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    RoundSummary, SessionContextSnapshot, SessionDetail, SessionOverview, SkillInfo, ToolInfo,
+    UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,

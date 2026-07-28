@@ -448,7 +448,18 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let input_history_handle = tokio::task::spawn_blocking(Config::load_history);
     let provider_usage_handle = tokio::task::spawn_blocking(provider_usage::ProviderUsage::load);
 
-    let restored_messages = session.full_transcript().await;
+    // `neenee resume` (no id) opens the sessions picker at startup instead of
+    // loading any session: no transcript, todos, or SessionStart hooks should
+    // run against the throwaway fresh session — the real session is restored
+    // only once the user picks one from the picker (`/session open`). Fresh and
+    // `neenee resume <id>` load eagerly as before.
+    let is_picker = matches!(startup, StartupMode::Picker);
+
+    let restored_messages = if is_picker {
+        Vec::new()
+    } else {
+        session.full_transcript().await
+    };
 
     // Mid-turn context projection: when pruning is enabled, install a gate that
     // clears old tool results between ReAct turns once pressure crosses the
@@ -477,14 +488,16 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     agent.apply_principal_profile(&principal);
 
     // Wire the `[principal]` config table: the opt-in hard-stop budget, the
-    // model-supplied-stdin toggle, and the anti-anchoring nudge config. (Session
-    // review is on-demand via `/review`, so it has no config to seed.) All
-    // default to sensible values when the table is absent, so this is a no-op
-    // for the common case — the nudge config defaults to disabled. These run
-    // *after* the profile binding so per-installation config wins.
+    // model-supplied-stdin toggle, the interactive-input-panel opt-out, and
+    // the anti-anchoring nudge config. (Session review is on-demand via
+    // `/review`, so it has no config to seed.) All default to sensible values
+    // when the table is absent, so this is a no-op for the common case — the
+    // nudge config defaults to disabled. These run *after* the profile binding
+    // so per-installation config wins.
     agent.set_hard_stop_turns(config.principal.hard_stop_turns);
     agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);
+    agent.set_skip_interactive_input(config.principal.skip_interactive_input);
     agent.set_bash_policy(&config.bash_policy);
 
     // Lifecycle event hooks (ADR-0025): each `[[hooks]]` entry runs a shell
@@ -495,32 +508,40 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let thread_id = session.id().await;
     agent.set_thread_id(&thread_id);
 
-    // Restore the unified task list so resume re-shows the sticky panel with
-    // the same items (and identity) the model last persisted. An empty list
-    // is the "no active task list" state and needs no restore.
-    let persisted_todos = session.todos().await;
-    if !persisted_todos.is_empty() {
-        agent.set_todos(persisted_todos);
-    }
+    // Restore the session-scoped runtime state and fire SessionStart hooks.
+    // Skipped entirely in Picker mode: the bootstrap session is a throwaway
+    // fresh one, and the user has not chosen a session yet. The full restore
+    // (todos + disabled tools + round counter + SessionStart hooks) runs when
+    // a real session is opened from the picker — see `handlers_slash`'s
+    // `restore_session_runtime`.
+    if !is_picker {
+        // Restore the unified task list so resume re-shows the sticky panel with
+        // the same items (and identity) the model last persisted. An empty list
+        // is the "no active task list" state and needs no restore.
+        let persisted_todos = session.todos().await;
+        if !persisted_todos.is_empty() {
+            agent.set_todos(persisted_todos);
+        }
 
-    // Restore the remaining session-scoped runtime state (ADR-0048 Phase 2):
-    // the orthogonal tool mask and round counter.
-    agent.restore_disabled_tools(session.disabled_tools().await);
-    agent.restore_round_count(session.round_counter().await);
+        // Restore the remaining session-scoped runtime state (ADR-0048 Phase 2):
+        // the orthogonal tool mask and round counter.
+        agent.restore_disabled_tools(session.disabled_tools().await);
+        agent.restore_round_count(session.round_counter().await);
 
-    // SessionStart hooks (ADR-0025): inject setup context before the first
-    // round. Resume vs fresh start is surfaced so a hook can branch.
-    {
-        let source = match &startup {
-            StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
-            _ => neenee_core::SessionSource::Startup,
-        };
-        let mut messages = session.model_window().await;
-        agent.fire_session_start(source, &mut messages).await;
-        // Persist the hook-injected setup context through the single write
-        // path so the session stays the source of truth (ADR-0048).
-        if let Err(err) = session.replace_messages(messages).await {
-            tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+        // SessionStart hooks (ADR-0025): inject setup context before the first
+        // round. Resume vs fresh start is surfaced so a hook can branch.
+        {
+            let source = match &startup {
+                StartupMode::Resume(_) => neenee_core::SessionSource::Resume,
+                _ => neenee_core::SessionSource::Startup,
+            };
+            let mut messages = session.model_window().await;
+            agent.fire_session_start(source, &mut messages).await;
+            // Persist the hook-injected setup context through the single write
+            // path so the session stays the source of truth (ADR-0048).
+            if let Err(err) = session.replace_messages(messages).await {
+                tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+            }
         }
     }
 

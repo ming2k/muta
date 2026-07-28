@@ -15,10 +15,11 @@ use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
 use neenee_core::{
-    InjectionKind, InjectionOrigin, Message, Provider, Role, count_tokens, estimate_bytes,
-    estimate_tokens,
+    InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, count_tokens,
+    estimate_bytes, estimate_tokens,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -710,16 +711,24 @@ impl SessionStore {
     /// resume restores the same list (and so per-item history is retained in
     /// the log).
     pub async fn set_todos(&self, todos: neenee_core::TodoList) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.todos = todos.clone();
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state.event_log.append(SessionEvent::TodosSet { todos })?;
-            (state.path.clone(), state.data.clone())
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty()
+                && todos.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::TodosSet { todos })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+        }
+        Ok(())
     }
 
     /// The `/repeat` cron-job schedule owned by this session. Empty means no
@@ -733,16 +742,24 @@ impl SessionStore {
     /// on every change so resume restores the exact schedule. Used by the
     /// `/repeat` command (add / cancel) and by the scheduler (mark fired).
     pub async fn set_repeat_jobs(&self, jobs: Vec<neenee_core::RepeatJob>) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.repeat_jobs = jobs.clone();
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state.event_log.append(SessionEvent::RepeatJobsSet { jobs })?;
-            (state.path.clone(), state.data.clone())
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty()
+                && jobs.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::RepeatJobsSet { jobs })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+        }
+        Ok(())
     }
 
     pub async fn last_projection(&self) -> Option<ContextProjectionCheckpoint> {
@@ -765,19 +782,31 @@ impl SessionStore {
     /// `manual = false` to clear. Persists both the snapshot and the event log
     /// so resume restores the same title.
     pub async fn set_title(&self, title: Option<String>, manual: bool) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.title = title.clone();
             state.data.title_manual = manual;
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::TitleSet { title, manual })?;
-            (state.path.clone(), state.data.clone())
+            // An empty, never-persisted session stays unpersisted even when a
+            // title is set: a session with a title but no messages is still
+            // empty content, and writing it would surface it in the picker as
+            // empty-session litter.
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::TitleSet { title, manual })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn archived_transcript_count(&self) -> usize {
@@ -800,18 +829,26 @@ impl SessionStore {
         &self,
         tools: std::collections::HashSet<String>,
     ) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.disabled_tools = tools.clone();
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::DisabledToolsSet { tools })?;
-            (state.path.clone(), state.data.clone())
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty()
+                && tools.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::DisabledToolsSet { tools })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+        }
+        Ok(())
     }
 
     /// The harness round counter, the session-scoped monotonic watermark
@@ -824,18 +861,26 @@ impl SessionStore {
     /// Replace the round counter. Mirrors `Agent::round_counter` so resume
     /// restores it. The single write path for the counter.
     pub async fn set_round_counter(&self, counter: u64) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.round_counter = counter;
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::RoundCounterSet { counter })?;
-            (state.path.clone(), state.data.clone())
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty()
+                && counter == 0;
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::RoundCounterSet { counter })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+        }
+        Ok(())
     }
 
     /// Durable lifecycle-aware request accounting for the active session.
@@ -907,37 +952,63 @@ impl SessionStore {
     /// per-session provider override; the `/models` switch handler calls it
     /// instead of mutating `config.toml`'s selection, so one session switching
     /// provider/model never affects another.
+    ///
+    /// A provider pin on an otherwise-empty, never-yet-persisted session is
+    /// **not** persisted (the `empty_unpersisted` guard): such a session has no
+    /// real content, so writing it would leave empty-session litter behind.
     pub async fn set_provider_selection(
         &self,
         selection: Option<ProviderSelection>,
     ) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.provider_selection = selection.clone();
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state
-                .event_log
-                .append(SessionEvent::ProviderSelectionSet { selection })?;
-            (state.path.clone(), state.data.clone())
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::ProviderSelectionSet { selection })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn replace_messages(&self, messages: Vec<Message>) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.model_window = messages;
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state.event_log.append(SessionEvent::MessagesReplaced {
-                messages: state.data.model_window.clone(),
-            })?;
-            (state.path.clone(), state.data.clone())
+            // A session that is still empty (no messages AND never persisted)
+            // stays in memory only: opening a session and exiting without
+            // sending any content must not create a record. The guard checks
+            // the POST-replacement state, so the first real message (or a
+            // command echo via `mutate_messages`) does persist, while a no-op
+            // `/clear` on a brand-new session does not.
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::MessagesReplaced {
+                    messages: state.data.model_window.clone(),
+                })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     /// Apply `f` to the live message window under the session lock, append a
@@ -956,18 +1027,31 @@ impl SessionStore {
     where
         F: FnOnce(&mut Vec<Message>),
     {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             f(&mut state.data.model_window);
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            state.event_log.append(SessionEvent::MessagesReplaced {
-                messages: state.data.model_window.clone(),
-            })?;
-            (state.path.clone(), state.data.clone())
+            // Same empty-session deferral as `replace_messages`: a brand-new
+            // session that is still empty after the mutation stays in memory.
+            // A real command echo (the primary `mutate_messages` caller) makes
+            // the session non-empty, so it DOES persist — exactly the "first
+            // command persists the session" contract.
+            let empty_unpersisted = !state.path.exists()
+                && state.data.model_window.is_empty()
+                && state.data.archived_transcript.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::MessagesReplaced {
+                    messages: state.data.model_window.clone(),
+                })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     /// Incrementally persist new messages appended since the last durable
@@ -1107,11 +1191,10 @@ impl SessionStore {
             project_root,
             ..Default::default()
         };
-        ensure_event_log_started(&event_log, &data)?;
         state.path = path;
         state.event_log = event_log;
         state.data = data;
-        // Do not persist an empty snapshot — a session that never gains
+        // Do not persist an empty snapshot or event log — a session that never gains
         // content leaves no empty-file litter (see ADR-0018).
         Ok(id)
     }
@@ -1285,16 +1368,22 @@ impl SessionStore {
         };
 
         let log = snapshot.with_extension("jsonl");
-        let existed = snapshot.exists() || log.exists();
-        let _ = fs::remove_file(&snapshot);
-        let _ = fs::remove_file(&log);
+        tokio::task::spawn_blocking(move || {
+            let existed = snapshot.exists() || log.exists();
+            let _ = fs::remove_file(&snapshot);
+            let _ = fs::remove_file(&log);
 
-        if !existed {
-            return Err(format!(
-                "Could not delete session '{}': files not found.",
-                resolved
-            ));
-        }
+            if !existed {
+                return Err(format!(
+                    "Could not delete session '{}': files not found.",
+                    resolved
+                ));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("delete task failed: {e}"))??;
+
         // Repoint at a fresh session so the store stays usable after the
         // active session is removed.
         if is_active {
@@ -1305,25 +1394,63 @@ impl SessionStore {
 
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
-        let mut summaries = Vec::new();
-        if self.sessions_dir.exists() {
-            for entry in fs::read_dir(&self.sessions_dir).map_err(|error| error.to_string())? {
-                let entry = entry.map_err(|error| error.to_string())?;
-                let path = entry.path();
-                if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                    continue;
+        let sessions_dir = self.sessions_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut summaries = Vec::new();
+            if sessions_dir.exists() {
+                for entry in fs::read_dir(&sessions_dir).map_err(|error| error.to_string())? {
+                    let entry = entry.map_err(|error| error.to_string())?;
+                    let path = entry.path();
+                    if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let Ok(content) = fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let Ok(session) = serde_json::from_str::<SessionHeader>(&content) else {
+                        continue;
+                    };
+                    summaries.push(summary_header(&session, session.id == active_id));
                 }
-                let Ok(content) = fs::read_to_string(&path) else {
-                    continue;
-                };
-                let Ok(session) = serde_json::from_str::<SessionData>(&content) else {
-                    continue;
-                };
-                summaries.push(summary(&session, session.id == active_id));
             }
-        }
-        summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
-        Ok(summaries)
+            summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+            Ok(summaries)
+        })
+        .await
+        .map_err(|e| format!("session list task failed: {e}"))?
+    }
+
+    /// Full detail for one session, requested on demand by the session-info
+    /// sub-view (`i` from the picker). Like [`Self::list`], this uses the
+    /// deferred `SessionHeader` parse (no full-transcript deserialize) and runs
+    /// on a blocking thread; unlike the list rows it returns the *complete*
+    /// last effective user prompt rather than a truncated preview. Returns
+    /// `Err` for an unknown / unreadable id.
+    pub async fn detail(&self, id: &str) -> Result<SessionDetail, String> {
+        let active_id = self.state.lock().await.data.id.clone();
+        // Resolve to a path (filename match, no full parse) and hand the one
+        // file off to a blocking thread for the header extract.
+        let (resolved, path) = {
+            let state = self.state.lock().await;
+            self.resolve_session(id, &state)?
+        };
+        tokio::task::spawn_blocking(move || {
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("could not read session '{}': {e}", resolved))?;
+            let header = serde_json::from_str::<SessionHeader>(&content)
+                .map_err(|e| format!("could not parse session '{}': {e}", resolved))?;
+            Ok(SessionDetail {
+                id: header.id.clone(),
+                title: header.title.clone(),
+                created_at: header.created_at,
+                updated_at: header.updated_at,
+                message_count: header.model_window.len() + header.archived_transcript.len(),
+                active: header.id == active_id,
+                last_prompt: last_effective_prompt(&header),
+            })
+        })
+        .await
+        .map_err(|e| format!("session detail task failed: {e}"))?
     }
 
     /// Run the snapshot persistence off the async runtime.
@@ -1401,6 +1528,13 @@ impl SessionStore {
         if active.data.id.starts_with(input) {
             matches.push((active.data.id.clone(), active.path.clone()));
         }
+        // Fast path: a session's filename *is* its id
+        // (`sessions/<id>.json`, ADR-0018), so resolve a prefix by listing the
+        // directory and matching file stems — no file is ever opened. This used
+        // to read + fully deserialize every session's `SessionData` (the full
+        // recursive transcript) on each `delete` / `open` just to compare an id
+        // prefix; with hundreds of multi-megabyte snapshots that dominated the
+        // delete latency and made the `/sessions` picker lag.
         if self.sessions_dir.exists() {
             for entry in fs::read_dir(&self.sessions_dir).map_err(|error| error.to_string())? {
                 let entry = entry.map_err(|error| error.to_string())?;
@@ -1408,15 +1542,44 @@ impl SessionStore {
                 if path.extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
-                let Ok(content) = fs::read_to_string(&path) else {
+                // Prefer the filename stem — the authoritative id for every
+                // snapshot written since ADR-0018. Legacy snapshots that carry
+                // an `id` differing from their filename are still reachable
+                // through the content-scan fallback below.
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                let Ok(session) = serde_json::from_str::<SessionData>(&content) else {
-                    continue;
-                };
-                if session.id.starts_with(input) && !matches.iter().any(|(id, _)| id == &session.id)
+                if stem.starts_with(input)
+                    && !matches.iter().any(|(id, _)| id == stem)
                 {
-                    matches.push((session.id, path));
+                    matches.push((stem.to_string(), path));
+                }
+            }
+            // Content-scan fallback, only when no filename matched: a legacy
+            // snapshot (pre-ADR-0018 active-pointer file) can store an `id` that
+            // differs from its filename, so a user typing that id finds nothing
+            // by filename. Falling back to an id-only deserialize — `SessionIdOnly`
+            // skips every other field, so it never allocates the transcript —
+            // keeps those rare sessions resolvable. The common case above never
+            // opens a file, so a large project pays this only on a genuine miss.
+            if matches.is_empty() {
+                for entry in fs::read_dir(&self.sessions_dir).map_err(|error| error.to_string())? {
+                    let entry = entry.map_err(|error| error.to_string())?;
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let Ok(content) = fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let Ok(header) = serde_json::from_str::<SessionIdOnly>(&content) else {
+                        continue;
+                    };
+                    if header.id.starts_with(input)
+                        && !matches.iter().any(|(id, _)| id == &header.id)
+                    {
+                        matches.push((header.id, path));
+                    }
                 }
             }
         }
@@ -1564,6 +1727,7 @@ fn load_or_seed(
     }
 
     // ── No event log: import from the snapshot, or start fresh.
+    let snapshot_existed = path.exists();
     let mut data = fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<SessionData>(&content).ok())
@@ -1580,7 +1744,14 @@ fn load_or_seed(
     if data.schema_version < CURRENT_SCHEMA_VERSION {
         data = migrate_session_data(data);
     }
-    let _ = event_log.rewrite(snapshot_to_events(&data));
+    // Laziness invariant (ADR-0018): a brand-new session with no snapshot and
+    // no messages is NOT seeded to disk here — opening a session and exiting
+    // without content must leave no empty-session litter. Only when there was
+    // a real snapshot to import (e.g. a legacy file) do we (re)write the log.
+    // The in-memory `data` is returned regardless, so the store is usable.
+    if snapshot_existed {
+        let _ = event_log.rewrite(snapshot_to_events(&data));
+    }
     data
 }
 
@@ -1594,37 +1765,110 @@ fn load_snapshot(path: &Path) -> Result<SessionData, String> {
         .map_err(|e| format!("could not parse snapshot: {e}"))
 }
 
-fn summary(data: &SessionData, active: bool) -> SessionSummary {
+/// Header-only view of a session snapshot, used by [`SessionStore::list`] to
+/// populate the sessions picker without paying for a full [`SessionData`]
+/// deserialize.
+///
+/// The message arrays (`model_window` / `archived_transcript`) are kept as
+/// [`Box<RawValue>`] — serde validates their JSON structure and records the
+/// byte range but defers the per-message deserialize. `list()` only needs the
+/// array *length* and the *first user message's* `content`, so a full decode of
+/// every message (content blobs, recursive envoy `children`, tool calls,
+/// provider meta, …) on every session file is pure waste. With hundreds of
+/// multi-megabyte snapshots this was the dominant cost of opening `/sessions`
+/// and the per-delete picker refresh (`build_sessions_overview`): each call
+/// re-read and re-allocated the entire transcript of every session on disk.
+/// `Box<RawValue>` keeps the byte ranges but skips the allocation, so the
+/// picker scales with the *number* of sessions, not their total content size.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct SessionHeader {
+    id: String,
+    parent_id: Option<String>,
+    created_at: u64,
+    updated_at: u64,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(rename = "model_window", alias = "messages", default)]
+    model_window: Vec<Box<RawValue>>,
+    #[serde(rename = "archived_transcript", alias = "archived_messages", default)]
+    archived_transcript: Vec<Box<RawValue>>,
+}
+
+/// The fields `list()` decodes out of a deferred message body: the `role` and
+/// `content` (for the picker preview), plus `origin` so a non-driving command
+/// echo (slash commands, `!shell` passthroughs — ADR-0050) can be excluded from
+/// the preview. Every other field is skipped, so a large transcript contributes
+/// a few bytes of allocation instead of a full message tree. `origin` is
+/// `#[serde(default)]`-optional and was absent from legacy on-disk snapshots,
+/// so adding it is backward-compatible.
+#[derive(Default, Deserialize)]
+struct MessagePreview {
+    role: Option<neenee_core::Role>,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    origin: Option<neenee_core::InjectionOrigin>,
+}
+
+/// Id-only projection of a session snapshot, used by the
+/// [`SessionStore::resolve_session`] content-scan fallback for legacy files
+/// whose stored `id` does not match their filename. `#[serde(default)]` plus
+/// ignored unknown fields means every other top-level key — including the huge
+/// `model_window` / `archived_transcript` arrays — is *skipped* rather than
+/// decoded, so this never allocates the transcript. It still walks the bytes to
+/// balance braces, but that is cheap relative to a full `SessionData` decode.
+#[derive(Default, Deserialize)]
+struct SessionIdOnly {
+    #[serde(default)]
+    id: String,
+}
+
+fn summary_header(data: &SessionHeader, active: bool) -> SessionSummary {
     SessionSummary {
         id: data.id.clone(),
         parent_id: data.parent_id.clone(),
         message_count: data.model_window.len() + data.archived_transcript.len(),
         updated_at: data.updated_at,
         created_at: data.created_at,
-        overview: session_overview(data),
+        overview: session_overview_header(data),
         active,
     }
 }
 
-/// Derive a short, human-readable description of a session. Precedence
-/// (ADR-0022): a stored title (AI or manual) wins; otherwise the first user
-/// message; then a placeholder. A title is already
-/// ≤ [`neenee_core::TITLE_MAX_LEN`] chars, so it is returned verbatim; the
-/// fallback paths are still truncated to the picker-row budget.
-fn session_overview(data: &SessionData) -> String {
+fn session_overview_header(data: &SessionHeader) -> String {
     const MAX: usize = 64;
     if let Some(title) = data.title.as_deref().filter(|t| !t.trim().is_empty()) {
         return truncate_preview(title, MAX);
     }
-    if let Some(message) = data
-        .model_window
-        .iter()
-        .chain(data.archived_transcript.iter())
-        .find(|message| message.role == neenee_core::Role::User)
-    {
-        return truncate_preview(&message.content, MAX);
+    // Show the LAST effective user prompt (the freshest real turn, excluding
+    // non-driving command echoes — see [`last_effective_prompt`]). Truncated to
+    // the picker-row budget; the full text is available via
+    // [`SessionStore::detail`] for the session-info sub-view.
+    match last_effective_prompt(data) {
+        Some(content) => truncate_preview(&content, MAX),
+        None => "(empty session)".to_string(),
     }
-    "(empty session)".to_string()
+}
+
+/// The complete, untruncated text of the last effective user prompt — the most
+/// recent user turn that is not a non-driving command echo (slash command /
+/// `!shell` passthrough, ADR-0050). Shared by the picker preview (truncated
+/// there) and the on-demand [`SessionStore::detail`] (returned in full). Uses
+/// the deferred header parse, decoding only candidate bodies lazily.
+fn last_effective_prompt(data: &SessionHeader) -> Option<String> {
+    data.model_window
+        .iter()
+        .rev()
+        .chain(data.archived_transcript.iter().rev())
+        .find_map(|raw| {
+            let preview = serde_json::from_str::<MessagePreview>(raw.get()).ok()?;
+            let is_echo = preview
+                .origin
+                .as_ref()
+                .is_some_and(|o| o.kind == InjectionKind::CommandEcho);
+            (preview.role == Some(Role::User) && !is_echo).then_some(preview.content)
+        })
 }
 
 fn truncate_preview(text: &str, max: usize) -> String {
@@ -2758,6 +3002,193 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_reads_overview_and_count_without_decoding_message_bodies() {
+        // `list()` builds the `/sessions` picker rows. It must extract the
+        // message count and the first-user-message overview *without* decoding
+        // the full message bodies (which carry envoy `children`, tool calls,
+        // content blobs, …) — otherwise opening the picker or refreshing it
+        // after a delete re-allocates the entire transcript of every session on
+        // disk. The picker rows defer message bodies via `Box<RawValue>`; this
+        // test pins that the deferred view still reports the right count and
+        // overview for a heavy session, including a user turn buried under
+        // assistant/tool output.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-list-deferred-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+
+        // A user turn carrying nested envoy children plus a tool result with a
+        // large payload — the kind of content that made the old eager parse
+        // expensive. The overview is the LAST effective user prompt ("nested
+        // envoy prompt"), not the System preamble and not the heavy payloads.
+        let mut envoy_child = Message::new(neenee_core::Role::User, "nested envoy prompt");
+        envoy_child.children = Some(vec![Message::new(
+            neenee_core::Role::Assistant,
+            "envoy reply",
+        )]);
+        let mut heavy_tool = Message::new(neenee_core::Role::Tool, "x".repeat(50_000));
+        heavy_tool.tool_call_id = Some("call_heavy".to_string());
+        store
+            .replace_messages(vec![
+                Message::new(neenee_core::Role::System, "system preamble"),
+                Message::new(neenee_core::Role::User, "the real first prompt"),
+                Message::new(neenee_core::Role::Assistant, "ack"),
+                heavy_tool,
+                envoy_child,
+            ])
+            .await
+            .unwrap();
+
+        let sessions = store.list().await.unwrap();
+        let row = sessions
+            .iter()
+            .find(|item| item.active)
+            .expect("active session is listed");
+        // Count comes from the array length, not the decoded bodies.
+        assert_eq!(row.message_count, 5);
+        // Overview is the LAST effective user prompt, not the System preamble
+        // and not any of the heavy payloads.
+        assert_eq!(row.overview, "nested envoy prompt");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn list_overview_excludes_command_echoes_and_picks_last_real_prompt() {
+        // Regression: the overview is the most recent user turn that is *not* a
+        // non-driving command echo (ADR-0050). A session whose final input was a
+        // slash command (`/unattended on`) or a shell passthrough must show its
+        // last genuine prompt instead — those echoes are agent operations, not
+        // AI-conversation turns. This must hold through the deferred header
+        // parse (which decodes `origin` as well as role/content).
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-list-echo-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![
+                Message::new(neenee_core::Role::System, "system preamble"),
+                Message::new(neenee_core::Role::User, "first real prompt"),
+                Message::new(neenee_core::Role::Assistant, "reply"),
+                // A genuine later prompt — should win as the freshest.
+                Message::new(neenee_core::Role::User, "second real prompt"),
+                Message::new(neenee_core::Role::Assistant, "reply 2"),
+                // Then non-driving echoes that must NOT become the overview
+                // even though they are the last user-role messages:
+                Message::command_echo("/unattended on"),
+                Message::command_echo("/session open abc123"),
+            ])
+            .await
+            .unwrap();
+
+        let sessions = store.list().await.unwrap();
+        let row = sessions.iter().find(|item| item.active).unwrap();
+        assert_eq!(
+            row.overview, "second real prompt",
+            "command echoes are excluded; the last real prompt wins"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn list_uses_a_stored_title_in_preference_to_first_user_message() {
+        // ADR-0022: a stored title (manual or AI) wins over the user-prompt
+        // fallback. The deferred header parse still reads the top-level `title`
+        // field, so this precedence must hold without decoding message bodies.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-list-title-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+
+        store
+            .replace_messages(vec![Message::new(
+                neenee_core::Role::User,
+                "raw first prompt that should be hidden by the title",
+            )])
+            .await
+            .unwrap();
+        store
+            .set_title(Some("Custom Title".to_string()), true)
+            .await
+            .unwrap();
+
+        let sessions = store.list().await.unwrap();
+        let row = sessions.iter().find(|item| item.active).unwrap();
+        assert_eq!(row.overview, "Custom Title");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn detail_returns_full_last_prompt_and_metadata() {
+        // The session-info sub-view (`i`) calls `detail()`, which must return the
+        // COMPLETE last effective user prompt (unlike the truncated picker
+        // preview), plus title/timestamps/message-count — and must exclude
+        // non-driving command echoes from the prompt, like `list()` does.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-detail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        let long_prompt = "This is a fairly long prompt that exceeds the \
+                           sixty-four character picker preview budget, so the \
+                           truncated overview would cut it off with an ellipsis.";
+        store
+            .replace_messages(vec![
+                Message::new(neenee_core::Role::System, "system preamble"),
+                Message::new(neenee_core::Role::User, "earlier real prompt"),
+                Message::new(neenee_core::Role::Assistant, "reply"),
+                Message::new(neenee_core::Role::User, long_prompt),
+                Message::new(neenee_core::Role::Assistant, "reply 2"),
+                // A trailing command echo must NOT become the last prompt.
+                Message::command_echo("/unattended on"),
+            ])
+            .await
+            .unwrap();
+        let id = store.id().await;
+
+        let detail = store.detail(&id).await.unwrap();
+        assert_eq!(detail.id, id);
+        assert!(detail.active);
+        assert_eq!(detail.message_count, 6);
+        // The FULL prompt is returned — not truncated.
+        assert_eq!(detail.last_prompt.as_deref(), Some(long_prompt));
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn detail_returns_none_prompt_for_echo_only_session() {
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-detail-echo-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::command_echo("/unattended on")])
+            .await
+            .unwrap();
+        let id = store.id().await;
+
+        let detail = store.detail(&id).await.unwrap();
+        assert_eq!(
+            detail.last_prompt, None,
+            "a session with only command echoes has no real user prompt"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
     async fn todos_round_trip_through_disk() {
         let directory =
             std::env::temp_dir().join(format!("neenee-todos-state-{}", uuid::Uuid::new_v4()));
@@ -2859,10 +3290,18 @@ mod tests {
         // C6: a session's provider/model pin must survive persist + reload so a
         // reopened session lands on its own provider instead of the global
         // default, independent of every other session.
+        //
+        // The pin only persists on a session that has real content — an empty
+        // session stays unpersisted (no empty-file litter), so seed a message
+        // first.
         let directory =
             std::env::temp_dir().join(format!("neenee-provider-sel-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(neenee_core::Role::User, "seed")])
+            .await
+            .unwrap();
         assert!(store.provider_selection().await.is_none());
 
         store
@@ -2883,6 +3322,92 @@ mod tests {
         loaded.set_provider_selection(None).await.unwrap();
         let cleared = SessionStore::for_path(path.clone());
         assert!(cleared.provider_selection().await.is_none());
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn set_provider_selection_does_not_persist_an_empty_session_snapshot() {
+        // Regression: pinning a provider on a brand-new, message-less session
+        // must NOT write the snapshot — otherwise an empty session (e.g. one a
+        // user landed in after Ctrl+C at the startup picker) gets surfaced in
+        // the sessions picker the moment they open `/models`. The pin lives in
+        // memory only; it is dropped when the process exits.
+        //
+        // (The lazy seed may leave a `.jsonl` with one `Started` event from the
+        // store constructor, but that never produces the `.json` snapshot the
+        // picker lists, so the empty session stays invisible.)
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-provider-empty-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .set_provider_selection(Some(ProviderSelection {
+                provider: "anthropic".to_string(),
+                model: Some("claude-sonnet-4-6".to_string()),
+            }))
+            .await
+            .unwrap();
+        // In-memory state updated…
+        assert_eq!(
+            store.provider_selection().await.as_ref().unwrap().provider,
+            "anthropic"
+        );
+        // …but no snapshot on disk → the empty session never appears in the
+        // picker (which lists `.json` files).
+        assert!(
+            !path.exists(),
+            "an empty session must not be persisted as a snapshot by a provider pin"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn empty_session_is_not_persisted_until_real_content() {
+        // Core laziness contract (ADR-0018): a session that is opened but never
+        // gains real content (a user message OR a command echo) leaves NO
+        // record on disk — opening and exiting must not pollute the session
+        // history. Metadata-only mutations on a brand-new empty session
+        // (title, provider, /clear to empty) stay in memory; the first real
+        // message or command does persist.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-empty-deferred-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+
+        // Metadata-only mutations on the empty session → no snapshot on disk.
+        store.set_title(Some("t".to_string()), true).await.unwrap();
+        store
+            .set_provider_selection(Some(ProviderSelection {
+                provider: "anthropic".to_string(),
+                model: None,
+            }))
+            .await
+            .unwrap();
+        store
+            .replace_messages(Vec::new())
+            .await
+            .unwrap(); // a no-op /clear-style replace
+        assert!(
+            !path.exists(),
+            "metadata/no-op mutations on an empty session must not persist a snapshot"
+        );
+
+        // A real command echo (via mutate_messages) DOES persist — the user
+        // acted, so the session is now real content.
+        store
+            .mutate_messages(|w| w.push(Message::command_echo("/models")))
+            .await
+            .unwrap();
+        assert!(
+            path.exists(),
+            "a real command echo persists the session (first-content contract)"
+        );
 
         let _ = fs::remove_dir_all(directory);
     }
@@ -3181,6 +3706,13 @@ mod tests {
             std::env::temp_dir().join(format!("neenee-log-compaction-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
+
+        // Seed real content so the session is persisted (the empty-session
+        // deferral would otherwise skip the title-set writes below).
+        store
+            .replace_messages(vec![Message::new(neenee_core::Role::User, "seed")])
+            .await
+            .unwrap();
 
         // Push well past the threshold via repeated title sets (cheap events).
         for i in 0..(LOG_COMPACTION_THRESHOLD + 64) as u64 {

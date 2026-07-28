@@ -224,6 +224,15 @@ pub struct Agent {
     /// does, and a model-supplied `stdin` is threaded as
     /// [`StdinPolicy::Prefilled`].
     allow_model_stdin: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether an interactive `bash` command skips the operator input panel
+    /// (the L3.5 β path). Default `false`; seeded from
+    /// `[principal] skip_interactive_input`. Lock-free so the dispatch site
+    /// reads it without contention. When `true`, a command the interactive
+    /// classifier matches never pops the inline input panel and instead runs
+    /// with stdin closed — fast failure + non-interactive remedy, exactly as
+    /// under unattended mode, but without turning the principal itself
+    /// unattended.
+    skip_interactive_input: Arc<std::sync::atomic::AtomicBool>,
     /// Command-aware safety policy for `bash`. This sits above the ordinary
     /// permission broker so broad approvals such as `bash *` cannot silently
     /// authorize destructive commands like `git reset --hard`.
@@ -807,6 +816,7 @@ impl Agent {
                 neenee_core::DoomGuardConfig::default(),
             )),
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            skip_interactive_input: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
             reviews: crate::default_reviews(),
             operation_scope: std::sync::Mutex::new(neenee_core::OperationScope::unrestricted()),
@@ -1098,6 +1108,25 @@ impl Agent {
     /// exposes a `stdin` parameter.
     pub fn allow_model_stdin(&self) -> bool {
         self.allow_model_stdin
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Mirrors `[principal] skip_interactive_input` in `config.toml`. When on,
+    /// an interactive `bash` command (matched by the interactive classifier)
+    /// never pops the inline input panel and instead runs with stdin closed —
+    /// fast failure with a non-interactive remedy, as under unattended mode.
+    /// Lets an operator who finds the prompt disruptive opt out of it without
+    /// turning the principal itself unattended.
+    pub fn set_skip_interactive_input(&self, enabled: bool) {
+        self.skip_interactive_input
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether an interactive `bash` command should skip the operator input
+    /// panel and run with stdin closed instead. Read at the bash dispatch site
+    /// to decide the [`StdinPolicy`].
+    pub fn skip_interactive_input(&self) -> bool {
+        self.skip_interactive_input
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -1419,6 +1448,7 @@ impl Agent {
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
+        self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);
     }
 
@@ -3696,12 +3726,17 @@ impl Agent {
             })
             .unwrap_or_default();
         if let Some(input_kind) = crate::shell_input::classify(&command) {
-            // Unattended: no operator is reachable to type into the prompt, so
-            // the inline input panel would deadlock. Close stdin instead — the
-            // command then fails fast with a non-interactive remedy, which is
-            // the honest outcome for an interactive command run unattended.
+            // Unattended, or the operator has opted out of the interactive
+            // input panel: no one is going to type into the prompt, so the
+            // inline panel would either deadlock (unattended) or just disrupt
+            // (opt-out). Close stdin instead — the command then fails fast
+            // with a non-interactive remedy, which is the honest outcome.
             if self.get_unattended() {
                 tracing::info!(command = %command, "interactive command stdin closed under unattended");
+                return StdinPolicy::default();
+            }
+            if self.skip_interactive_input() {
+                tracing::info!(command = %command, "interactive command stdin closed by skip_interactive_input");
                 return StdinPolicy::default();
             }
             let secret = input_kind.is_secret();
@@ -4294,6 +4329,116 @@ mod tests {
         );
         scoped.restore_round_end();
         assert!(!scoped.contains("bash"), "bash back after round end");
+    }
+
+    // ── skip_interactive_input wiring (ADR-0043 interactive-input opt-out) ──
+
+    /// Minimal provider mock so an `Agent` can be constructed in unit tests
+    /// without a live model. `decide_bash_stdin` never reaches the provider, so
+    /// the chat/stream impls are unreachable panics.
+    struct NoopProvider;
+
+    #[async_trait::async_trait]
+    impl neenee_core::Provider for NoopProvider {
+        async fn chat(
+            &self,
+            _: neenee_core::ModelRequest,
+        ) -> Result<neenee_core::Message, String> {
+            unreachable!("decide_bash_stdin must not call the provider")
+        }
+        async fn stream_chat(
+            &self,
+            _: neenee_core::ModelRequest,
+        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+            unreachable!("decide_bash_stdin must not call the provider")
+        }
+    }
+
+    fn stdin_test_agent() -> super::Agent {
+        use std::sync::Arc;
+        super::Agent::new(
+            Arc::new(NoopProvider) as Arc<dyn neenee_core::Provider>,
+            vec![],
+            neenee_core::AgentIdentity::default(),
+        )
+    }
+
+    /// A `sudo` command (matched by the interactive classifier) must, with
+    /// `skip_interactive_input` on, run with stdin **closed** and emit **no**
+    /// `InputRequest` — the inline panel never pops. This is the opt-out's core
+    /// contract and mirrors the unattended path.
+    #[tokio::test]
+    async fn skip_interactive_input_closes_stdin_without_input_request() {
+        use neenee_core::{AgentEvent, StdinPolicy};
+        use tokio::sync::mpsc;
+        let agent = stdin_test_agent();
+        agent.set_unattended(false);
+        agent.set_skip_interactive_input(true);
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let policy = agent
+            .decide_bash_stdin(r#"{"command":"sudo ls /root"}"#, &tx)
+            .await;
+        assert_eq!(policy, StdinPolicy::Closed, "stdin must be closed");
+        assert!(
+            rx.try_recv().is_err(),
+            "no InputRequest must be emitted under skip_interactive_input"
+        );
+    }
+
+    /// Without the opt-out (and attended), the same `sudo` command must take the
+    /// interactive branch — i.e. emit an `InputRequest` and not return
+    /// synchronously. We drain one event then cancel the parked oneshot so the
+    /// task ends cleanly. Regression guard: a refactor must not silently route
+    /// the interactive path to `Closed` when the opt-out is off.
+    #[tokio::test]
+    async fn interactive_input_path_emits_request_when_opt_out_is_off() {
+        use neenee_core::AgentEvent;
+        use tokio::sync::mpsc;
+        let agent = stdin_test_agent();
+        agent.set_unattended(false);
+        agent.set_skip_interactive_input(false);
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let (tx_cancel, rx_cancel) = tokio::sync::oneshot::channel::<()>();
+        let handle = {
+            let args = r#"{"command":"sudo ls /root"}"#.to_string();
+            tokio::spawn(async move {
+                // Park until the test observes the InputRequest, then drop the
+                // agent handle via the cancel signal so the task ends.
+                let _ = agent.decide_bash_stdin(&args, &tx).await;
+                let _ = rx_cancel.await;
+            })
+        };
+        let _ = tx_cancel; // keep ownership
+
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for InputRequest")
+            .expect("channel closed");
+        assert!(matches!(got, AgentEvent::InputRequest(_)));
+        // Let the spawned task finish (its agent handle drops, resolving the
+        // parked oneshot to None on the next round-end guard in real use; here
+        // we just let it go out of scope).
+        handle.abort();
+    }
+
+    /// `apply_principal_profile` must seed `skip_interactive_input` from the
+    /// profile's runtime config — the wiring the bootstrap path relies on.
+    #[test]
+    fn apply_principal_profile_seeds_skip_interactive_input() {
+        let agent = stdin_test_agent();
+        assert!(!agent.skip_interactive_input(), "default off");
+        let profile = neenee_core::PrincipalProfile::with_identity(
+            "code",
+            neenee_core::AgentIdentity::default(),
+        )
+        .with_runtime_config(neenee_core::PrincipalRuntimeConfig {
+            skip_interactive_input: true,
+            ..Default::default()
+        });
+        agent.apply_principal_profile(&profile);
+        assert!(agent.skip_interactive_input(), "profile overlay took effect");
     }
 }
 

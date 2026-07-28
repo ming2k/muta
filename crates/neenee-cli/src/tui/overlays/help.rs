@@ -131,7 +131,7 @@ pub fn draw_help_modal(
             ],
             extra_footer_hints: &[],
             keymap_open: false,
-            // Help is already a keybindings surface — no recursive `? more`.
+            // Help is already a keybindings surface — no recursive `? help`.
             show_more: false,
         },
         theme,

@@ -71,6 +71,7 @@ The optional `[principal]` table.
 |-----|---------|---------|
 | `principal.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
 | `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for unattended/automatic flows where no human is reachable |
+| `principal.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under unattended mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the principal unattended, so ordinary tool confirmations still apply |
 | `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same round. Forced off for envoys and `/review` |
 | `principal.nudge.window` | `8` | Number of recent watched tool signatures retained for repeat detection |
 
@@ -78,6 +79,7 @@ The optional `[principal]` table.
 [principal]
 hard_stop_turns = 0
 allow_model_stdin = false
+skip_interactive_input = false
 
 # Advanced, opt-in deterministic repeated-call blocking. The `nudge` table
 # name is retained for compatibility.
@@ -198,6 +200,7 @@ interactively with `/config`.
 |-----|---------|---------|
 | `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (turn bands) or `legacy` |
 | `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
+| `tui.click_outside_dismiss` | `false` | Click outside a modal to close it (mirrors Esc). Off by default so a stray click never closes a modal — and never quits the `neenee resume` startup picker; use Esc / Ctrl+C to exit. |
 | `tui.default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
 | `tui.custom_color_scheme.background` | `"#070808"` | Terminal canvas |
 | `tui.custom_color_scheme.surface` | `"#0e0f0f"` | Panels and menus |
@@ -216,6 +219,7 @@ from these values.
 [tui]
 transcript_layout = "default"
 color_scheme = "custom"
+click_outside_dismiss = false
 
 [tui.default_expanded]
 edit_file = true

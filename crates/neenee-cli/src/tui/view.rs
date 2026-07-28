@@ -1000,6 +1000,11 @@ mod tests {
                 &mut scroll,
                 true,
                 &theme,
+                false,
+                0,
+                false,
+                None,
+                &mut 0,
             );
             let question_request = UserQuestionRequest {
                 id: "q1".to_string(),

@@ -7,8 +7,8 @@ use neenee_tui_engine::{
 
 use crate::tui::components::footer::render_modal_footer;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_area, keyvocab,
-    modal_chrome_rows, modal_frame, modal_header_parts, render_body,
+    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, breadcrumb_parts, content_modal_area,
+    keyvocab, modal_chrome_rows, modal_frame, modal_header_parts, render_body,
 };
 use crate::tui::view::{CUSTOM_COLOR_FIELDS, Theme};
 
@@ -84,13 +84,7 @@ pub fn draw_config_theme_custom_modal(
     let desired = lines.len() as u16 + modal_chrome_rows(spec.modal_spec());
     let area = content_modal_area(frame, spec, desired);
     let modal = modal_frame(frame, area, theme.panel(), true, true);
-    let header = [
-        HeaderPart::Text {
-            text: "Appearance  /  ",
-            accent: false,
-        },
-        HeaderPart::title("Custom palette"),
-    ];
+    let header = breadcrumb_parts("Appearance", "Custom palette");
     modal_header_parts(frame, modal.header, &header, theme);
 
     let selected_line = field_start + field_index;

@@ -2182,3 +2182,28 @@ fn up_arrow_clamps_column_to_shorter_line() {
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 2, "column should clamp to the first line's length");
 }
+
+#[test]
+fn sessions_modal_n_key_triggers_create_new_session() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let action_n = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('n'),
+        KeyModifiers::NONE,
+        crate::tui::Modal::Sessions,
+        false,
+    );
+    assert_eq!(action_n, InputAction::CreateNewSession);
+
+    let action_big_n = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('N'),
+        KeyModifiers::NONE,
+        crate::tui::Modal::Sessions,
+        false,
+    );
+    assert_eq!(action_big_n, InputAction::CreateNewSession);
+}

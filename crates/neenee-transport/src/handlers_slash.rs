@@ -65,6 +65,49 @@ async fn supersede_for_session_switch(
     lifecycle.cancel_current().await;
 }
 
+/// Full session-scoped runtime restore, run after the session store has been
+/// repointed at a different session (via `/session open`, `/resume`, …).
+///
+/// This mirrors the restore block the bootstrap skips in Picker mode
+/// (`neenee resume` with no id): the unified task list, the disabled-tool
+/// mask, the round counter, and the SessionStart hooks. `fire_session_start`
+/// lives only in `bootstrap` otherwise, so a session chosen from the startup
+/// picker would otherwise never receive its hook-injected setup context.
+///
+/// `source` is surfaced to SessionStart hooks (`Startup` vs `Resume`) so a
+/// hook can branch — opening a prior session from the picker is a resume.
+///
+/// Emits the restored todos as a `TodosUpdated` event so the frontend's sticky
+/// panel appears the moment the user enters the picked session.
+async fn restore_session_runtime(
+    session: &Arc<SessionStore>,
+    agent: &Arc<Agent>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    source: neenee_core::SessionSource,
+) {
+    // Restore the task list. An empty list is the "no active task list" state
+    // and is still emitted so the frontend clears a stale panel.
+    let todos = session.todos().await;
+    agent.set_todos(todos.clone());
+    let _ = resp_tx.send(round_response(
+        &session.id().await,
+        RoundEvent::TodosUpdated(todos),
+    ));
+
+    // The orthogonal tool mask and round counter.
+    agent.restore_disabled_tools(session.disabled_tools().await);
+    agent.restore_round_count(session.round_counter().await);
+
+    // SessionStart hooks (ADR-0025): inject setup context before the first
+    // round of the freshly entered session. Persist through the single write
+    // path so the session stays the source of truth (ADR-0048).
+    let mut messages = session.model_window().await;
+    agent.fire_session_start(source, &mut messages).await;
+    if let Err(err) = session.replace_messages(messages).await {
+        tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+    }
+}
+
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
 #[allow(clippy::too_many_arguments)]
@@ -298,7 +341,15 @@ pub async fn dispatch(
             supersede_for_session_switch(lifecycle, agent, resp_tx).await;
             match resume_session(session, parts.get(1).copied()).await {
                 Ok((id, transcript)) => {
-                    agent.restore_round_count(session.round_counter().await);
+                    // Full restore: todos, disabled tools, round counter, and
+                    // SessionStart hooks. `/resume` is a resume.
+                    restore_session_runtime(
+                        session,
+                        agent,
+                        resp_tx,
+                        neenee_core::SessionSource::Resume,
+                    )
+                    .await;
                     let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                     let _ = resp_tx.send(round_response(
                         &session.id().await,
@@ -389,7 +440,17 @@ pub async fn dispatch(
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 match session.open(id).await {
                     Ok(()) => {
-                        agent.restore_round_count(session.round_counter().await);
+                        // Full restore of the session-scoped runtime the
+                        // bootstrap skipped in Picker mode: todos, disabled
+                        // tools, round counter, and SessionStart hooks.
+                        // Opening a prior session is a resume.
+                        restore_session_runtime(
+                            session,
+                            agent,
+                            resp_tx,
+                            neenee_core::SessionSource::Resume,
+                        )
+                        .await;
                         let transcript = session.full_transcript().await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the opened session's own
@@ -418,7 +479,15 @@ pub async fn dispatch(
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
                 match resume_session(session, parts.get(2).copied()).await {
                     Ok((id, transcript)) => {
-                        agent.restore_round_count(session.round_counter().await);
+                        // Full restore: todos, disabled tools, round counter,
+                        // and SessionStart hooks (`/resume` is a resume).
+                        restore_session_runtime(
+                            session,
+                            agent,
+                            resp_tx,
+                            neenee_core::SessionSource::Resume,
+                        )
+                        .await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
                         // C6: the live provider tracks the resumed session's own
                         // provider pin (or the global default if it has none).

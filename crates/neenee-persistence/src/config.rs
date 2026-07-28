@@ -38,6 +38,12 @@ pub const THINKING_KEY: &str = "thinking";
 /// # interrupts, or context compaction cannot relieve pressure (ADR-0009).
 /// # hard_stop_turns = 0
 ///
+/// # Never pop the interactive-input panel for a command needing stdin
+/// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
+/// # with a non-interactive remedy hint — like unattended mode, but without
+/// # turning the principal itself unattended.
+/// # skip_interactive_input = false
+///
 /// # Advanced doom-loop guard. Default disabled; opt in here when deterministic
 /// # repeated-call blocking is desired. See [`DoomGuardConfig`]. (TOML key
 /// # stays `nudge` for backward compatibility.)
@@ -62,6 +68,22 @@ pub struct PrincipalConfig {
     /// without it, stdin is structurally unreachable from the model's
     /// arguments. Wired through `Agent::set_allow_model_stdin`.
     pub allow_model_stdin: bool,
+    /// Whether an interactive `bash` command (one the interactive classifier
+    /// matches: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) should **never**
+    /// pop the inline input panel and instead run with stdin closed.
+    ///
+    /// Default `false`: a command needing input prompts the operator via the
+    /// input-injection panel (with the command + a masked/plain field). When
+    /// `true`, the panel is skipped — the command runs non-interactively,
+    /// reads EOF immediately, and fails fast with a non-interactive remedy
+    /// hint, exactly as it would under unattended mode. This is the right
+    /// setting for users who find the prompt disruptive and prefer to retry
+    /// the command themselves (or let the model retry with a non-interactive
+    /// form). Wired through `Agent::set_skip_interactive_input`.
+    ///
+    /// Note: this only governs the *interactive-input* path; it does not turn
+    /// the principal unattended, so ordinary tool confirmations still apply.
+    pub skip_interactive_input: bool,
     /// Doom-loop guard configuration (`neenee_agent::doom_guard`). Default
     /// **disabled** — opt in via the advanced `[principal.nudge]` sub-table.
     /// See [`DoomGuardConfig`] for the per-field semantics.
@@ -111,6 +133,16 @@ pub struct TuiConfig {
     /// User-editable semantic palette retained even when a built-in scheme is
     /// active, so it can be revisited from `/config` without losing changes.
     pub custom_color_scheme: neenee_core::ColorSchemeConfig,
+    /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
+    /// Defaults to `false` (disabled): a stray click never dismisses a modal or
+    /// — for the `neenee resume` startup picker — quits the program. Set `true`
+    /// to restore click-outside-to-dismiss.
+    ///
+    /// ```toml
+    /// [tui]
+    /// click_outside_dismiss = true
+    /// ```
+    pub click_outside_dismiss: bool,
 }
 
 /// Declarative permission configuration — the `[permissions]` table. Lets users
@@ -1693,5 +1725,25 @@ openai = "creds-key"
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn tui_click_outside_dismiss_defaults_off_and_overrides() {
+        // The click-outside-to-dismiss pref is off by default: a stray click
+        // must not close a modal (and must not quit the `neenee resume`
+        // startup picker) unless the user explicitly opts in.
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(
+            !cfg.tui.click_outside_dismiss,
+            "click_outside_dismiss defaults to false"
+        );
+
+        // Explicit opt-in round-trips.
+        let toml = r#"
+            [tui]
+            click_outside_dismiss = true
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert!(cfg.tui.click_outside_dismiss);
     }
 }

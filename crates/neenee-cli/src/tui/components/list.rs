@@ -82,7 +82,7 @@ pub(crate) fn draw_selectable_list_page(
             footer_hints,
             extra_footer_hints: page.extra_footer_hints,
             keymap_open: page.keymap_open,
-            // List modals support in-modal `?` expand, so surface `? more`
+            // List modals support in-modal `?` expand, so surface `? help`
             // when the footer has collapsed. Empty-list pages have no keymap
             // wiring, so suppress it there.
             show_more: page.has_items,

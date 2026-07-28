@@ -291,6 +291,18 @@ pub struct App {
     /// user scrolls manually (wheel / page keys) so they can browse freely, and
     /// re-set the moment they navigate again.
     pub session_modal_follow: bool,
+    /// `true` while the sessions picker is drilled into the session-info
+    /// sub-view (`i`). The detail body renders from [`Self::session_detail`];
+    /// Esc backs out to the list (mirrors the TokenReport drill-in).
+    pub session_info_detail: bool,
+    /// Full detail for the session under the info sub-view cursor. Populated by
+    /// an on-demand `QuerySessionDetail` round-trip when the sub-view opens
+    /// (`i`) and refreshed whenever the selection moves while in the sub-view.
+    /// `None` while the round-trip is in flight.
+    pub session_detail: Option<neenee_core::SessionDetail>,
+    /// Body scroll offset of the session-info sub-view. Reset to 0 on open and
+    /// when the detail changes; reused (not the list's `session_scroll`).
+    pub session_info_scroll: usize,
     /// Body scroll offset of the permissions manager modal. Reset to 0 each
     /// time the modal opens; clamped and auto-followed to the selection by the
     /// renderer each frame.
@@ -421,6 +433,14 @@ pub struct App {
     pub question_modal_follow: bool,
     /// Rows shown in the sessions picker (`/sessions` or `neenee resume`).
     pub sessions_overview: Vec<SessionOverview>,
+    /// `true` only when the TUI was launched via `neenee resume` (no id): the
+    /// sessions picker opened at startup *instead of* loading any session. In
+    /// that mode the picker is not a transient overlay — there is no real
+    /// conversation behind it yet — so closing it must quit the program rather
+    /// than drop into an empty chat. Cleared once a session is opened from the
+    /// picker. Always `false` for the in-session `/sessions` modal, which just
+    /// dismisses on Esc/click-out.
+    pub startup_picker: bool,
     pub permission_confirm_always: bool,
     /// Whether the inline permission sheet is expanded to show the full
     /// description + arguments. Collapsed by default so the prompt stays
@@ -493,6 +513,12 @@ pub struct App {
     /// Transactional working copy used by the custom palette editor. Esc
     /// discards it; Enter promotes it to `custom_color_scheme` and persists it.
     pub custom_color_draft: neenee_core::ColorSchemeConfig,
+    /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
+    /// From `[tui] click_outside_dismiss` (default `false`): when false, an
+    /// outside click is a no-op so a stray click never dismisses a modal or —
+    /// for the `neenee resume` startup picker — quits the program. Esc / Ctrl+C
+    /// always close/quit regardless of this flag.
+    pub click_outside_dismiss: bool,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means
     /// every key has its ordinary input-box meaning (typing flows into the

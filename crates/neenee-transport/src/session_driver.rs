@@ -435,7 +435,18 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::DeleteSession { id } => {
-                    crate::handlers_session::delete(&session, &resp_tx, id).await;
+                    let session = session.clone();
+                    let resp_tx = resp_tx.clone();
+                    tokio::spawn(async move {
+                        crate::handlers_session::delete(&session, &resp_tx, id).await;
+                    });
+                }
+                AgentRequest::QuerySessionDetail { id } => {
+                    let session = session.clone();
+                    let resp_tx = resp_tx.clone();
+                    tokio::spawn(async move {
+                        crate::handlers_session::detail(&session, &resp_tx, id).await;
+                    });
                 }
                 AgentRequest::QuerySessionContext => {
                     crate::handlers_session::query_context(

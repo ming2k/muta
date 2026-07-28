@@ -188,6 +188,11 @@ pub enum AgentRequest {
     DeleteSession {
         id: String,
     },
+    /// Request full detail for one session (the `i` session-info sub-view).
+    /// The harness replies with [`AgentResponse::SessionDetail`].
+    QuerySessionDetail {
+        id: String,
+    },
     /// Request a fresh session-context snapshot (model / tools / permissions /
     /// skills / mcp). The harness replies with [`AgentResponse::SessionContext`].
     /// Sent by the TUI when a manager modal opens.
@@ -326,6 +331,10 @@ pub enum AgentResponse {
     ConversationReplaced(Vec<Message>),
     /// Replace the sessions picker contents (and open the picker).
     SessionsOverview(Vec<SessionOverview>),
+    /// Reply to [`AgentRequest::QuerySessionDetail`]: full detail for one
+    /// session (complete last prompt, title, timestamps). Consumed by the
+    /// session-info sub-view.
+    SessionDetail(SessionDetail),
     Error(String),
     Exit,
     ProviderSwitched {
@@ -718,6 +727,25 @@ pub struct SessionOverview {
     pub updated_at: u64,
     pub message_count: usize,
     pub active: bool,
+}
+
+/// Full detail for one session, requested on demand (the session-info
+/// sub-view, `i` from the sessions picker). Unlike [`SessionOverview`], which
+/// carries a truncated preview, this carries the *complete* last effective user
+/// prompt so the info view can show it in full. Built from the same deferred
+/// header parse as the picker rows (no full-transcript deserialize).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SessionDetail {
+    pub id: String,
+    /// Stored title (AI or manual), if any.
+    pub title: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub message_count: usize,
+    pub active: bool,
+    /// The complete, untruncated text of the last non-echo user prompt, or
+    /// `None` when the session has no real user turn yet.
+    pub last_prompt: Option<String>,
 }
 
 /// One row of provider-picker state sent from the harness to the TUI. Carries

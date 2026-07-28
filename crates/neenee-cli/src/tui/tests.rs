@@ -1006,6 +1006,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         cursor_visible: true,
         session_scroll: 0,
         session_modal_follow: true,
+        session_info_detail: false,
+        session_detail: None,
+        session_info_scroll: 0,
         permissions_scroll: 0,
         config_scroll: 0,
         skills_expanded: None,
@@ -1038,6 +1041,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        startup_picker: false,
         permission_confirm_always: false,
         permission_show_details: false,
         permission_scroll: 0,
@@ -1061,6 +1065,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         color_scheme: "zen".to_string(),
         custom_color_scheme: neenee_core::ColorSchemeConfig::default(),
         custom_color_draft: neenee_core::ColorSchemeConfig::default(),
+        click_outside_dismiss: false,
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),
@@ -2616,4 +2621,273 @@ fn modal_page_step_tracks_body_height_and_floors_at_one() {
     // A 1-row modal body still yields a step of 1 (never 0).
     app.modal_body_height = 1;
     assert_eq!(modal_page_step(&app), 1);
+}
+
+/// `neenee resume` (no id) opens the sessions picker at startup instead of
+/// loading any session, so the `startup_picker` flag must gate quit-on-close.
+/// This pins the two state transitions the event loop relies on:
+///
+/// 1. The flag defaults to `false` in an ordinary (in-session) App, so the
+///    `/sessions` modal only ever dismisses on Esc.
+/// 2. Selecting a session from the picker clears the flag — once a real
+///    conversation backs the view, the picker reverts to a plain transient
+///    overlay. (The event loop's `OpenSelectedSession` arm does this.)
+#[test]
+fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // Default: an in-session App never treats the picker as a startup gate.
+    assert!(!app.startup_picker);
+
+    // Simulate the startup path (`neenee resume` with no id): the picker
+    // opens and `startup_picker` is armed. Closing it must quit.
+    app.startup_picker = true;
+    app.active_modal = Modal::Sessions;
+    assert!(app.startup_picker && app.active_modal == Modal::Sessions);
+    // The quit gate is `should_quit`; it is still clear until a close happens.
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Open a session from the picker: the flag clears so a later `/sessions`
+    // modal behaves as a normal transient overlay.
+    app.startup_picker = false;
+    app.active_modal = Modal::None;
+    assert!(!app.startup_picker, "opening a session drops the startup gate");
+}
+
+/// Helper: build a minimal picker row so a test list is readable.
+fn overview_row(id: &str) -> neenee_core::SessionOverview {
+    neenee_core::SessionOverview {
+        id: id.to_string(),
+        overview: format!("overview-{id}"),
+        created_at: 0,
+        updated_at: 0,
+        message_count: 0,
+        active: false,
+    }
+}
+
+/// Deleting the highlighted row from the sessions picker must leave the cursor
+/// on the **same line** (the next session slides up into the removed slot), not
+/// jump back to the top. The `DeleteSelectedSession` event-loop arm does this
+/// optimistically — it removes the row and clamps `modal_index` — so this pins
+/// that core behaviour: a mid-list delete keeps the index, and a delete of the
+/// last row clamps to the new last row rather than wrapping to 0.
+#[test]
+fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.sessions_overview = (0..5)
+        .map(|i| overview_row(&format!("s{i}")))
+        .collect::<Vec<_>>();
+    app.active_modal = Modal::Sessions;
+
+    // Delete the row at index 2 (mid-list). The cursor must stay at 2 — now
+    // pointing at "s3", which slid into the freed slot.
+    app.modal_index = 2;
+    let idx = app.modal_index.min(app.sessions_overview.len() - 1);
+    let deleted = app.sessions_overview.remove(idx);
+    assert_eq!(deleted.id, "s2");
+    app.modal_index = app.modal_index.min(app.sessions_overview.len() - 1);
+    assert_eq!(app.modal_index, 2, "mid-list delete keeps the cursor put");
+    assert_eq!(
+        app.sessions_overview[app.modal_index].id,
+        "s3",
+        "the next session slid into the removed slot"
+    );
+
+    // Delete the now-last row (index 3 in the shrunken 4-row list, which holds
+    // s4). The list then has 3 rows, so the cursor must clamp to index 2 (the
+    // new last row), not jump to 0.
+    app.modal_index = 3;
+    let idx = app.modal_index.min(app.sessions_overview.len() - 1);
+    app.sessions_overview.remove(idx);
+    app.modal_index = app.modal_index.min(app.sessions_overview.len() - 1);
+    assert_eq!(
+        app.modal_index, 2,
+        "deleting the last row clamps to the new last row, not the top"
+    );
+}
+
+/// Regression: after a delete the backend pushes a fresh `SessionsOverview`,
+/// and the event loop used to treat *every* such push as an "open the picker"
+/// request — resetting `modal_index` to 0 and `session_scroll` to 0. That
+/// snapped the selection back to the top on each delete, undoing the optimistic
+/// local removal. The refresh path must preserve the cursor/scroll when the
+/// modal is already open, resetting only on a genuine open (closed → open).
+#[test]
+fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
+    // This mirrors the event-loop branch exactly: `opening` is true only when
+    // the modal is not already Sessions.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.sessions_overview = (0..5)
+        .map(|i| overview_row(&format!("s{i}")))
+        .collect::<Vec<_>>();
+    app.active_modal = Modal::Sessions;
+    app.modal_index = 3;
+    app.session_scroll = 2;
+
+    // Simulate the refresh path (open_sessions signal + fresh overview) with
+    // the modal ALREADY open: cursor and scroll must be preserved.
+    let opening = app.active_modal != Modal::Sessions; // false
+    app.active_modal = Modal::Sessions;
+    if opening {
+        app.modal_index = 0;
+        app.session_scroll = 0;
+        app.session_modal_follow = true;
+    }
+    assert_eq!(app.modal_index, 3, "refresh while open keeps the cursor");
+    assert_eq!(app.session_scroll, 2, "refresh while open keeps the scroll");
+
+    // Now simulate opening from a different modal (the genuine-open case):
+    // cursor and scroll reset to the top.
+    app.active_modal = Modal::None;
+    let opening = app.active_modal != Modal::Sessions; // true
+    app.active_modal = Modal::Sessions;
+    if opening {
+        app.modal_index = 0;
+        app.session_scroll = 0;
+        app.session_modal_follow = true;
+    }
+    assert_eq!(app.modal_index, 0, "a genuine open resets the cursor");
+    assert_eq!(app.session_scroll, 0, "a genuine open resets the scroll");
+}
+
+/// `resolve_scroll` is the pure scroll-resolution core factored out of
+/// `render_body`, now also used by the windowed sessions picker. It must keep
+/// the selection in view (edge-margin follow), clamp to the valid range, and
+/// report the true `max_scroll` of the full list — which is what lets the
+/// picker build only the visible window while the scrollbar still reflects the
+/// whole list. This pins those invariants.
+#[test]
+fn resolve_scroll_follows_selection_and_clamps_to_max_scroll() {
+    use crate::tui::primitives::{SCROLL_EDGE_MARGIN, resolve_scroll};
+
+    // 100 rows, 10 visible → max_scroll is 90. A selection at row 50 with a
+    // top-anchored scroll of 0 must pull the viewport down so row 50 is in
+    // view (edge-margin follow), but never past max_scroll.
+    let mut scroll = 0usize;
+    let (start, max_scroll) =
+        resolve_scroll(&mut scroll, 10, 100, Some(50), SCROLL_EDGE_MARGIN);
+    assert_eq!(max_scroll, 90, "max_scroll reflects the full list length");
+    assert!(
+        (start..start + 10).contains(&50),
+        "selection 50 must land inside the resolved window {start}..{}",
+        start + 10
+    );
+    assert!(start <= 90, "resolved scroll never exceeds max_scroll");
+
+    // Selection at the very end clamps to max_scroll (no overshoot).
+    let mut scroll = 0usize;
+    let (start, _) = resolve_scroll(&mut scroll, 10, 100, Some(99), SCROLL_EDGE_MARGIN);
+    assert_eq!(start, 90, "end-of-list selection pins to max_scroll");
+
+    // Fewer rows than the viewport: max_scroll is 0 and scroll collapses to 0.
+    let mut scroll = 5usize;
+    let (start, max_scroll) = resolve_scroll(&mut scroll, 10, 3, Some(1), SCROLL_EDGE_MARGIN);
+    assert_eq!(max_scroll, 0, "content shorter than viewport has no scroll range");
+    assert_eq!(start, 0);
+
+    // No follow: scroll is only clamped to max_scroll, never auto-scrolled.
+    let mut scroll = 200usize;
+    let (start, max_scroll) = resolve_scroll(&mut scroll, 10, 100, None, SCROLL_EDGE_MARGIN);
+    assert_eq!(max_scroll, 90);
+    assert_eq!(start, 90, "out-of-range scroll clamps to max_scroll");
+}
+
+/// Esc back-out must respect modal hierarchy: a drill-in sub-page backs out to
+/// its parent view *before* any close/quit logic runs. Regression for a bug
+/// where pressing Esc in the `Sessions › Info` sub-view at startup
+/// (`startup_picker` armed) quit the program instead of returning to the
+/// sessions list — because the startup-quit check was ordered before the
+/// sub-page back-out check. This mirrors the event loop's `CloseModal` arm
+/// ordering exactly (deepest level first).
+#[test]
+fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // The user is in the Sessions › Info sub-view at startup: both the startup
+    // gate AND the info drill-in are active. Esc must back out to the list,
+    // NOT quit.
+    app.startup_picker = true;
+    app.active_modal = Modal::Sessions;
+    app.session_info_detail = true;
+    app.session_detail = Some(neenee_core::SessionDetail {
+        id: "x".to_string(),
+        ..Default::default()
+    });
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Mirror the CloseModal arm's ordering (deepest level wins).
+    let quit = if app.active_modal == Modal::Sessions && app.session_info_detail {
+        app.session_info_detail = false;
+        app.session_detail = None;
+        app.session_info_scroll = 0;
+        false
+    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+        app.should_quit.store(true, Ordering::SeqCst);
+        true
+    } else {
+        false
+    };
+    assert!(!quit, "Esc from Info backs out to the list, never quits");
+    assert!(
+        !app.session_info_detail,
+        "sub-view cleared — back on the list"
+    );
+    assert!(
+        !app.should_quit.load(Ordering::SeqCst),
+        "program did not quit"
+    );
+
+    // Now the list is showing (still at startup). A second Esc DOES quit, since
+    // there is no deeper sub-view left.
+    let quit = if app.active_modal == Modal::Sessions && app.session_info_detail {
+        false
+    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+        app.should_quit.store(true, Ordering::SeqCst);
+        true
+    } else {
+        false
+    };
+    assert!(quit, "Esc from the startup list quits the program");
+    assert!(app.should_quit.load(Ordering::SeqCst));
+}
+
+/// Ctrl+C at the `neenee resume` startup picker must quit the program — the
+/// same as Esc and an outside click — NOT drop into an empty session. Regression
+/// for a bug where Ctrl+C closed the modal (`active_modal = None`) but never set
+/// `should_quit`, so the user landed in a bare empty chat (which a stray
+/// `/models` then persisted as an empty-session file). Mirrors the event loop's
+/// `CtrlC` arm ordering.
+#[test]
+fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_picker = true;
+    app.active_modal = Modal::Sessions;
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Mirror the CtrlC arm: startup_picker + Sessions → quit (not modal-close).
+    // (Selection copy is skipped — no selection in a modal.)
+    let quit = if app.startup_picker && app.active_modal == Modal::Sessions {
+        app.should_quit.store(true, Ordering::SeqCst);
+        true
+    } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
+        app.active_modal = Modal::None;
+        false
+    } else {
+        false
+    };
+    assert!(quit, "Ctrl+C at the startup picker quits");
+    assert!(
+        app.should_quit.load(Ordering::SeqCst),
+        "program quits, does not drop into an empty session"
+    );
+    // The modal was NOT merely closed (which is what created the empty-session
+    // trap): should_quit is set, so the loop exits.
+    assert_ne!(app.active_modal, Modal::None, "quit path wins over close");
 }

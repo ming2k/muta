@@ -8,6 +8,10 @@ use crate::tui::model::selection::SelectionDrag;
 #[derive(Default)]
 pub struct InputContext {
     pub active_modal: super::Modal,
+    /// While the sessions picker is drilled into its info sub-view (`i`), the
+    /// list-only keys (delete `d`, new `n`, info `i`) are inert — the sub-view
+    /// is a read-only read-out.
+    pub session_info_detail: bool,
     pub is_responding: bool,
     /// Which completion menu (slash command vs `@path` mention) is active, or
     /// `None` when no menu is shown. Drives Tab/↑/↓ cycling and the
@@ -373,6 +377,11 @@ pub enum InputAction {
     TokenReportActivate,
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
+    /// Create a brand new session from the sessions picker ('n' / 'N').
+    CreateNewSession,
+    /// Open the session-info sub-view for the selected session ('i'). Shows the
+    /// full last effective prompt, creation time, and message count.
+    OpenSessionInfo,
     /// Close any modal.
     CloseModal,
     /// Toggle the in-modal keybindings page (`?` while a collapsible modal is
@@ -1210,6 +1219,7 @@ pub fn process_event(
                         super::Modal::OauthPending => InputAction::None,
                         super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
                         super::Modal::HistorySearch => InputAction::HistoryInsert,
+                        super::Modal::Sessions if context.session_info_detail => InputAction::None,
                         super::Modal::Sessions => InputAction::OpenSelectedSession,
                         super::Modal::Permission => InputAction::PermissionSubmit,
                         super::Modal::Question => InputAction::QuestionSubmit,
@@ -1713,8 +1723,21 @@ pub fn process_event(
                         // highlighted custom provider (ignored for built-ins by
                         // the handler).
                         InputAction::DeleteProvider
-                    } else if context.active_modal == super::Modal::Sessions && c == 'd' {
+                    } else if context.active_modal == super::Modal::Sessions
+                        && !context.session_info_detail
+                        && c == 'd'
+                    {
                         InputAction::DeleteSelectedSession
+                    } else if context.active_modal == super::Modal::Sessions
+                        && !context.session_info_detail
+                        && (c == 'n' || c == 'N')
+                    {
+                        InputAction::CreateNewSession
+                    } else if context.active_modal == super::Modal::Sessions
+                        && !context.session_info_detail
+                        && c == 'i'
+                    {
+                        InputAction::OpenSessionInfo
                     } else if context.active_modal == super::Modal::Queue && c == 'D' {
                         // Queue modal: `Shift+D` deletes the highlighted item
                         // outright (the queue is auto-blocked on open, so a
@@ -2221,6 +2244,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Slash,
                 suggestion_count: 1,
@@ -2268,6 +2292,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: kind,
                 suggestion_count,
@@ -2392,6 +2417,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Slash,
                 suggestion_count: 2,
@@ -2434,6 +2460,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Path,
                 suggestion_count: 3,
@@ -2475,6 +2502,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2513,6 +2541,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Slash,
                 suggestion_count: 2,
@@ -2551,6 +2580,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Slash,
                 suggestion_count: 1,
@@ -2593,6 +2623,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2635,6 +2666,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2672,6 +2704,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2750,6 +2783,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2788,6 +2822,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Permission,
+                session_info_detail: false,
                 is_responding: true,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2822,6 +2857,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2859,6 +2895,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Models,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2894,6 +2931,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Connections,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2931,6 +2969,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Connections,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -2967,6 +3006,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Models,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3002,6 +3042,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Connections,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3039,6 +3080,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Connections,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3076,6 +3118,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Models,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3109,6 +3152,7 @@ mod tests {
         let mut drag = SelectionDrag::default();
         let ctx = || InputContext {
             active_modal: crate::tui::Modal::Models,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -3164,6 +3208,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3194,6 +3239,7 @@ mod tests {
         let mut drag = SelectionDrag::default();
         let context = InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -3235,6 +3281,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Help,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3267,6 +3314,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3299,6 +3347,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3361,6 +3410,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: true,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3554,6 +3604,7 @@ mod tests {
             cursor,
             InputContext {
                 active_modal: modal,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -3883,6 +3934,7 @@ mod tests {
                 &mut cursor,
                 InputContext {
                     active_modal: crate::tui::Modal::Question,
+                    session_info_detail: false,
                     is_responding: false,
                     completion_kind: crate::tui::CompletionKind::None,
                     suggestion_count: 0,
@@ -4181,6 +4233,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Question,
+                session_info_detail: false,
                 ..Default::default()
             },
             &mut drag,
@@ -4206,6 +4259,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Question,
+                session_info_detail: false,
                 question_other_highlighted: false,
                 ..Default::default()
             },
@@ -4232,6 +4286,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Question,
+                session_info_detail: false,
                 question_other_highlighted: true,
                 ..Default::default()
             },
@@ -4571,6 +4626,7 @@ mod tests {
             cursor,
             InputContext {
                 active_modal: crate::tui::Modal::HistorySearch,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4656,6 +4712,7 @@ mod tests {
             cursor,
             InputContext {
                 active_modal: crate::tui::Modal::HistorySearch,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4777,6 +4834,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4810,6 +4868,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::HistorySearch,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4847,6 +4906,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4902,6 +4962,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Queue,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -4936,6 +4997,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::Queue,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -5012,6 +5074,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -5051,6 +5114,7 @@ mod tests {
             cursor,
             InputContext {
                 active_modal: modal,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -5186,6 +5250,7 @@ mod tests {
             &mut cur,
             InputContext {
                 active_modal: crate::tui::Modal::None,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::None,
                 suggestion_count: 0,
@@ -5466,6 +5531,7 @@ mod tests {
             &mut cursor,
             InputContext {
                 active_modal: crate::tui::Modal::OauthPending,
+                session_info_detail: false,
                 is_responding: false,
                 completion_kind: crate::tui::CompletionKind::Slash,
                 suggestion_count: 0,

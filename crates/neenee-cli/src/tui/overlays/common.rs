@@ -9,11 +9,12 @@ use crate::tui::primitives::contrast_fg;
 use crate::tui::view::Theme;
 /// Compact relative time for space-constrained surfaces (e.g. the sessions
 /// picker's meta column): `now` / `3m` / `2h` / `5d` / `3w` — no "ago" suffix.
-pub fn relative_time_compact(ts: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+/// Takes a caller-supplied `now` (seconds since the epoch) so a renderer can
+/// read the wall clock once per frame and format many timestamps against it,
+/// instead of paying a `SystemTime::now()` syscall (plus a heap `String`) for
+/// every row. Used by the sessions picker, which can render hundreds of rows
+/// per frame.
+pub fn relative_time_at(ts: u64, now: u64) -> String {
     let diff = now.saturating_sub(ts);
     if diff < 60 {
         "now".to_string()

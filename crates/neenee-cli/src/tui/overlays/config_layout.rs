@@ -18,7 +18,8 @@ use crate::tui::components::scroll::ScrollBody;
 use crate::tui::design::MODAL_INNER_H_PADDING;
 use crate::tui::layout::Strategy;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, content_modal_probe, keyvocab,
+    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, breadcrumb_parts, content_modal_probe,
+    keyvocab,
 };
 use crate::tui::view::Theme;
 
@@ -139,13 +140,7 @@ pub fn draw_config_layout_modal(
         Style::default().fg(theme.muted()),
     )));
 
-    let header = [
-        HeaderPart::Text {
-            text: "Settings  /  ",
-            accent: false,
-        },
-        HeaderPart::title("Layout"),
-    ];
+    let header = breadcrumb_parts("Settings", "Layout");
     draw_modal_page(
         frame,
         ModalPage {
