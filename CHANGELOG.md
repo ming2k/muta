@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+## [0.21.2] - 2026-07-29
+
+### Added
+
 - **`[principal] skip_interactive_input` config option.** When a `bash` command
   the interactive classifier matches (`sudo`/`gpg`/`passwd`/TUI editors/`read`/…)
   needs stdin, neenee normally pops an inline input panel (the command + a
@@ -2106,7 +2114,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.2...HEAD
+[0.21.2]: https://github.com/ming2k/neenee/releases/tag/v0.21.2
 [0.21.1]: https://github.com/ming2k/neenee/releases/tag/v0.21.1
 [0.21.0]: https://github.com/ming2k/neenee/releases/tag/v0.21.0
 [0.20.3]: https://github.com/ming2k/neenee/releases/tag/v0.20.3
