@@ -1052,6 +1052,22 @@ pub struct PermissionRequest {
     pub description: String,
     pub arguments: String,
     pub scope: String,
+    /// Whether this call is **outside** the agent's granted `OperationScope`
+    /// — an elevation the user, not a builtin limit, is being asked to grant
+    /// (the soft scope-gate, ADR-0028). The TUI renders such prompts with a
+    /// distinct ⚠ treatment so the operator understands they are authorising
+    /// access *beyond* the configured boundary, not a routine in-scope call.
+    /// `false` for ordinary broker prompts and bash-policy confirms.
+    #[serde(default)]
+    pub elevation: bool,
+    /// Whether the decision is **one-off only**: an `Always` reply is *not*
+    /// persisted, and the TUI suppresses the "Always allow" option for such
+    /// prompts. Set by the bash-policy confirm gate — a dangerous-command
+    /// confirmation must stay one-off unless the user writes an explicit
+    /// `[bash_policy.rules] action = "allow"` override. `false` (i.e.
+    /// "Always" is honoured) for ordinary broker prompts.
+    #[serde(default)]
+    pub one_off: bool,
 }
 
 /// One option offered to the user inside an `ask_user` question.

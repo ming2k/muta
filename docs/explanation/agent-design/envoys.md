@@ -72,26 +72,38 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_file`, `grep`, `glob`, `list_dir`, …) |
+| `CODE` | `envoy_code` tool | `Write` | none (user-supervised) | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface, every write/command user-approved |
 | `REVIEW` | harness session-review diagnostic | `Read` | none | Pure read tools, run on a transcript snapshot |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |
 
-All four are non-recursive (recursion is excluded absolutely, not per-profile
-— see [Tool admission](#tool-admission)). Only `EXPLORE` is reachable from a
+All five are non-recursive (recursion is excluded absolutely, not per-profile
+— see [Tool admission](#tool-admission)). `EXPLORE` (the default `envoy` tool)
+and `CODE` (the `envoy_code` tool) are the two profiles reachable from a
 model tool call today; `REVIEW`, `TITLE`, and `INTERACTIVE` are internal
-roles. `INTERACTIVE` opts into `allow_user_interaction: true` so an
-`ask_user` request surfaces to the parent through the full-duplex channel; it
-is defined ahead of a dispatch tool that needs it.
+roles. `CODE` and `INTERACTIVE` opt into `allow_user_interaction: true` so an
+`ask_user` request surfaces to the parent through the full-duplex channel;
+`CODE` additionally sets `unattended: false`, so its writes and commands
+surface as `EnvoyEvent::PermissionRequest` that the user approves exactly as
+they would a top-level call.
 
-### Why a `Read` ceiling
+### Why a `Read` ceiling (and the one exception)
 
 The research role is pure inspection, no side effects. A researcher should not
 run commands — an exploration envoy with `bash` could mutate the workspace
 or run arbitrary commands, which is wrong for "go find things and report
-back". Every built-in profile therefore carries a `Read` ceiling. The
-`Read < Execute < Write` tier split (ADR-0012) and the decoupled `write_paths`
+back". Every built-in *research* profile therefore carries a `Read` ceiling.
+The `Read < Execute < Write` tier split (ADR-0012) and the decoupled `write_paths`
 grant (ADR-0028) remain available for a future command-running or
 scoped-write role, but no built-in profile exercises them today.
+
+The one exception is `CODE`: a coding envoy needs the full edit surface
+(`bash` + `edit_file` + `write_file`), so it admits those tools by name. It is
+deliberately **not** autonomous — `unattended: false` routes every write and
+command through the permission broker, so the user approves each one just as
+they would a top-level call. Admission says *whether* a tool may run; the
+broker (and, for a future scoped profile, the `WriteScope`) says *where* and
+*whether the user signed off*. See [ADR-0086](../../adr/0086-coding-envoy-profile.md).
 
 ### Extending
 

@@ -22,7 +22,7 @@
 //! [`crate::EnvoyProfile`]. Both live in core as vocabulary so the engine stays
 //! role-agnostic and ADR-0042's role taxonomy is declared in one place.
 
-use crate::{AgentIdentity, OperationScope, ToolSelection};
+use crate::{AgentIdentity, CommandScope, OperationScope, ToolSelection};
 
 /// User-tunable principal *runtime* behaviour — the declarative form of the
 /// values `neenee`'s `main.rs` used to seed imperatively from the
@@ -143,6 +143,168 @@ impl PrincipalProfile {
     }
 }
 
+/// A named principal *role* a user can switch the live agent into at runtime
+/// via `@principal:{role}` or `/principal <role>` (plan §3.3). Each role
+/// composes a focused persona onto the product's base identity and narrows the
+/// capability scope / operation boundary to match that role's contract.
+///
+/// The roles live in `neenee-core` (shared vocabulary) rather than the
+/// application layer so both the CLI and the server offer the same set without
+/// duplicating definitions. They are *presets* over a base
+/// [`AgentIdentity`]: the product name ("neenee") is preserved and only the
+/// mission/persona shifts, so a switched role is still recognizably the same
+/// product, just wearing a different hat.
+///
+/// Use [`PrincipalProfile::for_role`] to materialize a role onto a base
+/// identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalRole {
+    /// The default coding principal — full capabilities, unrestricted writes,
+    /// the product's own mission. Identical in effect to the profile the
+    /// embedding binds at startup, so switching back to `code` after another
+    /// role restores the baseline.
+    Code,
+    /// Architect: design and review focus. Full read access, write tools
+    /// retained but the persona steers toward analysis, tradeoff evaluation,
+    /// and written design rationale before any change.
+    Architect,
+    /// Reviewer: read-only code review. Read/search/inspect tools only — no
+    /// `write_file`, `edit_file`, or `bash`. The persona is a meticulous
+    /// reviewer who reports findings and proposed diffs without applying them.
+    Reviewer,
+    /// Security auditor: read-only, command-confined. Read/search tools plus a
+    /// narrow command allowlist (`git`, `rg`, `cargo audit`-class inspection).
+    /// The persona focuses on vulnerability and supply-chain review.
+    Security,
+}
+
+impl PrincipalRole {
+    /// Every role in its canonical display order, for pickers and `/help`.
+    pub const ALL: &[PrincipalRole] = &[
+        PrincipalRole::Code,
+        PrincipalRole::Architect,
+        PrincipalRole::Reviewer,
+        PrincipalRole::Security,
+    ];
+
+    /// The stable string name used in `@principal:{name}` / `/principal <name>`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrincipalRole::Code => "code",
+            PrincipalRole::Architect => "architect",
+            PrincipalRole::Reviewer => "reviewer",
+            PrincipalRole::Security => "security",
+        }
+    }
+
+    /// Parse a role name (case-insensitive). Returns `None` for an unknown
+    /// name so the caller can surface a clear "unknown role" error listing
+    /// [`PrincipalRole::ALL`].
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "code" | "coder" | "default" => Some(PrincipalRole::Code),
+            "architect" | "architecture" => Some(PrincipalRole::Architect),
+            "reviewer" | "review" => Some(PrincipalRole::Reviewer),
+            "security" | "audit" | "auditor" => Some(PrincipalRole::Security),
+            _ => None,
+        }
+    }
+
+    /// A short human description of what this role does, for confirmations.
+    pub fn description(self) -> &'static str {
+        match self {
+            PrincipalRole::Code => "the default coding principal (full capabilities)",
+            PrincipalRole::Architect => "architecture & design focus (analysis-first)",
+            PrincipalRole::Reviewer => "read-only code review",
+            PrincipalRole::Security => "read-only security audit (command-confined)",
+        }
+    }
+}
+
+impl PrincipalProfile {
+    /// Materialize a [`PrincipalRole`] onto a product's base [`AgentIdentity`].
+    ///
+    /// The base identity's `name` is preserved (the agent is still called
+    /// "neenee"); only the mission — and, for focused roles, a persona
+    /// override — shifts to match the role. Capability scope and operation
+    /// boundary narrow per the role's contract (see [`PrincipalRole`]).
+    ///
+    /// Runtime config and the attended flag are left at defaults; the live
+    /// `[principal]` config overlay and the current attended setting are not
+    /// disturbed by a role switch.
+    pub fn for_role(role: PrincipalRole, base: &AgentIdentity) -> Self {
+        match role {
+            PrincipalRole::Code => Self::with_identity("code", base.clone()),
+            PrincipalRole::Architect => {
+                let identity = AgentIdentity::new(
+                    base.name.clone(),
+                    "an expert software architect — evaluates design tradeoffs, \
+                     proposes structure, and writes design rationale before changing code",
+                );
+                Self::with_identity("architect", identity)
+            }
+            PrincipalRole::Reviewer => {
+                // Read-only inspection tools. `bash` is excluded: a reviewer
+                // reports findings, it does not execute arbitrary commands.
+                let identity = AgentIdentity::new(
+                    base.name.clone(),
+                    "a meticulous code reviewer — reports findings and proposed \
+                     diffs without applying changes",
+                );
+                Self::with_identity("reviewer", identity).with_selection(
+                    ToolSelection::only([
+                        "read_text",
+                        "grep",
+                        "glob",
+                        "list_dir",
+                        "read_image",
+                        "webfetch",
+                        "websearch",
+                        "todo",
+                        "ask_user",
+                    ]),
+                )
+            }
+            PrincipalRole::Security => {
+                // Read-only, plus a confined command allowlist for audit-style
+                // inspection (version control, search, dependency audit).
+                let identity = AgentIdentity::new(
+                    base.name.clone(),
+                    "a security auditor — reviews for vulnerabilities and \
+                     supply-chain risk without modifying the project",
+                );
+                let scope = OperationScope {
+                    paths: None,
+                    commands: Some(CommandScope::new([
+                        "git".to_string(),
+                        "rg".to_string(),
+                        "cargo".to_string(),
+                        "npm".to_string(),
+                        "ls".to_string(),
+                        "cat".to_string(),
+                        "find".to_string(),
+                        "file".to_string(),
+                    ])),
+                };
+                Self::with_identity("security", identity)
+                    .with_selection(ToolSelection::only([
+                        "read_text",
+                        "grep",
+                        "glob",
+                        "list_dir",
+                        "read_image",
+                        "bash",
+                        "webfetch",
+                        "websearch",
+                        "todo",
+                        "ask_user",
+                    ]))
+                    .with_operation_scope(scope)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +345,69 @@ mod tests {
         let c = PrincipalRuntimeConfig::default();
         let _copy = c; // Copy: no move
         let _again = c;
+    }
+
+    #[test]
+    fn role_round_trips_through_parse() {
+        for role in PrincipalRole::ALL {
+            let parsed = PrincipalRole::parse(role.as_str());
+            assert_eq!(parsed, Some(*role), "{} should parse back", role.as_str());
+        }
+        // Aliases.
+        assert_eq!(PrincipalRole::parse("Coder"), Some(PrincipalRole::Code));
+        assert_eq!(PrincipalRole::parse("REVIEW"), Some(PrincipalRole::Reviewer));
+        assert_eq!(PrincipalRole::parse("auditor"), Some(PrincipalRole::Security));
+        // Unknown.
+        assert!(PrincipalRole::parse("wizard").is_none());
+    }
+
+    #[test]
+    fn for_role_preserves_product_name() {
+        let base = AgentIdentity::new("neenee", "an expert AI coding assistant");
+        for role in PrincipalRole::ALL {
+            let profile = PrincipalProfile::for_role(*role, &base);
+            // The product name survives a role switch; only the mission shifts.
+            assert_eq!(profile.identity.name, "neenee", "{:?} kept the name", role);
+            assert!(!profile.identity.mission.is_empty());
+            assert_eq!(profile.name, role.as_str());
+        }
+    }
+
+    #[test]
+    fn code_role_is_unrestricted_baseline() {
+        let base = AgentIdentity::new("neenee", "coding assistant");
+        let code = PrincipalProfile::for_role(PrincipalRole::Code, &base);
+        assert_eq!(code.agent_selection.scope, crate::ToolScope::All);
+        assert!(code.operation_scope.paths.is_none());
+        assert!(code.operation_scope.commands.is_none());
+    }
+
+    #[test]
+    fn reviewer_role_is_read_only() {
+        let base = AgentIdentity::new("neenee", "coding assistant");
+        let reviewer = PrincipalProfile::for_role(PrincipalRole::Reviewer, &base);
+        // Scoped: write/edit/bash are NOT admitted.
+        let crate::ToolScope::Only(names) = &reviewer.agent_selection.scope else {
+            panic!("reviewer must be scoped, not unrestricted");
+        };
+        assert!(!names.contains("write_file"));
+        assert!(!names.contains("edit_file"));
+        assert!(!names.contains("bash"));
+        assert!(names.contains("read_text"));
+    }
+
+    #[test]
+    fn security_role_confines_commands() {
+        let base = AgentIdentity::new("neenee", "coding assistant");
+        let security = PrincipalProfile::for_role(PrincipalRole::Security, &base);
+        // bash IS admitted (for audit commands) but the command scope narrows it.
+        let crate::ToolScope::Only(names) = &security.agent_selection.scope else {
+            panic!("security must be scoped");
+        };
+        assert!(names.contains("bash"));
+        let commands = security.operation_scope.commands.as_ref().unwrap();
+        assert!(commands.allows("git log"));
+        assert!(commands.allows("cargo audit"));
+        assert!(!commands.allows("rm -rf /"));
     }
 }

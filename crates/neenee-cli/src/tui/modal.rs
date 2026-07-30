@@ -135,9 +135,10 @@ pub enum Modal {
     /// `App::queue_scroll`.
     Queue,
     /// Context-usage report: current AI-visible context plus request totals by
-    /// user round, with a ReAct-turn drill-down. Value styling distinguishes
-    /// provider-reported counts from local estimates. Opened by clicking the
-    /// context meter in the hint bar. Esc / outside-click closes.
+    /// user round, with a ReAct-turn drill-down. Values use a calm,
+    /// single-foreground palette; only turn lifecycle state is colored.
+    /// Opened by clicking the context meter in the hint bar. Esc /
+    /// outside-click closes.
     TokenReport,
     /// Interactive-input injection panel (L3.5 β): shown when a `bash` command
     /// is classified interactive and the agent cannot supply its own input.

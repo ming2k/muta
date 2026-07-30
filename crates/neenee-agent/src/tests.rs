@@ -5,7 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Serialises tests that mutate process-wide env vars (`NEENEE_DATA_DIR`).
 /// Tests that touch env vars MUST take this lock to avoid racing other
 /// parallel tests that read paths via [`neenee_persistence::paths::get`].
-static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+///
+/// `pub(crate)` so sibling `#[cfg(test)]` modules (e.g.
+/// `permission_store::tests`) that also resolve project paths through
+/// `paths::get()` share the same serialization point instead of racing the
+/// env-mutating tests.
+pub(crate) static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct TestProvider;
 struct HintProvider;
@@ -438,10 +443,10 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
 /// stable, readable layout.
 #[test]
 fn system_prompt_registry_reproduces_legacy_layout() {
-    let mut agent = agent();
+    let agent = agent();
     // The `agent()` helper ships an empty identity; give it one so the
     // preamble section is active and exercises the full layout.
-    agent.identity = crate::AgentIdentity::new("neenee", "an expert AI coding assistant");
+    agent.set_identity(crate::AgentIdentity::new("neenee", "an expert AI coding assistant"));
 
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
@@ -465,6 +470,34 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     assert_eq!(
         messages[0].origin.as_ref().map(|o| o.kind),
         Some(crate::InjectionKind::SystemPrompt)
+    );
+}
+
+#[test]
+fn apply_principal_profile_switches_identity_into_the_system_prompt() {
+    // Plan §3.3 acceptance: switching the principal role live re-rolls the
+    // system-prompt preamble, so the next request speaks with the new persona.
+    let agent = agent();
+    agent.set_identity(crate::AgentIdentity::new("neenee", "a coding assistant"));
+
+    let architect = neenee_core::PrincipalProfile::for_role(
+        neenee_core::PrincipalRole::Architect,
+        &crate::AgentIdentity::new("neenee", "a coding assistant"),
+    );
+    agent.apply_principal_profile(&architect);
+
+    // The next assembled request must open with the architect preamble, not
+    // the original coding one.
+    let mut messages: Vec<Message> = Vec::new();
+    agent.prepare_request_messages_debug(&mut messages);
+    let prompt = &messages[0].content;
+    assert!(
+        prompt.contains("architect"),
+        "switched preamble should mention the architect role; got: {prompt}"
+    );
+    assert!(
+        !prompt.starts_with("You are neenee, a coding assistant."),
+        "the old identity preamble must be replaced, not appended; got: {prompt}"
     );
 }
 
@@ -2087,10 +2120,17 @@ async fn always_permission_persists_across_agents_for_same_project() {
     );
     let on_disk: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&perms_path).unwrap()).unwrap();
-    assert_eq!(on_disk["version"].as_u64(), Some(1));
+    // Version 2 added the `revoked` list (#3); the allowlist shape is otherwise
+    // unchanged. A freshly-approved rule writes an empty revoked array.
+    assert_eq!(on_disk["version"].as_u64(), Some(2));
     assert_eq!(on_disk["rules"].as_array().unwrap().len(), 1);
     assert_eq!(on_disk["rules"][0]["tool"], "write_test");
     assert_eq!(on_disk["rules"][0]["scope"], "/tmp/test");
+    assert_eq!(
+        on_disk["revoked"].as_array().unwrap().len(),
+        0,
+        "a fresh approval writes an empty revoked list"
+    );
 
     // A brand-new agent in the same project should inherit the rule without
     // ever prompting — that is the whole point of cross-session persistence.

@@ -439,6 +439,83 @@ so. Run at most a handful of turns, then answer.",
     allow_model_stdin: false,
 };
 
+/// Tools a coding envoy may use: the generic read-only inspection tools
+/// (shared with [`EXPLORE`]) plus the workspace-mutating tools — `bash` for
+/// running builds/tests/git, `edit_file` and `write_file` for code, and the
+/// `todo*` pair so a long delegation can track its own progress. Listed by
+/// name so adding a new side-effecting tool to the parent never silently
+/// widens this profile — the only tools a CODE envoy can touch are the ones
+/// enumerated here. Recursion (`envoy`) and control-flow escapes are excluded
+/// absolutely by [`ToolPolicy::admits_runtime`], independent of this list.
+const CODING_TOOLS: &[&str] = &[
+    // Generic read-only inspection (shared with EXPLORE).
+    "read_text",
+    "read_image",
+    "grep",
+    "glob",
+    "list_dir",
+    "webfetch",
+    "websearch",
+    // Workspace mutation — the code-editing surface.
+    "bash",
+    "edit_file",
+    "write_file",
+    // Self-contained task tracking (the envoy's own todo list, not the
+    // parent's).
+    "todo",
+    "todo_update",
+];
+
+/// The coding envoy role. Unlike [`EXPLORE`] (read-only, autonomous), this is
+/// a **write-capable** sub-agent: it can edit files and run commands to
+/// implement a delegated task end-to-end, then hand back a technically
+/// complete summary. It is the analogue of kimi-code's `coder` subagent.
+///
+/// Because writes and command execution have real consequences, the role is
+/// **user-supervised**, not autonomous:
+/// - `allow_user_interaction: true` admits `ask_user` (and any future
+///   approval-gated tool), so an ambiguous requirement can be surfaced rather
+///   than guessed.
+/// - `unattended: false` leaves the permission broker on, so every
+///   execute/write the envoy attempts surfaces as an
+///   [`EnvoyEvent::PermissionRequest`] that round-trips through the parent
+///   harness ↔ TUI ↔ registry handle ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
+///   The user approves exactly as they would a top-level write.
+///
+/// This is the second built-in profile with side effects (the first being the
+/// reserved [`INTERACTIVE`]), and the first that a dispatch tool can bind to
+/// for delegated *implementation* work. The read-only research contract of
+/// [`EXPLORE`] is untouched.
+pub const CODE: EnvoyProfile = EnvoyProfile {
+    name: "code",
+    system_prompt: "\
+You are a coding envoy operating under user supervision. You are delegated a \
+well-scoped software-engineering task: implement the change end to end. Read \
+the relevant code first, then edit files and run commands (builds, tests, \
+git) to land the change and verify it. Every command and file write you \
+attempt is presented to the user for approval before it executes — treat that \
+as a real gate, not a rubber stamp: prefer the narrowest change that satisfies \
+the task, and run commands only when they advance the work. The toolset handed \
+to you is the full set you are permitted to use — work within it, do not \
+request others. All your `user` messages come from the parent agent, which \
+cannot see your working context — it sees only your final message. Treat the \
+parent as your caller: do not address the end user directly. Your final \
+answer is the entire handoff, so make it technically complete — what you \
+changed and why, the path of every file you touched, how you verified the \
+change (tests or commands run, with results), and anything left undone. A \
+final message of only a sentence or two is too brief. Run at most a handful \
+of turns, then answer.",
+    tool_policy: ToolPolicy {
+        allowed_tools: Some(CODING_TOOLS),
+        allow_user_interaction: true,
+        write_paths: &[],
+        command_allowlist: &[],
+    },
+    variant_pins: &[],
+    unattended: false,
+    allow_model_stdin: false,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +752,32 @@ mod tests {
         assert!(!EXPLORE.tool_policy.admits(&make("place_order")));
         assert!(!EXPLORE.tool_policy.admits(&make("cancel_order")));
         assert!(!EXPLORE.tool_policy.admits(&make("list_positions")));
+    }
+
+    /// CODE is the write-capable coding role. It admits the full edit surface
+    /// (bash, edit_file, write_file) and the shared read-only tools, but — like
+    /// every envoy — it still excludes recursion and control-flow escapes
+    /// absolutely, and quant domain tools stay out (symmetric isolation with
+    /// the QUANT profile, mirroring `explore_profile_excludes_quant_tools`).
+    #[test]
+    fn code_profile_admits_edit_surface_but_not_recursion_or_quant() {
+        use crate::CODE;
+        // Write/execute surface: admitted.
+        assert!(CODE.tool_policy.admits(&make("bash")));
+        assert!(CODE.tool_policy.admits(&make("edit_file")));
+        assert!(CODE.tool_policy.admits(&make("write_file")));
+        assert!(CODE.tool_policy.admits(&make("todo")));
+        // Shared read-only inspection: admitted.
+        assert!(CODE.tool_policy.admits(&make("read_text")));
+        assert!(CODE.tool_policy.admits(&make("grep")));
+        // A non-whitelisted tool is excluded (name scope is real — adding a
+        // new tool to the parent never silently widens CODE).
+        assert!(!CODE.tool_policy.admits(&make("some_new_tool")));
+        // Quant domain tools are NOT admitted — domain isolation holds.
+        assert!(!CODE.tool_policy.admits(&make("market_data")));
+        assert!(!CODE.tool_policy.admits(&make("place_order")));
+        // Recursion and control-flow remain absolute.
+        assert!(!CODE.tool_policy.admits(&with_spawn(make("bash"))));
+        assert!(!CODE.tool_policy.admits(&make_control()));
     }
 }

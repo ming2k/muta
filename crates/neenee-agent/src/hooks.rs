@@ -662,6 +662,8 @@ mod tests {
             description: "rm -rf /tmp/x".into(),
             arguments: "{}".into(),
             scope: "command".into(),
+            elevation: false,
+            one_off: false,
         };
         reg.run_permission_request(&request, "s", None).await;
         assert_eq!(
@@ -688,6 +690,8 @@ mod tests {
             description: "".into(),
             arguments: "".into(),
             scope: "command".into(),
+            elevation: false,
+            one_off: false,
         };
         let edit_req = neenee_core::PermissionRequest {
             id: "p2".into(),
@@ -696,6 +700,8 @@ mod tests {
             description: "".into(),
             arguments: "".into(),
             scope: "path".into(),
+            elevation: false,
+            one_off: false,
         };
         reg.run_permission_request(&bash_req, "s", None).await;
         reg.run_permission_request(&edit_req, "s", None).await;

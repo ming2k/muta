@@ -34,6 +34,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `webfetch` | `Read` | `*` | [web](web.md) |
 | `websearch` | `Read` | `*` | [web](web.md) |
 | `envoy` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
+| `envoy_code` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
 | `search_history` | `Read` | `*` | [skills](skills.md) |
 | `use_skill` | `Read` | `*` | [skills](skills.md) |
 | `list_skills` | `Read` | `*` | [skills](skills.md) |

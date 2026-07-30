@@ -40,6 +40,13 @@
 //!    blocked), but it never opens an interactive modal of its own.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
 //!    failures.
+//! 6. **One prompt per call.** Both the bash confirm gate and the broker emit
+//!    [`PolicyDecision::Ask`]; the caller parks once, emits one prompt, and
+//!    awaits one decision. A bash command is never prompted twice (the old
+//!    chain-external re-evaluation is gone). An `Ask`'s [`PermissionRequest`]
+//!    carries `elevation` (out-of-scope, ADR-0028) and `one_off` (the bash
+//!    dangerous-command confirm: an `Always` reply is honoured but not
+//!    persisted) so the caller and the TUI handle both uniformly.
 
 use std::sync::Arc;
 
@@ -47,8 +54,29 @@ use async_trait::async_trait;
 use neenee_core::{RestorePoint, ScopeTarget, Tool, ToolOutput};
 
 use crate::agent::ScopedToolDisable;
+use crate::bash_policy::BashPolicyMatch;
 use crate::hooks::PreToolUseVerdict;
 use crate::permission_store::{PermissionRule, PermissionStore};
+
+/// The non-interactive verdict the bash policy returns for one command.
+///
+/// Replaces the old ambiguous `Option<ToolOutput>` whose `None` conflated "the
+/// command is allowed" with "it needs interactive confirmation but I have no
+/// event channel" — a load-bearing lie that forced a second full bash-policy
+/// re-evaluation outside the chain. The three variants are now disjoint and
+/// self-describing, so [`BashPolicy`] can decide everything itself and return a
+/// real [`PolicyDecision::Ask`] for the confirm path (no more chain-external
+/// re-run, no more double evaluation, no more double prompt).
+pub enum BashVerdict {
+    /// The command fell through to the normal permission broker.
+    Allow,
+    /// The command matches a `Confirm` rule and a human must approve it
+    /// one-off. Carries the rule match so the gate can build the prompt
+    /// payload (label/description/detail) without re-evaluating.
+    Confirm { match_: BashPolicyMatch },
+    /// A hard refusal (`Deny`, or a `Confirm` resolved under unattended).
+    Deny { output: ToolOutput },
+}
 
 /// The outcome a policy returns for one tool call. `Pass` is the chain's
 /// continuation signal; the first non-`Pass` wins.
@@ -69,6 +97,10 @@ pub enum PolicyDecision {
     /// Defer to the user: park and await a [`neenee_core::PermissionDecision`].
     /// The chain caller parks, emits the request, awaits; the policy only
     /// contributes the request payload + the rule to remember on `Always`.
+    ///
+    /// The request's `one_off` flag tells the caller **not to persist** an
+    /// `Always` reply (the bash dangerous-command confirm is one-off); its
+    /// `elevation` flag tells the TUI the call is out-of-scope (ADR-0028).
     Ask {
         request: neenee_core::PermissionRequest,
         rule: PermissionRule,
@@ -91,13 +123,17 @@ pub trait PermissionContext: Send + Sync {
     /// Apply scoped-disable side effects from a hook verdict.
     fn apply_scoped_disables(&self, disables: &[(String, RestorePoint)]);
 
-    /// The bash command policy for `command`. Returns `Some(output)` to
-    /// short-circuit (Deny/Confirm→Reject under unattended), `None` to allow.
-    async fn check_bash_policy(
-        &self,
-        command: &str,
-        arguments: &str,
-    ) -> Option<ToolOutput>;
+    /// The bash command policy for `command`, as a disjoint three-way
+    /// [`BashVerdict`] (Allow / Confirm / Deny). The chain's [`BashPolicy`]
+    /// gate maps each variant to its terminal decision, so **every** bash
+    /// outcome — including the interactive confirm — is resolved inside the
+    /// chain. There is no longer a chain-external re-evaluation.
+    ///
+    /// Unattended sessions never yield [`BashVerdict::Confirm`]: a confirm is
+    /// resolved silently to `Allow` or `Deny` per `unattended_confirm_action`,
+    /// so the gate produces no [`PolicyDecision::Ask`] under unattended (the
+    /// broker's unattended bypass therefore sees a `Pass`, as before).
+    async fn check_bash_policy(&self, command: &str, arguments: &str) -> BashVerdict;
 
     /// The permission store, for synchronous `is_always_allowed` checks.
     fn permissions(&self) -> &PermissionStore;
@@ -321,12 +357,27 @@ impl std::fmt::Display for ScopeTargetDisplay<'_> {
     }
 }
 
-/// Gate 5: bash command policy (Deny / unattended-Confirm only). The
-/// interactive Confirm path (non-unattended) stays in `execute_tool` because it
-/// needs an event channel to park for user approval — a mini-broker that
-/// doesn't fit the event-less policy signature. Here we only short-circuit the
-/// cases that need no interaction: an outright `Deny`, or a `Confirm` while
-/// unattended (resolved per `unattended_confirm_action`).
+/// Gate 5: bash command policy. A **complete** gate — every bash outcome,
+/// including the interactive confirm, is decided here. The old design left the
+/// attended `Confirm` path in `execute_tool` (it "needed an event channel to
+/// park"), which forced three corollary hacks: a chain-external re-evaluation
+/// of the same policy, an ambiguous `Option<ToolOutput>` return whose `None`
+/// conflated Allow with "needs confirm", and a *second* prompt on top of the
+/// broker's own `Ask` for the same command.
+///
+/// All of that is gone. The gate now maps the [`BashVerdict`] directly:
+/// - [`BashVerdict::Allow`] → `Pass` (fall through to the broker, which may
+///   still `Ask` for a not-yet-approved command — the *single* prompt).
+/// - [`BashVerdict::Deny`] → `Deny` (hard refusal, or a confirm resolved under
+///   unattended).
+/// - [`BashVerdict::Confirm`] → `Ask` with `one_off: true`, carrying the rule
+///   match. The caller parks through the **same** `Ask` path the broker uses,
+///   so there is one park/emit/await block, one prompt, no re-evaluation.
+///
+/// Because the confirm is `one_off`, an `Always` reply is honoured for this one
+/// call but **not persisted** — a dangerous-command confirmation is sharper
+/// than ordinary tool permission and stays one-off unless the user writes an
+/// explicit `[bash_policy.rules] action = "allow"` override.
 pub struct BashPolicy;
 #[async_trait]
 impl PermissionPolicy for BashPolicy {
@@ -341,14 +392,40 @@ impl PermissionPolicy for BashPolicy {
             ScopeTarget::Command(c) => c.clone(),
             _ => return PolicyDecision::Pass,
         };
-        // Delegate to the context's bash-policy check, but only the
-        // non-interactive resolution matters here. A `Some(output)` means the
-        // policy produced a terminal decision (Deny, or unattended-Confirm →
-        // Deny); a `None` means either Allow or "needs interactive Confirm"
-        // (the latter falls through to execute_tool's full check_bash_policy).
         match ctx.ctx.check_bash_policy(&command, ctx.arguments).await {
-            Some(output) => PolicyDecision::Deny { output },
-            None => PolicyDecision::Pass,
+            BashVerdict::Allow => PolicyDecision::Pass,
+            BashVerdict::Deny { output } => PolicyDecision::Deny { output },
+            BashVerdict::Confirm { match_ } => {
+                // Build the one-off dangerous-command prompt. `one_off: true`
+                // tells the caller (and the TUI) that an `Always` reply is not
+                // persisted and the option should be de-emphasised.
+                PolicyDecision::Ask {
+                    request: neenee_core::PermissionRequest {
+                        id: String::new(), // caller fills the generated id
+                        tool: "bash".to_string(),
+                        label: "Dangerous bash command".to_string(),
+                        description: format!(
+                            "Bash policy requires one-off confirmation before running this \
+                             command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry \
+                             does not bypass this safety check.",
+                            match_.name,
+                            if match_.builtin { " (built-in)" } else { "" },
+                            match_.reason,
+                        ),
+                        arguments: ctx.arguments.to_string(),
+                        scope: command.clone(),
+                        elevation: false,
+                        one_off: true,
+                    },
+                    // A well-formed rule that is never persisted: `one_off`
+                    // short-circuits persistence in the caller. Carried only to
+                    // satisfy the `Ask` shape uniformly.
+                    rule: PermissionRule {
+                        tool: "bash".to_string(),
+                        scope: command,
+                    },
+                }
+            }
         }
     }
 }
@@ -403,6 +480,12 @@ impl PermissionPolicy for BrokerPolicy {
         if ctx.ctx.permissions().is_always_allowed(&rule) {
             return PolicyDecision::Approve;
         }
+        // #10: an attended call whose target is OUTSIDE the granted scope is an
+        // *elevation* — the soft scope-gate (gate 4) deliberately let it reach
+        // here so the user, not a builtin limit, decides. Mark the prompt so the
+        // TUI can render a distinct ⚠ treatment; the operator must understand
+        // they are authorising access beyond the configured boundary.
+        let elevation = !ctx.operation_scope.allows(&ctx.scope_target);
         PolicyDecision::Ask {
             request: neenee_core::PermissionRequest {
                 id: String::new(), // caller fills the generated id
@@ -411,6 +494,8 @@ impl PermissionPolicy for BrokerPolicy {
                 description: ctx.tool.permission_description(),
                 arguments: ctx.arguments.to_string(),
                 scope: rule.scope.clone(),
+                elevation,
+                one_off: false,
             },
             rule,
         }
@@ -479,8 +564,8 @@ mod tests {
             PreToolUseVerdict::default()
         }
         fn apply_scoped_disables(&self, _d: &[(String, RestorePoint)]) {}
-        async fn check_bash_policy(&self, _c: &str, _a: &str) -> Option<ToolOutput> {
-            None
+        async fn check_bash_policy(&self, _c: &str, _a: &str) -> BashVerdict {
+            BashVerdict::Allow
         }
         fn permissions(&self) -> &PermissionStore {
             &self.perms
@@ -685,6 +770,76 @@ mod tests {
             &ctxr,
         );
         assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Ask { .. }));
+    }
+
+    #[tokio::test]
+    async fn broker_marks_out_of_scope_as_elevation() {
+        // #10: an attended out-of-scope call reaches the broker (the soft gate
+        // passes it), and the broker's Ask request must carry elevation: true so
+        // the TUI renders the distinct ⚠ treatment.
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        match BrokerPolicy.evaluate(&c).await {
+            PolicyDecision::Ask { request, .. } => assert!(request.elevation),
+            other => panic!("expected Ask, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_in_scope_ask_is_not_elevation() {
+        // An in-scope call's Ask must carry elevation: false (routine prompt).
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/home/user/a")),
+        });
+        let op = neenee_core::OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        };
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx {
+            unattended: false,
+            perms: PermissionStore::new(),
+        };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/home/user/a")),
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        match BrokerPolicy.evaluate(&c).await {
+            PolicyDecision::Ask { request, .. } => assert!(!request.elevation),
+            other => panic!("expected Ask, got {other:?}"),
+        }
     }
 
     #[tokio::test]

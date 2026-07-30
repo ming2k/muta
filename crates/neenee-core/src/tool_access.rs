@@ -106,6 +106,21 @@ impl ToolAccesses {
         Self(vec![ToolAccess::All])
     }
 
+    /// Whether this declaration claims a **mutating** access — a `Write`/
+    /// `ReadWrite` file operation or a global-exclusive `All`. Used by the
+    /// toolset-collection safety check (see `debug_assert_safe_targets`):
+    /// a tool that declares a write but leaves its `scope_target` at the
+    /// default `Unspecified` would bypass the scope-gate, bash-policy, and
+    /// broker entirely — a load-bearing safety hole. Read-only declarations
+    /// (`Read`/`Search`/`none()`) return `false`.
+    #[inline]
+    pub fn declares_write(&self) -> bool {
+        self.0.iter().any(|access| match access {
+            ToolAccess::All => true,
+            ToolAccess::File { operation, .. } => operation.writes(),
+        })
+    }
+
     /// Push a file access and return self, for chaining.
     #[inline]
     pub fn with_file(

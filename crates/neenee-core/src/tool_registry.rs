@@ -116,6 +116,7 @@ pub fn collect_toolset(ctx: &ToolContext) -> ToolSet {
         }
     }
     debug_assert_unique_identities(&tools);
+    debug_assert_safe_targets(&tools);
     ToolSet::from_tools(tools)
 }
 
@@ -136,6 +137,69 @@ fn debug_assert_unique_identities(tools: &[Arc<dyn Tool>]) {
         );
     }
 }
+
+/// #8 — Safety contract: a tool that declares a **mutating** `accesses()`
+/// (a `Write`/`ReadWrite`/`All`) **must** override `scope_target` to return a
+/// non-`Unspecified` target for the inputs it mutates. Otherwise the call
+/// bypasses the scope-gate (gate 4), bash-policy (gate 5), and broker (gate 7)
+/// — the three gates that key off `ScopeTarget::Unspecified` as the shared
+/// "no locatable target / auto-admit" switch — so a write would run with zero
+/// permission checks.
+///
+/// This cannot be enforced perfectly by sampling one input: a tool may take a
+/// path argument that is absent in the sample. So this is a **smell check**, not
+/// a proof: it flags only the structural case where the tool declares writes
+/// *unconditionally* yet returns `Unspecified` even for a representative,
+/// well-formed input. A tool that conditionally mutates based on its arguments
+/// (and correctly returns a `Path`/`Command` when it does) passes trivially.
+///
+/// A no-op in release; a hard failure in debug/test builds.
+#[cfg(debug_assertions)]
+fn debug_assert_safe_targets(tools: &[Arc<dyn Tool>]) {
+    // Representative inputs exercising the common arities. A tool whose write
+    // path only appears for a specific argument shape is expected to override
+    // `scope_target` to surface it for *some* input; sampling a handful keeps
+    // the check cheap while catching the unconditional-write default mistake.
+    let samples = [
+        "{}",
+        r#"{"path":"src/example.rs"}"#,
+        r#"{"command":"echo hi"}"#,
+        r#"{"path":"/tmp/x","content":"y"}"#,
+    ];
+    for tool in tools {
+        // Skip tools that never declare a write — read-only tools legitimately
+        // use the `Unspecified` default (it is their auto-admit path).
+        let any_write = samples
+            .iter()
+            .any(|sample| tool.accesses(sample).declares_write());
+        if !any_write {
+            continue;
+        }
+        // The tool declares a write for some sample input. For *that same*
+        // sample, its scope_target must be non-Unspecified, otherwise the write
+        // would bypass every permission gate.
+        for sample in samples {
+            let accesses = tool.accesses(sample);
+            if !accesses.declares_write() {
+                continue;
+            }
+            let target = tool.scope_target(sample);
+            assert!(
+                !matches!(target, crate::ScopeTarget::Unspecified),
+                "tool {:?} declares a mutating access (writes) for input {:?} but \
+                 returns ScopeTarget::Unspecified — the write would bypass the \
+                 scope-gate, bash-policy, and permission broker. Override \
+                 `scope_target` to return the Path/Command the call touches.",
+                tool.name(),
+                sample,
+            );
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+#[inline]
+fn debug_assert_safe_targets(_tools: &[Arc<dyn Tool>]) {}
 
 #[cfg(not(debug_assertions))]
 #[inline]
@@ -541,6 +605,8 @@ macro_rules! register_tool {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use crate::{ScopeTarget, ToolAccesses};
+    use std::path::PathBuf;
 
     struct PingTool;
     #[async_trait]
@@ -582,6 +648,93 @@ mod tests {
         let _ = ctx.get::<String>()?;
         DeclinedTool
     });
+
+    /// A well-behaved write tool: declares a write AND overrides scope_target to
+    /// surface the path it touches. Must pass `debug_assert_safe_targets`.
+    struct SafeWriteTool;
+    #[async_trait]
+    impl Tool for SafeWriteTool {
+        fn name(&self) -> &str {
+            "safe_write"
+        }
+        fn description(&self) -> &str {
+            "test write tool with a correct scope_target"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn call(&self, _arguments: &str) -> Result<String, String> {
+            Ok("wrote".to_string())
+        }
+        fn scope_target(&self, arguments: &str) -> ScopeTarget {
+            // Surface the path so the scope-gate / broker can check it.
+            serde_json::from_str::<serde_json::Value>(arguments)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(PathBuf::from))
+                .map(ScopeTarget::Path)
+                .unwrap_or(ScopeTarget::Unspecified)
+        }
+        // accesses is conditional in lockstep with scope_target: a write is only
+        // declared when there is a real path to write — the realistic shape.
+        fn accesses(&self, arguments: &str) -> ToolAccesses {
+            match self.scope_target(arguments) {
+                ScopeTarget::Path(p) => {
+                    ToolAccesses::write_file(p.to_string_lossy().into_owned())
+                }
+                _ => ToolAccesses::none(),
+            }
+        }
+    }
+
+    /// A *misbehaving* write tool: declares a write but leaves scope_target at
+    /// the `Unspecified` default. Must trip `debug_assert_safe_targets`.
+    struct UnsafeWriteTool;
+    #[async_trait]
+    impl Tool for UnsafeWriteTool {
+        fn name(&self) -> &str {
+            "unsafe_write"
+        }
+        fn description(&self) -> &str {
+            "test write tool that forgets scope_target"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn call(&self, _arguments: &str) -> Result<String, String> {
+            Ok("wrote".to_string())
+        }
+        // scope_target defaults to Unspecified — the hole.
+        fn accesses(&self, _arguments: &str) -> ToolAccesses {
+            ToolAccesses::write_file("/sample".to_string())
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn safe_targets_passes_for_correct_write_tool() {
+        let tool: Arc<dyn Tool> = Arc::new(SafeWriteTool);
+        // Must not panic: the write tool surfaces its target.
+        debug_assert_safe_targets(std::slice::from_ref(&tool));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "would bypass the")]
+    fn safe_targets_flags_write_tool_with_unspecified_target() {
+        let tool: Arc<dyn Tool> = Arc::new(UnsafeWriteTool);
+        // Must panic: the tool declares a write but returns Unspecified, so the
+        // write would bypass every permission gate.
+        debug_assert_safe_targets(std::slice::from_ref(&tool));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn safe_targets_ignores_read_only_tools() {
+        // A read-only tool (no declared write) may legitimately use the
+        // Unspecified default — its auto-admit path.
+        let tool: Arc<dyn Tool> = Arc::new(PingTool);
+        debug_assert_safe_targets(std::slice::from_ref(&tool));
+    }
 
     #[test]
     fn collect_toolset_includes_registered_and_skips_declined() {

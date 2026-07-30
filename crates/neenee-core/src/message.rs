@@ -86,6 +86,12 @@ pub enum InjectionKind {
     /// so the skill body was injected in-context. Site:
     /// `neenee-agent`'s conversation-context skill injection policy.
     ImplicitSkill,
+    /// Implicit file auto-load: the latest user round referenced a path via
+    /// `@file:` / `@files:`, so the file's contents were injected in-context
+    /// (sandboxed to the workspace root and capped in size). The companion to
+    /// `ImplicitSkill` for source files. Site: `neenee-agent`'s
+    /// conversation-context file injection policy.
+    ImplicitFile,
     /// System-prompt assembly: the harness rebuilt the head system message
     /// from live identity, model/provider, and tool state through the
     /// agent's request-scoped `SystemPromptRegistry` assembly.

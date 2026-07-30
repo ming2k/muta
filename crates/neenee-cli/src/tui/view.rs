@@ -1048,6 +1048,8 @@ mod tests {
                 description: "run a command".to_string(),
                 arguments: r#"{"command":"ls"}"#.to_string(),
                 scope: "*".to_string(),
+                elevation: false,
+                one_off: false,
             };
             let rect = neenee_tui_engine::Rect::new(0, 0, 60, 3);
             let mut hit_map = crate::tui::model::layout::ModalHitMap::new();

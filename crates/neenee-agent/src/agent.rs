@@ -288,7 +288,14 @@ pub struct Agent {
     /// prompt opens with — supplied by the *embedding* (e.g. the CLI), so this
     /// crate stays identity-agnostic and can be reused by frontends that are
     /// not "neenee". See [`AgentIdentity`].
-    pub(crate) identity: AgentIdentity,
+    ///
+    /// Behind a `RwLock` so a principal-role switch ([`Self::set_identity`],
+    /// driven by `/principal` / `@principal:`) can replace it live and the next
+    /// request's system prompt reflects the new preamble without rebuilding the
+    /// agent. Readers ([`Self::identity`], system-prompt assembly) take a read
+    /// lock and clone; writers take a write lock. Contention is negligible —
+    /// identity changes at most once per user command, reads once per request.
+    pub(crate) identity: std::sync::RwLock<AgentIdentity>,
     /// Optional mid-round save point invoked at every ReAct-turn boundary
     /// (ADR-0035). The embedding (orchestration) installs a closure that
     /// durably appends the round's new messages to the session log so a crash
@@ -825,7 +832,7 @@ impl Agent {
             inbox_rx: std::sync::Mutex::new(None),
             user_input_queue: std::sync::Mutex::new(None),
             round_paused_ms: std::sync::atomic::AtomicU64::new(0),
-            identity,
+            identity: std::sync::RwLock::new(identity),
             turn_persist: std::sync::Mutex::new(None),
             model_request_assembler,
             variant_selection: Arc::new(
@@ -936,7 +943,11 @@ impl Agent {
         let provider_guidance = self.provider.prompt_hints().system_guidance;
 
         crate::SystemPromptContext {
-            identity_preamble: self.identity.preamble(),
+            identity_preamble: self
+                .identity
+                .read()
+                .map(|guard| guard.preamble())
+                .unwrap_or_default(),
             tool_names,
             model_guidance,
             provider_guidance,
@@ -950,6 +961,10 @@ impl Agent {
     fn model_request(&self, messages: &[Message]) -> neenee_core::ModelRequest {
         let mut enriched = messages.to_vec();
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
+        crate::conversation_context::inject_mentioned_files(
+            self.workspace_root().as_deref(),
+            &mut enriched,
+        );
         let tools = self.visible_tools();
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
@@ -1246,6 +1261,14 @@ impl Agent {
 
     /// The cwd hooks run under (the persisted project root, if any).
     fn hook_cwd(&self) -> Option<std::path::PathBuf> {
+        self.workspace_root()
+    }
+
+    /// The persisted project root — the workspace sandbox for `@file:` injection
+    /// and the base relative file-tool paths resolve against. `None` when no
+    /// project was designated (envoys, tests, or a detached session), in which
+    /// case file injection is disabled.
+    pub(crate) fn workspace_root(&self) -> Option<std::path::PathBuf> {
         self.permissions.project_root()
     }
 
@@ -1443,6 +1466,12 @@ impl Agent {
     /// reproduces the agent constructor's built-in values, so binding it is a
     /// no-op for an already-default agent.
     pub fn apply_principal_profile(&self, profile: &neenee_core::PrincipalProfile) {
+        // Identity is now live-mutable (plan §3.3): applying a profile re-rolls
+        // the system-prompt preamble too, so `/principal architect` changes the
+        // persona the model speaks with on the very next request. Previously
+        // identity was immutable past construction; the role-switch feature
+        // requires it to track the active profile.
+        self.set_identity(profile.identity.clone());
         self.set_agent_selection(profile.agent_selection.clone());
         self.set_operation_scope(profile.operation_scope.clone());
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
@@ -1450,6 +1479,56 @@ impl Agent {
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);
+
+        // #9 — a principal running unattended with an unrestricted operation
+        // scope has *no* permission floor: the scope-gate is open on both axes,
+        // the broker is bypassed (unattended), and admission is the full pool.
+        // Any write or execute the model attempts will run unchecked. This is a
+        // legitimate configuration (e.g. a fully-trusted automation runner),
+        // but it is dangerous enough to warrant a loud, unmissable warning at
+        // startup rather than failing silently. A sandboxed scope (any `Some`
+        // dimension) keeps the scope-gate as the safety floor even unattended.
+        if profile.unattended && profile.operation_scope.is_unrestricted() {
+            tracing::warn!(
+                unattended = true,
+                scope = "unrestricted",
+                "principal is running UNATTENDED with an unrestricted operation scope — no \
+                 permission checks will gate writes or command execution. Ensure this is \
+                 intended (e.g. a trusted automation runner); otherwise pin write_paths / \
+                 command_allowlist, or set unattended = false.",
+            );
+        }
+    }
+
+    /// Replace this agent's identity (name + mission, or a persona override).
+    /// Feeds the system-prompt preamble, so the next request reflects the new
+    /// identity without rebuilding the agent. The principal-role switch
+    /// (`/principal`, `@principal:`) uses this to change personas live; an
+    /// embedding may also call it directly to re-persona a reused agent.
+    pub fn set_identity(&self, identity: AgentIdentity) {
+        if let Ok(mut guard) = self.identity.write() {
+            *guard = identity;
+        }
+    }
+
+    /// Switch the live agent into a named principal role (plan §3.3). Resolves
+    /// `role` (case-insensitive, alias-tolerant) to a [`PrincipalRole`],
+    /// composes it onto the current identity, and applies the resulting
+    /// profile. Returns the resolved role on success, or `None` when `role`
+    /// does not name a known role (so the caller can surface the available
+    /// names). Used by both the `/principal` command and the `@principal:`
+    /// inline directive.
+    ///
+    /// The role is composed onto the **current** identity snapshot, so a
+    /// sequence of switches (`code` → `architect` → `reviewer`) each preserve
+    /// the product name ("neenee") rather than drifting toward the previous
+    /// role's mission.
+    pub fn apply_principal_role(&self, role: &str) -> Option<neenee_core::PrincipalRole> {
+        let resolved = neenee_core::PrincipalRole::parse(role)?;
+        let base = self.identity();
+        let profile = neenee_core::PrincipalProfile::for_role(resolved, &base);
+        self.apply_principal_profile(&profile);
+        Some(resolved)
     }
 
     /// Snapshot of this agent's operation boundary. Used by the `execute_tool`
@@ -1461,13 +1540,17 @@ impl Agent {
             .unwrap_or_else(|_| neenee_core::OperationScope::unrestricted())
     }
 
-    /// The identity this agent was constructed with (name + mission, or a
-    /// persona override). Immutable past construction; feeds the system-prompt
-    /// preamble. Lets an embedding reuse the primary's identity (e.g. a
-    /// `/btw` side session) instead of recomposing it, so the server layer
-    /// never hardcodes a product identity.
-    pub fn identity(&self) -> &AgentIdentity {
-        &self.identity
+    /// A snapshot of this agent's identity (name + mission, or a persona
+    /// override). Feeds the system-prompt preamble. Returns a clone because
+    /// identity is now live-mutable behind a lock (so `/principal` can switch
+    /// personas); callers that need a stable view across an await should take
+    /// the snapshot once. Lets an embedding reuse the primary's identity (e.g.
+    /// a `/btw` side session) instead of recomposing it.
+    pub fn identity(&self) -> AgentIdentity {
+        self.identity
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     /// The round-end gate (ADR-0025). A `Stop` hook may force another turn with
@@ -3613,87 +3696,6 @@ impl Agent {
         }
     }
 
-    /// Enforce the command-aware safety layer for `bash` before the ordinary
-    /// permission broker. A broad cached permission such as `bash *` therefore
-    /// cannot silently authorize commands the policy marks as destructive.
-    ///
-    /// Returns `Some(output)` when execution must stop, or `None` when the
-    /// command may continue to the normal permission/stdin/spawn path.
-    async fn check_bash_policy(
-        &self,
-        command: &str,
-        arguments: &str,
-        event_tx: &mpsc::UnboundedSender<AgentEvent>,
-    ) -> Option<ToolOutput> {
-        let policy = self
-            .bash_policy
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let decision = policy.evaluate(command)?;
-        match decision.action {
-            crate::bash_policy::BashPolicyAction::Allow => None,
-            crate::bash_policy::BashPolicyAction::Deny => {
-                tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
-                Some(decision.blocked_output(command))
-            }
-            crate::bash_policy::BashPolicyAction::Confirm => {
-                if self.get_unattended() {
-                    return match policy.unattended_confirm_action() {
-                        crate::bash_policy::BashPolicyAction::Allow => {
-                            tracing::warn!(
-                                command = %command,
-                                rule = %decision.name,
-                                "bash policy confirmation bypassed by unattended_confirm=allow"
-                            );
-                            None
-                        }
-                        _ => Some(decision.unattended_confirm_output(command)),
-                    };
-                }
-
-                let request = PermissionRequest {
-                    id: format!("permission_{}", uuid::Uuid::new_v4()),
-                    tool: "bash".to_string(),
-                    label: "Dangerous bash command".to_string(),
-                    description: format!(
-                        "Bash policy requires one-off confirmation before running this command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry does not bypass this safety check.",
-                        decision.name,
-                        if decision.builtin { " (built-in)" } else { "" },
-                        decision.reason,
-                    ),
-                    arguments: arguments.to_string(),
-                    scope: command.to_string(),
-                };
-                let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
-                tracing::info!(command = %command, rule = %decision.name, "bash policy confirmation requested");
-                let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
-                self.fire_permission_request_hooks(&request).await;
-
-                let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
-                // Charge the human-thinking pause to the round so the exit gate
-                // can subtract it for an honest tokens/sec.
-                self.book_pause(parked_at.elapsed().as_millis() as u64);
-                match decision {
-                    PermissionDecision::Once | PermissionDecision::Always => {
-                        // Deliberately do not persist `Always`: a dangerous-command
-                        // confirmation is sharper than ordinary tool permission and
-                        // must stay one-off unless the user writes an explicit
-                        // `[bash_policy.rules] action = "allow"` override.
-                        tracing::info!(command = %command, "bash policy confirmation granted once");
-                        None
-                    }
-                    PermissionDecision::Reject => {
-                        tracing::warn!(command = %command, "bash policy confirmation rejected");
-                        Some(ToolOutput::PermissionDenied {
-                            tool: "bash".to_string(),
-                        })
-                    }
-                }
-            }
-        }
-    }
-
     /// Three-way stdin policy for a `bash` call (L3 + L3.5). See the decision
     /// block in [`Self::execute_tool`] for the contract. `arguments` is the
     /// raw JSON tool arguments.
@@ -3817,14 +3819,18 @@ impl Agent {
                     return output;
                 }
                 crate::permission_policy::PolicyDecision::Ask { request, rule } => {
-                    // The broker's interactive park. Fill the request id, emit,
-                    // fire observe hooks, await the user's decision.
+                    // The single interactive-park path. Both the broker (a
+                    // write/execute the user must approve) and the bash
+                    // dangerous-command confirm reach here; `request.one_off`
+                    // distinguishes them. Fill the request id, emit, fire
+                    // observe hooks, await the user's decision.
+                    let one_off = request.one_off;
                     let request = neenee_core::PermissionRequest {
                         id: format!("permission_{}", uuid::Uuid::new_v4()),
                         ..request
                     };
                     let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
-                    tracing::info!(tool = %request.tool, scope = %request.scope, "permission requested");
+                    tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
                     let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
                     self.fire_permission_request_hooks(&request).await;
                     let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
@@ -3836,8 +3842,22 @@ impl Agent {
                             tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
                         }
                         PermissionDecision::Always => {
-                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
-                            self.permissions.add_always(rule);
+                            if one_off {
+                                // A bash dangerous-command confirm: honour the
+                                // grant for this one call but do NOT persist it.
+                                // A dangerous-command confirmation is sharper
+                                // than ordinary tool permission and must stay
+                                // one-off unless the user writes an explicit
+                                // `[bash_policy.rules] action = "allow"` override.
+                                tracing::info!(
+                                    tool = %tool.name(),
+                                    decision = "always",
+                                    "one-off permission granted (not persisted)"
+                                );
+                            } else {
+                                tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
+                                self.permissions.add_always(rule);
+                            }
                         }
                         PermissionDecision::Reject => {
                             tracing::warn!(tool = %tool.name(), "permission denied");
@@ -3848,20 +3868,6 @@ impl Agent {
                     }
                 }
             }
-
-            // Bash interactive Confirm: the chain's BashPolicy handled Deny and
-        // unattended-Confirm, but a non-unattended Confirm needs the event
-        // channel to park for one-off approval. Re-run the full check here —
-        // it's idempotent for Deny (already short-circuited) and a no-op for
-        // Allow; only Confirm reaches the park.
-        if call.name == "bash"
-            && let neenee_core::ScopeTarget::Command(command) = &target
-            && let Some(output) = self
-                .check_bash_policy(command, &call.arguments, event_tx)
-                .await
-        {
-            return output;
-        }
 
         // ask_user: the chain's AskUserPolicy refused under unattended; here we
         // execute the interactive path (park for a user answer).
@@ -4475,33 +4481,52 @@ impl crate::permission_policy::PermissionContext for Agent {
         &self,
         command: &str,
         _arguments: &str,
-    ) -> Option<neenee_core::ToolOutput> {
-        // Non-interactive resolution only: Deny outright, or a Confirm that
-        // resolves under unattended. The interactive Confirm path (with its
-        // event-channel park) stays in execute_tool's full check_bash_policy.
+    ) -> crate::permission_policy::BashVerdict {
+        // The single source of truth for the chain's BashPolicy gate. Returns
+        // a disjoint Allow / Confirm / Deny verdict so the gate can decide
+        // everything (including the interactive confirm) without the caller
+        // re-evaluating outside the chain.
         let policy = self
             .bash_policy
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let decision = policy.evaluate(command)?;
+        let Some(decision) = policy.evaluate(command) else {
+            return crate::permission_policy::BashVerdict::Allow;
+        };
         match decision.action {
-            crate::bash_policy::BashPolicyAction::Deny => Some(decision.blocked_output(command)),
-            crate::bash_policy::BashPolicyAction::Confirm => {
-                // Only the unattended resolution belongs here; non-unattended
-                // Confirm needs the event channel, handled in execute_tool.
-                if self.get_unattended() {
-                    match policy.unattended_confirm_action() {
-                        crate::bash_policy::BashPolicyAction::Allow => None,
-                        _ => Some(decision.unattended_confirm_output(command)),
-                    }
-                } else {
-                    // Needs interactive confirm: signal "no decision here" so
-                    // execute_tool runs the full check_bash_policy.
-                    None
+            crate::bash_policy::BashPolicyAction::Deny => {
+                tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
+                crate::permission_policy::BashVerdict::Deny {
+                    output: decision.blocked_output(command),
                 }
             }
-            crate::bash_policy::BashPolicyAction::Allow => None,
+            crate::bash_policy::BashPolicyAction::Confirm => {
+                // Under unattended there is no human to confirm, so resolve
+                // silently per `unattended_confirm_action` (default Deny). The
+                // gate therefore never yields a Confirm Ask under unattended —
+                // matching the broker's unattended bypass.
+                if self.get_unattended() {
+                    match policy.unattended_confirm_action() {
+                        crate::bash_policy::BashPolicyAction::Allow => {
+                            tracing::warn!(
+                                command = %command,
+                                rule = %decision.name,
+                                "bash policy confirmation bypassed by unattended_confirm=allow"
+                            );
+                            crate::permission_policy::BashVerdict::Allow
+                        }
+                        _ => crate::permission_policy::BashVerdict::Deny {
+                            output: decision.unattended_confirm_output(command),
+                        },
+                    }
+                } else {
+                    crate::permission_policy::BashVerdict::Confirm { match_: decision }
+                }
+            }
+            crate::bash_policy::BashPolicyAction::Allow => {
+                crate::permission_policy::BashVerdict::Allow
+            }
         }
     }
 

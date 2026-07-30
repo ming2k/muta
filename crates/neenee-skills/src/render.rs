@@ -26,11 +26,24 @@ pub fn format_skill_list(skills: &[Skill]) -> String {
 ///
 /// Matches only explicit intent:
 /// - `@skill-name`
+/// - `@skill:skill-name` or `@skills:skill-name` (disambiguated namespace)
 /// - `skill://skill-name` or `skill://path/to/SKILL.md`
 ///
 /// A plain skill name as a loose token does NOT match — that was too eager
 /// and pulled skill bodies into context on coincidental word overlap.
+///
+/// Matching is **token-boundary aware**: the mention forms are scanned out of
+/// the text as whole identifiers first, then compared for equality. So
+/// `@rust-expert` does not match a skill named `rust` (the identifier runs on
+/// past it), and neither does `@skill:rust-expert`. The previous
+/// substring-`contains` check could not distinguish these.
 pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
+    let names = at_mention_names(text);
+    let uris = skill_uris(text);
+    if names.is_empty() && uris.is_empty() {
+        return Vec::new();
+    }
+
     let mut matched = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -38,7 +51,11 @@ pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
         .iter()
         .filter(|s| s.enabled && s.allows_implicit_invocation())
     {
-        if is_mentioned(text, &skill.name, &skill.source) && seen.insert(skill.name.clone()) {
+        let uri_hit = uris.iter().any(|uri| {
+            uri == &skill.name || uri == &skill.source.to_string_lossy().to_string()
+        });
+        let hit = names.contains(skill.name.as_str()) || uri_hit;
+        if hit && seen.insert(skill.name.clone()) {
             matched.push(skill);
         }
     }
@@ -46,28 +63,73 @@ pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
     matched
 }
 
-fn is_mentioned(text: &str, name: &str, source: &std::path::Path) -> bool {
-    // Direct @mention.
-    if text.contains(&format!("@{}", name)) {
-        return true;
-    }
+/// Characters allowed inside a skill name or `skill://` path segment.
+/// Skill names are conventionally `[A-Za-z0-9._-]` (e.g. `rust-expert`,
+/// `code_review`, `v1.2`); the `skill://` form additionally permits `/` so a
+/// full source path like `skills/rust-expert/SKILL.md` round-trips.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
+}
 
-    // skill:// URI by name or by source path.
-    let skill_uri = format!("skill://{}", name);
-    if text.contains(&skill_uri) {
-        return true;
+/// Extract every skill identifier the text *explicitly* refers to via an
+/// `@`-mention, returning borrowed slices into `text`. The three forms all
+/// collapse to the bare name:
+/// - `@name`        — bare mention
+/// - `@skill:name`  — disambiguated namespace
+/// - `@skills:name` — plural namespace (mirrors `@files:`)
+///
+/// Because identifiers are read to their boundary, `@rust` in the text
+/// `@rust-expert` is never produced (the run-on `rust-expert` is), so prefix
+/// collisions cannot inflate matches.
+fn at_mention_names(text: &str) -> std::collections::HashSet<&str> {
+    let mut names = std::collections::HashSet::new();
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find('@') {
+        let at = search_from + rel;
+        let after_at = at + 1;
+        let rest = text.get(after_at..).unwrap_or("");
+        // Optional `skill:` / `skills:` namespace prefix.
+        let name_start = rest
+            .strip_prefix("skills:")
+            .or_else(|| rest.strip_prefix("skill:"))
+            .map(|stripped| after_at + (rest.len() - stripped.len()))
+            .unwrap_or(after_at);
+        // Read the identifier to its boundary.
+        let mut end = name_start;
+        while let Some(ch) = text[end..].chars().next()
+            && is_name_char(ch)
+        {
+            end += ch.len_utf8();
+        }
+        if end > name_start {
+            names.insert(&text[name_start..end]);
+        }
+        search_from = after_at;
     }
-    let source_str = source.to_string_lossy();
-    if text.contains(&format!("skill://{}", source_str)) {
-        return true;
-    }
+    names
+}
 
-    // Deliberately do NOT match the plain skill name as a loose token: a
-    // coincidental word in the user's message ("pdf", "docx", ...) would
-    // otherwise pull the full skill body into context as a hidden user
-    // message. Implicit loading now requires an explicit signal — @mention
-    // or a skill:// URI.
-    false
+/// Extract `skill://{path}` references. The path segment admits `/` in
+/// addition to name chars so both `skill://rust-expert` and
+/// `skill://skills/rust-expert/SKILL.md` are captured whole.
+fn skill_uris(text: &str) -> Vec<String> {
+    const SCHEME: &str = "skill://";
+    let mut out = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find(SCHEME) {
+        let start = search_from + rel + SCHEME.len();
+        let mut end = start;
+        while let Some(ch) = text[end..].chars().next()
+            && (is_name_char(ch) || ch == '/')
+        {
+            end += ch.len_utf8();
+        }
+        if end > start {
+            out.push(text[start..end].to_string());
+        }
+        search_from = start;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -121,5 +183,38 @@ mod tests {
         let skills = vec![sample_skill("rust-expert")];
         let mentions = resolve_mentions("load skill://rust-expert", &skills);
         assert_eq!(mentions.len(), 1);
+    }
+
+    #[test]
+    fn resolves_at_skill_namespace() {
+        // `@skill:{name}` is the disambiguated form — useful when the skill
+        // name is also a common word. `@skills:{name}` is the accepted plural.
+        let skills = vec![sample_skill("rust-expert")];
+        let mentions = resolve_mentions("请按 @skill:rust-expert 规范处理", &skills);
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].name, "rust-expert");
+
+        let mentions = resolve_mentions("load @skills:rust-expert now", &skills);
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].name, "rust-expert");
+    }
+
+    #[test]
+    fn skill_namespace_does_not_match_partial_name() {
+        // `@skill:rust` must not match a skill named `rust-expert` (no prefix
+        // match), and `@skill:rust-expert` must not match one named `rust`.
+        let long = vec![sample_skill("rust-expert")];
+        assert!(resolve_mentions("use @skill:rust", &long).is_empty());
+
+        let short = vec![sample_skill("rust")];
+        assert!(resolve_mentions("use @skill:rust-expert", &short).is_empty());
+    }
+
+    #[test]
+    fn resolves_multiple_distinct_skills_via_namespace() {
+        let skills = vec![sample_skill("rust-expert"), sample_skill("pdf")];
+        let mentions =
+            resolve_mentions("use @skill:rust-expert and @skills:pdf here", &skills);
+        assert_eq!(mentions.len(), 2);
     }
 }

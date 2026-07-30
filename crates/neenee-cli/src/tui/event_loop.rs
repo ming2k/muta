@@ -456,8 +456,22 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
 }
 
 async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
+    // The footer button layout depends on the request: an ordinary prompt is
+    // [Allow once, Always allow, Reject, Details] (indices 0..3), but a
+    // one-off prompt (the bash dangerous-command confirm) suppresses the
+    // "Always allow" option, collapsing to [Allow once, Reject, Details]
+    // (indices 0..2). Resolve the index→action mapping accordingly so the
+    // Removed/Always/Reject/Details semantics stay correct in both layouts.
+    let one_off = app
+        .pending_permission
+        .as_ref()
+        .is_some_and(|r| r.one_off);
+    let reject_idx = if one_off { 1 } else { 2 };
+    let details_idx = if one_off { 2 } else { 3 };
     if app.permission_confirm_always {
-        // Confirm-always sub-step: index 0 = Confirm, 1 = Cancel.
+        // Confirm-always sub-step: index 0 = Confirm, 1 = Cancel. Reachable
+        // only for non-one_off prompts (the Always option is suppressed
+        // otherwise), so the `one_off` guard above keeps this branch honest.
         if app.modal_index == 1 {
             app.permission_confirm_always = false;
             app.modal_index = 1;
@@ -465,15 +479,17 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
         }
         // index 0: fall through to send Always.
     } else {
-        // "Details" (index 3): expand/collapse the body without deciding, so
-        // the user can review before acting.
-        if app.modal_index == 3 {
+        // "Details": expand/collapse the body without deciding, so the user
+        // can review before acting.
+        if app.modal_index == details_idx {
             app.permission_show_details = !app.permission_show_details;
             app.permission_scroll = 0;
             return;
         }
-        // "Always allow" (index 1): gate behind a confirm step.
-        if app.modal_index == 1 {
+        // "Always allow" (only present for non-one_off prompts): gate behind a
+        // confirm step. For one_off prompts this index is Reject (handled
+        // below), so this branch is skipped.
+        if !one_off && app.modal_index == 1 {
             app.permission_confirm_always = true;
             app.permission_show_details = false;
             app.modal_index = 0;
@@ -484,9 +500,11 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
         let decision = if app.permission_confirm_always {
             PermissionDecision::Always
         } else {
-            // index 0 = Allow once, index 2 = Reject.
+            // index 0 = Allow once; reject_idx (1 or 2) = Reject; anything
+            // else also resolves to Reject as a safe default.
             match app.modal_index {
                 0 => PermissionDecision::Once,
+                i if i == reject_idx => PermissionDecision::Reject,
                 _ => PermissionDecision::Reject,
             }
         };

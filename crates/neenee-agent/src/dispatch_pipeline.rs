@@ -344,6 +344,8 @@ mod tests {
                     description: "".into(),
                     arguments: "{}".into(),
                     scope: "/y".into(),
+                    elevation: false,
+                    one_off: false,
                 },
                 rule: crate::permission_store::PermissionRule {
                     tool: "write_file".into(),

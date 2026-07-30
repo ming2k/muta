@@ -678,6 +678,7 @@ pub async fn execute_round(
             crate::hooks::UserPromptVerdict::Allow => {}
         }
     }
+
     // The prompt is now admitted. Bump exactly once before request assembly so
     // hooks, token accounting, todos, and emitted positions share one round
     // number. A prompt rejected by UserPromptSubmit never opens a round.

@@ -17,6 +17,8 @@ use crate::tui::model::layout::ModalHitMap;
 use crate::tui::view::{Theme, draw_permission_sheet};
 
 /// Permission fixtures spanning different tools, scopes, and argument shapes.
+/// Includes one elevation (out-of-scope) prompt and one one-off (dangerous
+/// bash confirm) prompt to exercise the two new `PermissionRequest` axes.
 fn fixtures() -> Vec<PermissionRequest> {
     vec![
         PermissionRequest {
@@ -26,6 +28,8 @@ fn fixtures() -> Vec<PermissionRequest> {
             description: "Run a shell command".into(),
             arguments: r#"{"command":"cargo test --package neenee-cli"}"#.into(),
             scope: "*".into(),
+            elevation: false,
+            one_off: false,
         },
         PermissionRequest {
             id: "p2".into(),
@@ -34,14 +38,34 @@ fn fixtures() -> Vec<PermissionRequest> {
             description: "Edit a file by replacing old_string with new_string".into(),
             arguments: r#"{"path":"src/main.rs","old_string":"fn main()","new_string":"fn main() -> Result<()>"}"#.into(),
             scope: "src/main.rs".into(),
+            elevation: false,
+            one_off: false,
         },
         PermissionRequest {
+            // An out-of-scope elevation: the broker surfaces this ⚠ prompt so
+            // the user, not a builtin limit, decides whether to authorise the
+            // call beyond the configured OperationScope.
             id: "p3".into(),
             tool: "mcp__fs__write_file".into(),
             label: "mcp: fs · write_file".into(),
             description: "MCP tool: write_file (filesystem server)".into(),
             arguments: r#"{"path":"/etc/hosts","content":"127.0.0.1 localhost\n"}"#.into(),
             scope: "/etc/hosts".into(),
+            elevation: true,
+            one_off: false,
+        },
+        PermissionRequest {
+            // A one-off dangerous-command confirm: the bash policy matched a
+            // Confirm rule (e.g. `git reset --hard`). `Always` is honoured for
+            // this one call but not persisted; the TUI de-emphasises the option.
+            id: "p4".into(),
+            tool: "bash".into(),
+            label: "Dangerous bash command".into(),
+            description: "Bash policy requires one-off confirmation before running this command.\n\nRule: git reset hard (built-in)\nReason: git reset --hard discards uncommitted working tree changes.\n\nA broad bash allowlist entry does not bypass this safety check.".into(),
+            arguments: r#"{"command":"git reset --hard HEAD~1"}"#.into(),
+            scope: "git reset --hard HEAD~1".into(),
+            elevation: false,
+            one_off: true,
         },
     ]
 }

@@ -84,7 +84,7 @@ pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channelauth::{ChannelAuth, LoginMethod};
 pub use doomguardconfig::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
-pub use envoy::{EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
+pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus,
     ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
@@ -109,7 +109,7 @@ pub use pressure::{
     PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens,
     estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
 };
-pub use principal::{PrincipalProfile, PrincipalRuntimeConfig};
+pub use principal::{PrincipalProfile, PrincipalRole, PrincipalRuntimeConfig};
 pub use secret::SecretString;
 pub use session_review::{DEFAULT_REVIEWER_HARD_STOP, ReviewStatus, ReviewVerdict, SessionReview};
 pub use session_title::{TITLE_MAX_LEN, clean_title};

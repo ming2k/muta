@@ -226,7 +226,7 @@ mod tests {
     use async_trait::async_trait;
     use neenee_core::DynamicToolSink;
     use neenee_core::ToolAccesses;
-    use neenee_core::{ScopeTarget, ToolOutput};
+    use neenee_core::ScopeTarget;
 
     /// Minimal tool stub for classification tests.
     struct StubTool {

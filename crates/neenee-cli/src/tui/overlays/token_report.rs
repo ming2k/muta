@@ -3,15 +3,14 @@
 //! and model remain ledger metadata rather than the report's navigation axis.
 //!
 //! Opened by clicking the context meter in the hint bar. Up and down select a
-//! round, Enter opens its turns, and Esc backs out or closes. Token provenance
-//! is encoded directly on values: provider-reported counts are bold, local
-//! estimates are underlined, and mixed totals use both styles.
+//! round, Enter opens its turns, and Esc backs out or closes. Values use a
+//! calm, single-foreground palette; only turn lifecycle state is colored.
 
 use std::collections::BTreeMap;
 
 use neenee_core::{
-    ContextTokenSnapshot, ContextTokenSource, RequestUsageRecord, RequestUsageSource,
-    RequestUsageStatus, TokenSourceReport, TokenTurn,
+    ContextTokenSnapshot, RequestUsageRecord, RequestUsageSource, RequestUsageStatus,
+    TokenSourceReport, TokenTurn,
 };
 use neenee_tui_engine::{
     Frame, Modifier, Style, {Line, Span},
@@ -171,11 +170,12 @@ fn list_body(
         } else {
             fmt_token_count(snapshot.tokens)
         };
-        let style = match snapshot.source {
-            ContextTokenSource::Api => reported_style(theme),
-            ContextTokenSource::Projection => estimated_style(theme),
-        };
-        body.push(kv_styled("Size", &size, style, theme));
+        body.push(kv_styled(
+            "Size",
+            &size,
+            Style::default().fg(theme.fg()),
+            theme,
+        ));
     } else {
         body.push(placeholder(
             "Current context estimate unavailable.",
@@ -209,14 +209,13 @@ fn list_body(
         body.push(kv_styled(
             "Throughput",
             &detail,
-            reported_style(theme),
+            Style::default().fg(theme.fg()),
             theme,
         ));
     }
 
     body.push(Line::from(""));
     body.push(section_heading("Request usage", theme));
-    body.extend(provenance_legend(body_width, theme));
 
     if rounds.is_empty() {
         body.push(placeholder(
@@ -276,7 +275,7 @@ fn list_body(
             ),
             Span::styled(
                 format!("{token_text:>width$}", width = TOKENS_W),
-                provenance_style(&round.totals, theme),
+                Style::default().fg(theme.fg()),
             ),
             Span::styled(
                 format!(" {turn_text:>width$}", width = TURNS_W),
@@ -301,12 +300,9 @@ fn list_body(
                 fmt_tokens(report.grand_total.total()),
                 width = TOKENS_W
             ),
-            totals_style(
-                report.grand_total.reported_tokens,
-                report.grand_total.estimated_tokens,
-                false,
-                theme,
-            ),
+            Style::default()
+                .fg(theme.fg())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" {:>width$}", "", width = TURNS_W),
@@ -339,7 +335,7 @@ fn detail_body(
     body.push(kv_styled(
         "Total",
         &fmt_tokens(round.totals.total()),
-        provenance_style(&round.totals, theme),
+        Style::default().fg(theme.fg()),
         theme,
     ));
     let attempt_count = round
@@ -361,7 +357,7 @@ fn detail_body(
                 fmt_tokens(round.totals.prompt_tokens),
                 fmt_tokens(round.totals.completion_tokens)
             ),
-            provenance_style(&round.totals, theme),
+            Style::default().fg(theme.fg()),
             theme,
         ));
     }
@@ -380,20 +376,19 @@ fn detail_body(
                 fmt_tokens(round.totals.cache_read_tokens),
                 fmt_tokens(round.totals.cache_write_tokens)
             ),
-            reported_style(theme),
+            Style::default().fg(theme.fg()),
             theme,
         ));
         body.push(kv_styled(
             "Cache hit rate",
             &format!("{hit_rate}%"),
-            reported_style(theme),
+            Style::default().fg(theme.fg()),
             theme,
         ));
     }
 
     body.push(Line::from(""));
     body.push(section_heading("Turns", theme));
-    body.extend(provenance_legend(body_width, theme));
     body.push(rule(body_width, theme));
 
     let full_table = body_width >= 62;
@@ -425,16 +420,15 @@ fn detail_body(
             } else {
                 "—".to_string()
             };
-            let value_style = provenance_style(&turn.totals, theme);
             body.push(Line::from(vec![
                 Span::styled(
                     format!("{label:<round_width$}"),
                     Style::default().fg(theme.fg()),
                 ),
                 Span::styled(format!("{state:<STATE_W$}"), state_style),
-                Span::styled(format!("{input:>VALUE_W$}"), value_style),
-                Span::styled(format!("{output:>VALUE_W$}"), value_style),
-                Span::styled(format!("{total:>VALUE_W$}"), value_style),
+                Span::styled(format!("{input:>VALUE_W$}"), Style::default().fg(theme.fg())),
+                Span::styled(format!("{output:>VALUE_W$}"), Style::default().fg(theme.fg())),
+                Span::styled(format!("{total:>VALUE_W$}"), Style::default().fg(theme.fg())),
             ]));
         }
     } else {
@@ -465,7 +459,7 @@ fn detail_body(
                 Span::styled(format!("{state:<STATE_W$}"), state_style),
                 Span::styled(
                     format!("{total:>TOTAL_W$}"),
-                    provenance_style(&turn.totals, theme),
+                    Style::default().fg(theme.fg()),
                 ),
             ]));
         }
@@ -679,28 +673,6 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     rounds.into_values().collect()
 }
 
-fn provenance_legend(body_width: usize, theme: &Theme) -> Vec<Line<'static>> {
-    if body_width >= 54 {
-        vec![Line::from(vec![
-            Span::styled("Style  ", Style::default().fg(theme.muted())),
-            Span::styled("Provider-reported", reported_style(theme)),
-            Span::styled("  ", Style::default()),
-            Span::styled("Local estimate", estimated_style(theme)),
-            Span::styled("  ", Style::default()),
-            Span::styled("Mixed", mixed_style(theme)),
-        ])]
-    } else {
-        vec![
-            Line::from(vec![
-                Span::styled("Style  ", Style::default().fg(theme.muted())),
-                Span::styled("Provider-reported", reported_style(theme)),
-            ]),
-            Line::from(Span::styled("Local estimate", estimated_style(theme))),
-            Line::from(Span::styled("Mixed", mixed_style(theme))),
-        ]
-    }
-}
-
 fn section_heading(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         text.to_string(),
@@ -740,45 +712,6 @@ fn turn_state(turn: &TurnUsage, theme: &Theme) -> (String, Style) {
         RequestUsageStatus::Abandoned => ("abandoned", theme.warn()),
     };
     (state.to_string(), Style::default().fg(color))
-}
-
-fn provenance_style(totals: &UsageTotals, theme: &Theme) -> Style {
-    totals_style(
-        totals.reported_tokens,
-        totals.estimated_tokens,
-        totals.pending,
-        theme,
-    )
-}
-
-fn totals_style(reported: i64, estimated: i64, pending: bool, theme: &Theme) -> Style {
-    if reported > 0 && estimated > 0 {
-        mixed_style(theme)
-    } else if reported > 0 {
-        reported_style(theme)
-    } else if estimated > 0 {
-        estimated_style(theme)
-    } else if pending {
-        Style::default().fg(theme.info())
-    } else {
-        Style::default().fg(theme.muted())
-    }
-}
-
-fn reported_style(theme: &Theme) -> Style {
-    Style::default().fg(theme.ok()).add_modifier(Modifier::BOLD)
-}
-
-fn estimated_style(theme: &Theme) -> Style {
-    Style::default()
-        .fg(theme.warn())
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-fn mixed_style(theme: &Theme) -> Style {
-    Style::default()
-        .fg(theme.warn())
-        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 fn rule(width: usize, theme: &Theme) -> Line<'static> {
@@ -835,6 +768,7 @@ fn truncate_str(text: &str, max_width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neenee_core::ContextTokenSource;
 
     fn body_text(lines: &[Line<'_>]) -> String {
         lines
@@ -845,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn context_projection_uses_estimate_style_and_a_compact_legend() {
+    fn context_size_is_plain_without_provenance_legend() {
         let theme = Theme::default();
         let report = TokenSourceReport::default();
         let body = list_body(
@@ -868,11 +802,12 @@ mod tests {
             .expect("context size span");
 
         assert!(text.contains("Current AI-visible context"));
-        assert!(text.contains("Provider-reported"));
-        assert!(text.contains("Local estimate"));
-        assert!(!text.contains("local request projection (estimated)"));
-        assert!(size.style.add.contains(Modifier::UNDERLINED));
-        assert!(!size.style.add.contains(Modifier::BOLD));
+        // Provenance legend and source styling have been removed for a calmer
+        // palette; values are plain foreground, not color/underline-coded.
+        assert!(!text.contains("Provider-reported"));
+        assert!(!text.contains("Local estimate"));
+        assert!(!text.contains("Style"));
+        assert!(size.style.add.is_empty());
     }
 
     #[test]
@@ -907,6 +842,7 @@ mod tests {
         assert!(list.contains("Round 3"));
         assert!(!list.contains("relay"));
         assert!(!list.contains("model-a"));
+        assert!(!list.contains("Provider-reported"));
 
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
@@ -914,13 +850,15 @@ mod tests {
         assert!(detail_text.contains("Turn 2"));
         assert!(detail_text.contains("2 / 3"));
         assert!(!detail_text.contains("another-provider"));
+        assert!(!detail_text.contains("Provider-reported"));
 
+        // Round total is rendered as plain foreground now (no provenance
+        // color/underline encoding).
         let round_total = detail
             .iter()
             .flat_map(|line| &line.spans)
             .find(|span| span.content.trim() == "2.9k")
-            .expect("mixed round total");
-        assert!(round_total.style.add.contains(Modifier::BOLD));
-        assert!(round_total.style.add.contains(Modifier::UNDERLINED));
+            .expect("round total span");
+        assert!(round_total.style.add.is_empty());
     }
 }

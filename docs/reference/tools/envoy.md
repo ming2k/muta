@@ -25,3 +25,22 @@ This page is the parameter reference. The envoy mechanism — isolation model,
 event streaming, the TUI zoom view, profiles, and full-duplex — is explained in
 [Envoys](../../explanation/agent-design/envoys.md). See also
 [ADR-0011](../../adr/0011-subagent-profiles.md).
+
+## `envoy_code`
+
+A second `EnvoyTool` instance, constructed alongside `envoy` in the
+bootstrap (`crates/neenee-transport/src/bootstrap.rs`), bound to the
+[`CODE`](../../explanation/agent-design/envoys.md#profiles) profile. Same
+parameters as `envoy` (`description`, `prompt`), same streaming and full-duplex
+plumbing, but a different role: where `envoy` is the read-only research
+delegation path, `envoy_code` is the **implementation** delegation path —
+the analogue of kimi-code's `coder` subagent.
+
+The two tools share one `EnvoyRegistry` (call ids are globally unique, so a
+user's reply routes to the correct live child regardless of which tool spawned
+it) but register as distinct capabilities under different names, so they
+coexist in the parent toolset without one shadowing the other. Because `CODE`
+sets `unattended: false`, every `bash`/`edit_file`/`write_file` the envoy
+emits surfaces as a `EnvoyEvent::PermissionRequest` the user approves before
+it executes — identical to a top-level write. See
+[ADR-0086](../../adr/0086-coding-envoy-profile.md).

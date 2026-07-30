@@ -19,6 +19,34 @@ use serde_json::json;
 
 use crate::agent::{Agent, EnvoyHandle};
 
+/// Description of the default (read-only, EXPLORE) `envoy` dispatch tool,
+/// surfaced to the model. Kept as a `const` so a sibling write-capable tool
+/// can declare its own parallel description without duplicating this string.
+const ENVOY_TOOL_DESCRIPTION: &str = "\
+Launch a focused, read-only envoy to research or explore part of the codebase \
+(or the web) and return a concise written answer. Use it to parallelize \
+investigation: finding where code lives, summarizing files, gathering \
+context. The envoy cannot modify files — you perform any edits after \
+reviewing its findings.";
+
+/// Description of the write-capable `envoy_code` dispatch tool (bound to the
+/// [`neenee_core::CODE`] profile). Distinct from [`ENVOY_TOOL_DESCRIPTION`] so
+/// the model understands this is the delegation path for *implementation*
+/// work, not exploration, and that every write/command the envoy makes is
+/// user-approved. Paired with the code-profile system prompt, it frames the
+/// coder-subagent role (the analogue of kimi-code's `coder` subagent).
+pub const ENVOY_CODE_TOOL_DESCRIPTION: &str = "\
+Delegate a well-scoped software-engineering task to a coding envoy that \
+implements the change end to end — it reads the relevant code, edits files, \
+and runs builds/tests/git, then returns a technically complete summary of what \
+it changed and how it verified the change. Use it for substantial, \
+self-contained implementation work you want isolated in its own context \
+window. Unlike the read-only `envoy`, this one CAN modify files and run \
+commands — but every write and command it attempts is presented to the user \
+for approval before it executes, just like a top-level call. Do not use it \
+for trivial edits you can make directly, and once it is running, leave the \
+scope to it (do not redo its work in parallel).";
+
 /// Live envoy handles keyed by the parent tool-call id — the lookup table
 /// that lets the harness route a down-direction reply (a permission decision
 /// or `ask_user` answer the user gave in the TUI) back into the specific
@@ -80,6 +108,17 @@ pub struct EnvoyTool {
     provider: Arc<dyn neenee_core::Provider>,
     toolset: neenee_core::ToolSet,
     profile: &'static EnvoyProfile,
+    /// The tool name the model calls this dispatch tool by. The default (set by
+    /// [`EnvoyTool::new`]) is `"envoy"` for the read-only research role; a
+    /// second instance bound to a write-capable profile (e.g. [`CODE`]) takes a
+    /// distinct name like `"envoy_code"` so it registers as its own capability
+    /// alongside the read-only `envoy`, instead of colliding on the name.
+    tool_name: &'static str,
+    /// Human-facing description surfaced to the model as the tool's purpose.
+    /// Defaults to the read-only research framing; a write-capable instance
+    /// passes its own so the model knows it is the delegation path for
+    /// implementation work, not exploration.
+    tool_description: &'static str,
     /// Shared handle to the parent agent's variant selection (the **override**
     /// axis). Bound after the parent agent is built (see
     /// [`EnvoyTool::bind_variant_selection`]). At spawn the child resolves
@@ -114,12 +153,76 @@ impl EnvoyTool {
         toolset: neenee_core::ToolSet,
         profile: &'static EnvoyProfile,
     ) -> Self {
+        Self::named(provider, toolset, profile, "envoy", ENVOY_TOOL_DESCRIPTION)
+    }
+
+    /// Like [`new`](Self::new) but shares an existing [`EnvoyRegistry`] instead
+    /// of creating a fresh one. Used when a second dispatch tool (e.g. a
+    /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
+    /// children reachable from the *same* harness reply path: the driver holds
+    /// one `Arc<EnvoyRegistry>`, and tool-call ids are globally unique, so two
+    /// dispatch tools lodging their children into one table never collide. See
+    /// ADR-0029.
+    pub fn with_registry(
+        provider: Arc<dyn neenee_core::Provider>,
+        toolset: neenee_core::ToolSet,
+        profile: &'static EnvoyProfile,
+        registry: Arc<EnvoyRegistry>,
+    ) -> Self {
+        Self::named_with_registry(
+            provider,
+            toolset,
+            profile,
+            "envoy",
+            ENVOY_TOOL_DESCRIPTION,
+            registry,
+        )
+    }
+
+    /// Build a dispatch tool under an explicit name and description. This is
+    /// how a second, write-capable envoy dispatch tool is constructed: a
+    /// profile like [`neenee_core::CODE`] is paired with a distinct tool name
+    /// (e.g. `"envoy_code"`) and a description that tells the model this is the
+    /// delegation path for implementation work. The read-only `envoy` tool and
+    /// a named variant coexist as separate capabilities in the parent toolset.
+    pub fn named(
+        provider: Arc<dyn neenee_core::Provider>,
+        toolset: neenee_core::ToolSet,
+        profile: &'static EnvoyProfile,
+        tool_name: &'static str,
+        tool_description: &'static str,
+    ) -> Self {
         Self {
             provider,
             toolset,
             profile,
+            tool_name,
+            tool_description,
             parent_variants: std::sync::Mutex::new(None),
             registry: Arc::new(EnvoyRegistry::default()),
+            accounting: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// [`Self::named`] sharing an existing registry. The companion of
+    /// [`Self::with_registry`]: a named dispatch tool whose children are
+    /// reachable through the same harness reply path as its sibling.
+    pub fn named_with_registry(
+        provider: Arc<dyn neenee_core::Provider>,
+        toolset: neenee_core::ToolSet,
+        profile: &'static EnvoyProfile,
+        tool_name: &'static str,
+        tool_description: &'static str,
+        registry: Arc<EnvoyRegistry>,
+    ) -> Self {
+        Self {
+            provider,
+            toolset,
+            profile,
+            tool_name,
+            tool_description,
+            parent_variants: std::sync::Mutex::new(None),
+            registry,
             accounting: std::sync::Mutex::new(None),
         }
     }
@@ -179,13 +282,10 @@ impl EnvoyTool {
 #[async_trait]
 impl Tool for EnvoyTool {
     fn name(&self) -> &str {
-        "envoy"
+        self.tool_name
     }
     fn description(&self) -> &str {
-        "Launch a focused, read-only envoy to research or explore part of the codebase (or the \
-         web) and return a concise written answer. Use it to parallelize investigation: finding \
-         where code lives, summarizing files, gathering context. The envoy cannot modify \
-         files — you perform any edits after reviewing its findings."
+        self.tool_description
     }
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -832,5 +932,81 @@ mod tests {
         let explore_selected = EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let explore_names: Vec<&str> = explore_selected.iter().map(|t| t.name()).collect();
         assert_eq!(explore_names, vec!["read_text"]);
+    }
+
+    /// A write-capable `envoy_code` tool (bound to [`neenee_core::CODE`])
+    /// admits the edit surface a coder needs. Built with the real tools the
+    /// harness registers so a future capability regression is caught here —
+    /// mirrors `explore_profile_excludes_bash_writes_user_and_recursion` for
+    /// the inverse contract.
+    #[test]
+    fn code_profile_admits_edit_surface_using_real_tools() {
+        let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
+        let envoy_code_arc = std::sync::Arc::new(EnvoyTool::named(
+            provider.clone(),
+            neenee_core::ToolSet::default(),
+            &neenee_core::CODE,
+            "envoy_code",
+            "coding envoy",
+        ));
+
+        let toolset = neenee_core::ToolSet::from_tools(vec![
+            std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
+            std::sync::Arc::new(crate::tools::BashTool),
+            std::sync::Arc::new(crate::tools::WriteFileTool),
+            std::sync::Arc::new(crate::tools::EditFileTool),
+            std::sync::Arc::new(crate::tools::AskUserTool),
+            envoy_code_arc.clone() as std::sync::Arc<dyn Tool>,
+        ]);
+
+        // CODE admits bash, write_file, edit_file, and the read tools; it
+        // excludes the envoy dispatch tool itself (recursion).
+        let model = neenee_core::resolve_model(&CannedProvider.model());
+        let model_sel = neenee_core::ToolSelection::unrestricted();
+        let selected = neenee_core::CODE.resolve_tools(&toolset, &model, &model_sel);
+        let names: std::collections::HashSet<&str> =
+            selected.iter().map(|t| t.name()).collect();
+        assert!(names.contains("read_text"));
+        assert!(names.contains("bash"));
+        assert!(names.contains("write_file"));
+        assert!(names.contains("edit_file"));
+        assert!(!names.contains("envoy_code"), "recursion must be excluded");
+        assert!(!names.contains("envoy"));
+
+        // The tool surfaces under its own name.
+        assert_eq!(envoy_code_arc.name(), "envoy_code");
+    }
+
+    /// Two dispatch tools sharing one registry is the load-bearing property
+    /// that lets the harness route a reply to the correct child regardless of
+    /// which tool spawned it. A child registered under one tool's call id is
+    /// reachable via the shared registry, and neither tool's `registry()` is
+    /// a distinct allocation.
+    #[test]
+    fn named_with_registry_shares_the_registry_across_tools() {
+        let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
+        let explore = EnvoyTool::new(
+            provider.clone(),
+            neenee_core::ToolSet::default(),
+            &EXPLORE,
+        );
+        let shared = explore.registry();
+        let code = EnvoyTool::named_with_registry(
+            provider,
+            neenee_core::ToolSet::default(),
+            &neenee_core::CODE,
+            "envoy_code",
+            "coding envoy",
+            shared.clone(),
+        );
+        // Same Arc<EnvoyRegistry> — the driver hands one to the harness, and
+        // children of either tool land in the same table.
+        assert!(
+            std::sync::Arc::ptr_eq(&explore.registry(), &code.registry()),
+            "named_with_registry must share the registry, not clone-allocate"
+        );
+        // The two tools are distinct capabilities (different names) so they
+        // coexist in a parent toolset without one shadowing the other.
+        assert_ne!(explore.name(), code.name());
     }
 }

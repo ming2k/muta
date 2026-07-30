@@ -573,6 +573,16 @@ impl OperationScope {
         Self::default()
     }
 
+    /// Whether this scope imposes **no** constraint on either axis — i.e. every
+    /// `ScopeTarget` is admitted. `true` for the principal's default scope
+    /// (`paths: None, commands: None`). A sandboxed scope (any `Some` dimension)
+    /// returns `false`. Used by the principal's startup safety check: an
+    /// unattended principal with an unrestricted scope runs with no permission
+    /// floor at all, which deserves a loud warning (#9).
+    pub fn is_unrestricted(&self) -> bool {
+        self.paths.is_none() && self.commands.is_none()
+    }
+
     /// Whether a call with the given [`ScopeTarget`] is permitted under this
     /// scope. Dispatches on the target variant:
     /// - [`ScopeTarget::Path`] → checked against `paths` (prefix-containment,
@@ -693,6 +703,38 @@ mod tests {
         assert!(scope.allows(&ScopeTarget::Path(PathBuf::from("anywhere/x.rs"))));
         assert!(scope.allows(&ScopeTarget::Command("rm -rf /".to_string())));
         assert!(scope.allows(&ScopeTarget::Unspecified));
+    }
+
+    #[test]
+    fn is_unrestricted_reports_both_axes() {
+        // The principal's #9 safety check keys off this: only a fully-open
+        // scope (both axes None) is "unrestricted". Pinning either axis makes a
+        // sandboxed scope that keeps the scope-gate as a safety floor.
+        assert!(OperationScope::unrestricted().is_unrestricted());
+        assert!(OperationScope {
+            paths: None,
+            commands: None,
+        }
+        .is_unrestricted());
+        // Pinning paths alone is enough to be sandboxed.
+        assert!(!OperationScope {
+            paths: Some(vec![PathBuf::from("/home/user")]),
+            commands: None,
+        }
+        .is_unrestricted());
+        // Pinning commands alone is enough.
+        assert!(!OperationScope {
+            paths: None,
+            commands: Some(CommandScope::none()),
+        }
+        .is_unrestricted());
+        // An empty-Some on paths is still a constraint (permits nothing) — not
+        // unrestricted, which is the safer classification.
+        assert!(!OperationScope {
+            paths: Some(vec![]),
+            commands: Some(CommandScope::none()),
+        }
+        .is_unrestricted());
     }
 
     #[test]

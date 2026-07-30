@@ -363,10 +363,27 @@ pub fn draw_permission_sheet(
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD),
     )];
+    // #10: an elevation prompt (out-of-scope target) is flagged ⚠ so the
+    // operator understands they are authorising access *beyond* the configured
+    // boundary, not a routine in-scope call. Rendered in the error colour.
+    if request.elevation {
+        header.push(Span::styled("  ", Style::default()));
+        header.push(Span::styled(
+            "⚠ out of scope",
+            Style::default().fg(theme.err()).add_modifier(Modifier::BOLD),
+        ));
+    }
     if confirm_always {
         header.push(Span::styled(
             " — always allow until exit?",
             Style::default().fg(theme.fg()),
+        ));
+    } else if request.one_off {
+        // A one-off dangerous-command confirm: flag that this grant will not be
+        // remembered, so the user is not surprised to be re-prompted next time.
+        header.push(Span::styled(
+            " — one-off (not remembered)",
+            Style::default().fg(theme.warn()),
         ));
     } else if scope_meaningful {
         header.push(Span::styled("  ", Style::default()));
@@ -472,8 +489,16 @@ pub fn draw_permission_sheet(
     );
 
     let details_label = if show_details { "Hide" } else { "Details" };
-    let labels: Vec<&str> = if confirm_always {
+    // #2: a one-off prompt (the bash dangerous-command confirm) deliberately
+    // does not persist an `Always` reply, so the "Always allow" option is
+    // suppressed entirely — offering a button whose choice is silently ignored
+    // is a UI/behaviour lie. The decision collapses to Allow once / Reject /
+    // Details. (The confirm_always keyboard shortcut is also inert for these
+    // prompts, since there is no Always choice to confirm.)
+    let labels: Vec<&str> = if confirm_always && !request.one_off {
         vec!["Confirm always", "Cancel"]
+    } else if request.one_off {
+        vec!["Allow once", "Reject", details_label]
     } else {
         vec!["Allow once", "Always allow", "Reject", details_label]
     };
@@ -702,6 +727,8 @@ mod tests {
             description: "Run a command".into(),
             arguments: r#"{"command":"cargo test"}"#.into(),
             scope: "*".into(),
+            elevation: false,
+            one_off: false,
         };
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
         let mut hit_map = ModalHitMap::new();

@@ -233,6 +233,53 @@ pub async fn dispatch(
             // mid-turn. The `UnattendedChanged` event above already mirrors
             // the new value into the TUI snapshot without that side effect.
         }
+        Some(BuiltinCmd::Principal) => {
+            // /principal <role> — switch the live principal role (plan §3.3).
+            // Resolves the role onto the current identity, applies the
+            // resulting profile (identity preamble, capability scope, operation
+            // boundary), and surfaces a confirmation. With no argument, lists
+            // the available roles.
+            match parts.get(1) {
+                None | Some(&"") => {
+                    let roles: Vec<&'static str> = neenee_core::PrincipalRole::ALL
+                        .iter()
+                        .map(|r| r.as_str())
+                        .collect();
+                    let _ = resp_tx.send(round_response(
+                        &session.id().await,
+                        RoundEvent::Text(format!(
+                            "Available principal roles: {}. Usage: `/principal <role>` or \
+                             mention `@principal:<role>` in a message.",
+                            roles.join(", ")
+                        )),
+                    ));
+                }
+                Some(role) => match agent.apply_principal_role(role) {
+                    Some(resolved) => {
+                        let _ = resp_tx.send(round_response(
+                            &session.id().await,
+                            RoundEvent::Text(format!(
+                                "Principal role switched to `{}` — {}. The next response will \
+                                 speak with this role's perspective and capability scope.",
+                                resolved.as_str(),
+                                resolved.description()
+                            )),
+                        ));
+                    }
+                    None => {
+                        let roles: Vec<&'static str> = neenee_core::PrincipalRole::ALL
+                            .iter()
+                            .map(|r| r.as_str())
+                            .collect();
+                        let _ = resp_tx.send(AgentResponse::Error(format!(
+                            "Unknown principal role `{}`. Available roles: {}.",
+                            role,
+                            roles.join(", ")
+                        )));
+                    }
+                },
+            }
+        }
         Some(BuiltinCmd::Review) => {
             // /review — on-demand session review (ADR-0018,
             // superseding the periodic ADR-0016 design).

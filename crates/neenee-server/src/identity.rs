@@ -38,3 +38,10 @@ pub fn neenee_identity() -> AgentIdentity {
 pub fn principal_code() -> PrincipalProfile {
     PrincipalProfile::with_identity("code", neenee_identity())
 }
+
+// Principal role presets (`architect`, `reviewer`, `security`) and the
+// `/principal` / `@principal:` switching mechanism are declared in
+// `neenee-core` as shared vocabulary (`PrincipalRole`,
+// `PrincipalProfile::for_role`) and applied via `Agent::apply_principal_role`,
+// so this binary does not need its own role registry — both frontends share
+// one. Kept in sync with `crates/neenee-cli/src/identity.rs`.
