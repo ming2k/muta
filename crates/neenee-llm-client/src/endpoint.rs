@@ -49,13 +49,13 @@ pub const COPILOT_CLIENT_HEADERS: &[(&str, &str)] = &[
 pub struct Endpoint {
     /// API key. An *empty* key means "keyless": OpenAI-compatible relays omit
     /// the `Authorization` header rather than send an empty bearer token;
-    /// Gemini still appends `?key=` (a relay that ignores it tolerates the
+    /// Google still appends `?key=` (a relay that ignores it tolerates the
     /// empty value). Each provider's auth layer decides.
     pub api_key: String,
     /// Model id sent on the wire (`model` field of the request body).
     pub model: String,
     /// Full endpoint URL. For OpenAI/Anthropic this is the chat-completions /
-    /// `/messages` path; for Gemini it is the versioned base
+    /// `/messages` path; for Google it is the versioned base
     /// (`.../v1beta`) to which the per-call model path is appended.
     pub base_url: String,
     /// `User-Agent` header value.

@@ -2,7 +2,7 @@
 //!
 //! Prompt caching is the dominant cost lever for multi-turn agents: a cached
 //! prefix is billed at ~0.1× input (Anthropic) or folded into a discount
-//! (OpenAI / Gemini / Moonshot). Different providers expose wildly different
+//! (OpenAI / Google / Moonshot). Different providers expose wildly different
 //! surfaces, so this module is the **single classifier** that the provider
 //! adapters and the token ledger consult to know how a model family caches and
 //! how its discount surfaces.
@@ -17,7 +17,7 @@
 //!   Kimi). The request builder injects the key; the response parser reports
 //!   `cached_tokens` as a read.
 //! - [`CachePolicy::Automatic`] — the server auto-caches with no client control
-//!   (OpenAI, Gemini). Nothing is stamped; the response parser surfaces the
+//!   (OpenAI, Google). Nothing is stamped; the response parser surfaces the
 //!   discount as a read counter only.
 //!
 //! This module is **pure domain**: it knows no `reqwest`, no `serde_json` beyond
@@ -45,7 +45,7 @@ pub enum CachePolicy {
     /// The key namespaces the server-side cache per session so repeated prefixes
     /// hit. The response surfaces the discount as `cached_tokens` (read only).
     SessionKey,
-    /// The server auto-caches with no client control (OpenAI, Gemini). Nothing
+    /// The server auto-caches with no client control (OpenAI, Google). Nothing
     /// is stamped. The discount surfaces as a read counter when the provider
     /// reports it.
     Automatic,
@@ -64,7 +64,7 @@ impl CachePolicy {
             "claude" | "anthropic" => CachePolicy::Breakpoints,
             // Moonshot / Kimi: session-scoped prompt_cache_key.
             "kimi" | "moonshot" | "kimi-code" => CachePolicy::SessionKey,
-            // Everything else (openai, gemini, qwen, deepseek, …): auto-cache.
+            // Everything else (openai, google, qwen, deepseek, …): auto-cache.
             _ => CachePolicy::Automatic,
         }
     }
@@ -100,7 +100,7 @@ impl Default for CachePolicy {
 /// - `cached_tokens` (top-level) — Moonshot proprietary.
 /// - `prompt_tokens_details.cached_tokens` — OpenAI chat-completions.
 /// - `input_tokens_details.cached_tokens` — OpenAI Responses API.
-/// - `cachedContentTokenCount` — Google Gemini (`usageMetadata`).
+/// - `cachedContentTokenCount` — Google (`usageMetadata`).
 ///
 /// **Every** per-protocol `usage()` parser in the SDK layer MUST route through
 /// this helper rather than reading its field inline. Routing here is the single
@@ -119,10 +119,10 @@ pub fn read_cached_tokens(usage: &serde_json::Value) -> Option<i64> {
     let top = usage["cached_tokens"].as_i64();
     let prompt_detail = usage["prompt_tokens_details"]["cached_tokens"].as_i64();
     let input_detail = usage["input_tokens_details"]["cached_tokens"].as_i64();
-    let gemini = usage["cachedContentTokenCount"].as_i64();
+    let google = usage["cachedContentTokenCount"].as_i64();
     top.or(prompt_detail)
         .or(input_detail)
-        .or(gemini)
+        .or(google)
         .filter(|n| *n > 0)
 }
 
@@ -142,6 +142,8 @@ mod tests {
         );
         assert_eq!(CachePolicy::for_family("moonshot"), CachePolicy::SessionKey);
         assert_eq!(CachePolicy::for_family("openai"), CachePolicy::Automatic);
+        assert_eq!(CachePolicy::for_family("google"), CachePolicy::Automatic);
+        // Legacy family id still resolves (backward-compat for old configs).
         assert_eq!(CachePolicy::for_family("gemini"), CachePolicy::Automatic);
         assert_eq!(CachePolicy::for_family("qwen"), CachePolicy::Automatic);
         assert_eq!(CachePolicy::for_family(""), CachePolicy::Automatic);
@@ -186,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_gemini_cached_content_token_count() {
+    fn reads_google_cached_content_token_count() {
         let usage = json!({ "cachedContentTokenCount": 42 });
         assert_eq!(read_cached_tokens(&usage), Some(42));
     }

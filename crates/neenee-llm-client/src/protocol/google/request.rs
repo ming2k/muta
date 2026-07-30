@@ -75,7 +75,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
             "parts": [{ "text": system.join("\n\n") }]
         });
     }
-    if let Some(tools) = gemini_tools(input.tool_specs) {
+    if let Some(tools) = google_tools(input.tool_specs) {
         body["tools"] = tools;
     }
     // Request the model's reasoning *text* so it can be routed to
@@ -253,7 +253,7 @@ fn text_and_image_parts(
     parts
 }
 
-fn gemini_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
+fn google_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
     let specs = tool_specs?;
     if specs.is_empty() {
         return None;
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn declares_gemini_function_tools() {
+    fn declares_google_function_tools() {
         let body = body(
             vec![Message::new(Role::User, "list files")],
             BodyInput {

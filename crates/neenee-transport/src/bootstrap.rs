@@ -25,7 +25,7 @@ use neenee_agent::orchestration::{
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_core::{
-    AgentRequest, AgentResponse, CHARS_PER_TOKEN, CODE, EXPLORE, Message, Provider, RoundEvent,
+    AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider, RoundEvent,
     ToolContextBuilder, ToolSet, collect_toolset,
 };
 use neenee_agent::mcp::{McpCatalog, McpRuntime};
@@ -397,24 +397,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // underlying `Arc<EnvoyTool>` is what gets layered into the toolset.
     let envoy_tool_handle = envoy_tool.clone();
     toolset.insert(envoy_tool);
-    // The coding envoy (`envoy_code`): a write-capable dispatch tool bound to
-    // the CODE profile. Unlike the read-only `envoy`, its writes/commands are
-    // user-approved (the profile sets `unattended: false`), surfaced up via the
-    // same full-duplex channel. It shares the read-only tool's
-    // `EnvoyRegistry` — call ids are globally unique, so a user's reply routes
-    // to the correct live child regardless of which dispatch tool spawned it.
-    // A distinct tool name keeps it a separate capability in the parent toolset
-    // rather than colliding with `envoy`. See ADR-0086.
-    let envoy_code_tool = Arc::new(EnvoyTool::named_with_registry(
-        agent_provider.clone(),
-        toolset.clone(),
-        &CODE,
-        "envoy_code",
-        neenee_agent::envoy_tool::ENVOY_CODE_TOOL_DESCRIPTION,
-        envoy_registry.clone(),
-    ));
-    let envoy_code_tool_handle = envoy_code_tool.clone();
-    toolset.insert(envoy_code_tool);
     let agent = Arc::new(
         Agent::builder_from_toolset(agent_provider, toolset, identity)
             .with_skills((*skills_registry).clone())
@@ -424,7 +406,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // inherit the parent's tool-variant selection. The profile still owns the
     // orthogonal scope axis.
     envoy_tool_handle.bind_variant_selection(agent.variant_selection_handle());
-    envoy_code_tool_handle.bind_variant_selection(agent.variant_selection_handle());
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
     // missing or unreadable permissions.json just means we re-prompt.
@@ -632,11 +613,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // token-source report.
     let token_ledger = neenee_core::TokenSourceLedger::shared();
     envoy_tool_handle.bind_accounting(
-        token_ledger.clone(),
-        agent.thread_id_handle(),
-        agent.round_counter_handle(),
-    );
-    envoy_code_tool_handle.bind_accounting(
         token_ledger.clone(),
         agent.thread_id_handle(),
         agent.round_counter_handle(),

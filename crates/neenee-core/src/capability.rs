@@ -165,7 +165,7 @@ pub trait Provider: Send + Sync {
             .boxed())
     }
 
-    /// Stable provider/solution identifier (e.g. `"kimi-code"`, `"gemini"`).
+    /// Stable provider/solution identifier (e.g. `"kimi-code"`, `"google"`).
     /// The harness stamps it onto assistant messages so a session that mixes
     /// multiple models stays traceable. Defaults to an empty string for
     /// providers (mostly test doubles) that don't carry an identity.

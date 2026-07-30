@@ -53,7 +53,7 @@ pub struct Model {
     pub id: &'static str,
     /// Human-readable display name, e.g. `"GLM-5.2"`.
     pub name: &'static str,
-    /// Model family for grouping, e.g. `"glm"`, `"gpt"`, `"gemini"`.
+    /// Model family for grouping, e.g. `"glm"`, `"gpt"`, `"google"`.
     pub family: &'static str,
     /// Context window in tokens. `0` means unknown.
     pub context_window: usize,

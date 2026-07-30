@@ -117,7 +117,7 @@ pub struct ProviderTemplateSpec {
     /// layer intersects live-discovered ids against this local table.
     pub baselines: &'static [neenee_core::Model],
     /// Wire protocol the template's channels speak: `"openai"` | `"anthropic"`
-    /// | `"gemini"`.
+    /// | `"google"` (the legacy `"gemini"` label is still accepted).
     pub protocol: &'static str,
     /// The model ids the template initially seeds, in display/activation order.
     /// Fixed instances continue to mirror this list.

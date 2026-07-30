@@ -200,7 +200,7 @@ interactively with `/config`.
 |-----|---------|---------|
 | `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (turn bands) or `legacy` |
 | `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
-| `tui.click_outside_dismiss` | `false` | Click outside a modal to close it (mirrors Esc). Off by default so a stray click never closes a modal — and never quits the `neenee resume` startup picker; use Esc / Ctrl+C to exit. |
+| `tui.click_outside_dismiss` | `true` | Click outside a modal to close it (mirrors Esc). On by default; the dismissable set excludes modals holding in-progress input, and the `neenee resume` startup picker's click-outside still quits. Set `false` to require Esc / Ctrl+C for every close. |
 | `tui.default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
 | `tui.custom_color_scheme.background` | `"#070808"` | Terminal canvas |
 | `tui.custom_color_scheme.surface` | `"#0e0f0f"` | Panels and menus |
@@ -219,7 +219,7 @@ from these values.
 [tui]
 transcript_layout = "default"
 color_scheme = "custom"
-click_outside_dismiss = false
+click_outside_dismiss = true
 
 [tui.default_expanded]
 edit_file = true

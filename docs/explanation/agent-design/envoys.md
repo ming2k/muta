@@ -72,7 +72,7 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_file`, `grep`, `glob`, `list_dir`, …) |
-| `CODE` | `envoy_code` tool | `Write` | none (user-supervised) | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface, every write/command user-approved |
+| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs unattended, so the delegation *is* the authorization |
 | `REVIEW` | harness session-review diagnostic | `Read` | none | Pure read tools, run on a transcript snapshot |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |
@@ -82,10 +82,15 @@ All five are non-recursive (recursion is excluded absolutely, not per-profile
 and `CODE` (the `envoy_code` tool) are the two profiles reachable from a
 model tool call today; `REVIEW`, `TITLE`, and `INTERACTIVE` are internal
 roles. `CODE` and `INTERACTIVE` opt into `allow_user_interaction: true` so an
-`ask_user` request surfaces to the parent through the full-duplex channel;
-`CODE` additionally sets `unattended: false`, so its writes and commands
-surface as `EnvoyEvent::PermissionRequest` that the user approves exactly as
-they would a top-level call.
+`ask_user` request surfaces to the parent through the full-duplex channel.
+Every built-in envoy runs `unattended: true` — including `CODE`: the
+principal's act of calling `envoy_code` is the authorization for the
+delegated task, so the child's writes and commands execute on the envoy's
+own authority rather than routing each one back through the permission
+broker. The broker is the principal's gate; the principal reviews the
+envoy's handoff (files touched, commands run, verification) and stays
+accountable for the result. See
+[ADR-0087](../../adr/0087-code-envoy-runs-unattended.md).
 
 ### Why a `Read` ceiling (and the one exception)
 
@@ -98,12 +103,13 @@ grant (ADR-0028) remain available for a future command-running or
 scoped-write role, but no built-in profile exercises them today.
 
 The one exception is `CODE`: a coding envoy needs the full edit surface
-(`bash` + `edit_file` + `write_file`), so it admits those tools by name. It is
-deliberately **not** autonomous — `unattended: false` routes every write and
-command through the permission broker, so the user approves each one just as
-they would a top-level call. Admission says *whether* a tool may run; the
-broker (and, for a future scoped profile, the `WriteScope`) says *where* and
-*whether the user signed off*. See [ADR-0086](../../adr/0086-coding-envoy-profile.md).
+(`bash` + `edit_file` + `write_file`), so it admits those tools by name. Like
+every other built-in envoy it runs **unattended** — the delegation is the
+authorization, so the user does not re-approve each nested write/command; the
+principal reviews the envoy's handoff instead. Admission says *whether* a
+tool may run; the `WriteScope` (for a future scoped profile) says *where*.
+See [ADR-0087](../../adr/0087-code-envoy-runs-unattended.md)
+(supersedes ADR-0086's per-call approval model).
 
 ### Extending
 

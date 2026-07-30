@@ -227,7 +227,7 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         "kimi-code" => ("Kimi Code", "Moonshot AI coding model"),
         "openai" => ("OpenAI", "OpenAI API"),
         // Google hosts the Gemini family as one multi-model provider.
-        "google" => ("Google", "Google Gemini"),
+        "google" => ("Google", "Google"),
         // DeepSeek hosts V4 Flash + Pro as one multi-model provider.
         "deepseek" => ("DeepSeek", "DeepSeek V4 (Flash + Pro)"),
         "zai-code" => ("ZAI Code", "Z.AI coding plan (GLM-5.2)"),

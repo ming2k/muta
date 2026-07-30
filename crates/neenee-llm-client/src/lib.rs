@@ -2,7 +2,7 @@
 //!
 //! One crate speaks the wire protocols neenee supports — OpenAI
 //! chat-completions, the OpenAI Responses API, Anthropic Messages, and Google
-//! Gemini — over a shared pooled HTTP transport. The crate is organised in two
+//! — over a shared pooled HTTP transport. The crate is organised in two
 //! layers:
 //!
 //! - **Transport** (`endpoint`, `sse`, `transport`, `client`, `json`): the

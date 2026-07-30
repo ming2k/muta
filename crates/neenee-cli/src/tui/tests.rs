@@ -1171,7 +1171,7 @@ fn anthropic_template() -> &'static crate::tui::providers::ProviderTemplate {
         .expect("anthropic relay template")
 }
 
-/// The Antigravity (sub2api) relay template — a Gemini-native 中转站 with a
+/// The Antigravity (sub2api) relay template — a Google-native 中转站 with a
 /// pre-filled base URL and the three relay-specific model ids seeded.
 fn antigravity_template() -> &'static crate::tui::providers::ProviderTemplate {
     crate::tui::PROVIDER_TEMPLATES
@@ -1228,7 +1228,7 @@ fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
 fn antigravity_template_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(antigravity_template());
-    assert_eq!(app.custom_protocol_wire, "gemini");
+    assert_eq!(app.custom_protocol_wire, "google");
     // The relay host is pre-filled so the user only types a name + token; an
     // empty base_url would otherwise fall back to localhost in the catalog.
     assert_eq!(

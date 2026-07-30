@@ -514,10 +514,12 @@ pub struct App {
     /// discards it; Enter promotes it to `custom_color_scheme` and persists it.
     pub custom_color_draft: neenee_core::ColorSchemeConfig,
     /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
-    /// From `[tui] click_outside_dismiss` (default `false`): when false, an
-    /// outside click is a no-op so a stray click never dismisses a modal or —
-    /// for the `neenee resume` startup picker — quits the program. Esc / Ctrl+C
-    /// always close/quit regardless of this flag.
+    /// From `[tui] click_outside_dismiss` (default `true`): when true, an
+    /// outside click dismisses a dismissable modal like Esc (the draft is
+    /// parked, so nothing is lost). Modals holding precious in-progress input
+    /// are never click-dismissable regardless of this flag, and the `neenee
+    /// resume` startup picker's click-outside still quits. Esc / Ctrl+C always
+    /// close/quit regardless of this flag.
     pub click_outside_dismiss: bool,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means
@@ -596,7 +598,7 @@ pub struct App {
     /// editor is open.
     pub custom_fields: Vec<CustomField>,
     /// Wire protocol of the provider being created/edited (`"openai"` |
-    /// `"anthropic"` | `"gemini"`), carried from the template or the edited
+    /// `"anthropic"` | `"google"`), carried from the template or the edited
     /// provider rather than chosen with a protocol picker.
     pub custom_protocol_wire: String,
     /// Models seeded by the active template (create mode). Submitted as the

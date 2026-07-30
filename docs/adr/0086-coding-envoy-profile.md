@@ -1,6 +1,7 @@
 # 0086. The `CODE` envoy profile and the `envoy_code` dispatch tool
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0087 (the `unattended: false` decision only;
+  the profile, toolset, and dispatch tool below remain in force)
 - **Date:** 2026-08-14
 
 ## Context

@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`CODE` envoy runs unattended.** The coding envoy profile
+  (`envoy_code` dispatch tool) now runs `unattended: true`, matching every
+  other built-in envoy: the principal's act of calling `envoy_code` *is* the
+  authorization for the delegated task, so the child's writes and commands
+  no longer surface as per-call permission requests through the broker. The
+  permission sheet stays the principal's gate; the principal reviews the
+  envoy's handoff and stays accountable for the result. `ask_user`
+  supervision is preserved via the full-duplex channel. Decided in
+  [ADR-0087](docs/adr/0087-code-envoy-runs-unattended.md), which supersedes
+  ADR-0086's `unattended: false` decision.
+- **`envoy_code` renders as an envoy step in the TUI.** A coding delegation
+  now renders through `draw_envoy_inline_step` with the `EnvoyPresenter`
+  summary — one navigable line plus a live status line, `Enter` to drill
+  into the child transcript — identical in shape to an `EXPLORE` run. Fixes
+  `is_envoy_task()` / `presenter_for` matching only `envoy`, which left
+  `envoy_code` falling through to the generic expandable tool-step
+  ("disclosure") renderer.
+
 ### Removed
 
 ## [0.21.3] - 2026-07-30
@@ -102,12 +120,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AtomicBool` consulted by `decide_bash_stdin`, seeded in bootstrap and
   `apply_principal_profile`; documented in `docs/reference/configuration.md`.
 
-- **`[tui] click_outside_dismiss` config option.** Clicking outside a modal to
-  close it (mirroring Esc) is now off by default — a stray click no longer
-  dismisses a modal, and for the `neenee resume` startup picker no longer quits
-  the program; Esc / Ctrl+C are the deliberate exit path. Set
-  `click_outside_dismiss = true` under `[tui]` to restore click-outside-to-
-  dismiss. Added in `crates/neenee-persistence/src/config.rs` (`TuiConfig`),
+- **`[tui] click_outside_dismiss` config option.** Clicking outside a modal
+  to close it (mirroring Esc). **On by default**: a click on the backdrop of a
+  dismissable overlay (Help, Tools, Sessions, Config, …) closes it like Esc —
+  the composer draft is parked so nothing is lost. Modals that hold precious
+  in-progress input (API-key editor, permission/question sheets, …) are never
+  click-dismissable regardless of this flag, and the `neenee resume` startup
+  picker's click-outside still quits the program. Set
+  `click_outside_dismiss = false` under `[tui]` to require Esc / Ctrl+C for
+  every close. Added in `crates/neenee-persistence/src/config.rs` (`TuiConfig`),
   surfaced onto `App`, and gated in the event-loop click handler; documented in
   `docs/reference/configuration.md`.
 

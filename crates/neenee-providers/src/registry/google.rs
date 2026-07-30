@@ -1,11 +1,11 @@
-//! The built-in `google` provider template: the native Gemini API, one key.
+//! The built-in `google` provider template: the native Google API, one key.
 
 use neenee_core::thinking::ThinkingSupport;
 use neenee_core::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
-/// The Gemini model ids the built-in `google` provider serves (native Gemini
+/// The Gemini model ids the built-in `google` provider serves (native Google
 /// API, one key). Each id exists in the model registry. The set is the
 /// canonical text-generation family that Google plus common relays/中转站
 /// advertise — image/embedding/video/audio-only models are excluded since an
@@ -35,11 +35,11 @@ pub const MODELS: &[Model] = &[
     // The id strings mirror Google's official naming and the ids relay/中转站
     // gateways advertise — so a relay-served model resolves to real metadata
     // instead of a generic fallback. See ADR for the configurable
-    // `gemini_base_url`.
+    // `google_base_url`.
     Model {
         id: "gemini-3.5-flash",
         name: "Gemini 3.5 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -53,7 +53,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3-pro-preview",
         name: "Gemini 3 Pro Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -67,7 +67,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3-flash-preview",
         name: "Gemini 3 Flash Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -81,7 +81,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3.1-pro-preview",
         name: "Gemini 3.1 Pro Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -96,7 +96,7 @@ pub const MODELS: &[Model] = &[
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
         id: "gemini-3.1-pro-preview-customtools",
         name: "Gemini 3.1 Pro Preview (Custom Tools)",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -110,7 +110,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -124,7 +124,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-2.5-pro",
         name: "Gemini 2.5 Pro",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -138,7 +138,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-2.5-flash-lite",
         name: "Gemini 2.5 Flash-Lite",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
         tool_call: true,
@@ -152,7 +152,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
         tool_call: true,
@@ -168,7 +168,7 @@ inventory::submit!(neenee_core::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "google",
     baselines: MODELS,
-    protocol: "gemini",
+    protocol: "google",
     models: GOOGLE_BUILTIN_MODELS,
     discovery: true,
     fitting: false,

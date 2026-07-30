@@ -1492,7 +1492,7 @@ pub(super) async fn run_app_loop(
                     // the ADR-0046 per-protocol gating: Anthropic effort shows
                     // only while thinking is opted in; OpenAI effort (a
                     // standalone knob with no separate thinking field) shows
-                    // whenever the model exposes one; Gemini never. `None`
+                    // whenever the model exposes one; Google never. `None`
                     // otherwise — non-reasoning models keep the bar quiet.
                     let hint_reasoning = app
                         .provider_picker
@@ -4880,11 +4880,12 @@ pub(super) async fn run_app_loop(
                             r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height
                         });
                         if !inside && app.click_outside_dismiss {
-                            // Only dismiss when `[tui] click_outside_dismiss` is
-                            // on (default off): a stray click outside the panel
-                            // should never close a modal, and — for the `neenee
-                            // resume` startup picker — never quit the program;
-                            // Esc / Ctrl+C are the deliberate exit path. When
+                            // Dismiss when `[tui] click_outside_dismiss` is on
+                            // (default on): a click outside the panel closes
+                            // a dismissable overlay like Esc. The dismissable
+                            // set excludes modals holding precious in-progress
+                            // input (they report no rect and are skipped above),
+                            // so a stray click never discards an API key. When
                             // the flag is off the click is still consumed (this
                             // whole branch owns it) so it does not fall through
                             // to the transcript behind the backdrop.

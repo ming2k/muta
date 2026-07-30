@@ -471,16 +471,24 @@ const CODING_TOOLS: &[&str] = &[
 /// implement a delegated task end-to-end, then hand back a technically
 /// complete summary. It is the analogue of kimi-code's `coder` subagent.
 ///
-/// Because writes and command execution have real consequences, the role is
-/// **user-supervised**, not autonomous:
+/// Like every built-in envoy, the role is **autonomous** (`unattended: true`):
+/// the principal's act of delegating a task via the `envoy_code` tool *is* the
+/// authorization — the child runs its writes and commands on its own authority,
+/// without routing each one back through the permission broker. The broker
+/// (the TUI permission sheet, `/permissions`, the `Always` allowlist) is the
+/// principal's gate, not the envoy's: it gates the top-level call that spawns
+/// the envoy, and the principal stays accountable for the result via the
+/// envoy's final handoff. See ADR-0087.
 /// - `allow_user_interaction: true` admits `ask_user` (and any future
 ///   approval-gated tool), so an ambiguous requirement can be surfaced rather
-///   than guessed.
-/// - `unattended: false` leaves the permission broker on, so every
-///   execute/write the envoy attempts surfaces as an
-///   [`EnvoyEvent::PermissionRequest`] that round-trips through the parent
-///   harness ↔ TUI ↔ registry handle ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
-///   The user approves exactly as they would a top-level write.
+///   than guessed; that path still uses the full-duplex channel
+///   ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
+/// - `unattended: true` keeps the broker off for the child's writes/commands,
+///   matching every other built-in profile.
+///
+/// ADR-0086 originally shipped this profile with `unattended: false` (every
+/// write/command user-approved); ADR-0087 reverses that to keep the
+/// delegation-as-authorization contract uniform across envoys.
 ///
 /// This is the second built-in profile with side effects (the first being the
 /// reserved [`INTERACTIVE`]), and the first that a dispatch tool can bind to
@@ -489,13 +497,11 @@ const CODING_TOOLS: &[&str] = &[
 pub const CODE: EnvoyProfile = EnvoyProfile {
     name: "code",
     system_prompt: "\
-You are a coding envoy operating under user supervision. You are delegated a \
-well-scoped software-engineering task: implement the change end to end. Read \
-the relevant code first, then edit files and run commands (builds, tests, \
-git) to land the change and verify it. Every command and file write you \
-attempt is presented to the user for approval before it executes — treat that \
-as a real gate, not a rubber stamp: prefer the narrowest change that satisfies \
-the task, and run commands only when they advance the work. The toolset handed \
+You are a coding envoy. You are delegated a well-scoped software-engineering \
+task: implement the change end to end. Read the relevant code first, then edit \
+files and run commands (builds, tests, git) to land the change and verify it. \
+Prefer the narrowest change that satisfies the task, and run commands only \
+when they advance the work. The toolset handed \
 to you is the full set you are permitted to use — work within it, do not \
 request others. All your `user` messages come from the parent agent, which \
 cannot see your working context — it sees only your final message. Treat the \
@@ -512,7 +518,7 @@ of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: false,
+    unattended: true,
     allow_model_stdin: false,
 };
 
@@ -779,5 +785,16 @@ mod tests {
         // Recursion and control-flow remain absolute.
         assert!(!CODE.tool_policy.admits(&with_spawn(make("bash"))));
         assert!(!CODE.tool_policy.admits(&make_control()));
+    }
+
+    /// ADR-0087: the principal's act of delegating via `envoy_code` *is* the
+    /// authorization, so CODE runs autonomous like every other built-in
+    /// profile — the permission broker is the principal's gate, not the
+    /// envoy's. Pins the value so ADR-0086's `unattended: false` cannot
+    /// silently come back.
+    #[test]
+    fn code_profile_runs_unattended() {
+        use crate::CODE;
+        assert!(CODE.unattended);
     }
 }

@@ -4,7 +4,7 @@
 //! template's *compiled-in* model list ([`crate::registry::ProviderTemplateSpec`])
 //! or fetch the list *live* from the provider's own `GET /models` endpoint.
 //! This module owns the live path: it speaks the three wire protocols
-//! (`openai` / `anthropic` / `gemini`), authenticates the same way a chat
+//! (`openai` / `anthropic` / `google`), authenticates the same way a chat
 //! request would, and parses the returned model entries. Beyond the id,
 //! endpoints may advertise per-model capability hints (context length,
 //! reasoning, image input, effort tiers — the Kimi Code platform is the rich
@@ -32,7 +32,7 @@
 //!   no bearer header at all.
 //! - **Anthropic**: `GET {base}/v1/models`, `x-api-key` + `anthropic-version`,
 //!   body `{data: [{id}, …]}`.
-//! - **Gemini native**: `GET {base}/v1beta/models?key=<key>`,
+//! - **Google native**: `GET {base}/v1beta/models?key=<key>`,
 //!   body `{models: [{name: "models/<id>", supportedGenerationMethods: […]}, …]}`
 //!   — only `generateContent`-capable text models are kept.
 //!
@@ -59,8 +59,8 @@ pub enum DiscoveryProtocol {
     OpenAi,
     /// Anthropic `/messages` → `GET /v1/models` with `x-api-key`.
     Anthropic,
-    /// Google Gemini native → `GET /v1beta/models?key=`.
-    Gemini,
+    /// Google native → `GET /v1beta/models?key=`.
+    Google,
 }
 
 impl DiscoveryProtocol {
@@ -71,7 +71,9 @@ impl DiscoveryProtocol {
     pub fn from_template_protocol(protocol: &str) -> Self {
         match protocol {
             "anthropic" => Self::Anthropic,
-            "gemini" => Self::Gemini,
+            "google" => Self::Google,
+            // Legacy alias: old registries/protocols used "gemini".
+            "gemini" => Self::Google,
             _ => Self::OpenAi,
         }
     }
@@ -91,7 +93,7 @@ pub struct ModelDiscoveryRequest<'a> {
     pub user_agent: Option<&'a str>,
     /// Extra request headers a provider requires beyond standard auth —
     /// e.g. GitHub Copilot's `x-initiator` / `Openai-Intent` /
-    /// `X-GitHub-Api-Version`. Empty for stock OpenAI/Anthropic/Gemini.
+    /// `X-GitHub-Api-Version`. Empty for stock OpenAI/Anthropic/Google.
     /// Applied to every protocol; a provider that needs per-header logic can
     /// still set them here since discovery is read-only (GET).
     pub extra_headers: &'a [(&'a str, &'a str)],
@@ -152,7 +154,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// A model entry discovered from a provider's live `GET /models` list. The
 /// `id` is always present; every capability field is `None` when the endpoint
-/// does not advertise it. The stock OpenAI/Anthropic/Gemini shapes carry no
+/// does not advertise it. The stock OpenAI/Anthropic/Google shapes carry no
 /// capability data. Two rich shapes are recognized: the Kimi Code platform
 /// (`api.kimi.com/coding`), advertising flat `context_length` /
 /// `supports_reasoning` / `supports_image_in` / `think_efforts` fields per
@@ -242,7 +244,7 @@ impl DiscoveredModel {
 ///   keep the API root, append `/models`. Accepts both a full
 ///   `…/v1/chat/completions` URL and a bare `…/v1` root.
 /// - `anthropic`: strip a trailing `/messages`, append `/models`.
-/// - `gemini`: the base is already the API root (`…/v1beta`); append
+/// - `google`: the base is already the API root (`…/v1beta`); append
 ///   `/models`.
 ///
 /// Returns [`ModelListError::BadEndpoint`] only for an empty/whitespace base.
@@ -270,14 +272,14 @@ pub fn models_endpoint_for(
             .strip_suffix("/messages")
             .or_else(|| trimmed.strip_suffix("/messages/"))
             .unwrap_or(trimmed),
-        DiscoveryProtocol::Gemini => trimmed.strip_suffix('/').unwrap_or(trimmed),
+        DiscoveryProtocol::Google => trimmed.strip_suffix('/').unwrap_or(trimmed),
     };
     let root = root.strip_suffix('/').unwrap_or(root);
 
     Ok(match protocol {
         DiscoveryProtocol::OpenAi => format!("{root}/models"),
         DiscoveryProtocol::Anthropic => format!("{root}/models"),
-        DiscoveryProtocol::Gemini => format!("{root}/models"),
+        DiscoveryProtocol::Google => format!("{root}/models"),
     })
 }
 
@@ -331,8 +333,8 @@ pub async fn list_models(
             }
             builder.send().await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::Gemini => {
-            // Gemini auth: the key is a query param, never a header. A keyless
+        DiscoveryProtocol::Google => {
+            // Google auth: the key is a query param, never a header. A keyless
             // request omits it entirely (Google rejects keyless, but a relay
             // might not require it).
             let mut builder = client.get(&endpoint);
@@ -382,7 +384,7 @@ fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredMode
     match protocol {
         DiscoveryProtocol::OpenAi => parse_data_models(json),
         DiscoveryProtocol::Anthropic => parse_data_models(json),
-        DiscoveryProtocol::Gemini => parse_gemini_models(json),
+        DiscoveryProtocol::Google => parse_google_models(json),
     }
 }
 
@@ -561,18 +563,18 @@ fn copilot_endpoint(value: Option<&Value>) -> Option<RemoteModelEndpoint> {
     }
 }
 
-/// Extract Gemini `models[]`, keeping only `generateContent`-capable text
-/// models and stripping the `models/` name prefix to a bare id. The Gemini
+/// Extract Google `models[]`, keeping only `generateContent`-capable text
+/// models and stripping the `models/` name prefix to a bare id. The Google
 /// shape advertises no per-model capability fields neenee consumes, so the
 /// entries carry ids only.
-fn parse_gemini_models(json: &Value) -> Vec<DiscoveredModel> {
+fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
     let Some(models) = json.get("models").and_then(Value::as_array) else {
         return Vec::new();
     };
     models
         .iter()
         .filter_map(|entry| {
-            // Only keep text-generation models. A Gemini model entry advertises
+            // Only keep text-generation models. A Google model entry advertises
             // its capabilities via `supportedGenerationMethods`; entries that
             // list `generateContent` are the chat/text models an agent uses.
             // Embeddings/embedding-only and image/video models are excluded.
@@ -647,11 +649,11 @@ mod tests {
     }
 
     #[test]
-    fn derives_gemini_models_endpoint_from_root() {
-        // Gemini channels carry the API root (…/v1beta), not a method URL.
+    fn derives_google_models_endpoint_from_root() {
+        // Google channels carry the API root (…/v1beta), not a method URL.
         assert_eq!(
             models_endpoint_for(
-                DiscoveryProtocol::Gemini,
+                DiscoveryProtocol::Google,
                 "https://generativelanguage.googleapis.com/v1beta"
             )
             .unwrap(),
@@ -660,7 +662,7 @@ mod tests {
         // A trailing slash is normalized away.
         assert_eq!(
             models_endpoint_for(
-                DiscoveryProtocol::Gemini,
+                DiscoveryProtocol::Google,
                 "https://generativelanguage.googleapis.com/v1beta/"
             )
             .unwrap(),
@@ -937,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_gemini_models_stripping_prefix_and_filtering_non_text() {
+    fn parses_google_models_stripping_prefix_and_filtering_non_text() {
         let json = serde_json::json!({
             "models": [
                 {
@@ -957,7 +959,7 @@ mod tests {
                 { "name": "models/gemini-3-pro-preview" }
             ]
         });
-        let mut got: Vec<String> = parse_models(DiscoveryProtocol::Gemini, &json)
+        let mut got: Vec<String> = parse_models(DiscoveryProtocol::Google, &json)
             .into_iter()
             .map(|model| model.id)
             .collect();
@@ -981,7 +983,7 @@ mod tests {
         // No `models` array → empty.
         assert!(
             parse_models(
-                DiscoveryProtocol::Gemini,
+                DiscoveryProtocol::Google,
                 &serde_json::json!({ "error": "bad key" })
             )
             .is_empty()
@@ -995,8 +997,14 @@ mod tests {
             DiscoveryProtocol::Anthropic
         );
         assert_eq!(
+            DiscoveryProtocol::from_template_protocol("google"),
+            DiscoveryProtocol::Google
+        );
+        // Legacy "gemini" protocol string still maps to Google (backward
+        // compat for old registries/configs).
+        assert_eq!(
             DiscoveryProtocol::from_template_protocol("gemini"),
-            DiscoveryProtocol::Gemini
+            DiscoveryProtocol::Google
         );
         assert_eq!(
             DiscoveryProtocol::from_template_protocol("openai"),

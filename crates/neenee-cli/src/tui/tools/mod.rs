@@ -191,7 +191,7 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "webfetch" => &web::WebFetchPresenter,
         "websearch" => &web::WebSearchPresenter,
         "todo" => &meta::TodoPresenter,
-        "envoy" => &meta::EnvoyPresenter,
+        "envoy" | "envoy_code" => &meta::EnvoyPresenter,
         "use_skill" => &meta::UseSkillPresenter,
         _ => &fallback::FallbackPresenter,
     }

@@ -103,7 +103,7 @@ pub struct PrincipalConfig {
 ///
 /// All fields default sensibly, so a `config.toml` with no `[tui]` table (or
 /// a partially specified one) is valid.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiConfig {
     /// Per-step-kind default expand state. Keys are tool names (`edit_file`,
@@ -134,15 +134,41 @@ pub struct TuiConfig {
     /// active, so it can be revisited from `/config` without losing changes.
     pub custom_color_scheme: neenee_core::ColorSchemeConfig,
     /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
-    /// Defaults to `false` (disabled): a stray click never dismisses a modal or
-    /// — for the `neenee resume` startup picker — quits the program. Set `true`
-    /// to restore click-outside-to-dismiss.
+    ///
+    /// Defaults to `true`: clicking the backdrop of a dismissable overlay (Help,
+    /// Tools, Sessions, Config, …) closes it, exactly like Esc — the composer
+    /// draft is safely parked so nothing is lost. Modals that hold precious
+    /// in-progress input (API-key editor, permission/question sheets, …) are
+    /// never click-dismissable regardless of this flag (see
+    /// `Modal::dismissable_by_outside_click`), and the `neenee resume` startup
+    /// picker is a special case whose click-outside still quits. Set `false` to
+    /// disable click-outside-to-dismiss entirely (Esc / Ctrl+C always work).
     ///
     /// ```toml
     /// [tui]
     /// click_outside_dismiss = true
     /// ```
+    #[serde(default = "default_click_outside_dismiss")]
     pub click_outside_dismiss: bool,
+}
+
+/// Default for [`TuiConfig::click_outside_dismiss`]: **on**. Kept as a named
+/// function so it can be referenced from the manual `Default` impl and the
+/// `#[serde(default = …)]` attribute in lockstep.
+fn default_click_outside_dismiss() -> bool {
+    true
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            default_expanded: HashMap::new(),
+            transcript_layout: String::new(),
+            color_scheme: String::new(),
+            custom_color_scheme: neenee_core::ColorSchemeConfig::default(),
+            click_outside_dismiss: default_click_outside_dismiss(),
+        }
+    }
 }
 
 /// Declarative permission configuration — the `[permissions]` table. Lets users
@@ -369,7 +395,7 @@ pub struct UserChannelConfig {
     /// clamped at request time to the resolved model's supported levels.
     /// On Anthropic, setting this (or `thinking`) opts the model in to
     /// reasoning: thinking defaults on unless `thinking = false`. Left unset,
-    /// Anthropic does not reason (ADR-0046). Ignored for Gemini transports.
+    /// Anthropic does not reason (ADR-0046). Ignored for Google transports.
     #[serde(default)]
     pub effort: Option<String>,
     /// Whether extended thinking is on (`true`) or off (`false`) for this
@@ -701,16 +727,20 @@ pub struct Config {
     // OpenAI
     pub openai_api_key: Option<SecretString>,
     pub openai_model: Option<String>,
-    // Google / Gemini. The `google` provider is multi-model: the active Gemini
-    // model lives in `default_model`, so there is no per-provider model slot.
-    pub gemini_api_key: Option<SecretString>,
-    /// Versioned base URL for the built-in `google` Gemini provider. Defaults to
-    /// Google's official API; override (`GEMINI_BASE_URL` env first) to point at
-    /// a Gemini-format relay/中转站 (supply its host with the `/v1beta` prefix —
-    /// the provider appends `/models/{id}:generateContent` itself). One key
-    /// authenticates every Gemini model; the active model id lives in
-    /// `default_model`.
-    pub gemini_base_url: Option<String>,
+    // Google. The `google` provider is multi-model: the active model lives in
+    // `default_model`, so there is no per-provider model slot. (Field names
+    // renamed from `gemini_*`; the old keys are kept as serde aliases so an
+    // existing config.toml does not break on load.)
+    #[serde(alias = "gemini_api_key")]
+    pub google_api_key: Option<SecretString>,
+    /// Versioned base URL for the built-in `google` provider. Defaults to
+    /// Google's official API; override (`GOOGLE_BASE_URL` env first, falling
+    /// back to the legacy `GEMINI_BASE_URL`) to point at a Google-native
+    /// relay/中转站 (supply its host with the `/v1beta` prefix — the provider
+    /// appends `/models/{id}:generateContent` itself). One key authenticates
+    /// every model; the active model id lives in `default_model`.
+    #[serde(alias = "gemini_base_url")]
+    pub google_base_url: Option<String>,
     // Moonshot / Kimi Code (membership platform). The `kimi-code` preset pins
     // its model id via the provider registry, so the model override is kept
     // only for config/schema compatibility.
@@ -875,7 +905,7 @@ impl ToolVariantsConfig {
 ///
 /// Both fields are optional within an entry; an unset `effort` keeps the model
 /// default (`high`), and an unset `thinking` still opts in (thinking on). Only
-/// consulted for Anthropic-protocol models; ignored for OpenAI/Gemini.
+/// consulted for Anthropic-protocol models; ignored for OpenAI/Google.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ModelReasoningConfig(pub HashMap<String, ModelReasoningSettings>);
@@ -953,8 +983,8 @@ impl Default for Config {
             provider_retry_max_ms: 30_000,
             openai_api_key: None,
             openai_model: None,
-            gemini_api_key: None,
-            gemini_base_url: None,
+            google_api_key: None,
+            google_base_url: None,
             moonshot_api_key: None,
             moonshot_model: None,
             deepseek_api_key: None,
@@ -993,7 +1023,7 @@ impl Config {
                 .as_ref()
                 .map(SecretString::expose_secret),
             "google" => self
-                .gemini_api_key
+                .google_api_key
                 .as_ref()
                 .map(SecretString::expose_secret),
             "kimi-code" => self
@@ -1023,7 +1053,7 @@ impl Config {
     fn set_builtin_api_key(&mut self, id: &str, value: Option<SecretString>) {
         match id {
             "openai" => self.openai_api_key = value,
-            "google" => self.gemini_api_key = value,
+            "google" => self.google_api_key = value,
             "kimi-code" => self.moonshot_api_key = value,
             "deepseek" => self.deepseek_api_key = value,
             "zai-code" => self.zai_api_key = value,
@@ -1613,7 +1643,7 @@ id = "kimi"
         let mut cfg = Config {
             openai_api_key: Some("sk-openai".into()),
             anthropic_base_url: Some("https://relay.example.com/v1/messages".to_string()),
-            gemini_base_url: Some("https://gemini-relay.example.com/v1beta".to_string()),
+            google_base_url: Some("https://google-relay.example.com/v1beta".to_string()),
             ..Default::default()
         };
         cfg.providers.push(UserProviderConfig {
@@ -1647,8 +1677,8 @@ id = "kimi"
             "anthropic_base_url (endpoint, not a secret) was redacted"
         );
         assert!(
-            on_disk.contains("https://gemini-relay.example.com/v1beta"),
-            "gemini_base_url (endpoint, not a secret) was redacted"
+            on_disk.contains("https://google-relay.example.com/v1beta"),
+            "google_base_url (endpoint, not a secret) was redacted"
         );
 
         // credentials.toml holds the keys.
@@ -1771,23 +1801,25 @@ openai = "creds-key"
     }
 
     #[test]
-    fn tui_click_outside_dismiss_defaults_off_and_overrides() {
-        // The click-outside-to-dismiss pref is off by default: a stray click
-        // must not close a modal (and must not quit the `neenee resume`
-        // startup picker) unless the user explicitly opts in.
+    fn tui_click_outside_dismiss_defaults_on_and_overrides() {
+        // The click-outside-to-dismiss pref is ON by default: clicking the
+        // backdrop of a dismissable overlay closes it like Esc (the draft is
+        // parked, so nothing is lost). The startup-picker quit path and the
+        // never-dismissable "precious input" modals are gated elsewhere
+        // (`Modal::dismissable_by_outside_click`), not by this flag.
         let cfg: Config = toml::from_str("").unwrap();
         assert!(
-            !cfg.tui.click_outside_dismiss,
-            "click_outside_dismiss defaults to false"
+            cfg.tui.click_outside_dismiss,
+            "click_outside_dismiss defaults to true"
         );
 
-        // Explicit opt-in round-trips.
+        // Explicit opt-out round-trips.
         let toml = r#"
             [tui]
-            click_outside_dismiss = true
+            click_outside_dismiss = false
         "#;
         let cfg: Config = toml::from_str(toml).unwrap();
-        assert!(cfg.tui.click_outside_dismiss);
+        assert!(!cfg.tui.click_outside_dismiss);
     }
 
     // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------

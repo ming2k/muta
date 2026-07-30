@@ -1,4 +1,4 @@
-//! The `antigravity-sub2api` provider template: Gemini-native models served
+//! The `antigravity-sub2api` provider template: Google-native models served
 //! by Antigravity sub2api relays.
 
 use neenee_core::thinking::ThinkingSupport;
@@ -6,7 +6,7 @@ use neenee_core::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
-/// Gemini-native models advertised by Antigravity sub2api relays.
+/// Google-native models advertised by Antigravity sub2api relays.
 ///
 /// The order is deliberate: callers use the first model as the initial active
 /// channel, while some relays reject the `-high` variant.
@@ -22,16 +22,16 @@ pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
 pub const MODELS: &[Model] = &[
 
     // ── sub2api / antigravity relay models ────────────────────────────────
-    // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
+    // Google-native 中转站 variants that advertise effort-tiered 3.1 Pro
     // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
     // surface (`/v1beta/models/{id}:generateContent`), so the metadata mirrors
-    // the Gemini family; the relay forwards the model id verbatim. The wire
+    // the Google family; the relay forwards the model id verbatim. The wire
     // responses include `thoughtSignature`/`thoughtsTokenCount`, so these
     // reason like the rest of the 3.x family.
     Model {
         id: "gemini-3.1-pro-high",
         name: "Gemini 3.1 Pro High",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -45,7 +45,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3.1-pro-low",
         name: "Gemini 3.1 Pro Low",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -59,7 +59,7 @@ pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3-flash",
         name: "Gemini 3 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -75,7 +75,7 @@ inventory::submit!(neenee_core::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "antigravity-sub2api",
     baselines: MODELS,
-    protocol: "gemini",
+    protocol: "google",
     discovery: true,
     fitting: false,
     models: ANTIGRAVITY_SUB2API_MODELS,

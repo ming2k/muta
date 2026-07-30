@@ -419,6 +419,12 @@ impl EnvoyHandle {
 #[derive(Default)]
 pub(crate) struct RoundState {
     token_usage: TokenUsage,
+    /// Accumulated provider *generation* time across every completed request
+    /// in this round (sum of each `RequestAccountingGuard`'s sealed span).
+    /// Excludes tool execution, hooks, and human-decision pauses — it is the
+    /// honest denominator for tokens/sec. Folded into `RoundOutcome` at the
+    /// round-exit gate.
+    generation_ms: u64,
     /// Consecutive ReAct turns whose tool calls were all `Read`-tier. Surfaced
     /// to user-configured `Turn` hooks so a hook can act on "exploration
     /// without progress". Reset to 0 by any turn containing an
@@ -515,6 +521,12 @@ struct RequestAccountingGuard {
     observed_completion_tokens: i64,
     observed_usage: Option<TokenUsage>,
     settled: bool,
+    /// Started when the provider request was dispatched, stopped once a valid
+    /// assistant response is available (before any tool dispatch). The
+    /// elapsed span is the round's *generation* time — the honest denominator
+    /// for tokens/sec that excludes tool execution and human-decision pauses.
+    started_at: Option<std::time::Instant>,
+    generation_ms: u64,
 }
 
 impl RequestAccountingGuard {
@@ -546,6 +558,8 @@ impl RequestAccountingGuard {
             observed_completion_tokens: 0,
             observed_usage: None,
             settled: false,
+            started_at: Some(std::time::Instant::now()),
+            generation_ms: 0,
         }
     }
 
@@ -557,6 +571,16 @@ impl RequestAccountingGuard {
 
     fn observe_usage(&mut self, usage: TokenUsage) {
         self.observed_usage = Some(usage);
+    }
+
+    /// Freeze the generation clock at the point a validated assistant response
+    /// is available — *before* tool calls are dispatched, so their execution
+    /// time never inflates the measured generation span. Safe to call more
+    /// than once within one guard; only the first call records a span.
+    fn seal_generation(&mut self) {
+        if let Some(start) = self.started_at.take() {
+            self.generation_ms = start.elapsed().as_millis() as u64;
+        }
     }
 
     fn settle(
@@ -706,6 +730,10 @@ pub struct RoundOutcome {
     /// from the active time so the human-thinking pause never drags the
     /// measured server throughput down.
     pub paused_ms: u64,
+    /// Time the model actually spent *generating* across this round's
+    /// completed provider requests — excluding tool execution, hooks, and
+    /// human-decision pauses. The most accurate denominator for tokens/sec.
+    pub generation_ms: u64,
 }
 
 impl Agent {
@@ -1189,6 +1217,11 @@ impl Agent {
         streamed_usage: Option<TokenUsage>,
         request: &mut RequestAccountingGuard,
     ) {
+        // Seal the generation clock now, while we hold a validated assistant
+        // response and before any tool dispatch, so tool execution never
+        // inflates the measured generation span.
+        request.seal_generation();
+        state.generation_ms = state.generation_ms.saturating_add(request.generation_ms);
         // Prefer the usage the provider reported (streamed, then drained).
         let reported = streamed_usage.or_else(|| self.provider.take_last_usage());
         if let Some(usage) = reported {
@@ -2361,6 +2394,7 @@ impl Agent {
                 message: response,
                 token_usage: state.token_usage,
                 duration_ms,
+                generation_ms: state.generation_ms,
                 paused_ms: self
                     .round_paused_ms
                     .load(std::sync::atomic::Ordering::Relaxed),
@@ -2777,6 +2811,7 @@ impl Agent {
                 message: response,
                 token_usage: round.state.token_usage,
                 duration_ms,
+                generation_ms: round.state.generation_ms,
                 paused_ms: self
                     .round_paused_ms
                     .load(std::sync::atomic::Ordering::Relaxed),
@@ -3317,7 +3352,7 @@ impl Agent {
         // content to be a string), so the actual image is injected as a
         // follow-up user-role message with the image attached — the same
         // channel paste-up uses. The provider serialises it to `image_url`
-        // (OpenAI-compat) / `inline_data` (Gemini), letting the model see the
+        // (OpenAI-compat) / `inline_data` (Google), letting the model see the
         // pixels. A short textual link ties the two messages together.
         if let ToolOutput::Image { mime, data } = result {
             messages.push(crate::conversation_context::tool_image(

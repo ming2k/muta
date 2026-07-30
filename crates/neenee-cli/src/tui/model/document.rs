@@ -864,12 +864,15 @@ impl TranscriptMessage {
         }
     }
 
-    /// The `envoy` tool spawns an envoy. Such tool steps are rendered as a
-    /// compact, non-expandable step that navigates into a dedicated envoy
-    /// view on activation (see the TUI focus stack) rather than expanding
-    /// inline.
+    /// A tool step that spawns an envoy — the read-only `envoy` tool or the
+    /// write-capable `envoy_code` tool. Such steps render as a compact,
+    /// non-expandable line that navigates into a dedicated envoy view on
+    /// activation (see the TUI focus stack) rather than expanding inline.
     pub fn is_envoy_task(&self) -> bool {
-        matches!(&self.kind, MessageKind::ToolStep { name, .. } if name == "envoy")
+        matches!(
+            &self.kind,
+            MessageKind::ToolStep { name, .. } if name == "envoy" || name == "envoy_code"
+        )
     }
 
     /// The call id of a tool step, used as the addressable identity of a

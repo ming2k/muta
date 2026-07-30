@@ -650,7 +650,7 @@ mod tests {
     fn separates_providers_and_models() {
         let ledger = TokenSourceLedger::new();
         ledger.record("openai", "gpt-4o", 100, true);
-        ledger.record("gemini", "gemini-2.5", 80, true);
+        ledger.record("google", "gemini-2.5", 80, true);
         ledger.record("kimi", "k2", 30, false);
         let report = ledger.snapshot();
         assert_eq!(report.rows.len(), 3);

@@ -57,12 +57,13 @@ pub struct ProviderTemplate {
     /// One-line description shown under the label in the chooser.
     pub description: &'static str,
     /// Wire protocol sent in `AgentRequest::AddProvider`: `"openai"` |
-    /// `"anthropic"` | `"gemini"`.
+    /// `"anthropic"` | `"google"` (the legacy `"gemini"` label is still
+    /// accepted).
     pub protocol: &'static str,
     /// Models seeded as channels. Empty means the user enters one via the Model
     /// field (templates can opt in when they need one).
     pub models: &'static [&'static str],
-    /// Whether the editor shows a Base URL field (false for native Gemini).
+    /// Whether the editor shows a Base URL field (false for native Google).
     pub needs_url: bool,
     /// Placeholder shown in the Base URL field — the full endpoint shape.
     pub url_hint: &'static str,
@@ -143,9 +144,9 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     },
     ProviderTemplate {
         id: "google",
-        label: "Google Gemini",
-        description: "Native Gemini API — Google AI Studio or compatible relay",
-        protocol: "gemini",
+        label: "Google",
+        description: "Native Google API — Google AI Studio or compatible relay",
+        protocol: "google",
         models: neenee_providers::GOOGLE_BUILTIN_MODELS,
         needs_url: true,
         url_hint: "https://generativelanguage.googleapis.com/v1beta",
@@ -281,8 +282,8 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: neenee_core::ChannelAuth::ApiKey,
     },
-    // Antigravity — a sub2api-style Gemini-native 中转站. The relay forwards
-    // model ids verbatim to the Gemini REST surface, so the `gemini` protocol
+    // Antigravity — a sub2api-style Google-native 中转站. The relay forwards
+    // model ids verbatim to the Google REST surface, so the `google` protocol
     // reaches it unchanged. The base URL is editable and pre-filled with a
     // documentation-safe example; users can replace it with their relay host.
     // The three effort-tiered / non-preview ids are seeded as channels — they
@@ -299,7 +300,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         id: "antigravity-sub2api",
         label: "Antigravity (sub2api)",
         description: "Antigravity sub2api relay",
-        protocol: "gemini",
+        protocol: "google",
         models: neenee_providers::ANTIGRAVITY_SUB2API_MODELS,
         needs_url: true,
         url_hint: "https://relay.example.com/antigravity/v1beta",
@@ -355,12 +356,12 @@ pub fn edit_fields(protocol: &str, auth: ChannelAuth) -> Vec<CustomField> {
 /// Whether a protocol's model set is *closed*: the candidate list is the full,
 /// fixed set and the add-model overlay must NOT offer a free-text fallback.
 /// OpenAI and Anthropic relays serve an open, evolving model set, so
-/// typing an unlisted id is legitimate; native Gemini is a closed family — its
+/// typing an unlisted id is legitimate; native Google is a closed family — its
 /// models are enumerated by Google and forwarded verbatim by relays, so an
 /// arbitrary id is almost certainly a typo or hallucination, not a real model.
 #[allow(dead_code)]
 pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
-    matches!(protocol_wire, "gemini")
+    matches!(protocol_wire, "google" | "gemini")
 }
 
 /// The registry model ids that match a custom protocol's wire format, used as the
@@ -370,7 +371,7 @@ pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
 pub fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
     let format = match protocol_wire {
         "anthropic" => WireFormat::AnthropicCompat,
-        "gemini" => WireFormat::Google,
+        "google" | "gemini" => WireFormat::Google,
         _ => WireFormat::OpenAi,
     };
     let mut seen = std::collections::HashSet::new();
@@ -679,12 +680,12 @@ mod tests {
     }
 
     #[test]
-    fn gemini_candidate_set_is_the_canonical_family() {
-        // The native-Gemini candidate list mirrors the ids Google plus common
-        // relays/中转站 serve — so a Custom Gemini provider offers real models,
+    fn google_candidate_set_is_the_canonical_family() {
+        // The native-Google candidate list mirrors the ids Google plus common
+        // relays/中转站 serve — so a Custom Google provider offers real models,
         // not hallucinated preview ids. Image/embedding/video-only models are
         // excluded (an agent only consumes the text generateContent surface).
-        let gemini = protocol_model_candidates("gemini");
+        let google = protocol_model_candidates("google");
         for id in [
             "gemini-3.5-flash",
             "gemini-3-pro-preview",
@@ -694,29 +695,29 @@ mod tests {
             "gemini-2.5-pro",
             "gemini-2.0-flash",
         ] {
-            assert!(gemini.contains(&id), "gemini candidate set missing {id}");
+            assert!(google.contains(&id), "google candidate set missing {id}");
         }
         // Image-generation variants must NOT be in the text agent's candidate set.
         assert!(
-            !gemini.contains(&"gemini-2.5-flash-image"),
-            "image-only model leaked into gemini candidates"
+            !google.contains(&"gemini-2.5-flash-image"),
+            "image-only model leaked into google candidates"
         );
     }
 
     #[test]
-    fn gemini_candidate_set_includes_antigravity_relay_models() {
-        // The Antigravity (sub2api) relay ids are registered as native-Gemini
-        // baselines, so the add-model overlay for a Gemini provider offers
+    fn google_candidate_set_includes_antigravity_relay_models() {
+        // The Antigravity (sub2api) relay ids are registered as native-Google
+        // baselines, so the add-model overlay for a Google provider offers
         // them (the closed-set policy has real candidates to pick from).
-        let gemini = protocol_model_candidates("gemini");
+        let google = protocol_model_candidates("google");
         for id in [
             "gemini-3.1-pro-high",
             "gemini-3.1-pro-low",
             "gemini-3-flash",
         ] {
             assert!(
-                gemini.contains(&id),
-                "antigravity relay model {id} missing from gemini candidates"
+                google.contains(&id),
+                "antigravity relay model {id} missing from google candidates"
             );
         }
     }
@@ -726,13 +727,13 @@ mod tests {
         // The Antigravity (sub2api) relay ships as a curated template so a user
         // adds it from "＋ Add connection" without editing config.toml. Its host
         // is fixed, so the base URL is pre-filled (`default_url`); the three
-        // effort-tiered / non-preview ids are seeded; and it speaks the gemini
+        // effort-tiered / non-preview ids are seeded; and it speaks the google
         // protocol (no free-text Model field — the closed family is the seed).
         let tmpl = PROVIDER_TEMPLATES
             .iter()
             .find(|t| t.label == "Antigravity (sub2api)")
             .expect("antigravity template offered in the chooser");
-        assert_eq!(tmpl.protocol, "gemini");
+        assert_eq!(tmpl.protocol, "google");
         assert_eq!(tmpl.models, neenee_providers::ANTIGRAVITY_SUB2API_MODELS);
         assert_eq!(
             tmpl.default_url,
@@ -783,7 +784,7 @@ mod tests {
         let builtin_labels = [
             "OpenAI",
             "Anthropic",
-            "Google Gemini",
+            "Google",
             "DeepSeek",
             "xAI OAuth",
             "ChatGPT OAuth",
@@ -807,14 +808,14 @@ mod tests {
     }
 
     #[test]
-    fn gemini_model_set_is_closed_others_open() {
+    fn google_model_set_is_closed_others_open() {
         // A closed set means the add-model overlay offers no free-text fallback:
         // the candidate list is the complete family, so an unmatched id is a
         // typo. OpenAI/Anthropic relays serve an open, evolving set, so typing
         // an unlisted id stays legitimate there.
         assert!(
-            protocol_model_set_closed("gemini"),
-            "native Gemini must be a closed model set"
+            protocol_model_set_closed("google"),
+            "native Google must be a closed model set"
         );
         assert!(
             !protocol_model_set_closed("openai"),

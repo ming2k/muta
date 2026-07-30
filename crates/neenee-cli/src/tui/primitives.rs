@@ -139,7 +139,6 @@ impl FixedModalSpec {
     pub const PROVIDER: Self = Self::new(72, 72);
     pub const HISTORY: Self = Self::new(70, 72);
     pub const QUESTION: Self = Self::new(78, 70);
-    pub const MODEL_EDITOR: Self = Self::new(60, 30);
     pub const OAUTH_PENDING: Self = Self::new(72, 48);
     pub const CUSTOM_PROVIDER: Self = Self::new(66, 66);
     pub const HELP: Self = Self::new(58, 70);
@@ -178,6 +177,14 @@ impl ContentModalSpec {
     pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);
     pub const CONFIG_THEME: Self = Self::new(78, 14, 84);
     pub const CONFIG_THEME_CUSTOM: Self = Self::new(70, 18, 90);
+    /// The unified provider/model editor (`draw_model_editor`). Sizes to its
+    /// content — at most three rows (API key, reasoning effort, extended
+    /// thinking) — instead of reserving a fixed 30% slab that left most of
+    /// the panel empty. Width 66% gives long API keys more room than the old
+    /// 60% while staying comfortably inside the viewport. `max_viewport_percent`
+    /// is a generous 60% purely as a ceiling; the real height is the content
+    /// row count plus chrome, which never approaches it.
+    pub const MODEL_EDITOR: Self = Self::new(66, 6, 60);
 
     pub const fn modal_spec(self) -> ModalSpec {
         self.spec

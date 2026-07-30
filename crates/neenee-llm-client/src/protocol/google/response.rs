@@ -444,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn usage_surfaces_gemini_cached_content_tokens_as_read() {
+    fn usage_surfaces_google_cached_content_tokens_as_read() {
         let u = usage(&serde_json::json!({
             "promptTokenCount": 900,
             "candidatesTokenCount": 30,

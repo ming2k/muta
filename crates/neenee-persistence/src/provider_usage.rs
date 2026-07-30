@@ -204,17 +204,17 @@ mod tests {
     #[test]
     fn record_sets_last_used_and_increments_count() {
         let mut usage = ProviderUsage::default();
-        assert_eq!(usage.use_count("gemini"), 0);
-        assert!(usage.last_used_ms("gemini").is_none());
+        assert_eq!(usage.use_count("google"), 0);
+        assert!(usage.last_used_ms("google").is_none());
 
-        usage.record("gemini");
-        assert_eq!(usage.use_count("gemini"), 1);
-        let first = usage.last_used_ms("gemini").expect("recorded");
+        usage.record("google");
+        assert_eq!(usage.use_count("google"), 1);
+        let first = usage.last_used_ms("google").expect("recorded");
 
-        usage.record("gemini");
-        assert_eq!(usage.use_count("gemini"), 2);
+        usage.record("google");
+        assert_eq!(usage.use_count("google"), 2);
         // A second activation never moves the clock backwards.
-        assert!(usage.last_used_ms("gemini").unwrap() >= first);
+        assert!(usage.last_used_ms("google").unwrap() >= first);
     }
 
     #[test]

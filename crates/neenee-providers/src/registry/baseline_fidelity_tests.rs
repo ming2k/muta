@@ -376,11 +376,11 @@ const PRE_MIGRATION: &[Model] = &[
     // The id strings mirror Google's official naming and the ids relay/中转站
     // gateways advertise — so a relay-served model resolves to real metadata
     // instead of a generic fallback. See ADR for the configurable
-    // `gemini_base_url`.
+    // `google_base_url`.
     Model {
         id: "gemini-3.5-flash",
         name: "Gemini 3.5 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -392,7 +392,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3-pro-preview",
         name: "Gemini 3 Pro Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -404,7 +404,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3-flash-preview",
         name: "Gemini 3 Flash Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -416,7 +416,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3.1-pro-preview",
         name: "Gemini 3.1 Pro Preview",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -429,7 +429,7 @@ const PRE_MIGRATION: &[Model] = &[
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
         id: "gemini-3.1-pro-preview-customtools",
         name: "Gemini 3.1 Pro Preview (Custom Tools)",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -448,7 +448,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3.1-pro-high",
         name: "Gemini 3.1 Pro High",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -460,7 +460,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3.1-pro-low",
         name: "Gemini 3.1 Pro Low",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -472,7 +472,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-3-flash",
         name: "Gemini 3 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -484,7 +484,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-2.5-flash",
         name: "Gemini 2.5 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -496,7 +496,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-2.5-pro",
         name: "Gemini 2.5 Pro",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
         tool_call: true,
@@ -508,7 +508,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-2.5-flash-lite",
         name: "Gemini 2.5 Flash-Lite",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
         tool_call: true,
@@ -520,7 +520,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gemini-2.0-flash",
         name: "Gemini 2.0 Flash",
-        family: "gemini",
+        family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
         tool_call: true,

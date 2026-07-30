@@ -20,8 +20,9 @@ use unicode_width::UnicodeWidthStr;
 use super::common::placeholder;
 use crate::tui::design::MODAL_INNER_H_PADDING;
 use crate::tui::primitives::{
-    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, content_modal_probe,
-    keyvocab, modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
+    ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, breadcrumb_parts,
+    content_modal_area, content_modal_probe, keyvocab, modal_chrome_rows, modal_frame,
+    modal_header_parts, render_body, render_modal_footer,
 };
 use crate::tui::view::Theme;
 
@@ -66,63 +67,78 @@ pub fn draw_token_report_modal(
     let drill = detail && round_count > 0;
     let selected = selected.min(round_count.saturating_sub(1));
 
-    let (title, body, footer): (&str, Vec<Line>, Vec<FooterHint>) = if drill {
+    // Compute the drill-in breadcrumb child once at function scope so the
+    // borrowed `HeaderPart`s live long enough to reach the header render.
+    // Only meaningful when `drill`; empty otherwise.
+    let drill_child = if drill {
+        let round = &usage_rounds(report)[selected];
+        round_label(round.number)
+    } else {
+        String::new()
+    };
+
+    let (header, body, footer, follow): (
+        Vec<HeaderPart<'_>>,
+        Vec<Line>,
+        Vec<FooterHint>,
+        Option<usize>,
+    ) = if drill {
+        // The drill-in sub-page keeps the same modal but switches its header
+        // to a breadcrumb ("Context Usage › 1st round") so the user sees
+        // where they are in the hierarchy.
+        let header = breadcrumb_parts("Context Usage", &drill_child).to_vec();
         (
-            "Round Usage",
+            header,
             detail_body(report, selected, body_width, theme),
             vec![
                 FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
                 FooterHint::always(keyvocab::ESC, "rounds"),
             ],
+            None,
         )
     } else if round_count == 0 {
+        let (body, follow) = list_body(
+            report,
+            context.snapshot,
+            context.window_tokens,
+            context.round_summary,
+            selected,
+            body_width,
+            theme,
+        );
         (
-            "Context Usage",
-            list_body(
-                report,
-                context.snapshot,
-                context.window_tokens,
-                context.round_summary,
-                selected,
-                body_width,
-                theme,
-            ),
+            vec![HeaderPart::title("Context Usage")],
+            body,
             vec![FooterHint::always(keyvocab::ESC, "close")],
+            follow,
         )
     } else {
+        let (body, follow) = list_body(
+            report,
+            context.snapshot,
+            context.window_tokens,
+            context.round_summary,
+            selected,
+            body_width,
+            theme,
+        );
         (
-            "Context Usage",
-            list_body(
-                report,
-                context.snapshot,
-                context.window_tokens,
-                context.round_summary,
-                selected,
-                body_width,
-                theme,
-            ),
+            vec![HeaderPart::title("Context Usage")],
+            body,
             vec![
                 FooterHint::always(keyvocab::ARROWS_UD, "select"),
                 FooterHint::always(keyvocab::ENTER, "turns"),
                 FooterHint::always(keyvocab::ESC, "close"),
             ],
+            follow,
         )
     };
 
-    let follow = if drill {
-        None
-    } else {
-        body.iter().position(|line| {
-            line.spans
-                .first()
-                .is_some_and(|span| span.content.starts_with("> "))
-        })
-    };
     let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
     let modal = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, modal.header, title, theme);
+    modal_header_parts(frame, modal.header, &header, theme);
     render_body(
         frame,
         modal.body,
@@ -144,7 +160,8 @@ pub fn draw_token_report_modal(
     area
 }
 
-/// Top level: one selectable row per user round.
+/// Top level: one selectable row per user round. Returns the body lines and
+/// the index of the selected row (for auto-scroll `follow`), if any.
 fn list_body(
     report: &TokenSourceReport,
     current_context: Option<ContextTokenSnapshot>,
@@ -153,11 +170,11 @@ fn list_body(
     selected: usize,
     body_width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Option<usize>) {
     let rounds = usage_rounds(report);
     let mut body = Vec::new();
+    let mut selected_line: Option<usize> = None;
 
-    body.push(section_heading("Current AI-visible context", theme));
     if let Some(snapshot) = current_context {
         let size = if context_window > 0 {
             let ratio = (snapshot.tokens as f64 / context_window as f64).clamp(0.0, 1.0);
@@ -184,11 +201,12 @@ fn list_body(
         ));
     }
 
-    // Latest generation throughput: output tokens / *active* generation time.
-    // Active time excludes the human-decision pause (permission prompts /
-    // ask_user), so this reflects the server's real efficiency, not how long
-    // the user deliberated. The pause share is shown parenthetically so a
-    // round that was mostly waiting is not misread as a slow model.
+    // Latest generation throughput: output tokens / *generation* time. The
+    // denominator is the time the model actually spent streaming (excluding
+    // tool execution, hooks, and human-decision pauses), so this reflects the
+    // server's real efficiency rather than how long tools ran or how long the
+    // user deliberated. The timing breakdown is pulled out into its own
+    // sibling "Time" row so the two read at the same glance level.
     if let Some(summary) = latest_tps {
         let tps = summary.tps();
         let tps_label = if tps > 0.0 {
@@ -196,26 +214,22 @@ fn list_body(
         } else {
             "–".to_string()
         };
-        let active_s = summary.active_ms() as f64 / 1000.0;
-        let paused_pct = if summary.duration_ms > 0 {
-            ((summary.paused_ms as f64 / summary.duration_ms as f64) * 100.0).round() as u32
-        } else {
-            0
-        };
-        let detail = format!(
-            "{tps_label}  ·  {active_s:.1}s active  ·  {paused_pct}% paused  ·  round {}",
-            summary.round
-        );
+        let active_s = summary.generation_ms.max(summary.active_ms()) as f64 / 1000.0;
         body.push(kv_styled(
             "Throughput",
-            &detail,
+            &tps_label,
+            Style::default().fg(theme.fg()),
+            theme,
+        ));
+        body.push(kv_styled(
+            "Time",
+            &format!("{active_s:.1}s active"),
             Style::default().fg(theme.fg()),
             theme,
         ));
     }
 
     body.push(Line::from(""));
-    body.push(section_heading("Request usage", theme));
 
     if rounds.is_empty() {
         body.push(placeholder(
@@ -223,99 +237,118 @@ fn list_body(
             true,
             theme.muted(),
         ));
-        return body;
+        return (body, None);
     }
 
-    const TOKENS_W: usize = 12;
-    const TURNS_W: usize = 9;
-    let label_width = body_width.saturating_sub(TOKENS_W + TURNS_W + 3).max(10);
+    // The round table has four content-sized columns — Round, State, Tokens,
+    // Turns — and any leftover modal width is split evenly across the gaps
+    // between them, so the columns breathe instead of clumping at the left.
+    // (No suffixes like "…" / "›" on the turn count; the dedicated State
+    // column carries the lifecycle signal that those glyphs used to encode.)
+    let mut tokens_w = "Tokens".width();
+    let mut turns_w = "Turns".width();
+    let mut state_w = "State".width();
+    for round in &rounds {
+        let t = if round.totals.has_tokens() {
+            fmt_tokens(round.totals.total())
+        } else {
+            "—".to_string()
+        };
+        tokens_w = tokens_w.max(t.width());
+        turns_w = turns_w.max(round.turns.len().to_string().width());
+        state_w = state_w.max(round_state(round).width());
+    }
+    // The label column is sized to its content (header + bare ordinals),
+    // capped so a very long label truncates rather than crowding the others.
+    let label_budget = body_width
+        .saturating_sub(state_w + tokens_w + turns_w)
+        .max(8);
+    let label_w = ["Round"]
+        .into_iter()
+        .map(str::width)
+        .chain(rounds.iter().map(|r| round_row_label(r.number).width()))
+        .map(|w| w.min(label_budget))
+        .max()
+        .unwrap_or(0);
+
+    // Remaining width after all columns → split into equal gaps between the
+    // four columns (3 inter-column gaps) plus a small left indent.
+    const LEFT_INSET: usize = 2;
+    let used = LEFT_INSET + label_w + state_w + tokens_w + turns_w;
+    let gaps = 3usize;
+    let total_gap = body_width.saturating_sub(used);
+    // Distribute remainder as evenly as possible; leftover cells go to the
+    // earlier gaps (keeps the row exactly `body_width` wide).
+    let base_gap = total_gap / gaps;
+    let extra = total_gap % gaps;
+    let gap_w = |i: usize| base_gap + if i < extra { 1 } else { 0 };
+
+    let header_bg = theme.panel();
+    let pad_span = |text: &str, width: usize, style: Style| {
+        Span::styled(format_padded_left(text, width), style)
+    };
+    let gap_span = |i: usize, bg| {
+        Span::styled(" ".repeat(gap_w(i)), Style::default().bg(bg))
+    };
 
     body.push(Line::from(vec![
+        Span::styled(" ".repeat(LEFT_INSET), Style::default().bg(header_bg)),
+        pad_span("Round", label_w, Style::default().bg(header_bg).fg(theme.muted())),
+        gap_span(0, header_bg),
+        pad_span("State", state_w, Style::default().bg(header_bg).fg(theme.muted())),
+        gap_span(1, header_bg),
         Span::styled(
-            format!("  {:<width$}", "Round", width = label_width),
-            Style::default().fg(theme.muted()),
+            format!("{:>width$}", "Tokens", width = tokens_w),
+            Style::default().bg(header_bg).fg(theme.muted()),
         ),
+        gap_span(2, header_bg),
         Span::styled(
-            format!("{:>width$}", "Tokens", width = TOKENS_W),
-            Style::default().fg(theme.muted()),
-        ),
-        Span::styled(
-            format!(" {:>width$}", "Turns", width = TURNS_W),
-            Style::default().fg(theme.muted()),
+            format!("{:>width$}", "Turns", width = turns_w),
+            Style::default().bg(header_bg).fg(theme.muted()),
         ),
     ]));
-    body.push(rule(body_width, theme));
 
     for (index, round) in rounds.iter().enumerate() {
         let is_selected = index == selected;
-        let marker = if is_selected { "> " } else { "  " };
-        let label = truncate_str(&round_label(round.number), label_width);
-        let label_style = if is_selected {
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD)
+        // Selection is shown purely by a subtle full-width background
+        // highlight (no arrow marker, no bold text) — the established
+        // convention for selectable rows elsewhere in this modal family.
+        let bg = if is_selected {
+            theme.selected()
         } else {
-            Style::default().fg(theme.fg())
+            theme.panel()
         };
+        let label = truncate_str(&round_row_label(round.number), label_budget);
         let token_text = if round.totals.has_tokens() {
             fmt_tokens(round.totals.total())
         } else {
             "—".to_string()
         };
-        let turn_text = if round.totals.pending {
-            format!("{} …", round.turns.len())
-        } else {
-            format!("{} ›", round.turns.len())
-        };
+        let turn_text = round.turns.len().to_string();
+        let (state_text, state_style) = round_state_styled(round, theme);
 
+        if is_selected {
+            selected_line = Some(body.len());
+        }
         body.push(Line::from(vec![
+            Span::styled(" ".repeat(LEFT_INSET), Style::default().bg(bg)),
+            pad_span(&label, label_w, Style::default().bg(bg).fg(theme.fg())),
+            gap_span(0, bg),
+            pad_span(state_text, state_w, state_style.bg(bg)),
+            gap_span(1, bg),
             Span::styled(
-                format!("{marker}{label:<width$}", width = label_width),
-                label_style,
+                format!("{token_text:>width$}", width = tokens_w),
+                Style::default().bg(bg).fg(theme.fg()),
             ),
+            gap_span(2, bg),
             Span::styled(
-                format!("{token_text:>width$}", width = TOKENS_W),
-                Style::default().fg(theme.fg()),
-            ),
-            Span::styled(
-                format!(" {turn_text:>width$}", width = TURNS_W),
-                if round.totals.pending {
-                    Style::default().fg(theme.info())
-                } else {
-                    Style::default().fg(theme.muted())
-                },
+                format!("{turn_text:>width$}", width = turns_w),
+                Style::default().bg(bg).fg(theme.fg()),
             ),
         ]));
     }
 
-    body.push(rule(body_width, theme));
-    body.push(Line::from(vec![
-        Span::styled(
-            format!("  {:<width$}", "Total", width = label_width),
-            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "{:>width$}",
-                fmt_tokens(report.grand_total.total()),
-                width = TOKENS_W
-            ),
-            Style::default()
-                .fg(theme.fg())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {:>width$}", "", width = TURNS_W),
-            Style::default(),
-        ),
-    ]));
-
-    body.push(Line::from(""));
-    body.push(Line::from(Span::styled(
-        "Enter a round to inspect its model turns.",
-        Style::default().fg(theme.muted()),
-    )));
-    body
+    (body, selected_line)
 }
 
 /// Second level: aggregate all request attempts into the model turns of one
@@ -330,8 +363,6 @@ fn detail_body(
     let round = &rounds[selected];
     let mut body = Vec::new();
 
-    body.push(section_heading(&round_label(round.number), theme));
-    body.push(Line::from(""));
     body.push(kv_styled(
         "Total",
         &fmt_tokens(round.totals.total()),
@@ -389,83 +420,165 @@ fn detail_body(
 
     body.push(Line::from(""));
     body.push(section_heading("Turns", theme));
-    body.push(rule(body_width, theme));
 
+    // Split turns into the principal's own ReAct turns and any envoy sub-turns
+    // (nested turns spawned by an `envoy` tool call). The principal turns run
+    // first in execution order; envoys are shown beneath a small "Envoy"
+    // label so the nesting is clear without a fabricated parent ordinal.
+    // (The ledger's per-request record does not carry the parent turn index,
+    // so a faithful "3rd - 1st" pairing is not derivable.)
+    let principal_turns: Vec<&TurnUsage> = round
+        .turns
+        .values()
+        .filter(|t| t.actor == "principal")
+        .collect();
+    let envoy_turns: Vec<&TurnUsage> = round
+        .turns
+        .values()
+        .filter(|t| t.actor != "principal")
+        .collect();
+
+    // Token totals are tinted by their provenance: green when fully reported
+    // by the provider, yellow when estimated locally, plain when the turn is
+    // still pending/unknown. A legend is shown beneath the table.
     let full_table = body_width >= 62;
     if full_table {
         const STATE_W: usize = 16;
         const VALUE_W: usize = 10;
-        let round_width = body_width.saturating_sub(STATE_W + VALUE_W * 3).max(10);
+        let turn_col_w = body_width.saturating_sub(STATE_W + VALUE_W * 3).max(10);
         body.push(Line::from(Span::styled(
             format!(
-                "{:<round_width$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
+                "{:<turn_col_w$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
                 "Turn", "State", "Input", "Output", "Total"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for turn in round.turns.values() {
-            let label = truncate_str(&turn_label(turn), round_width);
-            let (state, state_style) = turn_state(turn, theme);
-            let (input, output) = if turn.totals.known_split {
-                (
-                    fmt_tokens(turn.totals.prompt_tokens),
-                    fmt_tokens(turn.totals.completion_tokens),
-                )
-            } else {
-                ("—".to_string(), "—".to_string())
-            };
-            let total = if turn.totals.has_tokens() {
-                fmt_tokens(turn.totals.total())
-            } else {
-                "—".to_string()
-            };
-            body.push(Line::from(vec![
-                Span::styled(
-                    format!("{label:<round_width$}"),
-                    Style::default().fg(theme.fg()),
-                ),
-                Span::styled(format!("{state:<STATE_W$}"), state_style),
-                Span::styled(format!("{input:>VALUE_W$}"), Style::default().fg(theme.fg())),
-                Span::styled(format!("{output:>VALUE_W$}"), Style::default().fg(theme.fg())),
-                Span::styled(format!("{total:>VALUE_W$}"), Style::default().fg(theme.fg())),
-            ]));
+        for turn in &principal_turns {
+            push_full_turn_row(&mut body, turn, turn_col_w, theme);
+        }
+
+        if !envoy_turns.is_empty() {
+            body.push(Line::from(""));
+            body.push(Line::from(Span::styled(
+                "Envoy".to_string(),
+                Style::default().fg(theme.muted()),
+            )));
+            for turn in &envoy_turns {
+                push_full_turn_row(&mut body, turn, turn_col_w, theme);
+            }
         }
     } else {
         const STATE_W: usize = 16;
         const TOTAL_W: usize = 11;
-        let round_width = body_width.saturating_sub(STATE_W + TOTAL_W).max(10);
+        let turn_col_w = body_width.saturating_sub(STATE_W + TOTAL_W).max(10);
         body.push(Line::from(Span::styled(
             format!(
-                "{:<round_width$}{:<STATE_W$}{:>TOTAL_W$}",
+                "{:<turn_col_w$}{:<STATE_W$}{:>TOTAL_W$}",
                 "Turn", "State", "Tokens"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for turn in round.turns.values() {
-            let label = truncate_str(&turn_label(turn), round_width);
-            let (state, state_style) = turn_state(turn, theme);
-            let total = if turn.totals.has_tokens() {
-                fmt_tokens(turn.totals.total())
-            } else {
-                "—".to_string()
-            };
-            body.push(Line::from(vec![
-                Span::styled(
-                    format!("{label:<round_width$}"),
-                    Style::default().fg(theme.fg()),
-                ),
-                Span::styled(format!("{state:<STATE_W$}"), state_style),
-                Span::styled(
-                    format!("{total:>TOTAL_W$}"),
-                    Style::default().fg(theme.fg()),
-                ),
-            ]));
+        for turn in &principal_turns {
+            push_compact_turn_row(&mut body, turn, turn_col_w, theme);
+        }
+
+        if !envoy_turns.is_empty() {
+            body.push(Line::from(""));
+            body.push(Line::from(Span::styled(
+                "Envoy".to_string(),
+                Style::default().fg(theme.muted()),
+            )));
+            for turn in &envoy_turns {
+                push_compact_turn_row(&mut body, turn, turn_col_w, theme);
+            }
         }
     }
 
+    body.push(Line::from(""));
+    body.push(Line::from(vec![
+        Span::styled(
+            "Tokens:  ".to_string(),
+            Style::default().fg(theme.muted()),
+        ),
+        Span::styled("green", Style::default().fg(theme.ok())),
+        Span::styled(
+            " = provider-reported   ".to_string(),
+            Style::default().fg(theme.muted()),
+        ),
+        Span::styled("yellow", Style::default().fg(theme.warn())),
+        Span::styled(" = local estimate".to_string(), Style::default().fg(theme.muted())),
+    ]));
+
     body
+}
+
+/// One turn row in the wide (≥62-col) detail table: label · state · input ·
+/// output · total. Token counts are tinted by their source provenance.
+fn push_full_turn_row(
+    body: &mut Vec<Line<'static>>,
+    turn: &TurnUsage,
+    turn_col_w: usize,
+    theme: &Theme,
+) {
+    const STATE_W: usize = 16;
+    const VALUE_W: usize = 10;
+    let label = truncate_str(&turn_label(turn), turn_col_w);
+    let (state, state_style) = turn_state(turn, theme);
+    let value_style = token_source_style(&turn.totals, theme);
+    let (input, output) = if turn.totals.known_split {
+        (
+            fmt_tokens(turn.totals.prompt_tokens),
+            fmt_tokens(turn.totals.completion_tokens),
+        )
+    } else {
+        ("—".to_string(), "—".to_string())
+    };
+    let total = if turn.totals.has_tokens() {
+        fmt_tokens(turn.totals.total())
+    } else {
+        "—".to_string()
+    };
+    body.push(Line::from(vec![
+        Span::styled(
+            format!("{label:<turn_col_w$}"),
+            Style::default().fg(theme.fg()),
+        ),
+        Span::styled(format!("{state:<STATE_W$}"), state_style),
+        Span::styled(format!("{input:>VALUE_W$}"), value_style),
+        Span::styled(format!("{output:>VALUE_W$}"), value_style),
+        Span::styled(format!("{total:>VALUE_W$}"), value_style),
+    ]));
+}
+
+/// One turn row in the narrow detail table: label · state · total.
+fn push_compact_turn_row(
+    body: &mut Vec<Line<'static>>,
+    turn: &TurnUsage,
+    turn_col_w: usize,
+    theme: &Theme,
+) {
+    const STATE_W: usize = 16;
+    const TOTAL_W: usize = 11;
+    let label = truncate_str(&turn_label(turn), turn_col_w);
+    let (state, state_style) = turn_state(turn, theme);
+    let total = if turn.totals.has_tokens() {
+        fmt_tokens(turn.totals.total())
+    } else {
+        "—".to_string()
+    };
+    body.push(Line::from(vec![
+        Span::styled(
+            format!("{label:<turn_col_w$}"),
+            Style::default().fg(theme.fg()),
+        ),
+        Span::styled(format!("{state:<STATE_W$}"), state_style),
+        Span::styled(
+            format!("{total:>TOTAL_W$}"),
+            token_source_style(&turn.totals, theme),
+        ),
+    ]));
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -605,6 +718,38 @@ impl RoundUsage {
         item.add_legacy(turn);
         self.totals.add_legacy(turn);
     }
+
+    /// Aggregate lifecycle of the round, derived from its turns' latest
+    /// statuses. Precedence: any in-flight turn ⇒ in flight; else any failed
+    /// ⇒ failed; else any interrupted/abandoned ⇒ interrupted; else completed.
+    fn status(&self) -> RequestUsageStatus {
+        let statuses = self.turns.values().map(|t| t.latest_status);
+        let mut any_in_flight = false;
+        let mut any_failed = false;
+        let mut any_interrupted = false;
+        let mut any_completed = false;
+        for s in statuses {
+            match s {
+                RequestUsageStatus::InFlight => any_in_flight = true,
+                RequestUsageStatus::Failed => any_failed = true,
+                RequestUsageStatus::Interrupted | RequestUsageStatus::Abandoned => {
+                    any_interrupted = true
+                }
+                RequestUsageStatus::Completed => any_completed = true,
+            }
+        }
+        if any_in_flight {
+            RequestUsageStatus::InFlight
+        } else if any_failed {
+            RequestUsageStatus::Failed
+        } else if any_interrupted {
+            RequestUsageStatus::Interrupted
+        } else if any_completed {
+            RequestUsageStatus::Completed
+        } else {
+            RequestUsageStatus::Abandoned
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -686,20 +831,67 @@ fn round_label(number: u64) -> String {
     if number == 0 {
         "Earlier usage".to_string()
     } else {
-        format!("Round {number}")
+        format!("{} round", ordinal(number))
     }
 }
 
-fn turn_label(turn: &TurnUsage) -> String {
-    let base = if turn.actor == "principal" {
-        format!("Turn {}", turn.number)
+/// Compact label for a row in the usage list: just the bare ordinal ("1st",
+/// "2nd"), since the table header ("Usage by round") already establishes that
+/// each row is a round. [`round_label`] keeps the fuller form for the detail
+/// view's heading.
+fn round_row_label(number: u64) -> String {
+    if number == 0 {
+        "Earlier".to_string()
     } else {
-        format!("Envoy · T{}", turn.number)
+        ordinal(number)
+    }
+}
+
+/// Compact English ordinal: 1 → "1st", 2 → "2nd", 3 → "3rd", 11/12/13 →
+/// "11th"/"12th"/"13th", and so on. Used for round labels so the list reads
+/// "1st round", "2nd round" rather than the heavier "Round 1".
+fn ordinal(n: u64) -> String {
+    let suffix = if n % 100 / 10 == 1 {
+        "th"
+    } else {
+        match n % 10 {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        }
     };
+    format!("{n}{suffix}")
+}
+
+fn turn_label(turn: &TurnUsage) -> String {
+    // Both principal turns and envoy sub-turns are turns within this round;
+    // label each by its bare ordinal. An envoy sub-turn is qualified as
+    // "<parent> - <sub>" to show it is nested under a principal turn — but the
+    // parent turn number is not carried in the ledger's per-request record
+    // (the envoy's `actor_id` holds the parent tool-call id, not the parent
+    // turn index), so we can only print the envoy's own sub-turn ordinal and
+    // rely on the grouping/sort to convey the nesting.
+    let base = ordinal(turn.number as u64);
     if turn.attempt_count > 1 {
         format!("{base} ×{}", turn.attempt_count)
     } else {
         base
+    }
+}
+
+/// Foreground style for a turn's token counts, tinted by their provenance:
+/// green when fully provider-reported, yellow when fully estimated, plain
+/// foreground when mixed or still pending/unknown.
+fn token_source_style(totals: &UsageTotals, theme: &Theme) -> Style {
+    if totals.pending || totals.total() <= 0 {
+        Style::default().fg(theme.fg())
+    } else if totals.estimated_tokens <= 0 {
+        Style::default().fg(theme.ok())
+    } else if totals.reported_tokens <= 0 {
+        Style::default().fg(theme.warn())
+    } else {
+        Style::default().fg(theme.fg())
     }
 }
 
@@ -714,11 +906,26 @@ fn turn_state(turn: &TurnUsage, theme: &Theme) -> (String, Style) {
     (state.to_string(), Style::default().fg(color))
 }
 
-fn rule(width: usize, theme: &Theme) -> Line<'static> {
-    Line::from(Span::styled(
-        "─".repeat(width),
-        Style::default().fg(theme.muted()),
-    ))
+/// Short label for a round's aggregate lifecycle, for the round-list table.
+fn round_state(round: &RoundUsage) -> &'static str {
+    match round.status() {
+        RequestUsageStatus::InFlight => "in flight",
+        RequestUsageStatus::Completed => "done",
+        RequestUsageStatus::Interrupted => "interrupted",
+        RequestUsageStatus::Failed => "failed",
+        RequestUsageStatus::Abandoned => "abandoned",
+    }
+}
+
+/// Round lifecycle label + color, ready to drop into a table cell.
+fn round_state_styled(round: &RoundUsage, theme: &Theme) -> (&'static str, Style) {
+    let color = match round.status() {
+        RequestUsageStatus::InFlight => theme.info(),
+        RequestUsageStatus::Completed => theme.ok(),
+        RequestUsageStatus::Interrupted | RequestUsageStatus::Abandoned => theme.warn(),
+        RequestUsageStatus::Failed => theme.err(),
+    };
+    (round_state(round), Style::default().fg(color))
 }
 
 fn kv_styled(key: &str, value: &str, value_style: Style, theme: &Theme) -> Line<'static> {
@@ -765,6 +972,21 @@ fn truncate_str(text: &str, max_width: usize) -> String {
     }
 }
 
+/// Left-align `text` into a fixed display-`width` field, padding the trailing
+/// cells with spaces. Width-aware (uses [`UnicodeWidthStr`]) so wide glyphs
+/// don't corrupt column alignment. Returns the text unchanged when it already
+/// meets or exceeds `width` (the caller is responsible for truncating first).
+fn format_padded_left(text: &str, width: usize) -> String {
+    let text_width = text.width();
+    if text_width >= width {
+        text.to_string()
+    } else {
+        let mut out = text.to_string();
+        out.push_str(&" ".repeat(width - text_width));
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,7 +1004,7 @@ mod tests {
     fn context_size_is_plain_without_provenance_legend() {
         let theme = Theme::default();
         let report = TokenSourceReport::default();
-        let body = list_body(
+        let (body, _follow) = list_body(
             &report,
             Some(ContextTokenSnapshot {
                 tokens: 12_500,
@@ -801,7 +1023,11 @@ mod tests {
             .find(|span| span.content.contains("12.5k / 200.0k"))
             .expect("context size span");
 
-        assert!(text.contains("Current AI-visible context"));
+        // The in-body section headings ("Current AI-visible context",
+        // "Request usage") have been removed — the modal title already
+        // conveys this, so the subtitles were redundant noise.
+        assert!(!text.contains("Current AI-visible context"));
+        assert!(!text.contains("Request usage"));
         // Provenance legend and source styling have been removed for a calmer
         // palette; values are plain foreground, not color/underline-coded.
         assert!(!text.contains("Provider-reported"));
@@ -837,20 +1063,62 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         assert_eq!(token_report_round_count(&report), 2);
-        let list = body_text(&list_body(&report, None, 0, None, 0, 80, &theme));
-        assert!(list.contains("Round 2"));
-        assert!(list.contains("Round 3"));
+        let (list_body_lines, follow) =
+            list_body(&report, None, 0, None, 0, 80, &theme);
+        let list = body_text(&list_body_lines);
+        // List rows use bare ordinals ("2nd", "3rd"); the round context is
+        // carried by the table header, and there is no longer a "Usage by
+        // round" sub-heading (it was redundant with the modal title).
+        assert!(list.contains("2nd"));
+        assert!(list.contains("3rd"));
+        assert!(!list.contains("Usage by round"));
+        assert!(!list.contains("2nd round")); // that fuller form is detail-only
+        assert!(!list.contains("Round 2"));
         assert!(!list.contains("relay"));
         assert!(!list.contains("model-a"));
         assert!(!list.contains("Provider-reported"));
+        // The Total row was removed (it duplicated the context-size summary),
+        // and so were the closing rule and the hint line.
+        assert!(!list.contains("Total"));
+        assert!(!list.contains("inspect its model turns"));
+        // The turn count is now a bare number (no "…" / "›" suffix glyphs),
+        // and a dedicated State column carries the lifecycle signal.
+        assert!(!list.contains('›'));
+        assert!(list.contains("State"));
+        assert!(list.contains("done"));
+        // `selected == 0` selects the first round row; the follow index must
+        // point at that row (the one carrying "2nd") for auto-scroll.
+        let follow_idx = follow.expect("a follow index for the selected row");
+        assert!(
+            list_body_lines[follow_idx]
+                .spans
+                .iter()
+                .any(|span| span.content.contains("2nd")),
+            "follow index {follow_idx} does not point at the selected round row"
+        );
 
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
-        assert!(detail_text.contains("Turn 1 ×2"));
-        assert!(detail_text.contains("Turn 2"));
+        // Turn labels are bare ordinals; the first turn was retried twice.
+        assert!(detail_text.contains("1st ×2"));
+        assert!(detail_text.contains("2nd"));
         assert!(detail_text.contains("2 / 3"));
         assert!(!detail_text.contains("another-provider"));
         assert!(!detail_text.contains("Provider-reported"));
+        // The token-source legend is rendered beneath the turns table.
+        assert!(detail_text.contains("green"));
+        assert!(detail_text.contains("local estimate"));
+        // The detail page's title is now the breadcrumb, not an in-body
+        // "2nd round" heading.
+        assert!(!detail_text.contains("2nd round"));
+        // No in-table separator rule beneath the Turns header.
+        assert!(
+            !detail
+                .iter()
+                .any(|line| line.spans.iter().any(|s| s.content.chars().all(|c| c == '─')
+                    && !s.content.is_empty())),
+            "turns table must not carry a separator rule"
+        );
 
         // Round total is rendered as plain foreground now (no provenance
         // color/underline encoding).
@@ -860,5 +1128,264 @@ mod tests {
             .find(|span| span.content.trim() == "2.9k")
             .expect("round total span");
         assert!(round_total.style.add.is_empty());
+    }
+
+    #[test]
+    fn selected_round_row_uses_background_highlight_not_arrow_or_bold() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+        let a = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
+        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40);
+        let b = ledger.begin_request("session", "relay", "model-a", 3, 1, 1_500);
+        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 75);
+        let report = ledger.snapshot_for_session("session");
+
+        // Select the second round (index 1).
+        let (body, follow) = list_body(&report, None, 0, None, 1, 80, &theme);
+        let selected_line = follow.expect("a follow index for the selected row");
+        let line = &body[selected_line];
+
+        // No ">" arrow marker anywhere in the selected row.
+        assert!(
+            !line.spans
+                .iter()
+                .any(|span| span.content.contains('>')),
+            "selected row must not carry an arrow marker"
+        );
+        // Every span of the selected row carries the selection background.
+        for span in &line.spans {
+            assert_eq!(
+                span.style.bg,
+                theme.selected(),
+                "span {:?} not using selection background",
+                span.content
+            );
+        }
+        // And no bold text on the selected label (the old brand+bold style).
+        // The row renders as [indent, label, gutter, tokens, turns, trail].
+        let label_span = &line.spans[1];
+        assert!(
+            !label_span.style.add.contains(Modifier::BOLD),
+            "selected label must not be bold"
+        );
+    }
+
+    #[test]
+    fn round_labels_use_ordinal_form() {
+        // `round_label` keeps the fuller "1st round" form for the detail view.
+        assert_eq!(round_label(0), "Earlier usage");
+        assert_eq!(round_label(1), "1st round");
+        assert_eq!(round_label(2), "2nd round");
+        assert_eq!(round_label(3), "3rd round");
+        assert_eq!(round_label(4), "4th round");
+        assert_eq!(round_label(11), "11th round");
+        assert_eq!(round_label(12), "12th round");
+        assert_eq!(round_label(13), "13th round");
+        assert_eq!(round_label(21), "21st round");
+        assert_eq!(round_label(22), "22nd round");
+        assert_eq!(round_label(23), "23rd round");
+        assert_eq!(round_label(111), "111th round");
+        assert_eq!(round_label(112), "112th round");
+
+        // `round_row_label` is the bare ordinal used in the usage list, where
+        // the "Usage by round" heading carries the round context.
+        assert_eq!(round_row_label(0), "Earlier");
+        assert_eq!(round_row_label(1), "1st");
+        assert_eq!(round_row_label(2), "2nd");
+        assert_eq!(round_row_label(3), "3rd");
+        assert_eq!(round_row_label(11), "11th");
+        assert_eq!(round_row_label(13), "13th");
+        assert_eq!(round_row_label(21), "21st");
+        assert_eq!(round_row_label(112), "112th");
+    }
+
+    /// The round table has four columns (Round / State / Tokens / Turns),
+    /// each content-sized, with leftover width split evenly across the
+    /// inter-column gaps. The token column must align across the header and
+    /// every data row, and each row fills the full body width (selection band
+    /// integrity).
+    #[test]
+    fn round_columns_are_content_sized_and_aligned() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+        let a = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
+        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40);
+        // A second round with a longer token total so the Tokens column must
+        // grow to fit it.
+        let b = ledger.begin_request("session", "relay", "model-a", 3, 1, 0);
+        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 1_234_567);
+        let report = ledger.snapshot_for_session("session");
+
+        let body_width = 80usize;
+        let (body, _follow) = list_body(&report, None, 0, None, 0, body_width, &theme);
+
+        // Header row carries "Tokens"; data rows carry a bare ordinal ("2nd",
+        // "3rd") plus a token value.
+        let header = body
+            .iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.trim() == "Tokens")
+            })
+            .expect("header row");
+        let is_ordinal = |c: &str| -> bool {
+            let b = c.as_bytes();
+            b.len() >= 3
+                && b[..b.len() - 2].iter().all(|x| x.is_ascii_digit())
+                && matches!(&b[b.len() - 2..], b"st" | b"nd" | b"rd" | b"th")
+        };
+        let data_rows: Vec<&Line> = body
+            .iter()
+            .filter(|line| {
+                let has_ordinal =
+                    line.spans.iter().any(|span| is_ordinal(span.content.trim()));
+                let has_number = line.spans.iter().any(|span| {
+                    let c = span.content.trim();
+                    !c.is_empty()
+                        && c.chars()
+                            .all(|ch| ch.is_ascii_digit() || ".kMB—".contains(ch))
+                });
+                has_ordinal && has_number
+            })
+            .collect();
+        assert_eq!(data_rows.len(), 2, "expected two round data rows");
+
+        // Span layout is identical for header and data rows:
+        //   [indent, label, gap0, state, gap1, tokens, gap2, turns]
+        // so the token value lives at span index 5 in every row. Its leading
+        // column offset is the cumulative width of spans 0..5.
+        const TOKEN_SPAN_IDX: usize = 5;
+        let token_offset = |line: &Line| -> usize {
+            line.spans[..TOKEN_SPAN_IDX]
+                .iter()
+                .map(|s| s.content.width())
+                .sum()
+        };
+        let header_off = token_offset(header);
+        let offsets: Vec<usize> = data_rows
+            .iter()
+            .map(|row| token_offset(row))
+            .collect();
+        for off in &offsets {
+            assert_eq!(
+                *off, header_off,
+                "token column not aligned across rows (header={header_off}, row={off})"
+            );
+        }
+
+        // Every data row fills the full body width (selection band integrity):
+        // the sum of span display widths equals body_width.
+        for row in &data_rows {
+            let total: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            assert_eq!(
+                total, body_width,
+                "data row does not fill body width ({total} != {body_width}); \
+                 selection highlight would not span the full row"
+            );
+        }
+    }
+
+    /// The detail view's turn table must (a) render newest-first and (b) tint
+    /// token totals by their provenance: green for provider-reported, yellow
+    /// for local estimate, plain for mixed/pending.
+    #[test]
+    fn detail_turns_are_in_execution_order_and_color_coded_by_source() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+
+        // Turn 1: reported usage (green). Turn 2: estimated (yellow).
+        let t1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
+        ledger.settle_request(
+            &t1,
+            RequestUsageStatus::Completed,
+            Some(neenee_core::TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 40,
+                total_tokens: 140,
+                ..Default::default()
+            }),
+            0,
+        );
+        let t2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
+        ledger.settle_request(&t2, RequestUsageStatus::Completed, None, 60);
+        let report = ledger.snapshot_for_session("session");
+
+        let detail = detail_body(&report, 0, 80, &theme);
+        let detail_text = body_text(&detail);
+
+        // Execution order: turn 1 (1st) appears before turn 2 (2nd).
+        let pos_1st = detail_text.find("1st").expect("1st turn label");
+        let pos_2nd = detail_text.find("2nd").expect("2nd turn label");
+        assert!(
+            pos_1st < pos_2nd,
+            "turns must be in execution order (1st before 2nd): got 1st@{pos_1st} vs 2nd@{pos_2nd}"
+        );
+
+        // The estimated turn's total (60) is tinted warning-yellow; the
+        // reported turn's total (140) is tinted success-green. Find the spans.
+        let find_total_span = |needle: &str| {
+            detail
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| span.content.trim() == needle)
+                .unwrap_or_else(|| panic!("token span {needle:?} not found"))
+        };
+        let reported_total = find_total_span("140");
+        assert_eq!(
+            reported_total.style.fg,
+            theme.ok(),
+            "reported turn total must be green (success)"
+        );
+        let estimated_total = find_total_span("60");
+        assert_eq!(
+            estimated_total.style.fg,
+            theme.warn(),
+            "estimated turn total must be yellow (warning)"
+        );
+
+        // The legend line explains both colors.
+        assert!(detail_text.contains("green"));
+        assert!(detail_text.contains("provider-reported"));
+        assert!(detail_text.contains("yellow"));
+        assert!(detail_text.contains("local estimate"));
+    }
+
+    /// Envoy sub-turns are grouped beneath an "Envoy" label and rendered with
+    /// their own bare ordinal (no `↳` glyph), separate from the principal's
+    /// own turns.
+    #[test]
+    fn detail_envoy_turns_are_grouped_without_arrow_glyph() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+
+        // Principal turns 1 and 2.
+        let p1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
+        ledger.settle_request(&p1, RequestUsageStatus::Completed, None, 40);
+        let p2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
+        ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60);
+        // An envoy sub-turn (turn 1 of the envoy actor) in the same round.
+        let e1 = ledger.begin_request_for_actor(
+            "session", "envoy:call_xyz", "relay", "model-a", 2, 1, 0,
+        );
+        ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120);
+        let report = ledger.snapshot_for_session("session");
+
+        let detail = detail_body(&report, 0, 80, &theme);
+        let detail_text = body_text(&detail);
+
+        // No stray arrow glyph anywhere.
+        assert!(!detail_text.contains('↳'));
+        // Principal turns render in execution order, before the envoy block.
+        let pos_1st = detail_text.find("1st").expect("1st principal turn");
+        let pos_2nd = detail_text.find("2nd").expect("2nd principal turn");
+        let pos_envoy = detail_text.find("Envoy").expect("Envoy group label");
+        assert!(pos_1st < pos_2nd);
+        assert!(
+            pos_2nd < pos_envoy,
+            "principal turns must come before the Envoy block"
+        );
+        // The envoy block header is present.
+        assert!(detail_text.contains("Envoy"));
     }
 }

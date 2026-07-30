@@ -747,11 +747,11 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
 }
 
 #[tokio::test]
-async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
+async fn google_list_models_sends_key_query_param_and_filters_non_text() {
     let mut server = Server::new_async().await;
     let _mock = server
         .mock("GET", "/v1beta/models")
-        // Gemini auth: the key is a query param, never a header.
+        // Google auth: the key is a query param, never a header.
         .match_query(Matcher::UrlEncoded(
             "key".to_string(),
             "gem-key".to_string(),
@@ -769,13 +769,13 @@ async fn gemini_list_models_sends_key_query_param_and_filters_non_text() {
 
     let key = SecretString::from("gem-key");
     let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::Gemini,
+        protocol: DiscoveryProtocol::Google,
         base_url: &format!("{}/v1beta", server.url()),
         api_key: &key,
         user_agent: None,
         extra_headers: &[],
     };
-    let models = list_models(req).await.expect("gemini discovery succeeds");
+    let models = list_models(req).await.expect("google discovery succeeds");
     // The embedding-only model is filtered out.
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["gemini-2.5-pro"]);

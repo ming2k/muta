@@ -39,8 +39,11 @@ the analogue of kimi-code's `coder` subagent.
 The two tools share one `EnvoyRegistry` (call ids are globally unique, so a
 user's reply routes to the correct live child regardless of which tool spawned
 it) but register as distinct capabilities under different names, so they
-coexist in the parent toolset without one shadowing the other. Because `CODE`
-sets `unattended: false`, every `bash`/`edit_file`/`write_file` the envoy
-emits surfaces as a `EnvoyEvent::PermissionRequest` the user approves before
-it executes — identical to a top-level write. See
-[ADR-0086](../../adr/0086-coding-envoy-profile.md).
+coexist in the parent toolset without one shadowing the other. `CODE` runs
+`unattended: true` like every other built-in envoy — the principal's act of
+calling `envoy_code` is the authorization for the delegated task, so the
+child's writes and commands execute on the envoy's own authority and do not
+route through the permission broker. (`ask_user` still uses the full-duplex
+channel.) See
+[ADR-0087](../../adr/0087-code-envoy-runs-unattended.md)
+(supersedes ADR-0086's `unattended: false`).

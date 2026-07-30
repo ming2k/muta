@@ -46,7 +46,7 @@ fn is_multi_model_provider(config: &Config, id: &str) -> bool {
 fn apply_switch_api_key(config: &mut Config, provider_type: &str, key: &str) {
     match provider_type {
         "openai" => config.openai_api_key = Some(key.into()),
-        "google" => config.gemini_api_key = Some(key.into()),
+        "google" => config.google_api_key = Some(key.into()),
         "kimi-code" => config.moonshot_api_key = Some(key.into()),
         "deepseek" => config.deepseek_api_key = Some(key.into()),
         "zai-code" => config.zai_api_key = Some(key.into()),
@@ -179,7 +179,7 @@ pub async fn add(
     let id = unique_provider_id(config, &name);
     let transport = match protocol.as_str() {
         "anthropic" => UserTransport::Anthropic,
-        "gemini" => UserTransport::Google,
+        "google" | "gemini" => UserTransport::Google,
         // Default (and explicit "openai"): the OpenAI-compatible chat surface.
         _ => UserTransport::OpenAi,
     };
@@ -327,7 +327,7 @@ pub async fn edit(
 
     let transport = match protocol.as_str() {
         "anthropic" => UserTransport::Anthropic,
-        "gemini" => UserTransport::Google,
+        "google" | "gemini" => UserTransport::Google,
         _ => UserTransport::OpenAi,
     };
     let trimmed_url = base_url.trim();

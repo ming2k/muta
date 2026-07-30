@@ -77,7 +77,7 @@ pub enum AgentRequest {
     },
     /// Add a user-defined provider from a TUI template, persist it to config,
     /// then activate it. `protocol` is one of `"openai"` | `"anthropic"` |
-    /// `"gemini"`; `api_key` may be empty (a keyless OpenAI-compatible relay
+    /// `"google"`; `api_key` may be empty (a keyless OpenAI-compatible relay
     /// suppresses the auth header). The harness derives a stable id from `name`.
     /// `models` is the provider's seeded model list — one channel per model,
     /// the first becoming the default/active model. A template that seeds the
@@ -491,11 +491,18 @@ pub struct RoundSummary {
     /// Total output (completion) tokens the model generated this round.
     pub output_tokens: u64,
     /// Full wall-clock duration of the round, including any human-decision
-    /// pause time (`paused_ms`).
+    /// pause time (`paused_ms`) and all tool execution.
     pub duration_ms: u64,
     /// Time within `duration_ms` the round spent parked on a human decision
     /// (a permission request or an `ask_user`). `0` when nothing blocked.
     pub paused_ms: u64,
+    /// Time the model actually spent *generating* — summed across every
+    /// completed provider request in the round, measured from request start
+    /// to a validated response and therefore **excluding** tool execution,
+    /// hooks, and human-decision pauses. This is the honest denominator for
+    /// tokens/sec: `tps = output_tokens / generation_ms`. Falls back to the
+    /// round `active_ms()` only when no request completed measurably.
+    pub generation_ms: u64,
 }
 
 impl RoundSummary {
@@ -506,15 +513,22 @@ impl RoundSummary {
         self.duration_ms.saturating_sub(self.paused_ms)
     }
 
-    /// Output tokens per second of *active* generation time. Returns `0.0`
-    /// when there was no measurable active time (e.g. an empty round) so the
-    /// UI can render `–` rather than `inf`.
+    /// Output tokens per second of *generation* time — the time the model
+    /// actually spent streaming a response, excluding tool execution and
+    /// human-decision pauses. Falls back to round `active_ms()` (wall-clock
+    /// minus human pause) when no provider request completed measurably, and
+    /// returns `0.0` when there is no usable denominator so the UI renders `–`
+    /// rather than `inf`.
     pub fn tps(&self) -> f64 {
-        let active = self.active_ms();
-        if active == 0 {
+        let denominator_ms = if self.generation_ms > 0 {
+            self.generation_ms
+        } else {
+            self.active_ms()
+        };
+        if denominator_ms == 0 {
             0.0
         } else {
-            (self.output_tokens as f64) * 1000.0 / (active as f64)
+            (self.output_tokens as f64) * 1000.0 / (denominator_ms as f64)
         }
     }
 }
@@ -774,7 +788,7 @@ pub struct ProviderPickerRow {
     /// providers.
     pub builtin: bool,
     /// Wire protocol id of the default channel (`"openai"` | `"anthropic"` |
-    /// `"gemini"`), used to pre-fill the edit form for a user-defined provider.
+    /// `"google"`), used to pre-fill the edit form for a user-defined provider.
     /// Empty for built-ins (their `e` editor only changes the API key).
     pub protocol: String,
     /// Base URL of the default channel, used to pre-fill the edit form. Empty
@@ -827,7 +841,7 @@ pub struct ProviderModelInfo {
     /// Wire model id. Mirrors an entry in [`ProviderPickerRow::models`].
     pub model: String,
     /// Wire protocol id of the channel serving this model (`"openai"` |
-    /// `"anthropic"` | `"gemini"`).
+    /// `"anthropic"` | `"google"`).
     pub protocol: String,
     /// Effective reasoning effort for channels whose model exposes an effort
     /// knob. `None` for protocols/models that do not expose one.
@@ -1217,16 +1231,34 @@ mod tests {
 
     #[test]
     fn round_summary_tps_excludes_human_pause() {
-        // 500 output tokens over 10s wall-clock, 8s of which the user spent
-        // deliberating on a permission prompt → only 2s of active generation.
-        // The honest TPS is therefore 250 tok/s, not 50.
+        // Fallback path (no generation_ms recorded): 500 output tokens over
+        // 10s wall-clock, 8s of which the user spent deliberating on a
+        // permission prompt → only 2s of active time. TPS = 250.
         let summary = RoundSummary {
             round: 3,
             output_tokens: 500,
             duration_ms: 10_000,
             paused_ms: 8_000,
+            generation_ms: 0,
         };
         assert_eq!(summary.active_ms(), 2_000);
+        assert!((summary.tps() - 250.0).abs() < 0.01, "got {}", summary.tps());
+    }
+
+    #[test]
+    fn round_summary_tps_uses_generation_time_excluding_tools() {
+        // A round that streamed 500 output tokens in 2s of real generation,
+        // then spent 30s executing tools, then 8s parked on a permission.
+        // Only the 2s of generation counts: TPS = 250, NOT ~12.5 (round
+        // active_ms) and NOT ~3.1 (wall-clock).
+        let summary = RoundSummary {
+            round: 3,
+            output_tokens: 500,
+            duration_ms: 40_000,
+            paused_ms: 8_000,
+            generation_ms: 2_000,
+        };
+        assert_eq!(summary.active_ms(), 32_000);
         assert!((summary.tps() - 250.0).abs() < 0.01, "got {}", summary.tps());
     }
 
@@ -1237,6 +1269,7 @@ mod tests {
             output_tokens: 0,
             duration_ms: 0,
             paused_ms: 0,
+            generation_ms: 0,
         };
         assert_eq!(summary.active_ms(), 0);
         assert_eq!(summary.tps(), 0.0);
@@ -1252,6 +1285,7 @@ mod tests {
             output_tokens: 100,
             duration_ms: 1_000,
             paused_ms: 2_000,
+            generation_ms: 0,
         };
         assert_eq!(summary.active_ms(), 0);
         assert_eq!(summary.tps(), 0.0);

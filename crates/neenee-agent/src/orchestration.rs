@@ -1076,6 +1076,7 @@ pub async fn execute_round(
                 output_tokens: outcome.token_usage.completion_tokens.max(0) as u64,
                 duration_ms: outcome.duration_ms,
                 paused_ms: outcome.paused_ms,
+                generation_ms: outcome.generation_ms,
             }),
         ));
     }

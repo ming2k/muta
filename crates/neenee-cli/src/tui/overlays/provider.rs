@@ -11,9 +11,10 @@ use crate::tui::model::layout::LayoutMap;
 
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::tui::primitives::{
-    FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, keymap_body_lines,
-    keymap_page_footer_hints, keyvocab, modal_area, modal_frame, modal_header, render_body,
-    render_modal_footer, render_modal_footer_with_more,
+    ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
+    content_modal_area, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area,
+    modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
+    render_modal_footer_with_more,
 };
 use crate::tui::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::tui::view::Theme;
@@ -583,7 +584,17 @@ pub fn draw_model_editor(
     thinking: Option<bool>,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
-    let area = modal_area(frame, FixedModalSpec::MODEL_EDITOR);
+    let geometry = ContentModalSpec::MODEL_EDITOR;
+
+    // Content-driven height: the editor has a fixed, width-independent row
+    // count (1–3), so size the panel to exactly fit them rather than reserving
+    // a fixed 30% slab that left most of the panel empty. We count the rows up
+    // front (the row count never depends on the body width — only the text
+    // within a row does), add the modal chrome, and let `content_modal_area`
+    // clamp the total to a sane viewport fraction.
+    let body_rows = show_key as u16 + effort.is_some() as u16 + thinking.is_some() as u16;
+    let desired = body_rows + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header(frame, f.header, &format!("Edit · {title}"), theme);

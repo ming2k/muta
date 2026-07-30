@@ -175,38 +175,82 @@ are derived from these records instead of serving as mutable primary state.
 
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is now **clickable**. Clicking it opens a centered, read-only
-**Context Usage** modal. The top section shows current AI-visible context. The
-request-usage section groups the active session's attempts by provider and
-model, and a detail page expands it into round, turn, and attempt rows:
+**Context Usage** modal. The top shows the current AI-visible context size
+plus the latest generation throughput; the request-usage list groups the
+active session's attempts by user round, and a detail page expands a round
+into its model turns:
 
 ```
 ┌─ Context Usage ───────────────────────────────────────────┐
-│ Current AI-visible context                              │
-│ Size                 12.5k / 200.0k (6%)                │
-│ Source               local request projection           │
-│ ──────────────────────────────────────────────────────────│
-│ Request usage                                            │
-│ openai · gpt-4o                 12.3k          100% real │
-│ relay · local-model              2.4k          estimated │
-│                                              Esc close     │
+│ Size                 12.5k / 200.0k (6%)                  │
+│ Throughput           52.3 tok/s                           │
+│ Time                 2.1s active                          │
+│                                                          │
+│   Round      State        Tokens      Turns               │
+│ ▌1st         done          12.3k         2                │
+│   2nd        done           2.4k         1                │
+│                                                          │
+│                            ↑↓ select  ↵ turns  Esc close │
 └────────────────────────────────────────────────────────────┘
 ```
 
+The top read-out has three peer key/value rows: context **Size**, latest
+**Throughput** (tokens/sec of the last completed round's generation), and
+**Time** (the active generation span that throughput was measured over).
+Beneath it sits the round ledger table — no sub-heading, since the modal
+title already names the view and the column headers frame the rows. The
+table has four columns: **Round** (bare ordinal label), **State** (the
+round's aggregate lifecycle — `done` / `in flight` / `failed` / …, the
+only colored column), **Tokens**, and **Turns** (a plain count, no `›`/`…`
+suffix — the State column carries that signal now). Column widths are
+content-driven: every column sizes to its widest cell, and any leftover
+modal width is split evenly across the gaps between columns, so the table
+breathes instead of clumping at one edge. The selected round row is
+indicated solely by a subtle full-width background highlight — no arrow
+marker, no bold text. The redundant Total row (it restated the grand total
+already summarized by the context size) and the closing hint line were
+dropped.
+
 The report answers two questions at a glance:
 
-- **"What would the next request contain?"** — the current-context section is
+- **"What would the next request contain?"** — the current-context line is
   available before the first request and refreshes after committed history
   changes.
-- **"How accurate is request accounting?"** — `% Real` describes the usage
-  ledger, not the current-context projection. `100%` means every settled token
-  for that model came from provider usage.
-- **"Which of my providers actually report usage?"** — the row breakdown makes
-  it obvious which models are measured and which are guessed, so a user
-  debugging a premature-overflow or never-compacts issue knows whether to look
-  at the estimator or at the provider.
+- **"How fast is the model generating?"** — the throughput line divides the
+  round's output tokens by its *generation* time (the time the model
+  actually spent streaming, excluding tool execution and human-decision
+  pauses), with the pause share shown parenthetically so a round that was
+  mostly waiting is not misread as a slow model.
+- **"Which round cost what?"** — the per-round totals make token spend
+  across the conversation visible at a glance; drilling into a round
+  exposes its individual model turns (and any retries). The detail page
+  keeps the same modal but switches its header to a breadcrumb
+  (`Context Usage › 1st round`) for hierarchy, and lists turns in execution
+  order.
+  Token totals in the table are tinted by provenance — green when
+  provider-reported, yellow when a local estimate — with a legend beneath
+  the table:
 
-The percentage colors signal accuracy at a glance: green when fully reported,
-yellow when mixed, muted/red when all estimated.
+```
+┌─ Context Usage › 1st round ──────────────────────────────┐
+│ Total                2.9k                                 │
+│ Turns / attempts     2 / 3                                │
+│                                                          │
+│ Turns                                                    │
+│ Turn            State             Input   Output    Total │
+│ 1st ×2          completed        790        40       830  │
+│ 2nd             completed          —        —     2.4k    │
+│                                                          │
+│ Tokens:  green = provider-reported   yellow = local est.  │
+│                                  ↑↓ scroll  Esc rounds    │
+└────────────────────────────────────────────────────────────┘
+```
+
+Turns are listed in execution order (oldest first). When a round spawned
+`envoy` sub-turns, those are grouped beneath an `Envoy` label rather than
+interleaved, since the ledger records each envoy's own sub-turn number but
+not the principal turn that parented it (so a faithful `3rd - 1st` pairing
+is not derivable from the available data).
 
 ## Current context vs. request usage
 
@@ -215,7 +259,7 @@ The two displayed quantities intentionally answer different questions:
 | Quantity | Behavior | Used for |
 |----------|----------|----------|
 | **Current context** | Replaceable projection of the next provider input | Hint-bar meter, pruning, compaction |
-| **Request usage** | Additive input/output usage for every network attempt | Provider/model totals, billing diagnostics |
+| **Request usage** | Additive input/output usage for every network attempt | Per-round totals, billing diagnostics |
 
 Provider usage does not directly replace current context. Billed output can
 include hidden reasoning or generated text discarded by an interrupt, neither

@@ -116,7 +116,7 @@ fn is_transient_transport_error(error: &reqwest::Error) -> bool {
 }
 
 /// Query parameter names that may carry credentials in provider URLs —
-/// Gemini's `?key=` is the notable one; some relays accept `api_key` /
+/// Google's `?key=` is the notable one; some relays accept `api_key` /
 /// `access_token` the same way. A `reqwest::Error`'s `Display` embeds the
 /// request URL, so formatting it verbatim would leak the credential into
 /// logs and user-facing errors.
@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn redact_url_credentials_masks_gemini_style_key_param() {
+    fn redact_url_credentials_masks_google_style_key_param() {
         let message = "google transport error: error sending request for url \
                        (https://generativelanguage.googleapis.com/v1/models/gemini-3:streamGenerateContent?alt=sse&key=AIza-secret)";
         let redacted = redact_url_credentials(message);

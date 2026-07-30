@@ -650,7 +650,7 @@ pub struct HintBarView<'a> {
     /// tag right after the model name — only when reasoning is actually in use
     /// for this model. The caller resolves the value and applies the
     /// per-protocol gating (Anthropic: shown only when thinking is opted in;
-    /// OpenAI: shown whenever the model exposes an effort knob; Gemini:
+    /// OpenAI: shown whenever the model exposes an effort knob; Google:
     /// never), so this is `None` for models that are not reasoning. Mirrors
     /// the `◆ think on · {effort}` tag the `/models` picker shows on a row.
     pub reasoning_effort: Option<&'a str>,

@@ -157,7 +157,7 @@ pub struct Message {
     /// named field on this struct. The canonical example is Anthropic's
     /// extended-thinking `signature` — a cryptographic credential the server
     /// requires to reconstruct a prior `thinking` block on multi-turn replay.
-    /// It is meaningless to OpenAI/Gemini, so instead of a named
+    /// It is meaningless to OpenAI/Google, so instead of a named
     /// `thinking_signature` field (which would pollute this provider-agnostic
     /// type with one protocol's transport detail), Anthropic-specific values
     /// live under a `"thinking_signature"` key inside this map. Each concrete
@@ -177,12 +177,12 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     /// Inline image attachments (typically pasted into the prompt). Each part
     /// carries a MIME type and already-base64-encoded bytes so it can be
-    /// emitted directly as an OpenAI `image_url` data URL or a Gemini
+    /// emitted directly as an OpenAI `image_url` data URL or a Google
     /// `inline_data` part. Only user messages normally carry images.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ImagePart>>,
     /// Identifier of the provider/solution that produced this assistant
-    /// message (e.g. `"kimi-code"`, `"gemini"`). Stamped by the harness so a
+    /// message (e.g. `"kimi-code"`, `"google"`). Stamped by the harness so a
     /// session that mixes multiple models stays traceable after resume. Other
     /// roles leave this `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
