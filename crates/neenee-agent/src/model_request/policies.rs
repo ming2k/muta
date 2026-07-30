@@ -131,14 +131,14 @@ impl SystemPromptSection for PersistenceGuidance {
 }
 
 /// The autonomous-operation posture. Active only when the agent is running
-/// unattended this round. With the harness having reclaimed `ask_user` and
+/// autopilot this round. With the harness having reclaimed `ask_user` and
 /// auto-approving every side-effecting tool, this tells the model the human is
 /// unreachable — it must resolve ambiguity itself, pick a sensible default, and
 /// never block waiting for an answer that will not come. Leading `\n`
 /// separates it from the paragraphs above.
-struct UnattendedGuidance;
+struct AutopilotGuidance;
 
-const UNATTENDED: &str = "\nYou are running unattended: no human is reachable this round. The \
+const AUTOPILOT: &str = "\nYou are running on autopilot: no human is reachable this round. The \
                           question tool has been reclaimed and every tool permission auto-approves, \
                           so nothing you do will pause for confirmation. Decide and act on your own \
                           authority: when faced with ambiguity, pick the most reasonable default \
@@ -146,18 +146,18 @@ const UNATTENDED: &str = "\nYou are running unattended: no human is reachable th
                           irreversible or high-stakes choice you made on your own in your final \
                           summary instead of stopping to ask.";
 
-impl SystemPromptSection for UnattendedGuidance {
+impl SystemPromptSection for AutopilotGuidance {
     fn id(&self) -> &'static str {
-        "system.unattended"
+        "system.autopilot"
     }
     fn rank(&self) -> u32 {
         36
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.unattended
+        ctx.autopilot
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(UNATTENDED))
+        Some(String::from(AUTOPILOT))
     }
 }
 
@@ -239,7 +239,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);
     registry.register(PersistenceGuidance);
-    registry.register(UnattendedGuidance);
+    registry.register(AutopilotGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry

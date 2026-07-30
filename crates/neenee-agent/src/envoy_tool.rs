@@ -468,14 +468,14 @@ impl EnvoyTool {
             self.registry.register(id, _handle.clone());
         }
         // Full-duplex (ADR-0029): the broker gate is now profile-driven. The
-        // built-in profiles keep `unattended: true` to preserve the legacy
-        // autonomous contract, but a profile with `unattended: false` lets a
+        // built-in profiles keep `autopilot: true` to preserve the legacy
+        // autonomous contract, but a profile with `autopilot: false` lets a
         // envoy's write/execute tool calls surface as
         // `EnvoyEvent::PermissionRequest` up to the parent, with the user's
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        envoy.set_unattended(self.profile.unattended);
+        envoy.set_autopilot(self.profile.autopilot);
         // Resolve the bound profile's write grant (ADR-0028) against the
         // process cwd and set it on the child. All built-in profiles
         // (EXPLORE/REVIEW/TITLE: empty `write_paths`) resolve to
@@ -625,7 +625,7 @@ impl EnvoyTool {
             // the registry → handle → `reply_permission`, which resolves the
             // child's parked oneshot directly (no inbox drain needed). The
             // built-in profiles still suppress this in practice via
-            // `unattended` + excluding `requires_user` tools, so reaching
+            // `autopilot` + excluding `requires_user` tools, so reaching
             // here means either a future interactive profile is in use, or a
             // policy leak — forwarding (not dropping) is correct in both cases.
             neenee_core::AgentEvent::PermissionRequest(request) => {

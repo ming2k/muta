@@ -11,16 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`CODE` envoy runs unattended.** The coding envoy profile
-  (`envoy_code` dispatch tool) now runs `unattended: true`, matching every
+- **`unattended` renamed to `autopilot`.** The no-human-intervention mode flag is renamed
+  across the agent, permission store, envoy/principal profiles, events, server wire schema,
+  CLI flag, slash command, and docs. The flag's *behaviour* is unchanged (auto-approving
+  tool permissions, reclaiming `ask_user`, closing interactive stdin); only the name and
+  user-facing surfaces move to a clearer, positive term: `--autopilot`, `/autopilot [on|off]`,
+  a status-bar `autopilot` badge, the `AutopilotChanged` events, and `HarnessState.autopilot`
+  on the wire. `unattended` → `autopilot` everywhere; the `BashPolicyConfig.unattended_confirm`
+  field and `BashPolicyUnattendedAction` enum become `autopilot_confirm` /
+  `BashPolicyAutopilotAction`. `docs/explanation/agent-design/unattended.md` is renamed to
+  `autopilot.md`; ADR-0087's file follows. Note: this supersedes the earlier `auto_approve`
+  → `unattended` rename — the wire field key and event names change again, so clients must
+  update.
+
+- **`CODE` envoy runs on autopilot.** The coding envoy profile
+  (`envoy_code` dispatch tool) now runs `autopilot: true`, matching every
   other built-in envoy: the principal's act of calling `envoy_code` *is* the
   authorization for the delegated task, so the child's writes and commands
   no longer surface as per-call permission requests through the broker. The
   permission sheet stays the principal's gate; the principal reviews the
   envoy's handoff and stays accountable for the result. `ask_user`
   supervision is preserved via the full-duplex channel. Decided in
-  [ADR-0087](docs/adr/0087-code-envoy-runs-unattended.md), which supersedes
-  ADR-0086's `unattended: false` decision.
+  [ADR-0087](docs/adr/0087-code-envoy-runs-autopilot.md), which supersedes
+  ADR-0086's `autopilot: false` decision.
 - **`envoy_code` renders as an envoy step in the TUI.** A coding delegation
   now renders through `draw_envoy_inline_step` with the `EnvoyPresenter`
   summary — one navigable line plus a live status line, `Enter` to drill
@@ -69,7 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Status bar layout flipped.** The status bar now leads with the `unattended`
+- **Status bar layout flipped.** The status bar now leads with the `autopilot`
   flag on the left and trails with the tilde-shortened workspace path on the
   right — previously the workspace led and the flag trailed. A silent agent
   running is the most glance-worthy session state, so the warning-toned flag
@@ -111,8 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masked/plain field) to collect the response. Set `skip_interactive_input = true`
   under `[principal]` to **never** pop that panel: the command runs with stdin
   closed instead, reads EOF immediately, and fails fast with the existing
-  non-interactive remedy hint — exactly as under unattended mode, but without
-  turning the principal itself unattended (ordinary tool confirmations still
+  non-interactive remedy hint — exactly as under autopilot mode, but without
+  turning the principal itself autopilot (ordinary tool confirmations still
   apply). For users who find the prompt disruptive and prefer to retry the
   command themselves (or let the model retry with a non-interactive form). Added
   in `crates/neenee-persistence/src/config.rs` (`PrincipalConfig`), mirrored in
@@ -209,9 +222,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - The left-hand preview is now the **last effective user prompt** — the most
     recent user turn that is *not* a non-driving command echo. Slash commands
-    (`/unattended on`, `/session open …`) and `!shell` passthroughs (ADR-0050)
+    (`/autopilot on`, `/session open …`) and `!shell` passthroughs (ADR-0050)
     are agent operations, not AI-conversation turns, so a row like
-    `/unattended on` was meaningless as a preview; it is now excluded. The
+    `/autopilot on` was meaningless as a preview; it is now excluded. The
     deferred header parse was extended to read each message's `origin` (it
     previously decoded only role + content) so echoes are filtered by their
     `CommandEcho` provenance, not by fragile `/` string-sniffing.
@@ -227,11 +240,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call is no longer blocked outright when a user is reachable; it falls
   through to the permission broker for the operator to approve / always-allow /
   reject — handing the right to decide back to the user. It still hard-denies
-  under unattended (no human to answer), preserving the safety floor for
+  under autopilot (no human to answer), preserving the safety floor for
   autonomous runs. See [ADR-0084](docs/adr/0084-soft-write-scope-gate.md)
   (supersedes ADR-0028). Changed in `crates/neenee-agent/src/permission_policy.rs`
   (`ScopeGatePolicy`); docs updated in
-  `docs/explanation/agent-design/{unattended,rounds-and-turns,harness}.md` and
+  `docs/explanation/agent-design/{autopilot,rounds-and-turns,harness}.md` and
   `docs/reference/glossary.md`.
 
 ### Fixed
@@ -312,7 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Status bar.** A new one-row strip caps the footer directly below the hint
   bar, dedicated to ambient session state: the tilde-shortened workspace path
   (e.g. `~/projects/xx`) on the left, and persistent status flags
-  (`unattended`) on the right. It is always present while chrome is visible,
+  (`autopilot`) on the right. It is always present while chrome is visible,
   so the workspace is always glanceable. `docs/reference/tui/status-bar.md`
   documents it.
 - **Activity bar reference page.** The footer's transient breathing-dot
@@ -344,16 +357,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"rm -rf"` substring inside another command (e.g. an `rg` pattern) no longer
   trips the rule. The permission chain's deny contract was also simplified:
   the `PolicyDecision::Deny` `collective` flag (and the unused
-  `PermissionContext::unattended`) were dropped — collective-abort of a
+  `PermissionContext::autopilot`) were dropped — collective-abort of a
   parked batch is owned by the permission store's `reply`, keyed on a
   `PermissionDecision::Reject`.
 
 - **Hint bar split into input-focused hint bar + session status bar.** The
-  bottom hint row no longer carries the `unattended` flag alongside the model
+  bottom hint row no longer carries the `autopilot` flag alongside the model
   and context meter. It is now purely input-focused — next-`Enter` action on
   the left, model + reasoning + context on the right — and a new
   **status bar** sits one row below it carrying session-level state (workspace
-  path on the left, `unattended` on the right). The layout constant that
+  path on the left, `autopilot` on the right). The layout constant that
   drives the transient activity bar was renamed `STATUS_BAR_ROWS` →
   `ACTIVITY_BAR_ROWS` to free up the `STATUS_BAR_ROWS` name for the new bar.
 - **Queue bar gets a todos-style identity.** The persistent outbox bar now
@@ -643,9 +656,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **State bar relocated below the input and lowercased.** The persistent
   session-state row now sits directly under the input box (above the hint bar)
-  rather than between the activity bar and the input, so `unattended` reads as
+  rather than between the activity bar and the input, so `autopilot` reads as
   an attribute of the composer area. The flag is rendered lowercase
-  (`unattended`, warning tone + bold). The row still costs zero vertical space
+  (`autopilot`, warning tone + bold). The row still costs zero vertical space
   while no indicator is active and remains the designated home for future
   ambient state (workspace, etc.). See the
   [state bar reference](docs/reference/tui/state-bar.md).
@@ -773,7 +786,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a 50-pass cap, tripped a budget, or was interrupted. The default round model
   is now the simplest one: **a round ends when the model stops calling tools,
   and that is treated as completion.** Forced continuation is the model's
-  responsibility to need, not the client's to perform. For running unattended
+  responsibility to need, not the client's to perform. For running on autopilot
   on a schedule, use `/repeat`. The marker (`[NEENEE_PURSUIT_COMPLETE]`), the
   durable `Pursuit`/`PursuitBudget`/checkpoint types, the `SessionData` fields,
   and the `pursuit`/`pursuit_runtime`/`loop_checkpoint` session events are all
@@ -1098,7 +1111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or on an `ask_user` question (`UserQuestion`). Both are **observe-only /
   fire-and-forget**: their outcomes are ignored, so a notification hook can
   never grant/deny or alter the transcript. The canonical use is a desktop /
-  terminal-bell notification so a long-running task that goes unattended still
+  terminal-bell notification so a long-running task that goes on autopilot still
   grabs your attention. A drop-in `notify.sh` example is provided in
   `assets/hooks/`.
 
@@ -1509,7 +1522,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hatch: the classifier pauses the turn, surfaces an inline `Modal::
   InputInjection` panel (masked for secrets), and pipes the operator's reply in
   — mirroring `ask_user`'s oneshot round-trip, with no PTY. An opt-in
-  `[principal] allow_model_stdin` (default `false`) lets an unattended flow let
+  `[principal] allow_model_stdin` (default `false`) lets an autopilot flow let
   the model supply `stdin` directly; otherwise stdin is structurally unreachable
   from the model's arguments. `ToolOutput::Shell` gains a `termination` field
   (`#[serde(default)]`, back-compatible). See ADR-0043.
@@ -1670,7 +1683,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`auto_approve` renamed to `unattended`.** The no-prompt permission flag is renamed
+- **`auto_approve` renamed to `autopilot`.** The no-prompt permission flag is renamed
   across the agent, permission store, events, server, and docs. The hint bar no longer
   renders a separate `AUTO-APPROVE` pill — the shell-mode pill now conveys the active state
   on its own.

@@ -258,7 +258,7 @@ pub async fn run_tui(
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
-        unattended: false,
+        autopilot: false,
     }));
     let harness_clone = harness.clone();
     // Unified task list, mirrored from `AgentResponse::TodosUpdated`. Empty
@@ -971,7 +971,7 @@ pub async fn run_tui(
                             // its reply. Queue them FIFO so none is lost; the UI shows
                             // one sheet at a time and hands off as each is resolved.
                             // Stays global regardless of session so the modal always
-                            // surfaces (ADR-0017: the side runs unattended, so in
+                            // surfaces (ADR-0017: the side runs on autopilot, so in
                             // practice only the primary ever reaches here).
                             pending_permission_clone.lock().await.push_back(request);
                             if !routes_to_side {
@@ -1072,9 +1072,9 @@ pub async fn run_tui(
                                 *todos_clone.lock().await = Some(list);
                             }
                         }
-                        RoundEvent::UnattendedChanged(enabled) => {
+                        RoundEvent::AutopilotChanged(enabled) => {
                             if !routes_to_side {
-                                harness_clone.lock().await.unattended = enabled;
+                                harness_clone.lock().await.autopilot = enabled;
                             }
                         }
                         RoundEvent::RetryScheduled {
@@ -1354,7 +1354,7 @@ pub async fn run_tui(
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
-        unattended: false,
+        autopilot: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

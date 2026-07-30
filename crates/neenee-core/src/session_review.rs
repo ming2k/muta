@@ -12,7 +12,7 @@
 //! ADR-0018 drops the automatic cadence entirely. The periodic trigger cost a
 //! diagnostic envoy call on *every* long round — including legitimate ones
 //! — and, because ADR-0016 kept the round uncapped by default, the auto-trigger's
-//! value during truly unattended runs was already muted: it could only nudge,
+//! value during truly autopilot runs was already muted: it could only nudge,
 //! never abort, and an alert no one is watching does no good. The user is the
 //! best judge of "this feels stuck", so review is now **on-demand**: the
 //! `/review` command spawns the same bounded, read-only diagnostic envoy

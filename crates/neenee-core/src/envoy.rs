@@ -137,7 +137,7 @@ pub struct EnvoyProfile {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether the spawned envoy runs **unattended**: without human
+    /// Whether the spawned envoy runs **autopilot**: without human
     /// intervention — no permission confirmations, no questions, the envoy
     /// proceeds on its own authority. Concretely this bypasses the permission
     /// broker, but the intent is broader autonomy, not just prompt-skipping.
@@ -149,12 +149,12 @@ pub struct EnvoyProfile {
     /// `reply_permission`) are wired, a future interactive profile can set
     /// this `false` so an envoy's tool calls prompt the user through the
     /// same modal a top-level call uses, and the reply routes back down.
-    pub unattended: bool,
+    pub autopilot: bool,
     /// Whether an envoy spawned under this profile may have the **model**
     /// supply stdin bytes for a `bash` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
     /// envoys run non-interactively (the L1 hard floor + L2 idle watchdog
-    /// keep them from hanging); a profile aimed at unattended CI/batch flows
+    /// keep them from hanging); a profile aimed at autopilot CI/batch flows
     /// where no human is reachable can set this `true` so the model can feed
     /// a command's stdin directly. Without it, stdin is structurally
     /// unreachable from the model's arguments even inside an envoy.
@@ -289,7 +289,7 @@ handful of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: true,
+    autopilot: true,
     allow_model_stdin: false,
 };
 
@@ -316,7 +316,7 @@ the requested structured verdict only, no preamble.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: true,
+    autopilot: true,
     allow_model_stdin: false,
 };
 
@@ -342,16 +342,16 @@ the title in the same language as the conversation.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: true,
+    autopilot: true,
     allow_model_stdin: false,
 };
 
 /// The interactive envoy role (ADR-0029). The built-in roles
-/// ([`EXPLORE`]) are autonomous: `unattended: true` and
+/// ([`EXPLORE`]) are autonomous: `autopilot: true` and
 /// no `requires_user` tools, so they never block on a human. This role is the
 /// opposite shape — it is meant to run **under user supervision**: a `Write`
 /// ceiling admits the full tool ladder (read + execute + write),
-/// `allow_user_interaction` admits `ask_user`, and `unattended: false` leaves
+/// `allow_user_interaction` admits `ask_user`, and `autopilot: false` leaves
 /// the permission broker on, so every execute/write surfaces as a
 /// `EnvoyEvent::PermissionRequest` that round-trips through the parent
 /// harness ↔ TUI ↔ registry handle.
@@ -380,7 +380,7 @@ turns short and report concrete findings, then stop.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: false,
+    autopilot: false,
     allow_model_stdin: false,
 };
 
@@ -435,7 +435,7 @@ so. Run at most a handful of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: true,
+    autopilot: true,
     allow_model_stdin: false,
 };
 
@@ -471,7 +471,7 @@ const CODING_TOOLS: &[&str] = &[
 /// implement a delegated task end-to-end, then hand back a technically
 /// complete summary. It is the analogue of kimi-code's `coder` subagent.
 ///
-/// Like every built-in envoy, the role is **autonomous** (`unattended: true`):
+/// Like every built-in envoy, the role is **autonomous** (`autopilot: true`):
 /// the principal's act of delegating a task via the `envoy_code` tool *is* the
 /// authorization — the child runs its writes and commands on its own authority,
 /// without routing each one back through the permission broker. The broker
@@ -483,10 +483,10 @@ const CODING_TOOLS: &[&str] = &[
 ///   approval-gated tool), so an ambiguous requirement can be surfaced rather
 ///   than guessed; that path still uses the full-duplex channel
 ///   ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
-/// - `unattended: true` keeps the broker off for the child's writes/commands,
+/// - `autopilot: true` keeps the broker off for the child's writes/commands,
 ///   matching every other built-in profile.
 ///
-/// ADR-0086 originally shipped this profile with `unattended: false` (every
+/// ADR-0086 originally shipped this profile with `autopilot: false` (every
 /// write/command user-approved); ADR-0087 reverses that to keep the
 /// delegation-as-authorization contract uniform across envoys.
 ///
@@ -518,7 +518,7 @@ of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    unattended: true,
+    autopilot: true,
     allow_model_stdin: false,
 };
 
@@ -700,7 +700,7 @@ mod tests {
 
     /// INTERACTIVE (ADR-0029): `allowed_tools: None` admits every named tool,
     /// `allow_user_interaction` admits ask_user, but recursion and control-flow
-    /// are still absolute. Its `unattended: false` (asserted at runtime by the
+    /// are still absolute. Its `autopilot: false` (asserted at runtime by the
     /// duplex test) is what surfaces its calls as PermissionRequests.
     #[test]
     fn interactive_admits_all_named_tools_but_not_recursion_or_control() {
@@ -790,11 +790,11 @@ mod tests {
     /// ADR-0087: the principal's act of delegating via `envoy_code` *is* the
     /// authorization, so CODE runs autonomous like every other built-in
     /// profile — the permission broker is the principal's gate, not the
-    /// envoy's. Pins the value so ADR-0086's `unattended: false` cannot
+    /// envoy's. Pins the value so ADR-0086's `autopilot: false` cannot
     /// silently come back.
     #[test]
-    fn code_profile_runs_unattended() {
+    fn code_profile_runs_autopilot() {
         use crate::CODE;
-        assert!(CODE.unattended);
+        assert!(CODE.autopilot);
     }
 }

@@ -62,7 +62,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **envoy** | An isolated child agent spawned by the `envoy` tool to investigate a sub-question; shares only the provider with the parent, runs with a fresh history and profile-filtered tools. [Envoys](../explanation/agent-design/envoys.md) |
 | **profile** | A declarative bundle (name, system-prompt fragment, and a `ToolPolicy`) that scopes an envoy's behavior; bound by reference by dispatch tools. [Envoys](../explanation/agent-design/envoys.md) |
 | **`EXPLORE` profile** | Research role: `Read` ceiling, no write grant; pure read tools. Bound by the `envoy` tool. [Envoys](../explanation/agent-design/envoys.md) |
-| **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs unattended like every built-in envoy — the delegation via `envoy_code` is the authorization. Bound by the `envoy_code` tool. [ADR-0087](../adr/0087-code-envoy-runs-unattended.md) |
+| **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs autopilot like every built-in envoy — the delegation via `envoy_code` is the authorization. Bound by the `envoy_code` tool. [ADR-0087](../adr/0087-code-envoy-runs-autopilot.md) |
 | **`REVIEW` profile** | Read-only transcript auditor role used by the session-review diagnostic. [ADR-0016](../adr/0016-session-review-over-round-counting.md) |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | An envoy is not fire-and-forget: requests travel up to the parent, replies travel down to the exact child. [ADR-0029](../adr/0029-full-duplex-subagent-communication.md) |
@@ -80,9 +80,9 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **ceiling** | The ordered `ToolAccess` threshold a profile admits tools at or below. [Envoys](../explanation/agent-design/envoys.md) |
 | **`write_paths` grant** | A declarative relative-dir spec on `ToolPolicy`; admits a `Write` tool below the ceiling, then scoped at runtime. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
 | **`WriteScope`** | A runtime, per-agent filesystem-write boundary (`None` / `Scoped` / `Unrestricted`); enforced softly — out-of-scope calls go to the user, not a hard block. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
-| **write-scope gate** | The gating-stack step (after lookup, before the broker) that routes out-of-scope write tools to the broker for the user to decide; hard-blocks only under unattended, where no human can answer. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
+| **write-scope gate** | The gating-stack step (after lookup, before the broker) that routes out-of-scope write tools to the broker for the user to decide; hard-blocks only under autopilot, where no human can answer. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 | **permission broker** | The interactive authorization surface: Write/Execute tools pass through it before execution; offers once/always/reject. [Harness architecture](../explanation/agent-design/harness.md) |
-| **unattended** | When on, the agent runs without human intervention: tool permissions auto-approve, the question tool is reclaimed, and interactive stdin is closed — it decides and acts on its own authority. Affects the live process only. [Slash commands](commands.md) |
+| **autopilot** | When on, the agent runs without human intervention: tool permissions auto-approve, the question tool is reclaimed, and interactive stdin is closed — it decides and acts on its own authority. Affects the live process only. [Slash commands](commands.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 
 ## Skills
@@ -154,7 +154,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **model-request assembly** | The pure pre-provider projection that clones the current window, removes non-driving command echoes and legacy system messages, composes one fresh system message, and snapshots admitted tools into `ModelRequest`. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`SystemPromptSection`** | An agent-owned declarative system-prompt fragment with a stable id, rank, activation predicate, and renderer. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message of an ephemeral request. It does not construct user-role context or mutate the durable model window. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
-| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, admitted tool names, model/provider guidance, and unattended state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, admitted tool names, model/provider guidance, and autopilot state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **harness context message** | A model-visible user-role message inserted by the harness rather than authored by the user. Common constructors enforce role, visibility, and provenance; lifecycle owners decide payload and insertion time. [Prompt and message assembly](../explanation/agent-design/prompt-assembly.md) |
 
 ## Architecture

@@ -167,7 +167,7 @@ pub fn cursor_screen_pos(
 /// navigated into the transcript with Ctrl+↑/↓ — the dimmer "read-only"
 /// palette signals that the next keypress targets the step, not the input box.
 ///
-/// The elevated unattended state is no longer signalled here; it lives on the
+/// The elevated autopilot state is no longer signalled here; it lives on the
 /// state bar directly below the input, separate from composer state.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_composer(

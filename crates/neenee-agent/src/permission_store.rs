@@ -66,16 +66,16 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     project_root: Mutex<Option<std::path::PathBuf>>,
-    /// When true, the agent runs **unattended** — without human intervention:
+    /// When true, the agent runs **autopilot** — without human intervention:
     /// no permission confirmations, no questions. Operationally this skips the
     /// permission prompt entirely (and bypasses the allowlist wholesale), but
     /// the flag's meaning is "no human in the loop," not just "skip prompts."
     ///
     /// This is the **single source of truth** for the agent's attended state:
-    /// `Agent::get_unattended`/`set_unattended` are thin forwards here, and the
-    /// permission chain snapshots it once into `PolicyContext::unattended`
+    /// `Agent::get_autopilot`/`set_autopilot` are thin forwards here, and the
+    /// permission chain snapshots it once into `PolicyContext::autopilot`
     /// (cloned before the async chain runs, so no lock is held across `.await`).
-    unattended: Mutex<bool>,
+    autopilot: Mutex<bool>,
 }
 
 impl PermissionStore {
@@ -83,18 +83,18 @@ impl PermissionStore {
         Self {
             state: Mutex::new(PermissionState::default()),
             project_root: Mutex::new(None),
-            unattended: Mutex::new(false),
+            autopilot: Mutex::new(false),
         }
     }
 
-    // ── unattended ────────────────────────────────────────────────────
+    // ── autopilot ────────────────────────────────────────────────────
 
-    pub fn unattended(&self) -> bool {
-        *lock(&self.unattended)
+    pub fn autopilot(&self) -> bool {
+        *lock(&self.autopilot)
     }
 
-    pub fn set_unattended(&self, value: bool) {
-        *lock(&self.unattended) = value;
+    pub fn set_autopilot(&self, value: bool) {
+        *lock(&self.autopilot) = value;
     }
 
     // ── pending requests ────────────────────────────────────────────────

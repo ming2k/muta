@@ -1467,7 +1467,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::ToolCancelled { name, .. } => {
                 format!("tool-cancelled {name}")
             }
-            AgentEvent::UnattendedChanged(enabled) => format!("unattended {enabled}"),
+            AgentEvent::AutopilotChanged(enabled) => format!("autopilot {enabled}"),
             AgentEvent::SessionReview { alert } => {
                 format!("session-review alert={alert:?}")
             }
@@ -1791,7 +1791,7 @@ async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
         tool: "bash".to_string(),
         scope: "git reset --hard".to_string(),
     }]);
-    agent.set_unattended(true);
+    agent.set_autopilot(true);
 
     let mut messages = vec![Message::new(Role::User, "discard changes")];
     let outcome = agent
@@ -1991,9 +1991,9 @@ async fn ask_user_tool_unblocks_with_a_cancelled_result() {
 }
 
 #[tokio::test]
-async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
+async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
     // The model still names ask_user (carried from an older tool list), but
-    // under unattended the harness must not park on it. The call short-
+    // under autopilot the harness must not park on it. The call short-
     // circuits with a refusal, no user-question event fires, and the round
     // completes without a human.
     let ask_args = serde_json::json!({
@@ -2015,7 +2015,7 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     );
-    agent.set_unattended(true);
+    agent.set_autopilot(true);
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2030,9 +2030,9 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
     // No question was ever surfaced to a human.
     assert!(
         !lines.iter().any(|line| line.starts_with("user-question")),
-        "ask_user should not surface a question under unattended"
+        "ask_user should not surface a question under autopilot"
     );
-    // The stale call was answered with the unattended refusal.
+    // The stale call was answered with the autopilot refusal.
     assert!(
         lines.iter().any(|line| {
             line.starts_with("tool-result ask_user") && line.contains("unavailable")
@@ -2041,8 +2041,8 @@ async fn unattended_reclaims_ask_user_and_short_circuits_stale_calls() {
 }
 
 #[tokio::test]
-async fn unattended_hides_ask_user_from_the_advertised_toolset() {
-    // Under unattended, ask_user's schema must be dropped so the model cannot
+async fn autopilot_hides_ask_user_from_the_advertised_toolset() {
+    // Under autopilot, ask_user's schema must be dropped so the model cannot
     // name it in the first place. `ModelRequest` snapshots the visible set, so
     // asserting it is absent from that set is the model-facing truth.
     let agent = Agent::new(
@@ -2053,12 +2053,12 @@ async fn unattended_hides_ask_user_from_the_advertised_toolset() {
     let visible_before = agent.visible_tools();
     let names_before: Vec<&str> = visible_before.iter().map(|t| t.name()).collect();
     assert!(names_before.contains(&"ask_user"));
-    agent.set_unattended(true);
+    agent.set_autopilot(true);
     let visible_after = agent.visible_tools();
     let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
     assert!(
         !names_after.contains(&"ask_user"),
-        "ask_user should be reclaimed under unattended, got {names_after:?}"
+        "ask_user should be reclaimed under autopilot, got {names_after:?}"
     );
 }
 

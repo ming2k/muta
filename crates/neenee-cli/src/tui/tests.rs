@@ -1023,7 +1023,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
-        unattended: false,
+        autopilot: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

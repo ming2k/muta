@@ -178,7 +178,7 @@ Write capability is enforced per-agent through a `WriteScope` boundary
 permission broker is still the interactive layer inside it); an envoy carries
 a scope resolved from its profile. A write tool whose target is outside that
 scope is *routed to the broker* for the user to decide when attended, and
-hard-blocked only under unattended, where no human can answer the prompt. All
+hard-blocked only under autopilot, where no human can answer the prompt. All
 built-in envoy profiles carry a `Read` ceiling today, so this gate is
 inactive in practice but available to future scoped-write roles. MCP servers
 with `read_only = false` declare `Write` and are subject to the same gate when
@@ -205,12 +205,12 @@ The headless entry point automatically rejects write permissions.
 Interactive clients use the event-driven entry point and reply to emitted
 requests.
 
-The `unattended` toggle suppresses this broker entirely: when on, a
+The `autopilot` toggle suppresses this broker entirely: when on, a
 side-effecting tool never parks a request and the once/always/reject modal
 never appears. It is the live, blanket form of the relaxation the `always`
 allowlist grants per rule. For the design intent behind running without human
 intervention — and where the flag is forced on — see
-[Unattended operation](unattended.md).
+[Autopilot operation](autopilot.md).
 
 ## Durable session
 

@@ -353,11 +353,11 @@ pub struct App {
     pub loop_status: LoopStatus,
     pub activity_status: String,
     /// Whether write-tool permission prompts are bypassed this session
-    /// (`--unattended` / `/unattended on`). Mirrored from the harness
-    /// snapshot; surfaced by the state bar's flat `unattended` label (warning
+    /// (`--autopilot` / `/autopilot on`). Mirrored from the harness
+    /// snapshot; surfaced by the state bar's flat `autopilot` label (warning
     /// tone + bold) directly below the input so the elevated state is
     /// unmissable.
-    pub unattended: bool,
+    pub autopilot: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Activity modal (and no longer pinned above the input box) so
     /// the footer reclaims the vertical space. `None` (or an empty list)

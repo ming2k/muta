@@ -51,7 +51,8 @@ All of these collapse to one field on the harness's shared per-turn type:
 for everyone except Anthropic, which is the only one with an explicit write
 tier). From there the value flows into the
 [token-source ledger](token-accounting.md#the-token-source-ledger) and the
-Context Usage modal's "Cache read / write" + hit-rate display.
+Context Usage modal's "Cache hit (with parenthesized hit-rate)" /
+"Cache populate" display.
 
 ## The one rule (and why it exists)
 

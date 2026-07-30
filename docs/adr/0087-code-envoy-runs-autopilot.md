@@ -1,8 +1,8 @@
-# 0087. The `CODE` envoy runs unattended
+# 0087. The `CODE` envoy runs on autopilot
 
 - **Status:** Accepted
 - **Date:** 2026-07-30
-- **Supersedes:** [ADR-0086](0086-coding-envoy-profile.md) (the `unattended:
+- **Supersedes:** [ADR-0086](0086-coding-envoy-profile.md) (the `autopilot:
   false` decision only; the profile and the `envoy_code` dispatch tool from
   0086 stay)
 
@@ -10,11 +10,11 @@
 
 ADR-0086 introduced the `CODE` envoy profile and the `envoy_code` dispatch
 tool — a write-capable coding sub-agent, the first built-in envoy with side
-effects. Its load-bearing choice was `unattended: false`: every
+effects. Its load-bearing choice was `autopilot: false`: every
 `bash` / `edit_file` / `write_file` the child emits surfaces up as an
 `EnvoyEvent::PermissionRequest` and round-trips through the parent harness ↔
 TUI ↔ registry handle, so the user approves each one exactly as they would a
-top-level write. ADR-0086 listed `unattended: true` under "Alternatives
+top-level write. ADR-0086 listed `autopilot: true` under "Alternatives
 considered" and rejected it as "a meaningfully different trust posture."
 
 Two things surfaced once the profile was actually exercised end-to-end:
@@ -38,7 +38,7 @@ Two things surfaced once the profile was actually exercised end-to-end:
    approval prompts that are awkward to attribute ("whose `bash` is this?").
 
 Meanwhile every *other* built-in envoy profile (`EXPLORE`, `REVIEW`, `TITLE`,
-`QUANT`) runs `unattended: true`. CODE was the lone exception, which made
+`QUANT`) runs `autopilot: true`. CODE was the lone exception, which made
 the role vocabulary inconsistent: an envoy either runs on its own authority
 or it does not, and the line should not be drawn by *whether the profile
 happens to admit write tools* — admission and supervision are orthogonal
@@ -57,7 +57,7 @@ vocabulary.
 
 ## Decision
 
-1. **`CODE` runs unattended.** Set `unattended: true` on the `CODE` profile
+1. **`CODE` runs on autopilot.** Set `autopilot: true` on the `CODE` profile
    in `crates/neenee-core/src/envoy.rs`, matching every other built-in
    envoy. The child's writes and commands execute on the envoy's own
    authority; no `EnvoyEvent::PermissionRequest` is surfaced for them. The
@@ -84,16 +84,16 @@ Only the supervision posture and the TUI routing change.
 
 ## Alternatives considered
 
-- **Keep ADR-0086 as-is (`unattended: false`).** Rejected for the reasons
+- **Keep ADR-0086 as-is (`autopilot: false`).** Rejected for the reasons
   above: it double-charges the user, conflates the envoy and principal roles
   in one broker, and is inconsistent with every other built-in profile.
 
-- **A third, "supervised-coding" profile alongside an unattended `CODE`.**
+- **A third, "supervised-coding" profile alongside an autopilot `CODE`.**
   Rejected: the capability is already expressible as a future
   `write_paths`-scoped profile (ADR-0028 / ADR-0084) or via the reserved
   `INTERACTIVE` shape. Adding a second coding profile now, before anyone has
   asked for it, speculatively widens the vocabulary. The clean baseline is
-  "envoys run unattended"; a future role that needs per-call approval opts
+  "envoys run on autopilot"; a future role that needs per-call approval opts
   back in explicitly, the way `INTERACTIVE` already does.
 
 - **Drop `allow_user_interaction` too, for full autonomy.** Rejected:
@@ -126,7 +126,7 @@ on its supervision decision only.
 ## References
 
 - [ADR-0086](0086-coding-envoy-profile.md) — the `CODE` profile and
-  `envoy_code` tool this revises (superseded on the `unattended` decision).
+  `envoy_code` tool this revises (superseded on the `autopilot` decision).
 - [ADR-0011](0011-subagent-profiles.md) — admission and supervision are
   orthogonal axes.
 - [ADR-0028](0028-capability-allocation-scoped-writes.md) /

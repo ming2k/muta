@@ -613,11 +613,11 @@ pub enum RoundEvent {
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
     TodosUpdated(crate::todos::TodoList),
-    /// The unattended toggle changed. `unattended` = the agent runs without
+    /// The autopilot toggle changed. `autopilot` = the agent runs without
     /// human intervention (no confirmations, no questions). Emitted by
-    /// `/unattended` so the TUI can refresh its badge without waiting for the
+    /// `/autopilot` so the TUI can refresh its badge without waiting for the
     /// next harness snapshot.
-    UnattendedChanged(bool),
+    AutopilotChanged(bool),
     /// Mirrors [`AgentEvent::SessionReview`]. The TUI renders a non-modal
     /// alert with `alert` (or clears it when `alert` is empty).
     SessionReview {
@@ -726,9 +726,9 @@ pub struct HarnessSnapshot {
     #[serde(default)]
     pub round_counter: u64,
     /// Whether write-tool permission prompts are bypassed this session
-    /// (`--unattended` / `/unattended on`). The TUI mirrors this into a
+    /// (`--autopilot` / `/autopilot on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
-    pub unattended: bool,
+    pub autopilot: bool,
 }
 
 /// A row in the sessions picker: enough to identify, describe and order a past
@@ -917,7 +917,7 @@ pub enum EnvoyEvent {
     /// `reply_permission` (resolving the parked oneshot directly), unblocking
     /// the envoy's pending tool. Only fires when
     /// the envoy's profile does not suppress the broker (e.g. via
-    /// `unattended`) — a read-only profile never produces one.
+    /// `autopilot`) — a read-only profile never produces one.
     PermissionRequest(PermissionRequest),
     /// The envoy called `ask_user` and is blocked awaiting answers.
     /// Full-duplex (ADR-0029): carries the questions *up*; the reply travels
@@ -1019,8 +1019,8 @@ pub enum AgentEvent {
     /// The task list changed (`todo` / `todo_update`). The TUI uses this to refresh the
     /// unified sticky panel above the input box.
     TodosUpdated(crate::todos::TodoList),
-    /// The unattended toggle changed (via `/unattended`).
-    UnattendedChanged(bool),
+    /// The autopilot toggle changed (via `/autopilot`).
+    AutopilotChanged(bool),
     /// An on-demand session-review diagnostic ran (ADR-0018, superseding the
     /// periodic ADR-0016 design). `alert` is a pre-rendered, human-facing
     /// summary of the worst verdict across all review dimensions (empty string

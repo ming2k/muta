@@ -815,7 +815,7 @@ pub(super) async fn run_app_loop(
             app.current_model = runtime.current_model.lock().await.clone();
             let harness = runtime.harness.lock().await.clone();
             app.loop_status = harness.loop_status;
-            app.unattended = harness.unattended;
+            app.autopilot = harness.autopilot;
             app.activity_status = runtime.activity_status.lock().await.clone();
             app.session_context = runtime.session_context.lock().await.clone();
             app.todos = runtime.todos.lock().await.clone();
@@ -1531,7 +1531,7 @@ pub(super) async fn run_app_loop(
 
                 // The status bar caps the footer directly below the hint bar.
                 // It is the dedicated home for ambient session state: the
-                // `unattended` flag leads on the left, the workspace path
+                // `autopilot` flag leads on the left, the workspace path
                 // trails on the right. Drawn after the hint bar so its immutable borrow of `app.cwd` does not conflict with the
                 // composer's mutable borrow of `app.input_scroll` below. The
                 // permission sheet covers this row too, so suppress it while
@@ -1546,7 +1546,7 @@ pub(super) async fn run_app_loop(
                         status_rect,
                         view::StatusBarView {
                             workspace: &workspace,
-                            unattended: app.unattended,
+                            autopilot: app.autopilot,
                         },
                         &app.theme,
                     );

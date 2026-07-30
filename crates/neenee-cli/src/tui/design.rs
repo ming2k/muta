@@ -87,14 +87,14 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 /// the hint bar. Dedicated to ambient **session** state — state that describes
 /// the whole session rather than the current input. The left side shows the
 /// workspace path (tilde-shortened, e.g. `~/projects/xx`); the right side
-/// shows session status flags such as `unattended`. Always one row tall when
+/// shows session status flags such as `autopilot`. Always one row tall when
 /// the footer is visible, so the workspace is always glanceable. Drawn by
 /// `draw_status_bar`.
 pub(crate) const STATUS_BAR_ROWS: u16 = 1;
 /// Internal left indent of status-bar content (matches the hint bar's prompt
 /// prefix feel so the two rows align on the left edge).
 pub(crate) const STATUS_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the left `unattended` flag cluster and the
+/// Minimum gap between the left `autopilot` flag cluster and the
 /// right-aligned workspace path of the status bar.
 pub(crate) const STATUS_BAR_GAP_MIN: usize = 2;
 /// Todo bar: a one-line region that leads the footer stack (above the queue

@@ -1,6 +1,6 @@
 # 0086. The `CODE` envoy profile and the `envoy_code` dispatch tool
 
-- **Status:** Superseded by ADR-0087 (the `unattended: false` decision only;
+- **Status:** Superseded by ADR-0087 (the `autopilot: false` decision only;
   the profile, toolset, and dispatch tool below remain in force)
 - **Date:** 2026-08-14
 
@@ -20,7 +20,7 @@ loop) in its own context window the way a research sub-question is isolated.
 The capability machinery to do better already exists: the `ToolPolicy` name
 scope admits any tool by name, the full-duplex channel (ADR-0029) already
 forwards a child's `PermissionRequest` up and routes the user's reply back down,
-and `unattended: false` already keeps the permission broker on for a spawned
+and `autopilot: false` already keeps the permission broker on for a spawned
 agent. What was missing was (a) a profile that frames a write-capable coding
 role and (b) a dispatch tool bound to it.
 
@@ -44,7 +44,7 @@ that binds it.
   every other profile) so adding a future side-effecting tool to the parent
   never silently widens it.
 - Sets `allow_user_interaction: true` (admits `ask_user`) and
-  `unattended: false`. The latter is load-bearing: it leaves the permission
+  `autopilot: false`. The latter is load-bearing: it leaves the permission
   broker on, so every `bash`/`edit_file`/`write_file` the envoy emits surfaces
   as a `EnvoyEvent::PermissionRequest` that round-trips through the parent
   harness ↔ TUI ↔ registry handle. The user approves each one exactly as they
@@ -75,15 +75,15 @@ that binds it.
   (kimi-code's `subagent_type` model). Rejected: the profile is bound at
   construction today, and surfacing it as a model-facing parameter would force
   `run_envoy_outcome` to switch profiles per call, thread the selection through
-  identity/scope/unattended resolution, and rework the event-forwarding that
+  identity/scope/autopilot resolution, and rework the event-forwarding that
   assumes a fixed profile. Two distinct tools are a smaller, more local change
   that keeps each profile's framing in its own dispatch description.
 
-- **Make `CODE` autonomous (`unattended: true`), like `EXPLORE`.** Rejected:
+- **Make `CODE` autonomous (`autopilot: true`), like `EXPLORE`.** Rejected:
   a write-capable envoy that silently edits files and runs commands with no
   human gate is a meaningfully different trust posture. Routing every side
   effect through the broker — the same gate a top-level write hits — is the
-  conservative default; a future unattended-coding profile (e.g. for CI/batch)
+  conservative default; a future autopilot-coding profile (e.g. for CI/batch)
   can opt back in explicitly.
 
 - **Grant `CODE` a scoped `write_paths` (ADR-0028) instead of leaving it

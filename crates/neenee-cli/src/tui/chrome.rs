@@ -116,7 +116,7 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// ```
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
-/// Session-state flags such as `unattended` deliberately do not live here:
+/// Session-state flags such as `autopilot` deliberately do not live here:
 /// they live on the dedicated status bar below the hint bar
 /// ([`draw_status_bar`]) so this row stays a pure activity surface. The
 /// persistent task-list summary lives on its own [`draw_todo_bar`], floated
@@ -533,7 +533,7 @@ pub fn draw_completion_menu(
         0
     };
     // The popup never grows past a compact share of the viewport: the slash
-    // menu's longest description (e.g. /unattended's) would otherwise fill
+    // menu's longest description (e.g. /autopilot's) would otherwise fill
     // the whole row on a standard 80-column terminal, pushing the popup's
     // leading edge off the typed token and breaking the visual anchor.
     // Over-long descriptions truncate with an ellipsis (see the row builder
@@ -640,7 +640,7 @@ pub fn draw_completion_menu(
 
 /// Inputs for [`draw_hint_bar`]. Carries the model + context-usage info that
 /// the old top header showed, now collapsed onto one row. Session-level state
-/// (workspace path, `unattended`) deliberately lives on the status bar below,
+/// (workspace path, `autopilot`) deliberately lives on the status bar below,
 /// not here.
 pub struct HintBarView<'a> {
     pub current_model: &'a str,
@@ -725,7 +725,7 @@ fn input_action_spans(
 ///
 /// Layout: current input action on the left, right-aligned cluster of
 /// `model · reasoning · context-usage` on the right. Session-level state flags
-/// (such as `unattended`) deliberately do **not** live here — they moved to the
+/// (such as `autopilot`) deliberately do **not** live here — they moved to the
 /// status bar directly below. On narrow terminals, the action sentence compacts
 /// first and ambient model metadata drops before the action.
 pub fn draw_hint_bar(
@@ -842,7 +842,7 @@ pub fn draw_hint_bar(
     }
     // Drop order under width pressure: reasoning first, then context, then the
     // model name. The action on the left always wins last. (Session-state flags
-    // such as `unattended` are not on this row — they live on the status bar.)
+    // such as `autopilot` are not on this row — they live on the status bar.)
     if !fits(zone_pill_width, right_width) && show_reasoning {
         show_reasoning = false;
         right_width = right_width_for(show_model, show_reasoning, show_context);
@@ -919,11 +919,11 @@ pub struct StatusBarView<'a> {
     /// `~/projects/xx`). Already abbreviated by the caller; rendered as-is on
     /// the right.
     pub workspace: &'a str,
-    /// `true` while the session runs in unattended mode (`--unattended` /
-    /// `/unattended on`). Shown as a warning-toned `unattended` tag leading on
+    /// `true` while the session runs in autopilot mode (`--autopilot` /
+    /// `/autopilot on`). Shown as a warning-toned `autopilot` tag leading on
     /// the left. Plain text rather than a pill: it reads as a persistent
     /// session flag rather than a momentary input mode.
-    pub unattended: bool,
+    pub autopilot: bool,
 }
 
 /// Abbreviate an absolute path to its `~/...` form so the workspace reads as a
@@ -953,7 +953,7 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
 /// whole session rather than the current input — so the hint bar above it
 /// stays focused on the next input action.
 ///
-/// Layout: the `unattended` safety flag leads on the left (it is the most
+/// Layout: the `autopilot` safety flag leads on the left (it is the most
 /// glance-worthy state — a silent agent is running), and the tilde-shortened
 /// workspace path is right-aligned on the right. The path always renders (it
 /// is the row's reason to exist); the flag is built only while active. On
@@ -966,20 +966,20 @@ pub fn draw_status_bar(
     view: StatusBarView<'_>,
     theme: &Theme,
 ) {
-    let StatusBarView { workspace, unattended } = view;
+    let StatusBarView { workspace, autopilot } = view;
 
     let bg = theme.surface();
     let full_w = rect.width as usize;
     let inner = STATUS_BAR_INNER_PADDING;
 
-    // --- Left cluster: the `unattended` safety flag. Built from independent
-    // segments so future flags can be added the same way. `unattended` is the
+    // --- Left cluster: the `autopilot` safety flag. Built from independent
+    // segments so future flags can be added the same way. `autopilot` is the
     // only one today; it leads the row because a silent agent running is the
     // most glance-worthy session state, but it is the first item to drop under
     // width pressure (the workspace is the row's reason to exist).
-    let unattended_spans: Vec<Span<'static>> = if unattended {
+    let autopilot_spans: Vec<Span<'static>> = if autopilot {
         vec![Span::styled(
-            "unattended",
+            "autopilot",
             Style::default()
                 .fg(theme.warn())
                 .add_modifier(Modifier::BOLD)
@@ -988,13 +988,13 @@ pub fn draw_status_bar(
     } else {
         Vec::new()
     };
-    let unattended_width = unattended_spans
+    let autopilot_width = autopilot_spans
         .iter()
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    let mut show_unattended = unattended_width > 0;
-    let left_width_for = |unattended: bool| usize::from(unattended) * unattended_width;
+    let mut show_autopilot = autopilot_width > 0;
+    let left_width_for = |autopilot: bool| usize::from(autopilot) * autopilot_width;
 
     // --- Right cluster: workspace path, truncated from the LEFT (`prefix…`)
     // when it would collide with the left flag. Because the path is
@@ -1009,10 +1009,10 @@ pub fn draw_status_bar(
     };
 
     // Drop the left flag first if it cannot coexist with the full path.
-    let mut left_width = left_width_for(show_unattended);
-    if !fits(left_width, workspace_full_width) && show_unattended {
-        show_unattended = false;
-        left_width = left_width_for(show_unattended);
+    let mut left_width = left_width_for(show_autopilot);
+    if !fits(left_width, workspace_full_width) && show_autopilot {
+        show_autopilot = false;
+        left_width = left_width_for(show_autopilot);
     }
 
     // Resolve the workspace label: full path if it fits alongside the (possibly
@@ -1060,8 +1060,8 @@ pub fn draw_status_bar(
 
     // Assemble: [indent][left flag][gap][workspace][trailing fill].
     let mut left_spans: Vec<Span<'static>> = Vec::new();
-    if show_unattended {
-        left_spans.extend(unattended_spans);
+    if show_autopilot {
+        left_spans.extend(autopilot_spans);
     }
     let right_width: usize = workspace_spans.iter().map(|s| s.content.width()).sum();
     // The minimum gap only applies when both clusters are present; a lone
@@ -1462,8 +1462,8 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_unattended_on_the_left_and_workspace_on_the_right() {
-        // The status bar owns ambient session state: the `unattended` safety
+    fn status_bar_shows_autopilot_on_the_left_and_workspace_on_the_right() {
+        // The status bar owns ambient session state: the `autopilot` safety
         // flag leads on the left (a silent agent running is the most
         // glance-worthy state), and the workspace path trails on the right.
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
@@ -1473,7 +1473,7 @@ mod tests {
                 Rect::new(0, 0, 80, 1),
                 StatusBarView {
                     workspace: "~/projects/xx",
-                    unattended: true,
+                    autopilot: true,
                 },
                 &Theme::default(),
             );
@@ -1485,11 +1485,11 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text.contains("~/projects/xx"), "workspace missing: {text:?}");
-        assert!(text.contains("unattended"), "flag missing: {text:?}");
+        assert!(text.contains("autopilot"), "flag missing: {text:?}");
         // The flag must lead (left) and the workspace trail (right), so the
         // workspace is never before the flag in the rendered row.
         let ws = text.find("~/projects/xx").unwrap();
-        let flag = text.find("unattended").unwrap();
+        let flag = text.find("autopilot").unwrap();
         assert!(flag < ws, "flag should lead the workspace: {text:?}");
 
         // Without the flag the row must not show the tag, but still shows the
@@ -1501,7 +1501,7 @@ mod tests {
                 Rect::new(0, 0, 80, 1),
                 StatusBarView {
                     workspace: "~/projects/xx",
-                    unattended: false,
+                    autopilot: false,
                 },
                 &Theme::default(),
             );
@@ -1513,7 +1513,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(text2.contains("~/projects/xx"), "workspace missing: {text2:?}");
-        assert!(!text2.contains("unattended"), "flag leaked: {text2:?}");
+        assert!(!text2.contains("autopilot"), "flag leaked: {text2:?}");
     }
 
     #[test]
@@ -1528,7 +1528,7 @@ mod tests {
                 Rect::new(0, 0, 24, 1),
                 StatusBarView {
                     workspace: "~/projects/a-very-long-workspace-name",
-                    unattended: false,
+                    autopilot: false,
                 },
                 &Theme::default(),
             );
@@ -1560,7 +1560,7 @@ mod tests {
                 Rect::new(0, 0, 12, 1),
                 StatusBarView {
                     workspace: "~/projects/xx",
-                    unattended: true,
+                    autopilot: true,
                 },
                 &Theme::default(),
             );
@@ -1572,7 +1572,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(
-            !text.contains("unattended"),
+            !text.contains("autopilot"),
             "flag should have dropped under width pressure: {text:?}"
         );
     }
@@ -1738,7 +1738,7 @@ mod tests {
         assert!(!text.contains("todos"), "badge leaked: {text:?}");
         // Session-state flags live on the hint bar; the activity row never
         // carries them, even when they would fit.
-        assert!(!text.contains("unattended"), "row was {text:?}");
+        assert!(!text.contains("autopilot"), "row was {text:?}");
     }
 
     #[test]
@@ -2068,8 +2068,8 @@ mod tests {
             ("/models", "Switch the active model"),
             ("/tools", "Manage session tools (enable/disable)"),
             (
-                "/unattended",
-                "Toggle unattended mode — agent runs without human intervention (on/off)",
+                "/autopilot",
+                "Toggle autopilot mode — agent runs without human intervention (on/off)",
             ),
         ]
         .iter()
@@ -2113,7 +2113,7 @@ mod tests {
             .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
             .collect();
         assert!(row_text.trim_end().ends_with('…'), "row was {row_text:?}");
-        assert!(row_text.starts_with("/unattended"), "row was {row_text:?}");
+        assert!(row_text.starts_with("/autopilot"), "row was {row_text:?}");
     }
 
     #[test]

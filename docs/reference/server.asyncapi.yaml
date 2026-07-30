@@ -653,7 +653,7 @@ components:
         - { $ref: '#/components/schemas/EventCompacted' }
         - { $ref: '#/components/schemas/EventHarnessState' }
         - { $ref: '#/components/schemas/EventTodosUpdated' }
-        - { $ref: '#/components/schemas/EventUnattendedChanged' }
+        - { $ref: '#/components/schemas/EventAutopilotChanged' }
         - { $ref: '#/components/schemas/EventSessionReview' }
         - { $ref: '#/components/schemas/EventRetryScheduled' }
         - { $ref: '#/components/schemas/EventActivity' }
@@ -754,11 +754,11 @@ components:
       properties:
         HarnessState:
           type: object
-          required: [loop_status, round_counter, unattended]
+          required: [loop_status, round_counter, autopilot]
           properties:
             loop_status: { type: string, enum: [idle, running] }
             round_counter: { type: integer, minimum: 0 }
-            unattended: { type: boolean }
+            autopilot: { type: boolean }
           additionalProperties: false
       additionalProperties: false
     EventTodosUpdated:
@@ -766,7 +766,7 @@ components:
       required: [TodosUpdated]
       properties: { TodosUpdated: { $ref: '#/components/schemas/TodoList' } }
       additionalProperties: false
-    EventUnattendedChanged: { type: object, required: [UnattendedChanged], properties: { UnattendedChanged: { type: boolean } }, additionalProperties: false }
+    EventAutopilotChanged: { type: object, required: [AutopilotChanged], properties: { AutopilotChanged: { type: boolean } }, additionalProperties: false }
     EventSessionReview:
       type: object
       required: [SessionReview]

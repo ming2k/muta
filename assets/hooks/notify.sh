@@ -2,7 +2,7 @@
 # neenee interrupt/turn notification hook.
 #
 # Drop-in example: wire it to PermissionRequest / UserQuestion / Turn in your
-# config.toml so a long-running task that goes unattended still grabs your
+# config.toml so a long-running task that goes on autopilot still grabs your
 # attention when it blocks on you — or when a turn finishes.
 #
 #   [[hooks]]

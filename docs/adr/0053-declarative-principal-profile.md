@@ -13,7 +13,7 @@ role-agnostic.
 But the *declaration* was asymmetric:
 
 - **Envoy side** is declarative. A role is a `const EnvoyProfile` (name, system
-  prompt, `ToolPolicy`, `variant_pins`, `unattended`, `allow_model_stdin`); the
+  prompt, `ToolPolicy`, `variant_pins`, `autopilot`, `allow_model_stdin`); the
   `EnvoyTool` binds it and the role's `resolve_operation_scope` becomes a hard
   write/command boundary. Adding an envoy role = adding a const.
 - **Principal side** was imperative. `neenee-code`'s `main.rs` hand-assembled
@@ -34,7 +34,7 @@ Consequences:
    was no first-class object to register, compare, or restrict a principal by.
 
 The `Agent` engine already accepted every knob the profile would set
-(`set_agent_selection`, `set_operation_scope`, `set_unattended`,
+(`set_agent_selection`, `set_operation_scope`, `set_autopilot`,
 `set_hard_stop_turns`, `set_doom_guard_config`, `set_allow_model_stdin`); only
 the declarative bundling was missing.
 
@@ -51,7 +51,7 @@ pub struct PrincipalProfile {
     pub agent_selection: ToolSelection,   // capability scope (default unrestricted)
     pub operation_scope: OperationScope,  // write/command boundary (default unrestricted)
     pub config: PrincipalRuntimeConfig,   // hard_stop / nudge / allow_model_stdin
-    pub unattended: bool,
+    pub autopilot: bool,
 }
 ```
 
@@ -96,7 +96,7 @@ config still wins. A future quant/research/ops principal is another value.
   ADR-0042's role taxonomy is declared in one place.
 - **Unify `PrincipalProfile` and `EnvoyProfile` into one `Role`.** Deferred: a
   shared role abstraction is a plausible end state, but the fields differ enough
-  (identity struct vs. system-prompt string; runtime-config bundle; `unattended`
+  (identity struct vs. system-prompt string; runtime-config bundle; `autopilot`
   default) that a premature merge would blur the principal/envoy distinction
   ADR-0042 deliberately kept. The two types intentionally share `ToolPolicy` /
   `OperationScope` / `ToolSelection` as their common vocabulary instead.

@@ -63,7 +63,7 @@ model of one agent round.
 8. [User questions](user-questions.md) — the `ask_user` tool that blocks a round
    to resolve ambiguity. The reference for the oneshot-channel blocking
    pattern the permission broker also uses.
-9. [Unattended operation](unattended.md) — the design intent of running
+9. [Autopilot operation](autopilot.md) — the design intent of running
    without human intervention. Separates the *enforced* floor (the broker
    gate the flag controls) from the broader *expressed* posture
    (no confirmations, no questions), and the contexts where the flag is
@@ -116,7 +116,7 @@ user message
             └─ fallback? [Rounds and turns] parse tool call from text
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
-            ├─ [Harness] permission broker (Write tools only) — unattended? → skip
+            ├─ [Harness] permission broker (Write tools only) — autopilot? → skip
             ├─ [Envoys] if call is `envoy`: spawn isolated child,
             │              stream SubTaskEvent back through the same pipeline
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio

@@ -59,7 +59,7 @@ define_builtin_commands! {
     Clear       = "/clear"        : "Clear the conversation history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
     Config      = "/config"       : "Open user configuration",
-    Unattended  = "/unattended"   : "Toggle unattended mode — agent runs without human intervention (on/off)",
+    Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on/off)",
     Principal   = "/principal"    : "Switch the principal role (code|architect|reviewer|security) — changes persona and capability scope",
     Review      = "/review"       : "Run an on-demand session-review diagnostic of the current round",
     Search      = "/search"       : "Semantic search over the project's session history",
@@ -116,7 +116,7 @@ pub enum StartupMode {
 pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, bool) {
     let mut iter = args.into_iter().peekable();
     let mut project: Option<PathBuf> = None;
-    let mut unattended = false;
+    let mut autopilot = false;
     let mut single_instance = false;
     // `Some(inner)` once `--attach` is seen; `inner` is the optional session id.
     let mut attach: Option<Option<String>> = None;
@@ -137,8 +137,8 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             attach = Some(id);
         } else if let Some(value) = arg.strip_prefix("--attach=") {
             attach = Some(Some(value.to_string()));
-        } else if arg == "--unattended" {
-            unattended = true;
+        } else if arg == "--autopilot" {
+            autopilot = true;
         } else if arg == "--single-instance" {
             single_instance = true;
         } else {
@@ -151,7 +151,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             return (
                 StartupMode::Attach(id),
                 project,
-                unattended,
+                autopilot,
                 single_instance,
             );
         }
@@ -181,13 +181,13 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee --attach [id]    attach to a session server (spawning one if none is running)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --unattended            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee --attach [id]    attach to a session server (spawning one if none is running)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
                 cmd
             );
             std::process::exit(2);
         }
     };
-    (mode, project, unattended, single_instance)
+    (mode, project, autopilot, single_instance)
 }
 
 /// Initialise file-based tracing for the process.
@@ -261,10 +261,10 @@ mod tests {
 
     #[test]
     fn no_args_is_fresh() {
-        let (mode, project, unattended, single) = parse_args(Vec::new());
+        let (mode, project, autopilot, single) = parse_args(Vec::new());
         assert!(matches!(mode, StartupMode::Fresh));
         assert!(project.is_none());
-        assert!(!unattended);
+        assert!(!autopilot);
         assert!(!single);
     }
 

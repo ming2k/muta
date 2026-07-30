@@ -21,7 +21,7 @@
 
 - **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
-- **Scheduled Prompts** — Schedule recurring prompts on a clock with `/repeat` so the agent can run unattended on a schedule.
+- **Scheduled Prompts** — Schedule recurring prompts on a clock with `/repeat` so the agent can run on autopilot on a schedule.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
 

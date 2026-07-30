@@ -400,19 +400,22 @@ fn detail_body(
             .max(0);
         let denominator = (round.totals.cache_read_tokens + uncached).max(1) as f64;
         let hit_rate = (round.totals.cache_read_tokens as f64 / denominator * 100.0).round() as i64;
+        // "hit" vs "populate": a read is a *cache hit* (discounted reuse);
+        // a write is the *first-time population* of the provider cache this turn
+        // (billed at a premium so later turns can hit). The hit rate rides along
+        // in parentheses so it reads as one fact, not a separate metric.
         body.push(kv_styled(
-            "Cache read / write",
+            "Cache hit",
             &format!(
-                "{} / {}",
-                fmt_tokens(round.totals.cache_read_tokens),
-                fmt_tokens(round.totals.cache_write_tokens)
+                "{} ({hit_rate}%)",
+                fmt_tokens(round.totals.cache_read_tokens)
             ),
             Style::default().fg(theme.fg()),
             theme,
         ));
         body.push(kv_styled(
-            "Cache hit rate",
-            &format!("{hit_rate}%"),
+            "Cache populate",
+            &fmt_tokens(round.totals.cache_write_tokens),
             Style::default().fg(theme.fg()),
             theme,
         ));
@@ -421,77 +424,71 @@ fn detail_body(
     body.push(Line::from(""));
     body.push(section_heading("Turns", theme));
 
-    // Split turns into the principal's own ReAct turns and any envoy sub-turns
-    // (nested turns spawned by an `envoy` tool call). The principal turns run
-    // first in execution order; envoys are shown beneath a small "Envoy"
-    // label so the nesting is clear without a fabricated parent ordinal.
-    // (The ledger's per-request record does not carry the parent turn index,
-    // so a faithful "3rd - 1st" pairing is not derivable.)
-    let principal_turns: Vec<&TurnUsage> = round
-        .turns
-        .values()
-        .filter(|t| t.actor == "principal")
-        .collect();
-    let envoy_turns: Vec<&TurnUsage> = round
-        .turns
-        .values()
-        .filter(|t| t.actor != "principal")
-        .collect();
+    // The table is flattened: one row per provider request *attempt*, labelled
+    // "<turn> - <attempt>" (e.g. "1st - 1st", "1st - 2nd"), so a retried turn
+    // shows its attempts individually rather than collapsed into "1st ×2".
+    // Newest-first within each actor bucket; principal turns first, then any
+    // envoy sub-turns beneath an "Envoy" label.
+    let attempts = flat_attempts(report, round.number);
+    let principal_attempts: Vec<&FlatAttempt<'_>> =
+        attempts.iter().filter(|a| a.actor == "principal").collect();
+    let envoy_attempts: Vec<&FlatAttempt<'_>> =
+        attempts.iter().filter(|a| a.actor != "principal").collect();
 
     // Token totals are tinted by their provenance: green when fully reported
-    // by the provider, yellow when estimated locally, plain when the turn is
-    // still pending/unknown. A legend is shown beneath the table.
+    // by the provider, yellow when estimated locally, plain when unknown. A
+    // legend is shown beneath the table.
     let full_table = body_width >= 62;
     if full_table {
         const STATE_W: usize = 16;
         const VALUE_W: usize = 10;
-        let turn_col_w = body_width.saturating_sub(STATE_W + VALUE_W * 3).max(10);
+        let label_w = body_width.saturating_sub(STATE_W + VALUE_W * 3).max(10);
         body.push(Line::from(Span::styled(
             format!(
-                "{:<turn_col_w$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
+                "{:<label_w$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
                 "Turn", "State", "Input", "Output", "Total"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for turn in &principal_turns {
-            push_full_turn_row(&mut body, turn, turn_col_w, theme);
+        for a in &principal_attempts {
+            push_full_attempt_row(&mut body, a, label_w, theme);
         }
 
-        if !envoy_turns.is_empty() {
+        if !envoy_attempts.is_empty() {
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
                 "Envoy".to_string(),
                 Style::default().fg(theme.muted()),
             )));
-            for turn in &envoy_turns {
-                push_full_turn_row(&mut body, turn, turn_col_w, theme);
+            for a in &envoy_attempts {
+                push_full_attempt_row(&mut body, a, label_w, theme);
             }
         }
     } else {
         const STATE_W: usize = 16;
         const TOTAL_W: usize = 11;
-        let turn_col_w = body_width.saturating_sub(STATE_W + TOTAL_W).max(10);
+        let label_w = body_width.saturating_sub(STATE_W + TOTAL_W).max(10);
         body.push(Line::from(Span::styled(
             format!(
-                "{:<turn_col_w$}{:<STATE_W$}{:>TOTAL_W$}",
+                "{:<label_w$}{:<STATE_W$}{:>TOTAL_W$}",
                 "Turn", "State", "Tokens"
             ),
             Style::default().fg(theme.muted()),
         )));
 
-        for turn in &principal_turns {
-            push_compact_turn_row(&mut body, turn, turn_col_w, theme);
+        for a in &principal_attempts {
+            push_compact_attempt_row(&mut body, a, label_w, theme);
         }
 
-        if !envoy_turns.is_empty() {
+        if !envoy_attempts.is_empty() {
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
                 "Envoy".to_string(),
                 Style::default().fg(theme.muted()),
             )));
-            for turn in &envoy_turns {
-                push_compact_turn_row(&mut body, turn, turn_col_w, theme);
+            for a in &envoy_attempts {
+                push_compact_attempt_row(&mut body, a, label_w, theme);
             }
         }
     }
@@ -514,35 +511,37 @@ fn detail_body(
     body
 }
 
-/// One turn row in the wide (≥62-col) detail table: label · state · input ·
-/// output · total. Token counts are tinted by their source provenance.
-fn push_full_turn_row(
+/// One attempt row in the wide (≥62-col) detail table: label · state · input
+/// · output · total. Token counts are tinted by the attempt's source.
+fn push_full_attempt_row(
     body: &mut Vec<Line<'static>>,
-    turn: &TurnUsage,
-    turn_col_w: usize,
+    a: &FlatAttempt<'_>,
+    label_w: usize,
     theme: &Theme,
 ) {
     const STATE_W: usize = 16;
     const VALUE_W: usize = 10;
-    let label = truncate_str(&turn_label(turn), turn_col_w);
-    let (state, state_style) = turn_state(turn, theme);
-    let value_style = token_source_style(&turn.totals, theme);
-    let (input, output) = if turn.totals.known_split {
+    let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
+    let (state, state_style) = attempt_state(a.record, theme);
+    let value_style = attempt_source_style(a.record, theme);
+    let rec = a.record;
+    let known_split = rec.prompt_tokens > 0 || rec.completion_tokens > 0;
+    let (input, output) = if known_split {
         (
-            fmt_tokens(turn.totals.prompt_tokens),
-            fmt_tokens(turn.totals.completion_tokens),
+            fmt_tokens(rec.prompt_tokens),
+            fmt_tokens(rec.completion_tokens),
         )
     } else {
         ("—".to_string(), "—".to_string())
     };
-    let total = if turn.totals.has_tokens() {
-        fmt_tokens(turn.totals.total())
+    let total = if rec.total_tokens > 0 {
+        fmt_tokens(rec.total_tokens)
     } else {
         "—".to_string()
     };
     body.push(Line::from(vec![
         Span::styled(
-            format!("{label:<turn_col_w$}"),
+            format!("{label:<label_w$}"),
             Style::default().fg(theme.fg()),
         ),
         Span::styled(format!("{state:<STATE_W$}"), state_style),
@@ -552,31 +551,31 @@ fn push_full_turn_row(
     ]));
 }
 
-/// One turn row in the narrow detail table: label · state · total.
-fn push_compact_turn_row(
+/// One attempt row in the narrow detail table: label · state · total.
+fn push_compact_attempt_row(
     body: &mut Vec<Line<'static>>,
-    turn: &TurnUsage,
-    turn_col_w: usize,
+    a: &FlatAttempt<'_>,
+    label_w: usize,
     theme: &Theme,
 ) {
     const STATE_W: usize = 16;
     const TOTAL_W: usize = 11;
-    let label = truncate_str(&turn_label(turn), turn_col_w);
-    let (state, state_style) = turn_state(turn, theme);
-    let total = if turn.totals.has_tokens() {
-        fmt_tokens(turn.totals.total())
+    let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
+    let (state, state_style) = attempt_state(a.record, theme);
+    let total = if a.record.total_tokens > 0 {
+        fmt_tokens(a.record.total_tokens)
     } else {
         "—".to_string()
     };
     body.push(Line::from(vec![
         Span::styled(
-            format!("{label:<turn_col_w$}"),
+            format!("{label:<label_w$}"),
             Style::default().fg(theme.fg()),
         ),
         Span::styled(format!("{state:<STATE_W$}"), state_style),
         Span::styled(
             format!("{total:>TOTAL_W$}"),
-            token_source_style(&turn.totals, theme),
+            attempt_source_style(a.record, theme),
         ),
     ]));
 }
@@ -753,6 +752,7 @@ impl RoundUsage {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // identity fields read via FlatAttempt in the detail view
 struct TurnUsage {
     actor: String,
     number: u32,
@@ -818,6 +818,60 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     rounds.into_values().collect()
 }
 
+/// One per-attempt row in the flattened detail table: the record plus enough
+/// identity to render a `<turn> - <attempt>` label and bucket it under its
+/// actor (principal vs envoy). Newest-first within each bucket.
+#[derive(Debug)]
+struct FlatAttempt<'a> {
+    actor: &'a str,
+    turn: u32,
+    attempt: u32,
+    record: &'a RequestUsageRecord,
+}
+
+/// Collect every per-attempt record for `round`, sorted newest-first within
+/// each actor bucket (principal turns first, then envoys). This is the flat
+/// view the detail table renders — one row per attempt rather than the
+/// aggregated `TurnUsage` (so a retried turn shows as `1st - 1st` then
+/// `1st - 2nd` instead of `1st ×2`).
+fn flat_attempts<'a>(report: &'a TokenSourceReport, round: u64) -> Vec<FlatAttempt<'a>> {
+    let mut out: Vec<FlatAttempt<'a>> = report
+        .rows
+        .iter()
+        .flat_map(|row| row.requests.iter())
+        .filter(|r| r.key.round == round)
+        .map(|r| FlatAttempt {
+            actor: &r.key.actor_id,
+            turn: r.key.turn,
+            attempt: r.key.attempt,
+            record: r,
+        })
+        .collect();
+    // Sort by (is_envoy, actor, turn, attempt) ascending so a stable reverse
+    // yields newest-first within each bucket while keeping buckets grouped.
+    out.sort_by(|a, b| {
+        (
+            a.actor != "principal",
+            a.actor,
+            a.turn,
+            a.attempt,
+        )
+            .cmp(&(
+                b.actor != "principal",
+                b.actor,
+                b.turn,
+                b.attempt,
+            ))
+    });
+    out.reverse();
+    out
+}
+
+/// `<turn ordinal> - <attempt ordinal>` label for a flattened attempt row.
+fn attempt_label(turn: u32, attempt: u32) -> String {
+    format!("{} - {}", ordinal(turn as u64), ordinal(attempt as u64))
+}
+
 fn section_heading(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         text.to_string(),
@@ -864,46 +918,26 @@ fn ordinal(n: u64) -> String {
     format!("{n}{suffix}")
 }
 
-fn turn_label(turn: &TurnUsage) -> String {
-    // Both principal turns and envoy sub-turns are turns within this round;
-    // label each by its bare ordinal. An envoy sub-turn is qualified as
-    // "<parent> - <sub>" to show it is nested under a principal turn — but the
-    // parent turn number is not carried in the ledger's per-request record
-    // (the envoy's `actor_id` holds the parent tool-call id, not the parent
-    // turn index), so we can only print the envoy's own sub-turn ordinal and
-    // rely on the grouping/sort to convey the nesting.
-    let base = ordinal(turn.number as u64);
-    if turn.attempt_count > 1 {
-        format!("{base} ×{}", turn.attempt_count)
-    } else {
-        base
-    }
-}
-
-/// Foreground style for a turn's token counts, tinted by their provenance:
-/// green when fully provider-reported, yellow when fully estimated, plain
-/// foreground when mixed or still pending/unknown.
-fn token_source_style(totals: &UsageTotals, theme: &Theme) -> Style {
-    if totals.pending || totals.total() <= 0 {
-        Style::default().fg(theme.fg())
-    } else if totals.estimated_tokens <= 0 {
-        Style::default().fg(theme.ok())
-    } else if totals.reported_tokens <= 0 {
-        Style::default().fg(theme.warn())
-    } else {
-        Style::default().fg(theme.fg())
-    }
-}
-
-fn turn_state(turn: &TurnUsage, theme: &Theme) -> (String, Style) {
-    let (state, color) = match turn.latest_status {
+/// Short state label + color for one per-attempt record.
+fn attempt_state(record: &RequestUsageRecord, theme: &Theme) -> (&'static str, Style) {
+    let (state, color) = match record.status {
         RequestUsageStatus::InFlight => ("in flight", theme.info()),
         RequestUsageStatus::Completed => ("completed", theme.ok()),
         RequestUsageStatus::Interrupted => ("interrupted", theme.warn()),
         RequestUsageStatus::Failed => ("failed", theme.err()),
         RequestUsageStatus::Abandoned => ("abandoned", theme.warn()),
     };
-    (state.to_string(), Style::default().fg(color))
+    (state, Style::default().fg(color))
+}
+
+/// Source-tint style for one per-attempt record: green when provider-reported,
+/// yellow when locally estimated, plain when unknown/pending.
+fn attempt_source_style(record: &RequestUsageRecord, theme: &Theme) -> Style {
+    match record.source {
+        RequestUsageSource::Reported => Style::default().fg(theme.ok()),
+        RequestUsageSource::Estimated => Style::default().fg(theme.warn()),
+        RequestUsageSource::Unknown => Style::default().fg(theme.fg()),
+    }
 }
 
 /// Short label for a round's aggregate lifecycle, for the round-list table.
@@ -1099,9 +1133,13 @@ mod tests {
 
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
-        // Turn labels are bare ordinals; the first turn was retried twice.
-        assert!(detail_text.contains("1st ×2"));
-        assert!(detail_text.contains("2nd"));
+        // The table is flattened: one row per attempt. Turn 1 was retried, so
+        // it shows as "1st - 1st" (interrupted) then "1st - 2nd" (completed),
+        // not the old collapsed "1st ×2".
+        assert!(detail_text.contains("1st - 1st"));
+        assert!(detail_text.contains("1st - 2nd"));
+        assert!(!detail_text.contains("×2"));
+        assert!(detail_text.contains("2nd - 1st"));
         assert!(detail_text.contains("2 / 3"));
         assert!(!detail_text.contains("another-provider"));
         assert!(!detail_text.contains("Provider-reported"));
@@ -1288,9 +1326,9 @@ mod tests {
 
     /// The detail view's turn table must (a) render newest-first and (b) tint
     /// token totals by their provenance: green for provider-reported, yellow
-    /// for local estimate, plain for mixed/pending.
+    /// for local estimate, plain for mixed/pending. Turns are newest-first.
     #[test]
-    fn detail_turns_are_in_execution_order_and_color_coded_by_source() {
+    fn detail_turns_are_newest_first_and_color_coded_by_source() {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
 
@@ -1314,12 +1352,18 @@ mod tests {
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
 
-        // Execution order: turn 1 (1st) appears before turn 2 (2nd).
-        let pos_1st = detail_text.find("1st").expect("1st turn label");
-        let pos_2nd = detail_text.find("2nd").expect("2nd turn label");
+        // Newest-first: turn 2 appears before turn 1. Both have a single
+        // attempt, so the flattened labels are "2nd - 1st" and "1st - 1st".
+        let pos_2nd = detail_text
+            .find("2nd - 1st")
+            .expect("2nd turn attempt label");
+        let pos_1st = detail_text
+            .find("1st - 1st")
+            .expect("1st turn attempt label");
         assert!(
-            pos_1st < pos_2nd,
-            "turns must be in execution order (1st before 2nd): got 1st@{pos_1st} vs 2nd@{pos_2nd}"
+            pos_2nd < pos_1st,
+            "attempts must be newest-first (2nd - 1st before 1st - 1st): \
+             got {pos_2nd} vs {pos_1st}"
         );
 
         // The estimated turn's total (60) is tinted warning-yellow; the
@@ -1376,13 +1420,22 @@ mod tests {
 
         // No stray arrow glyph anywhere.
         assert!(!detail_text.contains('↳'));
-        // Principal turns render in execution order, before the envoy block.
-        let pos_1st = detail_text.find("1st").expect("1st principal turn");
-        let pos_2nd = detail_text.find("2nd").expect("2nd principal turn");
+        // Principal turns render newest-first, before the envoy block. With
+        // single attempts each, the flattened labels are "2nd - 1st" then
+        // "1st - 1st".
+        let pos_2nd = detail_text
+            .find("2nd - 1st")
+            .expect("2nd principal attempt");
+        let pos_1st = detail_text
+            .find("1st - 1st")
+            .expect("1st principal attempt");
         let pos_envoy = detail_text.find("Envoy").expect("Envoy group label");
-        assert!(pos_1st < pos_2nd);
         assert!(
-            pos_2nd < pos_envoy,
+            pos_2nd < pos_1st,
+            "principal attempts must be newest-first (2nd - 1st before 1st - 1st)"
+        );
+        assert!(
+            pos_1st < pos_envoy,
             "principal turns must come before the Envoy block"
         );
         // The envoy block header is present.

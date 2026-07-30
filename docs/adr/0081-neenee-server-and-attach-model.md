@@ -57,7 +57,7 @@ pub struct BootstrapParams {
     pub identity: AgentIdentity, pub principal: PrincipalProfile,
     pub ui: Arc<dyn UiBridge>, pub startup: StartupMode,
     pub project_root: Option<PathBuf>,
-    pub unattended: bool, pub single_instance: bool,
+    pub autopilot: bool, pub single_instance: bool,
 }
 pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, …>
 ```
@@ -175,7 +175,7 @@ Attach mode is opt-in.
      the server keeps running.
   7. Discovery liveness is a TCP probe; the WS handshake is the real
      validation.
-  8. `--unattended`/`--single-instance` parse alongside `--attach` but do
+  8. `--autopilot`/`--single-instance` parse alongside `--attach` but do
      not apply (server-side concerns).
 - **Neutral.** Crate count: 13 → 12 (ADR-0079) → 13 (this ADR).
 - **Migration.** None for users: the `neenee` command and standalone

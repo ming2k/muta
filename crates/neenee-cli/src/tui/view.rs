@@ -508,7 +508,7 @@ pub fn draw_transcript(
         HINT_BAR_ROWS
     };
     // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state — the `unattended` flag leads
+    // dedicated home for ambient session state — the `autopilot` flag leads
     // on the left, the workspace path trails on the right — so the hint bar
     // above it stays focused on the next input action. Always present whenever
     // the footer chrome is visible (it never conditionally hides), keeping the
@@ -523,7 +523,7 @@ pub fn draw_transcript(
         // input box so the live status reads as part of the composer; the hint
         // bar carries the next input action + model/context; the status bar
         // caps the footer with session-level state (workspace path + flags such
-        // as `unattended`, which used to have its own row above the input).
+        // as `autopilot`, which used to have its own row above the input).
         FOOTER_TOP_GAP_ROWS + activity_height + todo_height + queue_height + input_box_height
             + hint_height
             + status_height
@@ -759,7 +759,7 @@ pub fn draw_transcript(
     };
 
     // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state (the `unattended` flag leads
+    // dedicated home for ambient session state (the `autopilot` flag leads
     // on the left, the workspace path trails on the right) so the hint bar
     // above it stays focused on the next input action. Its draw call is
     // delegated to the app loop (which owns the workspace path and the

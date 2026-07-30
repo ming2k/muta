@@ -70,8 +70,8 @@ The optional `[principal]` table.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `principal.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
-| `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for unattended/automatic flows where no human is reachable |
-| `principal.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under unattended mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the principal unattended, so ordinary tool confirmations still apply |
+| `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
+| `principal.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the principal on autopilot, so ordinary tool confirmations still apply |
 | `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same round. Forced off for envoys and `/review` |
 | `principal.nudge.window` | `8` | Number of recent watched tool signatures retained for repeat detection |
 
@@ -291,7 +291,7 @@ command = ".neenee/hooks/turn-open.sh"
 
 # Interrupt notifications (observe-only): fire-and-forget when the agent blocks
 # waiting for you. The canonical use is a desktop/bell notification so a
-# long-running task that goes unattended still gets your attention. Outcomes are
+# long-running task that goes on autopilot still gets your attention. Outcomes are
 # ignored — these never grant/deny or alter the transcript. The matcher targets
 # the tool seeking approval (here: only bash). `UserQuestion` has no matcher.
 [[hooks]]

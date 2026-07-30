@@ -65,7 +65,7 @@ programs never reach our terminal at all.
 ### Layer 1 — stdin closed by default (hard floor)
 
 Spawn with `.stdin(Stdio::null())` unless a declared source provides input.
-`Closed` is the only policy that is *correct by default* for an unattended
+`Closed` is the only policy that is *correct by default* for an autopilot
 agent: a `read(stdin)` gets instant EOF and the command fails fast with a
 real exit code, instead of hanging. Inner pipelines (`echo x | gpg …`) are
 unaffected — that redirection is internal to `sh -c`.
@@ -183,7 +183,7 @@ non-interactive contract is structural, not conventional. `sudo`/`gpg`
 passwords work via the human escape hatch without a PTY.
 
 **Negative.** A command that legitimately needs interactive input *and* has
-no non-interactive flag form cannot run unattended — it fails fast with a
+no non-interactive flag form cannot run on autopilot — it fails fast with a
 remedy hint. This is the intended trade-off (and the state of every mature
 agent harness). The idle budget (10s) very occasionally trips on a genuinely
 slow-but-fine command; the footer tells the model to retry with a larger

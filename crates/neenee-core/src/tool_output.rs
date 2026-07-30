@@ -174,7 +174,7 @@ pub enum StdinPolicy {
     /// with a real exit code, instead of hanging silently until the wall-clock
     /// timeout. This is the only policy that is *correct by default* for an
     #[default]
-    /// unattended agent.
+    /// autopilot agent.
     Closed,
     /// Provide `data` bytes via a pipe. Used in exactly two declared-source
     /// situations, decided before spawn by the agent dispatch layer:
@@ -187,7 +187,7 @@ pub enum StdinPolicy {
     /// 2. **Model-supplied** (opt-in): an envoy profile or main config set
     ///    `allow_model_stdin`, which dynamically exposed a `stdin` parameter
     ///    in the bash tool schema and the model filled it. For autonomous /
-    ///    unattended flows where no human is reachable.
+    ///    autopilot flows where no human is reachable.
     ///
     /// In both cases the bytes are buffered in the pipe ahead of the child's
     /// first read, so ordering relative to stdout is irrelevant.

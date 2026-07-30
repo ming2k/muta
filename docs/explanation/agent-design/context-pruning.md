@@ -81,10 +81,15 @@ model-relative trigger — `prune_threshold_tokens`, i.e. `prune_utilization`
 (0.65) of the active model's context window (see
 [compaction](context-compaction.md#thresholds-are-model-relative) for how the
 policy resolves). Neither runs unconditionally. Pressure against that threshold
-is measured by `effective_pressure_tokens`, which prefers a plausible
-provider-reported `prompt_tokens` and otherwise falls back to the conservative
-chars/4 estimate — see
-[compaction](context-compaction.md#how-pressure-is-measured).
+is measured by the same char-class estimator used everywhere else —
+`estimate_tokens` (`neenee-core/src/pressure.rs`), which classifies each
+Unicode scalar (CJK glyphs ≈1 token each, ASCII letters ≈0.25, code
+punctuation ≈1) rather than using a flat byte ratio. This is the current
+*estimate* path: provider-reported `usage` is authoritative for the context
+*meter* after a completed request, but it is not reused as the next request's
+pressure, because the next request's system prompt, tool set, and history may
+differ. See [compaction](context-compaction.md#how-pressure-is-measured) and
+[Token accounting](token-accounting.md).
 
 | Entry point | When | Code |
 |-------------|------|------|

@@ -40,8 +40,8 @@ pub const THINKING_KEY: &str = "thinking";
 ///
 /// # Never pop the interactive-input panel for a command needing stdin
 /// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
-/// # with a non-interactive remedy hint — like unattended mode, but without
-/// # turning the principal itself unattended.
+/// # with a non-interactive remedy hint — like autopilot mode, but without
+/// # turning the principal itself autopilot.
 /// # skip_interactive_input = false
 ///
 /// # Advanced doom-loop guard. Default disabled; opt in here when deterministic
@@ -76,13 +76,13 @@ pub struct PrincipalConfig {
     /// input-injection panel (with the command + a masked/plain field). When
     /// `true`, the panel is skipped — the command runs non-interactively,
     /// reads EOF immediately, and fails fast with a non-interactive remedy
-    /// hint, exactly as it would under unattended mode. This is the right
+    /// hint, exactly as it would under autopilot mode. This is the right
     /// setting for users who find the prompt disruptive and prefer to retry
     /// the command themselves (or let the model retry with a non-interactive
     /// form). Wired through `Agent::set_skip_interactive_input`.
     ///
     /// Note: this only governs the *interactive-input* path; it does not turn
-    /// the principal unattended, so ordinary tool confirmations still apply.
+    /// the principal autopilot, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
     /// Doom-loop guard configuration (`neenee_agent::doom_guard`). Default
     /// **disabled** — opt in via the advanced `[principal.nudge]` sub-table.
@@ -202,7 +202,7 @@ pub struct PermissionConfig {
 /// ```toml
 /// [bash_policy]
 /// enabled = true
-/// unattended_confirm = "deny"
+/// autopilot_confirm = "deny"
 ///
 /// [[bash_policy.rules]]
 /// name = "deny git reset hard"
@@ -218,9 +218,9 @@ pub struct BashPolicyConfig {
     /// built-in commands are protected even when the user has broadly allowed
     /// the `bash` tool.
     pub enabled: bool,
-    /// What to do with a `confirm` decision while unattended/no-human mode is
+    /// What to do with a `confirm` decision while autopilot/no-human mode is
     /// active. Defaults to `deny`.
-    pub unattended_confirm: BashPolicyUnattendedAction,
+    pub autopilot_confirm: BashPolicyAutopilotAction,
     /// Whether an explicit user `allow` rule may override a compiled-in `deny`
     /// rule. Defaults to `false`; user `allow` rules can still override
     /// compiled-in `confirm` rules.
@@ -235,7 +235,7 @@ impl Default for BashPolicyConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            unattended_confirm: BashPolicyUnattendedAction::Deny,
+            autopilot_confirm: BashPolicyAutopilotAction::Deny,
             allow_user_override_builtin_deny: false,
             rules: Vec::new(),
         }
@@ -244,11 +244,11 @@ impl Default for BashPolicyConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BashPolicyUnattendedAction {
+pub enum BashPolicyAutopilotAction {
     /// Refuse commands that require confirmation when no human is reachable.
     #[default]
     Deny,
-    /// Allow confirmation-gated commands to proceed unattended. Useful only for
+    /// Allow confirmation-gated commands to proceed autopilot. Useful only for
     /// highly controlled automation; not recommended for normal agent use.
     Allow,
 }

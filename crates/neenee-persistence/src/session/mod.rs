@@ -3059,7 +3059,7 @@ mod tests {
     async fn list_overview_excludes_command_echoes_and_picks_last_real_prompt() {
         // Regression: the overview is the most recent user turn that is *not* a
         // non-driving command echo (ADR-0050). A session whose final input was a
-        // slash command (`/unattended on`) or a shell passthrough must show its
+        // slash command (`/autopilot on`) or a shell passthrough must show its
         // last genuine prompt instead — those echoes are agent operations, not
         // AI-conversation turns. This must hold through the deferred header
         // parse (which decodes `origin` as well as role/content).
@@ -3079,7 +3079,7 @@ mod tests {
                 Message::new(neenee_core::Role::Assistant, "reply 2"),
                 // Then non-driving echoes that must NOT become the overview
                 // even though they are the last user-role messages:
-                Message::command_echo("/unattended on"),
+                Message::command_echo("/autopilot on"),
                 Message::command_echo("/session open abc123"),
             ])
             .await
@@ -3149,7 +3149,7 @@ mod tests {
                 Message::new(neenee_core::Role::User, long_prompt),
                 Message::new(neenee_core::Role::Assistant, "reply 2"),
                 // A trailing command echo must NOT become the last prompt.
-                Message::command_echo("/unattended on"),
+                Message::command_echo("/autopilot on"),
             ])
             .await
             .unwrap();
@@ -3174,7 +3174,7 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::command_echo("/unattended on")])
+            .replace_messages(vec![Message::command_echo("/autopilot on")])
             .await
             .unwrap();
         let id = store.id().await;

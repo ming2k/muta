@@ -225,8 +225,7 @@ The report answers two questions at a glance:
   across the conversation visible at a glance; drilling into a round
   exposes its individual model turns (and any retries). The detail page
   keeps the same modal but switches its header to a breadcrumb
-  (`Context Usage › 1st round`) for hierarchy, and lists turns in execution
-  order.
+  (`Context Usage › 1st round`) for hierarchy, and lists turns newest-first.
   Token totals in the table are tinted by provenance — green when
   provider-reported, yellow when a local estimate — with a legend beneath
   the table:
@@ -238,19 +237,21 @@ The report answers two questions at a glance:
 │                                                          │
 │ Turns                                                    │
 │ Turn            State             Input   Output    Total │
-│ 1st ×2          completed        790        40       830  │
-│ 2nd             completed          —        —     2.4k    │
+│ 2nd - 1st       completed          —        —     2.4k    │
+│ 1st - 2nd       completed        790        40       830  │
+│ 1st - 1st       interrupted       —        —        —     │
 │                                                          │
 │ Tokens:  green = provider-reported   yellow = local est.  │
 │                                  ↑↓ scroll  Esc rounds    │
 └────────────────────────────────────────────────────────────┘
 ```
 
-Turns are listed in execution order (oldest first). When a round spawned
-`envoy` sub-turns, those are grouped beneath an `Envoy` label rather than
-interleaved, since the ledger records each envoy's own sub-turn number but
-not the principal turn that parented it (so a faithful `3rd - 1st` pairing
-is not derivable from the available data).
+The turns table is **flattened**: one row per provider request *attempt*,
+labelled `<turn> - <attempt>` (e.g. `1st - 1st`, then `1st - 2nd` for a
+retried turn), so a transient retry surfaces as its own row with its own
+state rather than being collapsed into a `×2` suffix. Attempts are listed
+newest-first. When a round spawned `envoy` sub-turns, those are grouped
+beneath an `Envoy` label rather than interleaved.
 
 ## Current context vs. request usage
 

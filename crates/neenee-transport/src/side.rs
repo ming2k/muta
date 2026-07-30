@@ -73,12 +73,12 @@ impl SideSession {
         );
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
-        // A side conversation is a quick aside; run it unattended — without
+        // A side conversation is a quick aside; run it autopilot — without
         // human intervention — so it never raises a permission modal whose
         // reply could not be routed back to the side `Agent` through the
         // shared permission channel. This mirrors the envoy policy
-        // (`envoy_tool.rs` sets `unattended`).
-        agent.set_unattended(true);
+        // (`envoy_tool.rs` sets `autopilot`).
+        agent.set_autopilot(true);
 
         Ok(Self {
             id: side_id,

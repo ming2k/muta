@@ -62,7 +62,7 @@ The default. A two-chunk vertical split inside `draw_transcript`:
 There is **no top header**. The model name and context-usage indicator that
 a header would carry live in the [hint bar](hint-line.md) at the bottom, so
 the transcript reclaims the full vertical space above the footer. Ambient
-session state (`unattended`, workspace path) lives one row further down, on
+session state (`autopilot`, workspace path) lives one row further down, on
 the [status bar](status-bar.md).
 
 ### Footer stack
@@ -78,7 +78,7 @@ hint, and status bars are persistent (when chrome is visible):
 | Queue bar | `QUEUE_BAR_ROWS = 2` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `📤 QUEUE` identity · count · next-item send time · key legend (`F3` block/resume, `F2` expand, row 1) and a one-line preview of the next item to pop (row 2). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/reasoning/context cluster (right). |
-| Status bar | `STATUS_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries ambient session state: the `unattended` flag (left) and the tilde-shortened workspace path (right). See [Status bar](status-bar.md). |
+| Status bar | `STATUS_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries ambient session state: the `autopilot` flag (left) and the tilde-shortened workspace path (right). See [Status bar](status-bar.md). |
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
@@ -87,7 +87,7 @@ hint, and status bars are persistent (when chrome is visible):
 │ ● making edits (23s · Esc Esc to interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
 │ Enter send             Kimi K2.7 Code  ◆ high  89.2k (8%)   │  ← hint bar
-│ unattended                                    ~/projects/xx │  ← status bar
+│ autopilot                                    ~/projects/xx │  ← status bar
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -101,7 +101,7 @@ current item); the queue bar owns the pending outbox. The structural counters
 they live inside the Activity modal (opened by clicking the activity bar),
 along with the per-item todo breakdown. The hint bar carries the next input
 action plus model/context info; the status bar caps the footer with
-session-level state (the `unattended` flag + the workspace path) so none of
+session-level state (the `autopilot` flag + the workspace path) so none of
 the bars above it have to. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share
 the same horizontal extent so their left and right edges line up.

@@ -19,7 +19,7 @@
 //! - **Confirm:** recursive `rm` of any other absolute path (e.g. `/var/db/x`)
 //!   or a parent-traversal target (e.g. `../sibling`). The command must leave
 //!   the project, so a human should glance at it. This still degrades to a deny
-//!   when unattended.
+//!   when autopilot.
 //! - **Allow (fall through to the normal permission broker):** everything
 //!   else, i.e. recursive `rm` of a relative path inside the cwd such as
 //!   `rm -rf target/` or `rm -f build.log`, plus the OS scratch directory
@@ -107,13 +107,13 @@ impl BashPolicyMatch {
     }
 
     /// A `Confirm` that could not reach a human because the session is
-    /// unattended (and `unattended_confirm` resolves to deny). Distinct
+    /// autopilot (and `autopilot_confirm` resolves to deny). Distinct
     /// headline from [`Self::blocked_output`]; shared detail.
-    pub(crate) fn unattended_confirm_output(&self, command: &str) -> neenee_core::ToolOutput {
+    pub(crate) fn autopilot_confirm_output(&self, command: &str) -> neenee_core::ToolOutput {
         neenee_core::ToolOutput::Error {
             message: format!(
-                "[bash policy] Dangerous command requires confirmation but session is \
-                 unattended: {command}"
+                "[bash policy] Dangerous command requires confirmation but the session is \
+                 on autopilot: {command}"
             ),
             detail: Some(self.detail()),
         }
@@ -123,7 +123,7 @@ impl BashPolicyMatch {
 #[derive(Debug, Clone)]
 pub(crate) struct BashPolicy {
     enabled: bool,
-    unattended_confirm: BashPolicyAction,
+    autopilot_confirm: BashPolicyAction,
     allow_user_override_builtin_deny: bool,
     user_rules: Vec<CompiledRule>,
     invalid_rules: Vec<String>,
@@ -151,11 +151,11 @@ impl BashPolicy {
             .collect();
         Self {
             enabled: config.enabled,
-            unattended_confirm: match config.unattended_confirm {
-                neenee_persistence::config::BashPolicyUnattendedAction::Deny => {
+            autopilot_confirm: match config.autopilot_confirm {
+                neenee_persistence::config::BashPolicyAutopilotAction::Deny => {
                     BashPolicyAction::Deny
                 }
-                neenee_persistence::config::BashPolicyUnattendedAction::Allow => {
+                neenee_persistence::config::BashPolicyAutopilotAction::Allow => {
                     BashPolicyAction::Allow
                 }
             },
@@ -199,7 +199,7 @@ impl BashPolicy {
         }
 
         // A built-in allow quiets a built-in confirm for genuinely safe targets
-        // (e.g. the OS scratch directory), so an unattended agent is not blocked.
+        // (e.g. the OS scratch directory), so an autopilot agent is not blocked.
         if builtin_allow.is_some() {
             return None;
         }
@@ -207,8 +207,8 @@ impl BashPolicy {
         builtin_confirm.map(CompiledRule::into_match)
     }
 
-    pub(crate) fn unattended_confirm_action(&self) -> BashPolicyAction {
-        self.unattended_confirm
+    pub(crate) fn autopilot_confirm_action(&self) -> BashPolicyAction {
+        self.autopilot_confirm
     }
 }
 
@@ -466,7 +466,7 @@ fn builtin_confirm_rules() -> Vec<CompiledRule> {
 /// Built-in `allow` rules. These never bypass a built-in `deny` (a recursive
 /// `rm` of `/` still cannot run); they only quiet a built-in `confirm`, so a
 /// genuinely safe target like the OS scratch directory does not block an
-/// unattended agent. A user `deny` rule still wins over everything.
+/// autopilot agent. A user `deny` rule still wins over everything.
 fn builtin_allow_rules() -> Vec<CompiledRule> {
     use BashPolicyAction::Allow;
     vec![CompiledRule::builtin(
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn recursive_rm_allows_os_scratch_tmp() {
         // /tmp is the OS scratch dir: cleaning it needs no confirmation, so an
-        // unattended agent is not blocked.
+        // autopilot agent is not blocked.
         let policy = BashPolicy::default();
         assert!(policy.evaluate("rm -rf /tmp/build-out").is_none());
         assert!(policy.evaluate("rm -rf /tmp/").is_none());

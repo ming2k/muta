@@ -62,7 +62,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Todo bar](todo-bar.md) | One-row task-list summary: `todo` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
 | [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
-| [Status bar](status-bar.md) | Ambient session state: `unattended` flag (left) + tilde-shortened workspace path (right) |
+| [Status bar](status-bar.md) | Ambient session state: `autopilot` flag (left) + tilde-shortened workspace path (right) |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |
 

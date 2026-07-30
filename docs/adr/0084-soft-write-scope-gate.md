@@ -20,9 +20,9 @@ Two things have changed since:
 1. **A user is often reachable.** ADR-0029 (full-duplex subagent
    communication) wired a reply path so a sub-agent's permission prompt
    surfaces to the operator, and the `INTERACTIVE` envoy profile sets
-   `unattended: false` precisely so its prompts can be answered. The "no user
-   reachable" premise now holds only for genuinely unattended runs
-   (`--unattended`, read-only envoy profiles), not for attended ones.
+   `autopilot: false` precisely so its prompts can be answered. The "no user
+   reachable" premise now holds only for genuinely autopilot runs
+   (`--autopilot`, read-only envoy profiles), not for attended ones.
 2. **Operators asked for the right to decide.** A hard builtin block is too
    strict for the attended case: it removes the operator's authority to grant
    an elevation, which is exactly what the permission broker exists to offer.
@@ -32,16 +32,16 @@ hard capability limit. This ADR concerns only the *scope* gate (gate 4).
 
 ## Decision
 
-The scope gate becomes **soft when attended, hard when unattended**:
+The scope gate becomes **soft when attended, hard when autopilot**:
 
-- **Attended** (`ctx.unattended == false`, a human is reachable): a call whose
+- **Attended** (`ctx.autopilot == false`, a human is reachable): a call whose
   `ScopeTarget` is outside the granted `OperationScope` is *not* blocked. The
   gate returns `Pass` and lets the call fall through to the next gate — the
   permission broker (`BrokerPolicy`) — which emits the standard
   approve / always-allow / reject prompt. The **user**, not a builtin limit,
   decides whether the elevation is granted. "Always allow" then caches the
   rule as for any other broker ask.
-- **Unattended** (`ctx.unattended == true`, no human reachable): the call is
+- **Autopilot** (`ctx.autopilot == true`, no human reachable): the call is
   still **hard-denied** with a `ToolOutput::Text` message. With no one to
   answer a prompt, blocking is the only safe resolution; auto-allowing would
   remove the safety floor for autonomous runs entirely.
@@ -50,23 +50,23 @@ Calls that are *in* scope, and tools with `ScopeTarget::Unspecified` (no
 locatable target, e.g. `read_text`, `grep`), always `Pass` exactly as before —
 the broker then applies as usual.
 
-The denial under unattended stays a `ToolOutput::Text` (not
+The denial under autopilot stays a `ToolOutput::Text` (not
 `PermissionDenied`) so the model can retry with a different path/command,
 preserving ADR-0028's retry semantics for the one path that is still blocked.
 
-`ScopeGatePolicy` now reads `ctx.unattended`, but it still opens **no
+`ScopeGatePolicy` now reads `ctx.autopilot`, but it still opens **no
 interactive modal of its own** — it never parks. The broker remains the only
 interactive surface; the gate only decides whether the broker gets the chance.
 
 ## Alternatives considered
 
-- **Remove the gate entirely.** Rejected: it would leave unattended envoys
-  fully unrestricted (the broker auto-approves under `unattended`), removing
-  the safety floor for autonomous runs. The attended/unattended split keeps
+- **Remove the gate entirely.** Rejected: it would leave autopilot envoys
+  fully unrestricted (the broker auto-approves under `autopilot`), removing
+  the safety floor for autonomous runs. The attended/autopilot split keeps
   that floor while restoring operator authority where a human exists.
-- **Auto-allow under unattended too** (treat unattended as fully trusted).
-  Rejected: it directly contradicts the unattended posture's safety contract
-  and ADR-0028's core (still-valid for the unattended case) rationale.
+- **Auto-allow under autopilot too** (treat autopilot as fully trusted).
+  Rejected: it directly contradicts the autopilot posture's safety contract
+  and ADR-0028's core (still-valid for the autopilot case) rationale.
 - **Add an explicit "elevation" flag to `PermissionRequest`.** Rejected as
   unnecessary: an out-of-scope ask renders acceptably as a normal broker
   prompt (the target path/command is shown), and `Tool::permission_label` /
@@ -77,9 +77,9 @@ interactive surface; the gate only decides whether the broker gets the chance.
 - **Positive.** Operators regain the right to grant a one-off or permanent
   elevation when they are present; the tool no longer refuses work the user
   was willing to authorize.
-- **Positive.** The unattended safety floor is preserved verbatim — autonomous
-  sub-agents and `--unattended` sessions are still bounded by their scope.
-- **Negative.** Under unattended, a rejection that previously let the model
+- **Positive.** The autopilot safety floor is preserved verbatim — autonomous
+  sub-agents and `--autopilot` sessions are still bounded by their scope.
+- **Negative.** Under autopilot, a rejection that previously let the model
   retry still does (it is `Text`, not `PermissionDenied`). Under *attended*, a
   user **Reject** on an out-of-scope ask returns `PermissionDenied`, which
   stops the round and rejects the whole concurrent batch — consistent with any
@@ -97,6 +97,6 @@ prompt" decision only.
 
 - ADR-0028 (the hard gate this softens for the attended case)
 - ADR-0029 (full-duplex subagent communication — makes the user reachable)
-- `docs/explanation/agent-design/unattended.md` — attended vs unattended
+- `docs/explanation/agent-design/autopilot.md` — attended vs autopilot
 - `crates/neenee-agent/src/permission_policy.rs` — `ScopeGatePolicy`,
   `BrokerPolicy`, `default_chain`

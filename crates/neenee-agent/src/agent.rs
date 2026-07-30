@@ -230,8 +230,8 @@ pub struct Agent {
     /// reads it without contention. When `true`, a command the interactive
     /// classifier matches never pops the inline input panel and instead runs
     /// with stdin closed — fast failure + non-interactive remedy, exactly as
-    /// under unattended mode, but without turning the principal itself
-    /// unattended.
+    /// under autopilot mode, but without turning the principal itself
+    /// autopilot.
     skip_interactive_input: Arc<std::sync::atomic::AtomicBool>,
     /// Command-aware safety policy for `bash`. This sits above the ordinary
     /// permission broker so broad approvals such as `bash *` cannot silently
@@ -979,7 +979,7 @@ impl Agent {
             tool_names,
             model_guidance,
             provider_guidance,
-            unattended: self.get_unattended(),
+            autopilot: self.get_autopilot(),
         }
     }
 
@@ -1129,7 +1129,7 @@ impl Agent {
     /// (the default), the bash schema exposes no `stdin` parameter and a
     /// command needing input either gets it from a human (interactive
     /// classifier → input panel) or fails fast. When on, the model may feed
-    /// a command's stdin directly — for unattended/automatic flows.
+    /// a command's stdin directly — for autopilot/automatic flows.
     pub fn set_allow_model_stdin(&self, enabled: bool) {
         self.allow_model_stdin
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -1157,9 +1157,9 @@ impl Agent {
     /// Mirrors `[principal] skip_interactive_input` in `config.toml`. When on,
     /// an interactive `bash` command (matched by the interactive classifier)
     /// never pops the inline input panel and instead runs with stdin closed —
-    /// fast failure with a non-interactive remedy, as under unattended mode.
+    /// fast failure with a non-interactive remedy, as under autopilot mode.
     /// Lets an operator who finds the prompt disruptive opt out of it without
-    /// turning the principal itself unattended.
+    /// turning the principal itself autopilot.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
         self.skip_interactive_input
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -1462,12 +1462,12 @@ impl Agent {
         *self.round_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
-    pub fn get_unattended(&self) -> bool {
-        self.permissions.unattended()
+    pub fn get_autopilot(&self) -> bool {
+        self.permissions.autopilot()
     }
 
-    pub fn set_unattended(&self, enabled: bool) {
-        self.permissions.set_unattended(enabled);
+    pub fn set_autopilot(&self, enabled: bool) {
+        self.permissions.set_autopilot(enabled);
     }
 
     /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
@@ -1511,24 +1511,24 @@ impl Agent {
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
-        self.set_unattended(profile.unattended);
+        self.set_autopilot(profile.autopilot);
 
-        // #9 — a principal running unattended with an unrestricted operation
+        // #9 — a principal running on autopilot with an unrestricted operation
         // scope has *no* permission floor: the scope-gate is open on both axes,
-        // the broker is bypassed (unattended), and admission is the full pool.
+        // the broker is bypassed (autopilot), and admission is the full pool.
         // Any write or execute the model attempts will run unchecked. This is a
         // legitimate configuration (e.g. a fully-trusted automation runner),
         // but it is dangerous enough to warrant a loud, unmissable warning at
         // startup rather than failing silently. A sandboxed scope (any `Some`
-        // dimension) keeps the scope-gate as the safety floor even unattended.
-        if profile.unattended && profile.operation_scope.is_unrestricted() {
+        // dimension) keeps the scope-gate as the safety floor even autopilot.
+        if profile.autopilot && profile.operation_scope.is_unrestricted() {
             tracing::warn!(
-                unattended = true,
+                autopilot = true,
                 scope = "unrestricted",
-                "principal is running UNATTENDED with an unrestricted operation scope — no \
+                "principal is running AUTOPILOT with an unrestricted operation scope — no \
                  permission checks will gate writes or command execution. Ensure this is \
                  intended (e.g. a trusted automation runner); otherwise pin write_paths / \
-                 command_allowlist, or set unattended = false.",
+                 command_allowlist, or set autopilot = false.",
             );
         }
     }
@@ -2109,12 +2109,12 @@ impl Agent {
     /// in-memory hook-scoped mask). Used at the schema-build choke points so a
     /// disabled tool's definition never reaches the provider.
     pub(crate) fn visible_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // `ask_user` is reclaimed under unattended: no human is reachable to
+        // `ask_user` is reclaimed under autopilot: no human is reachable to
         // answer, so admitting it would only deadlock a round. Drop its schema
         // so the model never names it. The dispatch guard also short-circuits
         // any stale call (a name carried over from an earlier turn's tool
         // list) — see `execute_tool`.
-        let reclaim_ask_user = self.get_unattended();
+        let reclaim_ask_user = self.get_autopilot();
         self.installed_tools()
             .into_iter()
             .filter(|t| !self.is_name_disabled(t.name()))
@@ -3763,13 +3763,13 @@ impl Agent {
             })
             .unwrap_or_default();
         if let Some(input_kind) = crate::shell_input::classify(&command) {
-            // Unattended, or the operator has opted out of the interactive
+            // Autopilot, or the operator has opted out of the interactive
             // input panel: no one is going to type into the prompt, so the
-            // inline panel would either deadlock (unattended) or just disrupt
+            // inline panel would either deadlock (autopilot) or just disrupt
             // (opt-out). Close stdin instead — the command then fails fast
             // with a non-interactive remedy, which is the honest outcome.
-            if self.get_unattended() {
-                tracing::info!(command = %command, "interactive command stdin closed under unattended");
+            if self.get_autopilot() {
+                tracing::info!(command = %command, "interactive command stdin closed under autopilot");
                 return StdinPolicy::default();
             }
             if self.skip_interactive_input() {
@@ -3809,12 +3809,12 @@ impl Agent {
 
         // ── Permission policy chain (full async chain) ──
         // Every permission gate — PreToolUse hook, disabled mask, schema
-        // validation, operation-scope gate, bash policy (Deny/unattended),
+        // validation, operation-scope gate, bash policy (Deny/autopilot),
         // ask_user shortcut, and the broker's always-allowed fast path — runs
         // as one chain evaluation (see `permission_policy`). The chain is
         // async because some gates await (hooks, bash policy). Outcomes:
         //   • Deny    → short-circuit with the policy's output.
-        //   • Approve → proceed (already-allowed, or unattended bypass).
+        //   • Approve → proceed (already-allowed, or autopilot bypass).
         //   • Ask     → the broker wants a live user decision: park, emit the
         //               request, fire observe hooks, await.
         //   • Pass    → (chain fallback) proceed.
@@ -3841,7 +3841,7 @@ impl Agent {
             call_name: call.name.as_str(),
             arguments: &call.arguments,
             scope_target: target.clone(),
-            unattended: self.get_unattended(),
+            autopilot: self.get_autopilot(),
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
@@ -3904,7 +3904,7 @@ impl Agent {
                 }
             }
 
-        // ask_user: the chain's AskUserPolicy refused under unattended; here we
+        // ask_user: the chain's AskUserPolicy refused under autopilot; here we
         // execute the interactive path (park for a user answer).
         if call.name == "ask_user" {
             return self.execute_ask_user(call, call_id, event_tx).await;
@@ -4407,13 +4407,13 @@ mod tests {
     /// A `sudo` command (matched by the interactive classifier) must, with
     /// `skip_interactive_input` on, run with stdin **closed** and emit **no**
     /// `InputRequest` — the inline panel never pops. This is the opt-out's core
-    /// contract and mirrors the unattended path.
+    /// contract and mirrors the autopilot path.
     #[tokio::test]
     async fn skip_interactive_input_closes_stdin_without_input_request() {
         use neenee_core::{AgentEvent, StdinPolicy};
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_unattended(false);
+        agent.set_autopilot(false);
         agent.set_skip_interactive_input(true);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -4437,7 +4437,7 @@ mod tests {
         use neenee_core::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_unattended(false);
+        agent.set_autopilot(false);
         agent.set_skip_interactive_input(false);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -4537,22 +4537,22 @@ impl crate::permission_policy::PermissionContext for Agent {
                 }
             }
             crate::bash_policy::BashPolicyAction::Confirm => {
-                // Under unattended there is no human to confirm, so resolve
-                // silently per `unattended_confirm_action` (default Deny). The
-                // gate therefore never yields a Confirm Ask under unattended —
-                // matching the broker's unattended bypass.
-                if self.get_unattended() {
-                    match policy.unattended_confirm_action() {
+                // Under autopilot there is no human to confirm, so resolve
+                // silently per `autopilot_confirm_action` (default Deny). The
+                // gate therefore never yields a Confirm Ask under autopilot —
+                // matching the broker's autopilot bypass.
+                if self.get_autopilot() {
+                    match policy.autopilot_confirm_action() {
                         crate::bash_policy::BashPolicyAction::Allow => {
                             tracing::warn!(
                                 command = %command,
                                 rule = %decision.name,
-                                "bash policy confirmation bypassed by unattended_confirm=allow"
+                                "bash policy confirmation bypassed by autopilot_confirm=allow"
                             );
                             crate::permission_policy::BashVerdict::Allow
                         }
                         _ => crate::permission_policy::BashVerdict::Deny {
-                            output: decision.unattended_confirm_output(command),
+                            output: decision.autopilot_confirm_output(command),
                         },
                     }
                 } else {

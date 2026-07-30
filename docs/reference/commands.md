@@ -17,7 +17,7 @@ Project and user-defined commands are covered under
 | `/compact` | Compact older complete rounds now |
 | `/clear` | Clear the conversation history |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
-| `/unattended [on\|off]` | Toggle unattended mode (agent runs without human intervention) |
+| `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
 | `/review` | Run an on-demand session-review diagnostic of the current round |
 | `/search <query>` | Semantic search over the project's session history |
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
@@ -71,7 +71,7 @@ all share the same agent request queue.
 `<cron>` is five fields — `minute hour day-of-month month day-of-week` — e.g.
 `*/5 * * * *` (every 5 minutes), `0 9 * * 1-5` (09:00 on weekdays). Jobs are
 durable (survive restarts) and auto-expire after 30 days. `/repeat` is a
-clock-driven scheduler for unattended, scheduled prompts.
+clock-driven scheduler for autopilot, scheduled prompts.
 
 ### `/session`
 
@@ -117,13 +117,13 @@ accent, success, warning, and error colors. Valid custom colors preview live;
 `Enter` saves and applies the palette, while `Esc` cancels the draft. Changes
 apply immediately and persist in the `[tui]` table of `config.toml`.
 
-### `/unattended`
+### `/autopilot`
 
 | Form | Effect |
 |------|--------|
-| `/unattended` | Toggle unattended on/off |
-| `/unattended on` | Run without human intervention (no confirmations, no questions) |
-| `/unattended off` | Restore interactive prompts |
+| `/autopilot` | Toggle autopilot on/off |
+| `/autopilot on` | Run without human intervention (no confirmations, no questions) |
+| `/autopilot off` | Restore interactive prompts |
 
 When on, the agent acts without human intervention: tool permissions
 auto-approve before write/execute tools (`bash`, `write_file`,
@@ -132,7 +132,7 @@ the model; any stale call short-circuits), interactive command stdin is
 closed instead of prompting, and the system prompt is told no human is
 reachable. Affects the live process only. For the design intent and every
 surface the flag enforces, see
-[Unattended operation](../explanation/agent-design/unattended.md).
+[Autopilot operation](../explanation/agent-design/autopilot.md).
 
 ### `/btw`
 

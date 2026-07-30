@@ -64,8 +64,8 @@ pub struct BootstrapParams {
     pub startup: StartupMode,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
-    /// `--unattended` at start: the agent runs without human intervention.
-    pub unattended: bool,
+    /// `--autopilot` at start: the agent runs without human intervention.
+    pub autopilot: bool,
     /// `--single-instance`: restore the pre-ADR-0018 exclusive per-project
     /// process lock.
     pub single_instance: bool,
@@ -127,7 +127,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        unattended: unattended_at_start,
+        autopilot: autopilot_at_start,
         single_instance,
     } = params;
     debug_assert!(
@@ -453,12 +453,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime_for_bg.refresh_all().await;
     });
     neenee_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
-    if unattended_at_start {
-        agent.set_unattended(true);
+    if autopilot_at_start {
+        agent.set_autopilot(true);
         let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Text(
-                "Unattended ON: the agent will run without human intervention (no confirmations, no questions).".to_string(),
+                "Autopilot ON: the agent will run without human intervention (no confirmations, no questions).".to_string(),
             ),
         ));
     }

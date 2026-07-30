@@ -4,7 +4,7 @@ Single-row strip pinned at the bottom of the footer, directly below the
 [hint bar](hint-line.md). It is the dedicated home for ambient **session**
 state — state that describes the whole session rather than the current input.
 
-- **Left:** persistent session status flags, currently just `unattended`. The
+- **Left:** persistent session status flags, currently just `autopilot`. The
   safety flag leads the row because a silent agent running is the most
   glance-worthy session state.
 - **Right:** the workspace path the session is rooted at, tilde-shortened to its
@@ -22,10 +22,10 @@ only from whatever flags are active.
 
 ## Appearance
 
-Unattended mode active:
+Autopilot mode active:
 
 ```text
- unattended                                                    ~/projects/xx
+ autopilot                                                    ~/projects/xx
 ```
 
 Ordinary session (no flag):
@@ -44,15 +44,15 @@ disappears. The row never overflows.
 | Location | 1 row directly below the hint bar (bottom of the footer stack) |
 | Height | `STATUS_BAR_ROWS = 1` whenever chrome is visible (never conditionally hidden) |
 | Workspace | `text_muted`, tilde-shortened, truncated from the left (`…tail`) when it would collide with the left cluster |
-| `unattended` flag | lowercase, warning tone + BOLD, left-aligned (leads the row), only while unattended mode is on |
+| `autopilot` flag | lowercase, warning tone + BOLD, left-aligned (leads the row), only while autopilot mode is on |
 | Indent | 1 space |
 | Background | `surface` |
 
-## Unattended mode
+## Autopilot mode
 
-When unattended mode is active (`--unattended` / `/unattended on`), the
+When autopilot mode is active (`--autopilot` / `/autopilot on`), the
 agent runs without human intervention — no confirmations, no questions.
-The status bar shows a lowercase `unattended` flag in the warning tone, bold,
+The status bar shows a lowercase `autopilot` flag in the warning tone, bold,
 leading on the left. Plain text rather than a bracketed pill: it reads as a
 persistent session flag (always-on while the session is elevated) rather than
 a momentary input mode, so it carries its meaning without any chrome.
@@ -71,5 +71,5 @@ a momentary input mode, so it carries its meaning without any chrome.
 `draw_status_bar` / `StatusBarView` in `render/chrome.rs`. The workspace path
 is tilde-shortened by `tilde_home` (same module) from `App::cwd`, captured at
 startup. The row's height and placement are resolved in `draw_transcript`
-(`view.rs`) from `STATUS_BAR_ROWS` (`render/design.rs`); the `unattended` flag
-arrives through `App::unattended`.
+(`view.rs`) from `STATUS_BAR_ROWS` (`render/design.rs`); the `autopilot` flag
+arrives through `App::autopilot`.

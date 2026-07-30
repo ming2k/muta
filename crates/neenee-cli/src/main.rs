@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // production startup cost (skill scan, MCP connects,
     // agent construction) for nothing. The Showcase variant only exists under
     // `debug_assertions`, so the guard here mirrors it.
-    let (startup, project_override, unattended_at_start, single_instance) =
+    let (startup, project_override, autopilot_at_start, single_instance) =
         parse_args(std::env::args().skip(1).collect());
 
     #[cfg(debug_assertions)]
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui: Arc::new(crate::tui::clipboard::TuiClipboard),
         startup,
         project_root: project_override,
-        unattended: unattended_at_start,
+        autopilot: autopilot_at_start,
         single_instance,
     })
     .await?;

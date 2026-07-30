@@ -3,7 +3,7 @@
 //!
 //! This is the largest handler — it fans the parsed command out across every
 //! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/clear`,
-//! `/permissions`, `/unattended`, `/review`, `/search`, `/resume`,
+//! `/permissions`, `/autopilot`, `/review`, `/search`, `/resume`,
 //! `/session`, `/sessions`, `/btw`, `/pursue`, `/repeat`, `/init`,
 //! `/skills`, `/skill`, `/export`, `/debug`, `/help`, `/exit`) plus the
 //! `None` arm that runs a user-defined project command.
@@ -197,25 +197,25 @@ pub async fn dispatch(
                 ));
             }
         }
-        Some(BuiltinCmd::Unattended) => {
+        Some(BuiltinCmd::Autopilot) => {
             let next = match parts.get(1).map(|s| s.to_lowercase()).as_deref() {
                 Some("on") | Some("true") | Some("1") => Some(true),
                 Some("off") | Some("false") | Some("0") => Some(false),
                 Some(other) => {
                     let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Unknown value '{}'. Use `/unattended on|off`.",
+                        "Unknown value '{}'. Use `/autopilot on|off`.",
                         other
                     )));
                     return;
                 }
                 None => None,
             };
-            let enabled = next.unwrap_or_else(|| !agent.get_unattended());
-            agent.set_unattended(enabled);
+            let enabled = next.unwrap_or_else(|| !agent.get_autopilot());
+            agent.set_autopilot(enabled);
             let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::Text(format!(
-                    "Unattended {}: the agent {} run without human intervention — the question \
+                    "Autopilot {}: the agent {} run without human intervention — the question \
                      tool is reclaimed, tool permissions auto-approve, and no prompts or \
                      questions can pause the session.",
                     if enabled { "ON" } else { "OFF" },
@@ -224,13 +224,13 @@ pub async fn dispatch(
             ));
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::UnattendedChanged(enabled),
+                RoundEvent::AutopilotChanged(enabled),
             ));
-            // No `send_harness_state` here: toggling unattended is not a
+            // No `send_harness_state` here: toggling autopilot is not a
             // round lifecycle transition, so emitting a `HarnessState("idle")`
             // would make the HarnessState handler clear the live activity
             // cell (`activity_status`) and momentarily hide the activity bar
-            // mid-turn. The `UnattendedChanged` event above already mirrors
+            // mid-turn. The `AutopilotChanged` event above already mirrors
             // the new value into the TUI snapshot without that side effect.
         }
         Some(BuiltinCmd::Principal) => {

@@ -138,8 +138,8 @@ envoy that hits ambiguity returns it in its written answer instead. See
 
 ## See also
 
-- [Unattended operation](unattended.md) — the autonomous counterpart to this
-  surface: when `unattended` is on it reclaims `ask_user` outright (and
+- [Autopilot operation](autopilot.md) — the autonomous counterpart to this
+  surface: when `autopilot` is on it reclaims `ask_user` outright (and
   auto-approves tool permissions), so the question surface is governed by the
   same flag rather than left to the model's discretion.
 - [How to ask the user a question](../../how-to/ask-the-user.md)

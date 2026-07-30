@@ -34,8 +34,8 @@
 //!    broker: `Unspecified` skips all three.
 //! 3. **`Reject` is collective** — one reject rejects the whole pending batch
 //!    (owned by the permission store's `reply`, keyed on a reject decision).
-//! 4. **`unattended` bypasses interactive policies only** (broker, bash-confirm,
-//!    ask-user), never the hook. The scope gate *reads* `unattended` (to decide
+//! 4. **`autopilot` bypasses interactive policies only** (broker, bash-confirm,
+//!    ask-user), never the hook. The scope gate *reads* `autopilot` (to decide
 //!    whether an out-of-scope call can be elevated by the user or must be
 //!    blocked), but it never opens an interactive modal of its own.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
@@ -74,7 +74,7 @@ pub enum BashVerdict {
     /// one-off. Carries the rule match so the gate can build the prompt
     /// payload (label/description/detail) without re-evaluating.
     Confirm { match_: BashPolicyMatch },
-    /// A hard refusal (`Deny`, or a `Confirm` resolved under unattended).
+    /// A hard refusal (`Deny`, or a `Confirm` resolved under autopilot).
     Deny { output: ToolOutput },
 }
 
@@ -129,10 +129,10 @@ pub trait PermissionContext: Send + Sync {
     /// outcome — including the interactive confirm — is resolved inside the
     /// chain. There is no longer a chain-external re-evaluation.
     ///
-    /// Unattended sessions never yield [`BashVerdict::Confirm`]: a confirm is
-    /// resolved silently to `Allow` or `Deny` per `unattended_confirm_action`,
-    /// so the gate produces no [`PolicyDecision::Ask`] under unattended (the
-    /// broker's unattended bypass therefore sees a `Pass`, as before).
+    /// Autopilot sessions never yield [`BashVerdict::Confirm`]: a confirm is
+    /// resolved silently to `Allow` or `Deny` per `autopilot_confirm_action`,
+    /// so the gate produces no [`PolicyDecision::Ask`] under autopilot (the
+    /// broker's autopilot bypass therefore sees a `Pass`, as before).
     async fn check_bash_policy(&self, command: &str, arguments: &str) -> BashVerdict;
 
     /// The permission store, for synchronous `is_always_allowed` checks.
@@ -149,7 +149,7 @@ pub struct PolicyContext<'a> {
     pub call_name: &'a str,
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
-    pub unattended: bool,
+    pub autopilot: bool,
     pub operation_scope: neenee_core::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
@@ -300,11 +300,11 @@ impl PermissionPolicy for SchemaPolicy {
 ///
 /// A call whose [`ScopeTarget`] falls outside the agent's granted
 /// [`OperationScope`] is not hard-blocked. Instead:
-/// - **Attended** (a human is reachable, `ctx.unattended == false`) → `Pass`, so
+/// - **Attended** (a human is reachable, `ctx.autopilot == false`) → `Pass`, so
 ///   the call falls through to the next gate — the [`BrokerPolicy`], which
 ///   surfaces the standard approve / always-allow / reject prompt. The user, not
 ///   a builtin limit, decides whether the elevation is granted.
-/// - **Unattended** (no human reachable, `ctx.unattended == true`) → hard `Deny`.
+/// - **Autopilot** (no human reachable, `ctx.autopilot == true`) → hard `Deny`.
 ///   With no user to answer a prompt, blocking outright is the only safe
 ///   resolution; auto-allowing would remove the safety floor entirely. The
 ///   message is a `ToolOutput::Text` (not `PermissionDenied`) so the model can
@@ -326,8 +326,8 @@ impl PermissionPolicy for ScopeGatePolicy {
             return PolicyDecision::Pass;
         }
         // Out of scope. Attended → hand the decision to the user (the broker);
-        // unattended → block outright, since no human can answer an elevation.
-        if ctx.unattended {
+        // autopilot → block outright, since no human can answer an elevation.
+        if ctx.autopilot {
             PolicyDecision::Deny {
                 output: ToolOutput::Text(format!(
                     "[operation scope] Tool '{}' targets '{}' outside its granted scope, and no \
@@ -369,7 +369,7 @@ impl std::fmt::Display for ScopeTargetDisplay<'_> {
 /// - [`BashVerdict::Allow`] → `Pass` (fall through to the broker, which may
 ///   still `Ask` for a not-yet-approved command — the *single* prompt).
 /// - [`BashVerdict::Deny`] → `Deny` (hard refusal, or a confirm resolved under
-///   unattended).
+///   autopilot).
 /// - [`BashVerdict::Confirm`] → `Ask` with `one_off: true`, carrying the rule
 ///   match. The caller parks through the **same** `Ask` path the broker uses,
 ///   so there is one park/emit/await block, one prompt, no re-evaluation.
@@ -430,7 +430,7 @@ impl PermissionPolicy for BashPolicy {
     }
 }
 
-/// Gate 6: ask_user shortcut. Under unattended, refuse (no human to answer).
+/// Gate 6: ask_user shortcut. Under autopilot, refuse (no human to answer).
 pub struct AskUserPolicy;
 #[async_trait]
 impl PermissionPolicy for AskUserPolicy {
@@ -438,10 +438,10 @@ impl PermissionPolicy for AskUserPolicy {
         "ask-user"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.call_name == "ask_user" && ctx.unattended {
+        if ctx.call_name == "ask_user" && ctx.autopilot {
             return PolicyDecision::Deny {
                 output: ToolOutput::Text(
-                    "ask_user is unavailable: this session is running unattended and no human \
+                    "ask_user is unavailable: this session is running on autopilot and no human \
                      is reachable to answer. Resolve the ambiguity yourself — pick the most \
                      reasonable default and proceed."
                         .to_string(),
@@ -453,15 +453,15 @@ impl PermissionPolicy for AskUserPolicy {
 }
 
 /// Gate 7: the permission broker. A non-`Unspecified` target not already
-/// always-allowed (and not unattended) yields `Ask`; the chain caller parks.
+/// always-allowed (and not autopilot) yields `Ask`; the chain caller parks.
 ///
-/// **Unattended bypass:** when `ctx.unattended` is true this gate auto-approves
+/// **Autopilot bypass:** when `ctx.autopilot` is true this gate auto-approves
 /// every call that survived scope-gate (gate 4) and bash-policy (gate 5). The
 /// broker therefore does *no* work for the common read-only envoy profiles,
-/// which are `unattended: true` — their real safety floor is admission
+/// which are `autopilot: true` — their real safety floor is admission
 /// (`resolve_tools`, which filters the toolset at spawn) plus the scope-gate.
 /// The broker is the live layer only for the principal agent and for the
-/// `INTERACTIVE` profile (`unattended: false`), which forwards prompts up to
+/// `INTERACTIVE` profile (`autopilot: false`), which forwards prompts up to
 /// the parent (ADR-0029).
 pub struct BrokerPolicy;
 #[async_trait]
@@ -473,7 +473,7 @@ impl PermissionPolicy for BrokerPolicy {
         if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
-        if ctx.unattended {
+        if ctx.autopilot {
             return PolicyDecision::Approve;
         }
         let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
@@ -551,7 +551,7 @@ mod tests {
 
     /// A stub PermissionContext for policy tests: all hooks/bash/park are no-ops.
     struct StubCtx {
-        unattended: bool,
+        autopilot: bool,
         perms: PermissionStore,
     }
     #[async_trait]
@@ -577,7 +577,7 @@ mod tests {
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
-        unattended: bool,
+        autopilot: bool,
         op: neenee_core::OperationScope,
         disabled: std::collections::HashSet<String>,
         scoped: ScopedToolDisable,
@@ -588,7 +588,7 @@ mod tests {
             call_name: name,
             arguments: args,
             scope_target: target,
-            unattended,
+            autopilot,
             operation_scope: op,
             disabled,
             scoped_disabled: scoped,
@@ -606,7 +606,7 @@ mod tests {
         let scoped = ScopedToolDisable::default();
         let op = neenee_core::OperationScope::unrestricted();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(&tool, "bash", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
@@ -617,7 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_unattended_blocks_out_of_scope() {
+    async fn scope_gate_autopilot_blocks_out_of_scope() {
         // No user reachable → an out-of-scope call is hard-denied (safety floor).
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -630,7 +630,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: true,
+            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -638,7 +638,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            true, // unattended
+            true, // autopilot
             op.clone(),
             disabled.clone(),
             scoped.clone(),
@@ -664,7 +664,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -685,7 +685,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_in_scope_passes_regardless_of_unattended() {
+    async fn scope_gate_in_scope_passes_regardless_of_autopilot() {
         // Inside the granted scope → always passes (broker applies as usual).
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -698,7 +698,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: true,
+            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_unattended_approves() {
+    async fn broker_autopilot_approves() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
@@ -728,7 +728,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: true,
+            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -755,7 +755,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -788,7 +788,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -822,7 +822,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -852,7 +852,7 @@ mod tests {
         let disabled: HashSet<String> = ["write_file".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -883,7 +883,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(&tool, "read_text", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
@@ -907,7 +907,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: false,
+            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -929,9 +929,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chain_out_of_scope_unattended_blocks() {
+    async fn chain_out_of_scope_autopilot_blocks() {
         // No human → the soft gate must still block out-of-scope calls; it never
-        // reaches a broker that would silently auto-approve under unattended.
+        // reaches a broker that would silently auto-approve under autopilot.
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -943,7 +943,7 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            unattended: true,
+            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -951,7 +951,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            true, // unattended
+            true, // autopilot
             op.clone(),
             disabled.clone(),
             scoped.clone(),

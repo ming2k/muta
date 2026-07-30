@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui: Arc::new(HeadlessUi),
         startup,
         project_root: Some(args.project.clone()),
-        unattended: false,
+        autopilot: false,
         single_instance: false,
     })
     .await?;

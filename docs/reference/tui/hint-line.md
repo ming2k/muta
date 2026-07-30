@@ -4,7 +4,7 @@ Single-row strip pinned directly below the input box. It is **input-focused**:
 the left side states what the next `Enter` does, and the right side carries the
 model name, an optional reasoning-effort tag, and the context-usage indicator.
 
-Long-lived **session** state (the workspace path, the `unattended` flag) does
+Long-lived **session** state (the workspace path, the `autopilot` flag) does
 **not** live here — it has its own dedicated [status bar](status-bar.md) on the
 row directly below this one.
 

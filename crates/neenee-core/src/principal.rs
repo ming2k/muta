@@ -98,9 +98,9 @@ pub struct PrincipalProfile {
     pub operation_scope: OperationScope,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
     pub config: PrincipalRuntimeConfig,
-    /// Whether this principal runs unattended (no human confirmations). Default
+    /// Whether this principal runs on autopilot (no human confirmations). Default
     /// `false` — a top-level principal is interactive by contract.
-    pub unattended: bool,
+    pub autopilot: bool,
 }
 
 impl PrincipalProfile {
@@ -114,7 +114,7 @@ impl PrincipalProfile {
             agent_selection: ToolSelection::unrestricted(),
             operation_scope: OperationScope::unrestricted(),
             config: PrincipalRuntimeConfig::default(),
-            unattended: false,
+            autopilot: false,
         }
     }
 
@@ -136,9 +136,9 @@ impl PrincipalProfile {
         self
     }
 
-    /// Run attended (`false`, the default) or unattended (`true`).
-    pub fn with_unattended(mut self, unattended: bool) -> Self {
-        self.unattended = unattended;
+    /// Run attended (`false`, the default) or autopilot (`true`).
+    pub fn with_autopilot(mut self, autopilot: bool) -> Self {
+        self.autopilot = autopilot;
         self
     }
 }
@@ -314,7 +314,7 @@ mod tests {
     fn with_identity_is_unrestricted_and_attended() {
         let p = PrincipalProfile::with_identity("code", AgentIdentity::new("n", "m"));
         assert_eq!(p.name, "code");
-        assert!(!p.unattended);
+        assert!(!p.autopilot);
         // unrestricted selection ⇒ All scope, empty variant pins
         assert_eq!(p.agent_selection.scope, crate::ToolScope::All);
         assert!(p.agent_selection.variants.is_empty());
@@ -331,12 +331,12 @@ mod tests {
     #[test]
     fn builders_override_defaults() {
         let p = PrincipalProfile::with_identity("ops", AgentIdentity::default())
-            .with_unattended(true)
+            .with_autopilot(true)
             .with_runtime_config(PrincipalRuntimeConfig {
                 hard_stop_turns: 7,
                 ..Default::default()
             });
-        assert!(p.unattended);
+        assert!(p.autopilot);
         assert_eq!(p.config.hard_stop_turns, 7);
     }
 

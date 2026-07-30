@@ -3,7 +3,7 @@
 Transient activity indicator shown in the footer stack, directly above the
 input box (below the ambient [todo bar](todo-bar.md) and queue bar). It
 unifies the live status label and the breathing-dot liveness anchor into one
-click-to-open bar. Long-lived session-state flags (`unattended` and friends)
+click-to-open bar. Long-lived session-state flags (`autopilot` and friends)
 are deliberately absent — they live on the dedicated [status bar](status-bar.md)
 below the hint bar — and the task-list summary lives on its own todo bar above.
 

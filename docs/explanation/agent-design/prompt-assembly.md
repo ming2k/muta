@@ -47,7 +47,7 @@ section present only when its precondition holds:
    supplied by the selected model and provider. Empty guidance contributes no
    section.
 3. **Persistence and autonomy.** Mission-independent policy tells the agent to
-   carry work through implementation and verification. An unattended session
+   carry work through implementation and verification. An autopilot session
    adds the stronger rule that no human is reachable and ambiguity must be
    resolved without waiting for input.
 4. **Conditional workflow guidance.** Tool schemas are declared natively (see

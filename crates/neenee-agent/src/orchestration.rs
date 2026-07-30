@@ -478,7 +478,7 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
 }
 
 /// Emit the current harness snapshot (mode, round counter, loop
-/// status, unattended) to the UI.
+/// status, autopilot) to the UI.
 pub fn send_harness_state(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
@@ -497,7 +497,7 @@ pub fn send_harness_state(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            unattended: agent.get_unattended(),
+            autopilot: agent.get_autopilot(),
         }),
     ));
 }
@@ -1260,8 +1260,8 @@ pub fn relay_agent_event(
         AgentEvent::TodosUpdated(todos) => {
             round_response(session_id, RoundEvent::TodosUpdated(todos))
         }
-        AgentEvent::UnattendedChanged(enabled) => {
-            round_response(session_id, RoundEvent::UnattendedChanged(enabled))
+        AgentEvent::AutopilotChanged(enabled) => {
+            round_response(session_id, RoundEvent::AutopilotChanged(enabled))
         }
         AgentEvent::SessionReview { alert } => {
             if !alert.trim().is_empty() {

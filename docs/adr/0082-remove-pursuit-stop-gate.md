@@ -81,7 +81,7 @@ Remove the pursuit primitive entirely:
 - The `/export` metadata header drops its **Pursuit** line.
 
 `/repeat` (the cron scheduler) is **kept**: it is mechanism-orthogonal (a
-clock, not a stop-gate) and genuinely useful for unattended scheduled prompts.
+clock, not a stop-gate) and genuinely useful for autopilot scheduled prompts.
 The misplaced SessionStart-hook block that used to live inside `/pursue
 status` is relocated to `bootstrap::assemble`, where it fires once at startup
 — its prior location was a known bug (it fired on every `/pursue status`).
@@ -100,7 +100,7 @@ a vote on whether to force another turn.
   (gate + marker + budget + checkpoint + persistence + TUI badge) for a
   minority opt-in use case, and the review's conclusion was that autonomy is
   a product question, not a structural one — it can return as a focused
-  feature if a real unattended-mode need emerges, rather than living as the
+  feature if a real autopilot-mode need emerges, rather than living as the
   default round machinery.
 - **Keep the durable objective + marker as a pure system-prompt anchor, drop
   only the gate.** Rejected: the anchor's only real value (surviving
@@ -132,7 +132,7 @@ Negative:
 - **Autonomy is gone.** A user can no longer set a condition and walk away
   expecting the agent to keep working unprompted. Mitigation: a capable model
   completes long tasks within one round by its own tool-calling; `/repeat`
-  covers scheduled/unattended prompt delivery; and a focused unattended-mode
+  covers scheduled/autopilot prompt delivery; and a focused autopilot-mode
   feature can be re-introduced if the need is real.
 - **Breaking change for `/pursue` users.** Any muscle memory, scripts, or
   exported-session markers referencing `/pursue` or `[NEENEE_PURSUIT_COMPLETE]`

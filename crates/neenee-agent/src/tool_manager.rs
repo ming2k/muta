@@ -11,7 +11,7 @@
 //! separate places that had to be kept consistent by hand:
 //!
 //! - [`Agent::installed_tools`](crate::Agent) — schema source (resolved ∪ dynamic);
-//! - [`Agent::visible_tools`](crate::Agent) — per-turn schema (installed − disabled − unattended `ask_user`);
+//! - [`Agent::visible_tools`](crate::Agent) — per-turn schema (installed − disabled − autopilot `ask_user`);
 //! - the lookup inside [`Agent::execute_tool`](crate::Agent) — dispatch (resolved, then dynamic fallback).
 //!
 //! Each recomputed "static ∪ dynamic − mask" with its own code, so the three
@@ -172,16 +172,16 @@ impl ToolManager {
     }
 
     /// The live tool set the model may see this turn: `installed` minus the
-    /// disabled mask (user + hook-scoped), minus `ask_user` when unattended.
+    /// disabled mask (user + hook-scoped), minus `ask_user` when autopilot.
     ///
     /// This is the per-turn schema authority (kimi's `loopTools` getter). It
     /// is **cheap**: the only per-call work is the classification + filter
     /// pass; the resolved/dynamic storage is not recomputed.
-    pub(crate) fn loop_tools(&self, unattended: bool) -> Vec<Arc<dyn Tool>> {
+    pub(crate) fn loop_tools(&self, autopilot: bool) -> Vec<Arc<dyn Tool>> {
         self.installed()
             .into_iter()
             .filter(|s| !self.is_name_disabled(s.tool.name()))
-            .filter(|s| !(unattended && s.tool.name() == "ask_user"))
+            .filter(|s| !(autopilot && s.tool.name() == "ask_user"))
             .map(|s| s.tool)
             .collect()
     }
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_tools_filters_disabled_and_unattended_ask_user() {
+    fn loop_tools_filters_disabled_and_autopilot_ask_user() {
         let m = manager(
             vec![StubTool::new("bash"), StubTool::new("ask_user")],
             vec![],
@@ -337,11 +337,11 @@ mod tests {
         let names: Vec<&str> = live.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["ask_user"], "bash disabled; ask_user kept");
 
-        // Unattended drops ask_user too.
-        let live_unattended = m.loop_tools(true);
+        // Autopilot drops ask_user too.
+        let live_autopilot = m.loop_tools(true);
         assert!(
-            live_unattended.is_empty(),
-            "unattended must reclaim ask_user"
+            live_autopilot.is_empty(),
+            "autopilot must reclaim ask_user"
         );
     }
 
