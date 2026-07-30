@@ -201,12 +201,16 @@ fn list_body(
         ));
     }
 
-    // Latest generation throughput: output tokens / *generation* time. The
-    // denominator is the time the model actually spent streaming (excluding
-    // tool execution, hooks, and human-decision pauses), so this reflects the
-    // server's real efficiency rather than how long tools ran or how long the
-    // user deliberated. The timing breakdown is pulled out into its own
-    // sibling "Time" row so the two read at the same glance level.
+    // Latest model output rate: output tokens / *generation* time. The
+    // denominator is the time the model actually spent generating (excluding
+    // tool execution, hooks, and human-decision pauses, but including any
+    // envoy's generation once its output tokens are counted too), so this
+    // reflects the server's real efficiency rather than how long tools ran or
+    // how long the user deliberated. "Output rate" is more honest than
+    // "Throughput" — throughput implies end-to-end processing speed, whereas
+    // this deliberately excludes everything except model generation. The Time
+    // row renders *exactly* the denominator the rate was divided by, so the two
+    // stay consistent (the old code used `.max(active_ms)`, which was larger).
     if let Some(summary) = latest_tps {
         let tps = summary.tps();
         let tps_label = if tps > 0.0 {
@@ -214,16 +218,16 @@ fn list_body(
         } else {
             "–".to_string()
         };
-        let active_s = summary.generation_ms.max(summary.active_ms()) as f64 / 1000.0;
+        let gen_s = summary.denominator_ms() as f64 / 1000.0;
         body.push(kv_styled(
-            "Throughput",
+            "Output rate",
             &tps_label,
             Style::default().fg(theme.fg()),
             theme,
         ));
         body.push(kv_styled(
             "Time",
-            &format!("{active_s:.1}s active"),
+            &format!("{gen_s:.1}s gen"),
             Style::default().fg(theme.fg()),
             theme,
         ));

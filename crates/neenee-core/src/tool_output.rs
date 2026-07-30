@@ -129,6 +129,13 @@ pub enum ToolOutput {
         summary: String,
         messages: Vec<crate::Message>,
         usage: crate::TokenUsage,
+        /// Time the envoy's own provider requests spent *generating*
+        /// (completion-spanning, excluding tool execution and human pauses),
+        /// so the parent round can fold it into its throughput denominator.
+        /// Without this, the envoy's output tokens would be in the parent's
+        /// numerator but its generation time missing from the denominator —
+        /// inflating the displayed tok/s for any delegating round.
+        generation_ms: u64,
         failed: bool,
     },
     /// An image read from disk (by `read_image`). `mime` is the content type
@@ -569,6 +576,17 @@ impl ToolOutput {
             _ => None,
         }
     }
+
+    /// If this output is a [`ToolOutput::Envoy`], return the generation time
+    /// its own provider requests spent, so the parent can fold it into its
+    /// throughput denominator alongside the envoy's output tokens. Returns
+    /// `0` for every other variant.
+    pub fn envoy_generation_ms(&self) -> u64 {
+        match self {
+            ToolOutput::Envoy { generation_ms, .. } => *generation_ms,
+            _ => 0,
+        }
+    }
 }
 
 impl From<String> for ToolOutput {
@@ -944,6 +962,7 @@ mod tests {
             summary: "external summary".into(),
             messages,
             usage,
+            generation_ms: 0,
             failed: false,
         };
         assert_eq!(o.to_text(), "external summary");
@@ -966,6 +985,7 @@ mod tests {
             summary: "s".into(),
             messages: messages.clone(),
             usage,
+            generation_ms: 0,
             failed: false,
         };
         let (got_messages, got_usage) = o.envoy_payload().expect("envoy payload");
@@ -988,6 +1008,7 @@ mod tests {
             summary: "partial findings".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
+            generation_ms: 0,
             failed: true,
         };
         assert!(with_flag.is_error());
@@ -996,6 +1017,7 @@ mod tests {
             summary: "Error: legacy text".into(),
             messages: Vec::new(),
             usage: crate::TokenUsage::default(),
+            generation_ms: 0,
             failed: false,
         };
         assert!(!no_flag.is_error());

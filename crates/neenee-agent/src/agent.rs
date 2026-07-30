@@ -3292,6 +3292,14 @@ impl Agent {
             state.token_usage.total_tokens += sub_usage.total_tokens;
             state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
             state.token_usage.completion_tokens += sub_usage.completion_tokens;
+            // The envoy's output tokens are in the numerator above; fold its
+            // own generation time into the denominator too, so the round's
+            // throughput stays scoped-consistent (no inflated tok/s for
+            // delegating rounds). Tool execution inside the envoy is already
+            // excluded from this figure.
+            state.generation_ms = state
+                .generation_ms
+                .saturating_add(result.envoy_generation_ms());
             // Still count the summary bytes that the parent model will
             // actually re-read on the next turn.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);

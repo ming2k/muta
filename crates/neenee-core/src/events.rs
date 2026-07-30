@@ -513,6 +513,18 @@ impl RoundSummary {
         self.duration_ms.saturating_sub(self.paused_ms)
     }
 
+    /// The time `tps()` divides by: `generation_ms` when at least one request
+    /// completed measurably, otherwise the round `active_ms()` fallback.
+    /// Exposed so a UI can render *exactly* the denominator the throughput
+    /// figure was computed from, instead of a coincidentally-larger span.
+    pub fn denominator_ms(&self) -> u64 {
+        if self.generation_ms > 0 {
+            self.generation_ms
+        } else {
+            self.active_ms()
+        }
+    }
+
     /// Output tokens per second of *generation* time — the time the model
     /// actually spent streaming a response, excluding tool execution and
     /// human-decision pauses. Falls back to round `active_ms()` (wall-clock
@@ -520,11 +532,7 @@ impl RoundSummary {
     /// returns `0.0` when there is no usable denominator so the UI renders `–`
     /// rather than `inf`.
     pub fn tps(&self) -> f64 {
-        let denominator_ms = if self.generation_ms > 0 {
-            self.generation_ms
-        } else {
-            self.active_ms()
-        };
+        let denominator_ms = self.denominator_ms();
         if denominator_ms == 0 {
             0.0
         } else {

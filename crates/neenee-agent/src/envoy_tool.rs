@@ -359,6 +359,7 @@ impl Tool for EnvoyTool {
             summary,
             messages: outcome.messages,
             usage: outcome.token_usage,
+            generation_ms: outcome.generation_ms,
             failed: outcome.failed,
         })
     }
@@ -377,6 +378,11 @@ struct EnvoyOutcome {
     /// `failed` flag on the returned [`neenee_core::ToolOutput::Envoy`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
     failed: bool,
+    /// The envoy's own generation time (summed across its completed provider
+    /// requests). Folded into the parent round's `generation_ms` so the
+    /// throughput denominator matches its numerator scope (envoy output
+    /// tokens already reach the parent via `token_usage`).
+    generation_ms: u64,
 }
 
 impl EnvoyTool {
@@ -539,6 +545,7 @@ impl EnvoyTool {
                     token_usage: result.token_usage,
                     final_content,
                     failed: false,
+                    generation_ms: result.generation_ms,
                 })
             }
             Err(error) => {
@@ -549,6 +556,7 @@ impl EnvoyTool {
                     token_usage: neenee_core::TokenUsage::default(),
                     final_content: format!("Error: {error_string}"),
                     failed: true,
+                    generation_ms: 0,
                 })
             }
         }

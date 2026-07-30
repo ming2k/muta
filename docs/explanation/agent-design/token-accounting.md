@@ -176,15 +176,15 @@ are derived from these records instead of serving as mutable primary state.
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is now **clickable**. Clicking it opens a centered, read-only
 **Context Usage** modal. The top shows the current AI-visible context size
-plus the latest generation throughput; the request-usage list groups the
+plus the latest model output rate; the request-usage list groups the
 active session's attempts by user round, and a detail page expands a round
 into its model turns:
 
 ```
 ┌─ Context Usage ───────────────────────────────────────────┐
 │ Size                 12.5k / 200.0k (6%)                  │
-│ Throughput           52.3 tok/s                           │
-│ Time                 2.1s active                          │
+│ Output rate          52.3 tok/s                           │
+│ Time                 2.1s gen                              │
 │                                                          │
 │   Round      State        Tokens      Turns               │
 │ ▌1st         done          12.3k         2                │
@@ -195,8 +195,18 @@ into its model turns:
 ```
 
 The top read-out has three peer key/value rows: context **Size**, latest
-**Throughput** (tokens/sec of the last completed round's generation), and
-**Time** (the active generation span that throughput was measured over).
+**Output rate** (tokens/sec of the last completed round's model generation),
+and **Time** (the generation span that the rate was measured over). The label
+is "Output rate", not "Throughput", deliberately: throughput implies
+end-to-end processing speed, but this figure *excludes* tool execution, hooks,
+and human-decision pauses — it isolates how fast the model itself generated.
+The **Time** row renders exactly the denominator the rate was divided by
+(`generation_ms`, summed across the round's completed provider requests, with
+a fallback to active wall-clock when none completed measurably), so the two
+rows always correspond — the rate *is* `output_tokens / Time`. Envoy sub-agents
+are folded in symmetrically: their completion tokens reach the numerator and
+their own generation time reaches the denominator, so a delegating round does
+not show an inflated tok/s.
 Beneath it sits the round ledger table — no sub-heading, since the modal
 title already names the view and the column headers frame the rows. The
 table has four columns: **Round** (bare ordinal label), **State** (the
@@ -216,11 +226,13 @@ The report answers two questions at a glance:
 - **"What would the next request contain?"** — the current-context line is
   available before the first request and refreshes after committed history
   changes.
-- **"How fast is the model generating?"** — the throughput line divides the
-  round's output tokens by its *generation* time (the time the model
-  actually spent streaming, excluding tool execution and human-decision
-  pauses), with the pause share shown parenthetically so a round that was
-  mostly waiting is not misread as a slow model.
+- **"How fast is the model generating?"** — the output-rate line divides the
+  round's output tokens by its *generation* time (the time the model actually
+  spent streaming, excluding tool execution and human-decision pauses). A
+  round that was mostly waiting (permission prompts, `ask_user`) therefore does
+  not read as a slow model: only the model's own streaming span is in the
+  denominator. The Time row shows exactly that span, so the two are
+  self-checking.
 - **"Which round cost what?"** — the per-round totals make token spend
   across the conversation visible at a glance; drilling into a round
   exposes its individual model turns (and any retries). The detail page

@@ -2622,6 +2622,7 @@ mod tests {
             summary: "Error: boom".into(),
             messages: Vec::new(),
             usage: neenee_core::TokenUsage::default(),
+            generation_ms: 0,
             failed: true,
         };
         assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
