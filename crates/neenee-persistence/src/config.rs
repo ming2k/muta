@@ -1072,6 +1072,49 @@ impl Config {
         config
     }
 
+    /// Load only the `[mcp.*]` table from a project-local `.neenee/config.toml`
+    /// (ADR-0085 §2/§3). Returns an empty map when the file or table is absent.
+    ///
+    /// This reads a *narrow* projection — just the mcp table — so a project
+    /// config that also carries unrelated keys (or partial/incomplete TOML)
+    /// does not fail the whole load. Project-scope MCP is untrusted until a
+    /// trust grant exists (§5); this function is pure parsing, the trust gate
+    /// is applied by the caller (bootstrap / `/reload`).
+    pub fn load_project_mcp(project_root: &std::path::Path) -> HashMap<String, McpServerConfig> {
+        let path = project_root.join(".neenee/config.toml");
+        let Some(content) = fs::read_to_string(&path).ok() else {
+            return HashMap::new();
+        };
+        // Deserialize into a struct that only declares `mcp`, ignoring every
+        // other key the project file may carry (deny_unknown_fields off).
+        #[derive(Deserialize)]
+        struct ProjectMcpProjection {
+            #[serde(default)]
+            mcp: HashMap<String, McpServerConfig>,
+        }
+        match toml::from_str::<ProjectMcpProjection>(&content) {
+            Ok(parsed) => parsed.mcp,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "project .neenee/config.toml has invalid [mcp.*]; ignoring project MCP"
+                );
+                HashMap::new()
+            }
+        }
+    }
+
+    /// Merge a project-local MCP server set into this (global-origin) config.
+    /// A project entry with the same name as a global entry **replaces** it
+    /// wholesale (ADR-0085 §4); project entries with new names are added. The
+    /// result is the effective `[mcp.*]` set the runtime connects to.
+    pub fn merge_project_mcp(&mut self, project_mcp: HashMap<String, McpServerConfig>) {
+        for (name, cfg) in project_mcp {
+            self.mcp.insert(name, cfg);
+        }
+    }
+
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         Self::save_inner(self, false)
     }
@@ -1745,5 +1788,113 @@ openai = "creds-key"
         "#;
         let cfg: Config = toml::from_str(toml).unwrap();
         assert!(cfg.tui.click_outside_dismiss);
+    }
+
+    // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------
+
+    fn scratch_project_root() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "neenee-project-mcp-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(dir.join(".neenee")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_project_mcp_reads_neenee_config_table() {
+        let root = scratch_project_root();
+        std::fs::write(
+            root.join(".neenee/config.toml"),
+            r#"
+                [mcp.project-db]
+                command = ["./bin/db-mcp"]
+                enabled = true
+            "#,
+        )
+        .unwrap();
+
+        let mcp = Config::load_project_mcp(&root);
+        assert_eq!(mcp.len(), 1);
+        assert_eq!(mcp["project-db"].command, vec!["./bin/db-mcp".to_string()]);
+        assert!(mcp["project-db"].enabled);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_project_mcp_is_empty_when_file_absent() {
+        let root = scratch_project_root();
+        // No config.toml written.
+        let mcp = Config::load_project_mcp(&root);
+        assert!(mcp.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_project_mcp_ignores_unrelated_keys_and_bad_toml() {
+        let root = scratch_project_root();
+        // A project file may carry non-mcp tables; only [mcp.*] is projected,
+        // and an invalid [mcp.*] makes the whole table drop (warn + empty).
+        std::fs::write(
+            root.join(".neenee/config.toml"),
+            r#"
+                [principal]
+                hard_stop_turns = 7
+
+                [mcp.ok]
+                command = ["x"]
+            "#,
+        )
+        .unwrap();
+        let mcp = Config::load_project_mcp(&root);
+        assert_eq!(mcp.len(), 1, "principal ignored, mcp.ok projected");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // A structurally invalid TOML → empty (never panics).
+        let root2 = scratch_project_root();
+        std::fs::write(root2.join(".neenee/config.toml"), "this is = = not toml").unwrap();
+        assert!(Config::load_project_mcp(&root2).is_empty());
+        let _ = std::fs::remove_dir_all(&root2);
+    }
+
+    #[test]
+    fn merge_project_mcp_overrides_same_name_adds_new() {
+        let mut global = Config::default();
+        global.mcp.insert(
+            "shared".to_string(),
+            McpServerConfig {
+                command: vec!["global-cmd".into()],
+                enabled: true,
+                ..McpServerConfig::default()
+            },
+        );
+        global.mcp.insert(
+            "only-global".to_string(),
+            McpServerConfig::default(),
+        );
+
+        let mut project = HashMap::new();
+        // Same name → wholesale override (new command).
+        project.insert(
+            "shared".to_string(),
+            McpServerConfig {
+                command: vec!["project-cmd".into()],
+                enabled: false,
+                ..McpServerConfig::default()
+            },
+        );
+        // New name → added.
+        project.insert("only-project".to_string(), McpServerConfig::default());
+
+        global.merge_project_mcp(project);
+
+        // Override took effect.
+        assert_eq!(global.mcp["shared"].command, vec!["project-cmd".to_string()]);
+        assert!(!global.mcp["shared"].enabled);
+        // Both pre-existing and added survive.
+        assert!(global.mcp.contains_key("only-global"));
+        assert!(global.mcp.contains_key("only-project"));
+        assert_eq!(global.mcp.len(), 3);
     }
 }

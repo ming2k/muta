@@ -1513,9 +1513,8 @@ pub(super) async fn run_app_loop(
 
                 // The status bar caps the footer directly below the hint bar.
                 // It is the dedicated home for ambient session state: the
-                // workspace path on the left, session status flags (e.g.
-                // `unattended`) on the right. Drawn after the hint bar so its
-                // immutable borrow of `app.cwd` does not conflict with the
+                // `unattended` flag leads on the left, the workspace path
+                // trails on the right. Drawn after the hint bar so its immutable borrow of `app.cwd` does not conflict with the
                 // composer's mutable borrow of `app.input_scroll` below. The
                 // permission sheet covers this row too, so suppress it while
                 // the sheet is open.

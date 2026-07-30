@@ -22,6 +22,7 @@
 use crate::commands::{CustomCommand, expand_command};
 use crate::project::init_neenee_config;
 use neenee_agent::Agent;
+use neenee_agent::mcp::McpRuntime;
 use neenee_agent::RoundLifecycle;
 use neenee_agent::orchestration::{
     ContextProjectionSettings, RoundInput, compact_round_history, round_response,
@@ -35,6 +36,7 @@ use neenee_core::{
 };
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    trusted_projects::TrustGate,
 };
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
@@ -115,6 +117,8 @@ pub async fn dispatch(
     cmd: String,
     config: &Config,
     agent: &Arc<Agent>,
+    mcp_runtime: &Arc<McpRuntime>,
+    trust_gate: &Arc<TrustGate>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     session: &Arc<SessionStore>,
     lifecycle: &Arc<RoundLifecycle>,
@@ -831,6 +835,149 @@ pub async fn dispatch(
                     let _ = resp_tx.send(AgentResponse::Error(error));
                 }
             }
+        }
+        Some(BuiltinCmd::Reload) => {
+            // ADR-0085 §6: re-read config.toml and apply the diff live, so
+            // editing the MCP servers / permissions / bash policy / hooks no
+            // longer requires a restart. Reload is user-triggered (not
+            // fs-watch): only the user knows when their edit is complete, and
+            // a half-written file would otherwise tear down live sessions.
+            let mut reloaded = Config::load();
+            // Re-apply the project-scope MCP layer too (ADR-0085 §2/§3): a
+            // project `.neenee/config.toml` edit is exactly the kind of change
+            // `/reload` exists to surface without a restart. Project MCP is
+            // still gated by trust (§5): untrusted projects load nothing here.
+            let project_mcp = Config::load_project_mcp(project_root_for_side);
+            if !project_mcp.is_empty() && trust_gate.is_trusted(project_root_for_side) {
+                reloaded.merge_project_mcp(project_mcp);
+            }
+            // MCP: diff + (re)connect/disconnect. The next request picks up the
+            // new tool set automatically (visible_tools recomputes each turn).
+            let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+
+            // Re-apply the agent-scoped config sections that are otherwise
+            // seeded only at startup. Each setter is replace-style and safe to
+            // re-run; permissions seeding is additive (new allow-rules take
+            // effect; removed rules are noted but not revoked this session).
+            agent.set_bash_policy(&reloaded.bash_policy);
+            agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
+            agent.set_doom_guard_config(reloaded.principal.nudge.clone());
+            agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
+            agent.set_skip_interactive_input(reloaded.principal.skip_interactive_input);
+            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
+            agent.seed_permissions_from_config(&reloaded.permissions.allow);
+            crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
+            crate::agent_setup::reseed_tool_variants(agent, &reloaded);
+
+            let mut lines = Vec::new();
+            if report.removed.is_empty()
+                && report.connected.is_empty()
+                && report.unchanged.is_empty()
+            {
+                lines.push("No MCP servers configured.".to_string());
+            } else {
+                if !report.unchanged.is_empty() {
+                    lines.push(format!(
+                        "MCP unchanged: {}",
+                        report.unchanged.join(", ")
+                    ));
+                }
+                if !report.connected.is_empty() {
+                    let ok: Vec<&str> = report
+                        .connected
+                        .iter()
+                        .filter(|(_, ok)| *ok)
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+                    let fail: Vec<&str> = report
+                        .connected
+                        .iter()
+                        .filter(|(_, ok)| !*ok)
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+                    if !ok.is_empty() {
+                        lines.push(format!("MCP connected: {}", ok.join(", ")));
+                    }
+                    if !fail.is_empty() {
+                        lines.push(format!("MCP failed to connect: {}", fail.join(", ")));
+                    }
+                }
+                if !report.removed.is_empty() {
+                    lines.push(format!("MCP removed: {}", report.removed.join(", ")));
+                }
+            }
+            lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Text(format!("Config reloaded.\n{}", lines.join("\n"))),
+            ));
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+        }
+        Some(BuiltinCmd::Trust) => {
+            // ADR-0085 §5: grant trust for this project, then activate its
+            // project-scope MCP by reconfiguring with the merged config.
+            let project_mcp = Config::load_project_mcp(project_root_for_side);
+            if project_mcp.is_empty() {
+                let _ = resp_tx.send(round_response(
+                    &session.id().await,
+                    RoundEvent::Text(
+                        "No MCP servers declared in .neenee/config.toml. Nothing to trust."
+                            .to_string(),
+                    ),
+                ));
+            } else {
+                let newly = trust_gate.trust(project_root_for_side);
+                // Build the effective config = global + now-trusted project MCP.
+                let mut reloaded = Config::load();
+                reloaded.merge_project_mcp(project_mcp);
+                let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+                let connected: Vec<&str> = report
+                    .connected
+                    .iter()
+                    .filter(|(_, ok)| *ok)
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                let msg = if newly {
+                    format!(
+                        "Project trusted. MCP activated: {}",
+                        if connected.is_empty() {
+                            "(none connected)".to_string()
+                        } else {
+                            connected.join(", ")
+                        }
+                    )
+                } else {
+                    "Project already trusted; reloaded its MCP servers.".to_string()
+                };
+                let _ = resp_tx.send(round_response(
+                    &session.id().await,
+                    RoundEvent::Text(msg),
+                ));
+            }
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+        }
+        Some(BuiltinCmd::Untrust) => {
+            // ADR-0085 §5: revoke trust and disconnect project-scope MCP by
+            // reconfiguring with global-only config (project servers vanish
+            // from the set → reconfigure removes them).
+            let was_trusted = trust_gate.untrust(project_root_for_side);
+            let reloaded = Config::load(); // global only; no project merge now
+            let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+            let msg = if was_trusted {
+                format!(
+                    "Project untrusted. Disconnected project MCP servers{}.",
+                    if report.removed.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", report.removed.join(", "))
+                    }
+                )
+            } else {
+                "Project was not trusted; nothing to revoke.".to_string()
+            };
+            let _ = resp_tx
+                .send(round_response(&session.id().await, RoundEvent::Text(msg)));
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Skills) => {
             let sub = parts.get(1).copied().unwrap_or("list");

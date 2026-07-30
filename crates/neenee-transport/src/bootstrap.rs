@@ -33,6 +33,7 @@ use neenee_persistence::{
     config::{Config, TuiConfig},
     embedding, lock, paths, provider_usage,
     session::SessionStore,
+    trusted_projects::TrustGate,
 };
 use neenee_skills::{SkillCatalog, SkillRegistry};
 
@@ -413,6 +414,29 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // policies are data-driven. Runtime "Always" decisions still write to
     // permissions.json; these config rules re-apply on every start.
     agent.seed_permissions_from_config(&config.permissions.allow);
+    // Project-scope trust gate (ADR-0085 §5). A project's `.neenee/config.toml`
+    // may execute processes via `[mcp.*]`, so it loads only after the user has
+    // explicitly trusted this project root (`/trust`). Global config is
+    // user-authored and trusted unconditionally.
+    let trust_gate = Arc::new(TrustGate::load());
+    // Layer project-scope MCP on top of global (ADR-0085 §2/§3): a project
+    // `[mcp.*]` entry overrides a same-named global one and adds new servers.
+    // Applied only when the project is trusted; otherwise recorded-but-not-
+    // loaded, with a one-time hint directing the user to `/trust`.
+    let project_mcp = Config::load_project_mcp(&project_root);
+    if !project_mcp.is_empty() {
+        if trust_gate.is_trusted(&project_root) {
+            config.merge_project_mcp(project_mcp);
+        } else {
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Text(format!(
+                    "This project declares MCP servers in .neenee/config.toml. \
+                     Run /trust to load them (they run project-supplied commands)."
+                )),
+            ));
+        }
+    }
     // Connect every configured MCP server in the BACKGROUND so a slow/unreachable
     // server (8s connect timeout each) never delays the first frame. The
     // runtime is ready immediately with every enabled server in `Connecting`;
@@ -606,6 +630,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         skills_registry,
         envoy_registry,
         mcp_runtime,
+        trust_gate,
         commands: commands_for_task,
         embedding_store: embedding_store_for_commands,
         lifecycle,

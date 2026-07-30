@@ -163,6 +163,15 @@ impl Dirs {
         self.state_dir.join("provider_usage.json")
     }
 
+    /// User-granted trust set for project-scope external tools (ADR-0085 §5).
+    /// Records the absolute project roots the user has explicitly trusted, so
+    /// a project's `.neenee/config.toml` `[mcp.*]` (which may execute
+    /// processes) only auto-loads after a one-time `/trust`. Loss = revert to
+    /// safe (re-prompt); never configuration.
+    pub fn trusted_projects_file(&self) -> PathBuf {
+        self.state_dir.join("trusted_projects.json")
+    }
+
     /// Per-project embedding index. A lightweight brute-force index by default;
     /// future versions may swap in an HNSW/vector-DB backend using the same
     /// path convention.

@@ -508,11 +508,11 @@ pub fn draw_transcript(
         HINT_BAR_ROWS
     };
     // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state — the workspace path on the
-    // left, session status flags (e.g. `unattended`) on the right — so the hint
-    // bar above it stays focused on the next input action. Always present
-    // whenever the footer chrome is visible (it never conditionally hides),
-    // keeping the workspace always glanceable.
+    // dedicated home for ambient session state — the `unattended` flag leads
+    // on the left, the workspace path trails on the right — so the hint bar
+    // above it stays focused on the next input action. Always present whenever
+    // the footer chrome is visible (it never conditionally hides), keeping the
+    // workspace always glanceable.
     let status_height: u16 = if chrome_hidden || in_envoy { 0 } else { STATUS_BAR_ROWS };
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
@@ -759,10 +759,11 @@ pub fn draw_transcript(
     };
 
     // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state (workspace path on the left,
-    // status flags such as `unattended` on the right) so the hint bar above it
-    // stays focused on the next input action. Its draw call is delegated to the
-    // app loop (which owns the workspace path and the session-state flags).
+    // dedicated home for ambient session state (the `unattended` flag leads
+    // on the left, the workspace path trails on the right) so the hint bar
+    // above it stays focused on the next input action. Its draw call is
+    // delegated to the app loop (which owns the workspace path and the
+    // session-state flags).
     let status_rect = if status_height > 0 {
         Rect::new(
             footer_x,

@@ -94,8 +94,8 @@ pub(crate) const STATUS_BAR_ROWS: u16 = 1;
 /// Internal left indent of status-bar content (matches the hint bar's prompt
 /// prefix feel so the two rows align on the left edge).
 pub(crate) const STATUS_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the left workspace cluster and the right-aligned status
-/// cluster of the status bar.
+/// Minimum gap between the left `unattended` flag cluster and the
+/// right-aligned workspace path of the status bar.
 pub(crate) const STATUS_BAR_GAP_MIN: usize = 2;
 /// Todo bar: a one-line region that leads the footer stack (above the queue
 /// bar and the transient activity bar) and surfaces the live task list — a

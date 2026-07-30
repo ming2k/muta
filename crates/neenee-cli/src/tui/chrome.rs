@@ -15,7 +15,7 @@ use crate::tui::model::document::TranscriptMessage;
 use crate::tui::model::layout::LayoutMap;
 
 use super::Theme;
-use super::components::keycap::keycap_span;
+use super::components::keycap::{keycap_span, keycap_style};
 use super::design::{
     HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_SEGMENT_GAP, STATUS_BAR_GAP_MIN,
     STATUS_BAR_INNER_PADDING,
@@ -687,10 +687,13 @@ fn input_action_spans(
     theme: &Theme,
     bg: Color,
 ) -> Vec<Span<'static>> {
-    let key_style = Style::default()
-        .fg(theme.fg())
-        .bg(bg)
-        .add_modifier(Modifier::BOLD);
+    // Route the keycap through the unified keycap style (brand + bold) so the
+    // "Enter" affordance matches every other keycap in the app — the activity
+    // bar's Esc-to-interrupt hint, the queue bar's F2/F3 legend, the modal
+    // footers — instead of hand-rolling a divergent fg+bold combination here.
+    // The keycap style carries no background, so the surface tint is applied
+    // here once for the whole row.
+    let key_style = keycap_style(theme).bg(bg);
     let hint_style = Style::default().fg(theme.muted()).bg(bg);
     let compact = matches!(density, ActionDensity::Compact | ActionDensity::Tiny);
     let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
@@ -914,11 +917,11 @@ pub fn draw_hint_bar(
 pub struct StatusBarView<'a> {
     /// Tilde-shortened workspace path the session is rooted at (e.g.
     /// `~/projects/xx`). Already abbreviated by the caller; rendered as-is on
-    /// the left.
+    /// the right.
     pub workspace: &'a str,
     /// `true` while the session runs in unattended mode (`--unattended` /
-    /// `/unattended on`). Shown as a warning-toned `unattended` tag on the
-    /// right cluster. Plain text rather than a pill: it reads as a persistent
+    /// `/unattended on`). Shown as a warning-toned `unattended` tag leading on
+    /// the left. Plain text rather than a pill: it reads as a persistent
     /// session flag rather than a momentary input mode.
     pub unattended: bool,
 }
@@ -950,12 +953,13 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
 /// whole session rather than the current input — so the hint bar above it
 /// stays focused on the next input action.
 ///
-/// Layout: the tilde-shortened workspace path on the left, right-aligned
-/// session status flags on the right (currently just `unattended`). The
-/// workspace always renders (it is the row's reason to exist); the right
-/// cluster is built from whatever flags are active. On narrow terminals the
-/// workspace is truncated from the right (`~/…suffix`) so its tail stays
-/// visible, and the right cluster drops before the workspace disappears.
+/// Layout: the `unattended` safety flag leads on the left (it is the most
+/// glance-worthy state — a silent agent is running), and the tilde-shortened
+/// workspace path is right-aligned on the right. The path always renders (it
+/// is the row's reason to exist); the flag is built only while active. On
+/// narrow terminals the path is truncated from the left (`…suffix`) so its
+/// most specific tail (the project dir) stays pinned to the right edge, and
+/// the flag drops before the path disappears.
 pub fn draw_status_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -968,10 +972,11 @@ pub fn draw_status_bar(
     let full_w = rect.width as usize;
     let inner = STATUS_BAR_INNER_PADDING;
 
-    // --- Right cluster: session status flags. Built from independent segments
-    // so future flags can be added the same way. `unattended` is the only one
-    // today; it is a safety flag, so it is the last item to drop under width
-    // pressure.
+    // --- Left cluster: the `unattended` safety flag. Built from independent
+    // segments so future flags can be added the same way. `unattended` is the
+    // only one today; it leads the row because a silent agent running is the
+    // most glance-worthy session state, but it is the first item to drop under
+    // width pressure (the workspace is the row's reason to exist).
     let unattended_spans: Vec<Span<'static>> = if unattended {
         vec![Span::styled(
             "unattended",
@@ -989,11 +994,13 @@ pub fn draw_status_bar(
         .sum::<usize>();
 
     let mut show_unattended = unattended_width > 0;
-    let right_width_for = |unattended: bool| usize::from(unattended) * unattended_width;
+    let left_width_for = |unattended: bool| usize::from(unattended) * unattended_width;
 
-    // --- Left cluster: workspace path, truncated from the right (`~/…suffix`)
-    // when it would collide with the right cluster. The full path is the common
-    // case and is shown as-is whenever it fits.
+    // --- Right cluster: workspace path, truncated from the LEFT (`prefix…`)
+    // when it would collide with the left flag. Because the path is
+    // right-aligned, truncating from the left keeps its most specific tail
+    // (the project directory) pinned to the right edge. The full path is the
+    // common case and is shown as-is whenever it fits.
     let workspace_style = Style::default().fg(theme.muted()).bg(bg);
     let workspace_full_width = workspace.width();
     let fits = |left_width: usize, right_width: usize| {
@@ -1001,81 +1008,73 @@ pub fn draw_status_bar(
             <= full_w
     };
 
-    // Drop the right cluster first if it cannot coexist with the full path.
-    let mut right_width = right_width_for(show_unattended);
-    if !fits(workspace_full_width, right_width) && show_unattended {
+    // Drop the left flag first if it cannot coexist with the full path.
+    let mut left_width = left_width_for(show_unattended);
+    if !fits(left_width, workspace_full_width) && show_unattended {
         show_unattended = false;
-        right_width = right_width_for(show_unattended);
+        left_width = left_width_for(show_unattended);
     }
 
     // Resolve the workspace label: full path if it fits alongside the (possibly
-    // dropped) right cluster, otherwise truncate from the right keeping the
-    // `~/…` prefix so the path's most specific tail (the project dir) stays
-    // visible. If there is still no room, the path shrinks to `…` and finally
-    // the empty string — the row never overflows.
+    // dropped) left flag, otherwise truncate from the left keeping a `…`-
+    // style suffix + the project dir tail so the path's most specific part
+    // stays visible at the right edge. If there is still no room, the path
+    // shrinks to `…` and finally the empty string — the row never overflows.
     let mut workspace_spans: Vec<Span<'static>> = Vec::new();
-    if fits(workspace_full_width, right_width) {
+    if fits(left_width, workspace_full_width) {
         if !workspace.is_empty() {
             workspace_spans.push(Span::styled(workspace.to_string(), workspace_style));
         }
     } else {
-        // Truncate from the right, keeping a `~/…`-style prefix + tail.
-        // Reserve the gap + right cluster + a `…` ellipsis (1 col) + at least
-        // 1 col of real path, otherwise the row is too narrow for a path.
+        // Truncate from the left, keeping a tail (`…suffix`) so the path's most
+        // specific end (the project dir) stays pinned to the right edge.
+        // Reserve the indent + gap + left flag; the remaining budget buys a
+        // `…` ellipsis (1 col, when any chars are dropped) plus as many
+        // trailing chars of the path as fit.
         let budget = full_w
             .saturating_sub(inner)
-            .saturating_sub(if right_width > 0 { STATUS_BAR_GAP_MIN } else { 0 })
-            .saturating_sub(right_width);
-        if budget >= 4 {
-            // Keep the leading segment up to the first `/` after `~` (the
-            // `~/projects` part when present) so the label still reads as a
-            // home-rooted path, then `…`, then as many tail chars as fit.
-            let keep_prefix = workspace
-                .char_indices()
-                .skip(2) // skip `~/`
-                .find(|(_, c)| *c == '/')
-                .map(|(i, _)| i)
-                .unwrap_or(workspace.len());
+            .saturating_sub(if left_width > 0 { STATUS_BAR_GAP_MIN } else { 0 })
+            .saturating_sub(left_width);
+        if budget >= 2 {
             let ellipsis = '…';
-            let need_ellipsis = keep_prefix + 1 < workspace.len();
-            let tail_budget = budget.saturating_sub(keep_prefix).saturating_sub(if need_ellipsis { 1 } else { 0 });
-            let truncated: String = if tail_budget == 0 {
-                let mut s = String::with_capacity(keep_prefix + 1);
-                s.push_str(&workspace[..keep_prefix]);
-                if need_ellipsis { s.push(ellipsis); }
-                s
+            let chars: Vec<char> = workspace.chars().collect();
+            // Keep the whole path if it now fits the post-gap budget (rare, but
+            // keeps it exact); otherwise keep its last `budget - 1` chars
+            // preceded by `…` so the tail stays at the right edge.
+            if chars.len() <= budget {
+                workspace_spans.push(Span::styled(workspace.to_string(), workspace_style));
             } else {
-                let chars: Vec<char> = workspace.chars().collect();
-                let start = chars.len().saturating_sub(tail_budget);
-                let mut s = String::with_capacity(keep_prefix + 1 + tail_budget);
-                s.extend(chars.iter().take(keep_prefix));
-                if need_ellipsis { s.push(ellipsis); }
-                s.extend(chars.iter().skip(start).take(tail_budget));
-                s
-            };
-            workspace_spans.push(Span::styled(truncated, workspace_style));
+                let take = budget - 1; // -1 for the leading `…`
+                let start = chars.len() - take;
+                let mut s = String::with_capacity(1 + take);
+                s.push(ellipsis);
+                s.extend(chars.iter().skip(start).take(take));
+                workspace_spans.push(Span::styled(s, workspace_style));
+            }
         } else if budget > 0 {
             workspace_spans.push(Span::styled("…".to_string(), workspace_style));
         }
         // budget == 0 → render nothing for the path; the row still paints the
-        // right cluster if present (or is empty fill).
+        // left flag if present (or is empty fill).
     }
 
-    // Assemble: [indent][workspace][gap][right cluster][trailing fill].
-    let mut right_spans: Vec<Span<'static>> = Vec::new();
+    // Assemble: [indent][left flag][gap][workspace][trailing fill].
+    let mut left_spans: Vec<Span<'static>> = Vec::new();
     if show_unattended {
-        right_spans.extend(unattended_spans);
+        left_spans.extend(unattended_spans);
     }
-    let left_width: usize = workspace_spans.iter().map(|s| s.content.width()).sum();
+    let right_width: usize = workspace_spans.iter().map(|s| s.content.width()).sum();
+    // The minimum gap only applies when both clusters are present; a lone
+    // workspace (flag dropped or absent) starts right after the indent.
     let gap = full_w
         .saturating_sub(inner + left_width + right_width)
-        .max(if right_width > 0 { STATUS_BAR_GAP_MIN } else { 0 });
+        .max(if left_width > 0 && right_width > 0 { STATUS_BAR_GAP_MIN } else { 0 });
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4 + right_spans.len());
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4 + left_spans.len());
     spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
-    spans.extend(workspace_spans);
+    spans.extend(left_spans);
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
-    spans.extend(right_spans);
+    spans.extend(workspace_spans);
     let used = inner + left_width + gap + right_width;
     spans.push(Span::styled(
         " ".repeat(full_w.saturating_sub(used)),
@@ -1463,10 +1462,10 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_workspace_on_the_left_and_unattended_on_the_right() {
-        // The status bar owns ambient session state: the workspace path leads
-        // on the left, and `unattended` shows as a warning-toned tag on the
-        // right (it moved here from the hint bar's right cluster).
+    fn status_bar_shows_unattended_on_the_left_and_workspace_on_the_right() {
+        // The status bar owns ambient session state: the `unattended` safety
+        // flag leads on the left (a silent agent running is the most
+        // glance-worthy state), and the workspace path trails on the right.
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
             draw_status_bar(
@@ -1487,11 +1486,11 @@ mod tests {
             .collect::<String>();
         assert!(text.contains("~/projects/xx"), "workspace missing: {text:?}");
         assert!(text.contains("unattended"), "flag missing: {text:?}");
-        // The workspace must lead (left) and the flag trail (right), so the
-        // flag is never before the workspace in the rendered row.
+        // The flag must lead (left) and the workspace trail (right), so the
+        // workspace is never before the flag in the rendered row.
         let ws = text.find("~/projects/xx").unwrap();
         let flag = text.find("unattended").unwrap();
-        assert!(ws < flag, "workspace should lead the flag: {text:?}");
+        assert!(flag < ws, "flag should lead the workspace: {text:?}");
 
         // Without the flag the row must not show the tag, but still shows the
         // workspace.
@@ -1518,10 +1517,10 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_truncates_long_workspace_keeping_its_tail() {
-        // When the workspace path is too long to fit, it is truncated from the
-        // right keeping the `~/…`-style prefix and the most-specific tail (the
-        // project dir), and never overflows the row.
+    fn status_bar_truncates_long_workspace_from_the_left_keeping_its_tail() {
+        // When the workspace path is too long to fit (it is right-aligned),
+        // it is truncated from the LEFT keeping the most-specific tail (the
+        // project dir) pinned to the right edge, and never overflows the row.
         let mut terminal = neenee_tui_engine::TestTerminal::new(24, 1);
         terminal.draw(|frame| {
             draw_status_bar(
@@ -1811,6 +1810,41 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
         assert!(row_text(&mut terminal, false).contains("Enter send"));
         assert!(row_text(&mut terminal, true).contains("Enter run command"));
+    }
+
+    #[test]
+    fn hint_bar_enter_keycap_uses_the_unified_brand_color() {
+        // The "Enter" keycap on the hint bar must route through the unified
+        // keycap style (brand + bold) so it matches every other keycap in the
+        // app (activity bar, queue bar, modal footers) instead of a divergent
+        // fg tone. The 'E' of "Enter" sits right after the 1-space indent.
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_hint_bar(
+                frame,
+                Rect::new(0, 0, 80, 1),
+                HintBarView {
+                    current_model: "",
+                    messages: &Vec::<TranscriptMessage>::new(),
+                    reasoning_effort: None,
+                    shell_active: false,
+                    busy: false,
+                    context_tokens: None,
+                },
+                &theme,
+            );
+        });
+        let cells = terminal.buffer().content.clone();
+        // Layout: [indent(1)] [Enter(5)] [ send]. 'E' lands at index 1.
+        assert_eq!(cells[1].symbol(), "E", "expected 'Enter' at col 1");
+        assert_eq!(cells[1].fg(), theme.brand(), "Enter keycap not brand-colored");
+        assert!(
+            cells[1].style.add.contains(Modifier::BOLD),
+            "Enter keycap not bold"
+        );
+        // The surface tint must cover the keycap cell.
+        assert_eq!(cells[1].bg(), theme.surface(), "Enter keycap not on surface");
     }
 
     #[test]

@@ -132,10 +132,6 @@ mod permission_store;
 mod permission_policy;
 #[allow(dead_code)] // machinery: the four-stage pipeline types await the full dispatch rewrite.
 mod dispatch_pipeline;
-#[allow(dead_code)] // machinery: disclosure ledger awaits select_tools + tool_specs wiring.
-mod disclosure_ledger;
-#[allow(dead_code)] // machinery: disclosure bridge awaits the select_tools switchover.
-mod disclosure_bridge;
 pub mod round_lifecycle;
 pub use round_lifecycle::{RoundBegin, RoundLifecycle};
 pub mod session_review;

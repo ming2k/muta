@@ -19,6 +19,7 @@ use neenee_core::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use neenee_agent::mcp::McpRuntime;
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    trusted_projects::TrustGate,
 };
 use neenee_skills::SkillRegistry;
 
@@ -68,6 +69,10 @@ pub struct SessionDriver {
     /// Mutated by the `/mcp` modal (toggle / reconnect) and the periodic
     /// catalog refresh; read for the session-context snapshot's MCP pane.
     pub mcp_runtime: Arc<McpRuntime>,
+    /// Project-scope trust grants (ADR-0085 §5). Records which project roots
+    /// may auto-load `.neenee/config.toml` `[mcp.*]` servers. Mutated by
+    /// `/trust` / `/untrust`; consulted by bootstrap and `/reload`.
+    pub trust_gate: Arc<TrustGate>,
     /// User-defined `/<name>` commands (`commands_for_task` in the old code).
     pub commands: Arc<HashMap<String, CustomCommand>>,
     /// Project embedding index for `/search` (`embedding_store_for_commands`).
@@ -129,6 +134,7 @@ impl SessionDriver {
             skills_registry,
             envoy_registry,
             mcp_runtime,
+            trust_gate,
             commands: commands_for_task,
             embedding_store: embedding_store_for_commands,
             lifecycle,
@@ -516,6 +522,8 @@ impl SessionDriver {
                         cmd,
                         &config,
                         &agent,
+                        &mcp_runtime,
+                        &trust_gate,
                         &resp_tx,
                         &session,
                         &lifecycle,

@@ -20,4 +20,4 @@ pub use catalog::McpCatalog;
 pub use client::{
     McpLoadResult, McpServer, connect_server, load_mcp_tools, reconnect_server, refresh_mcp_tools,
 };
-pub use runtime::McpRuntime;
+pub use runtime::{McpRuntime, ReconfigureReport};

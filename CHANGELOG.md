@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Status bar layout flipped.** The status bar now leads with the `unattended`
+  flag on the left and trails with the tilde-shortened workspace path on the
+  right — previously the workspace led and the flag trailed. A silent agent
+  running is the most glance-worthy session state, so the warning-toned flag
+  now sits next to the input where the eye lands. The workspace path is still
+  always rendered; on narrow terminals it is now truncated from the left
+  (`…suffix`) so its most specific tail (the project directory) stays pinned
+  to the right edge, and the flag drops before the path disappears. Updated in
+  `draw_status_bar` (`crates/neenee-cli/src/tui/chrome.rs`).
+- **`Enter send` keycap now uses the unified keycap style.** The hint bar's
+  left action sentence ("Enter send" / "Enter queue message" / "Enter run
+  command") hand-rolled its `Enter` keycap as `fg + bold`, diverging from every
+  other keycap in the app (the activity bar's `Esc Esc to interrupt`, the
+  queue bar's `F2`/`F3` legend, the modal footers). It now routes through the
+  shared `keycap_style` (brand color + bold), so the affordance reads
+  consistently across surfaces. Updated in `input_action_spans`
+  (`crates/neenee-cli/src/tui/chrome.rs`).
+
 ### Removed
 
 ## [0.21.2] - 2026-07-29
