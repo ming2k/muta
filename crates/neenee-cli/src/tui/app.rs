@@ -340,6 +340,16 @@ pub struct App {
     /// Raw current working directory captured at startup. Used to resolve
     /// `@path` mention completions against the real filesystem.
     pub cwd: std::path::PathBuf,
+    /// The id of the session the TUI is currently viewing (`primary_session_id`
+    /// outside a side view, the side id inside one). Learned each frame from
+    /// the session source and stamped onto every recorded input-history entry
+    /// so the inline ↑/↓ recall can walk this session's prompts only, while
+    /// Ctrl+R searches the whole cross-session history.
+    pub current_session_id: String,
+    /// The workspace label for the current session — the project root's
+    /// display path (already tilde-shortened). Stamped onto recorded entries
+    /// and surfaced by the history panel's selected-row origin line.
+    pub current_workspace: String,
     /// Cached recursive project file listing for `@path` completion, populated
     /// lazily on the first `@` mention and reused afterwards. Mirrors the
     /// per-directory picker cache in opencode's TUI. Invalidated after each
@@ -448,7 +458,7 @@ pub struct App {
     pub permission_show_details: bool,
     pub permission_scroll: usize,
     pub permission_max_scroll: usize,
-    pub input_history: Vec<String>,
+    pub input_history: Vec<neenee_core::HistoryEntry>,
     pub history_index: Option<usize>,
     /// The in-progress draft the user was composing when they first pressed
     /// ↑ to walk history. Restored when they press ↓ past the newest history
@@ -755,6 +765,17 @@ impl App {
             // returns to the picker.
             if self.pending_provider_delete.is_some() {
                 return CaretOwner::None;
+            }
+            // The history panel floats above a fully-live composer: the
+            // composer IS its filter input, so the composer (not a modal
+            // field) owns the caret while this surface is open. This is why
+            // `HistorySearch` is deliberately absent from `Modal::owns_caret`.
+            if self.active_modal == Modal::HistorySearch {
+                return if self.in_envoy_view() {
+                    CaretOwner::None
+                } else {
+                    CaretOwner::Composer
+                };
             }
             return if self.active_modal.owns_caret() {
                 CaretOwner::Modal
@@ -1400,22 +1421,38 @@ impl App {
         self.reset_view_state();
     }
 
-    /// Rows shown in the Ctrl+R history modal, as `(original_index, FuzzyMatch)`
-    /// pairs. The single source of truth for navigation (Up/Down clamp), Enter
-    /// accept, and rendering — they all index into this same vector so the
-    /// cursor never lands on a row the user cannot see.
+    /// Rows shown in the Ctrl+R history panel, as `(original_index,
+    /// FuzzyMatch)` pairs indexing into [`App::input_history`]. The single
+    /// source of truth for navigation (Up/Down clamp), Enter-accept, and
+    /// rendering — they all index into this same vector so the cursor never
+    /// lands on a row the user cannot see.
     ///
-    /// In **browse** mode (or in search mode before the user types anything) the
-    /// list is **reverse-chronological** — newest first — with empty matches (no
-    /// highlight). Once a query is present in **search** mode the rows are the
-    /// fuzzy-ranked matches, best score first, with input order as the stable
-    /// tiebreaker. Recomputed from scratch each call: history is small and this
-    /// runs at most a few times per frame, so caching would only add stale-state
-    /// risk.
+    /// The list is always the **whole cross-session history**, independent of
+    /// which session or workspace produced each entry — that is the entire
+    /// point of Ctrl+R (the inline ↑/↓ recall, by contrast, is scoped to the
+    /// current session via [`App::current_session_history`]). Entries are
+    /// ordered newest-first by `created_at_ms`.
+    ///
+    /// With an empty query (`App::input`, which the panel borrows as its live
+    /// filter) every entry shows, unhighlighted. Once a query is present the
+    /// rows are the fuzzy-ranked matches, best score first, with the original
+    /// newest-first order as the stable tiebreaker. Recomputed from scratch
+    /// each call: history is small and this runs at most a few times per
+    /// frame, so caching would only add stale-state risk.
     pub fn history_rows(&self) -> Vec<(usize, fuzzy::FuzzyMatch)> {
-        if !self.history_search || self.input.is_empty() {
-            return (0..self.input_history.len())
-                .rev()
+        // The display order: newest-first. The on-disk file is already stored
+        // newest-first, but in-memory appends during this run land at the
+        // tail, so re-sort by created_at_ms (stable) to keep the panel's order
+        // correct without mutating the stored Vec.
+        let order: Vec<usize> = self.history_order();
+        let texts: Vec<&str> = order
+            .iter()
+            .map(|&i| self.input_history.get(i).map(|e| e.text.as_str()).unwrap_or(""))
+            .collect();
+        if self.input.is_empty() {
+            // Empty query → show everything newest-first, unhighlighted.
+            return order
+                .into_iter()
                 .map(|i| {
                     (
                         i,
@@ -1427,26 +1464,90 @@ impl App {
                 })
                 .collect();
         }
-        let mut ranked = fuzzy::rank(&self.input_history, &self.input);
+        // `rank` returns indices into `texts`; map them back to the original
+        // `input_history` indices via `order`. The matched char positions are
+        // indices into the entry text itself, so they need no remap.
+        let mut ranked = fuzzy::rank(&texts, &self.input);
         fuzzy::sort_by_score(&mut ranked);
         ranked
+            .into_iter()
+            .map(|(ti, m)| (order[ti], m))
+            .collect()
     }
 
-    /// Record `entry` in the cross-session input history: dedup against the
-    /// last entry, reset the up/down recall cursor, and persist the new entry
-    /// to disk immediately (off-thread) so it survives an unclean exit and is
-    /// visible to concurrent sessions right away rather than only on exit.
+    /// The newest-first ordering of [`App::input_history`] by `created_at_ms`,
+    /// as original indices into that Vec. Stable on ties so the on-disk order
+    /// survives. Shared by [`Self::history_rows`] (Ctrl+R) and
+    /// [`Self::current_session_history`] (inline ↑/↓) so both surfaces agree
+    /// on what "newest" means.
+    pub fn history_order(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.input_history.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(self.input_history[i].created_at_ms));
+        order
+    }
+
+    /// The current session's history, newest-first, as original indices into
+    /// [`App::input_history`]. This is what the inline ↑/↓ recall walks: it
+    /// filters the global history down to entries whose `session_id` matches
+    /// [`App::current_session_id`], so arrow-key recall surfaces only the
+    /// prompts the user typed in *this* conversation. Ctrl+R is unaffected —
+    /// it searches the whole list regardless of session.
+    pub fn current_session_history(&self) -> Vec<usize> {
+        let sid = self.current_session_id.as_str();
+        self.history_order()
+            .into_iter()
+            .filter(|&i| {
+                self.input_history
+                    .get(i)
+                    .is_some_and(|e| e.session_id.as_deref() == Some(sid))
+            })
+            .collect()
+    }
+
+    /// Record `entry` in the cross-session input history, tagged with the
+    /// current session id + workspace and stamped "now": reset the up/down
+    /// recall cursor, dedup against the most recent same-text+same-session
+    /// entry, and persist the new entry to disk immediately (off-thread) so
+    /// it survives an unclean exit and is visible to concurrent sessions
+    /// right away rather than only on exit.
+    ///
+    /// The origin (session/workspace) is what separates Ctrl+R (searches the
+    /// whole history) from inline ↑/↓ (walks only this session's entries).
     pub fn record_input_history(&mut self, entry: String) {
         self.history_index = None;
-        if entry.is_empty() || self.input_history.last() == Some(&entry) {
+        if entry.is_empty() {
             return;
         }
-        self.input_history.push(entry.clone());
+        // Dedup against the newest same-text entry in *this* session: typing
+        // the same prompt twice in a row should not produce two adjacent
+        // rows, but the same words typed in a different session legitimately
+        // are a distinct history entry (each keeps its own origin).
+        let now = crate::tui::event_loop::now_epoch_ms();
+        let session_id = if self.current_session_id.is_empty() {
+            None
+        } else {
+            Some(self.current_session_id.clone())
+        };
+        let workspace = if self.current_workspace.is_empty() {
+            None
+        } else {
+            Some(self.current_workspace.clone())
+        };
+        let already_latest_in_session = self
+            .current_session_history()
+            .first()
+            .and_then(|&i| self.input_history.get(i))
+            .is_some_and(|e| e.text == entry && e.session_id == session_id);
+        if already_latest_in_session {
+            return;
+        }
+        let recorded = neenee_core::HistoryEntry::new(entry, session_id, workspace, now);
+        self.input_history.push(recorded.clone());
         // `save_history` lock+merges into the on-disk union, so persisting just
         // the new entry is enough and cheap. Off-thread: the write takes a file
         // lock and must not block the event loop.
         tokio::task::spawn_blocking(move || {
-            let _ = neenee_persistence::config::Config::save_history(std::slice::from_ref(&entry));
+            let _ = neenee_persistence::config::Config::save_history(std::slice::from_ref(&recorded));
         });
     }
 

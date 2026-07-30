@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/autopilot on`. Revises ADR-0081 consequence #8.
 
 ### Changed
+- **Multi-session daemon and select-then-attach protocol (ADR-0089).** A
+  single `neenee-server`/`neenee daemon` process now hosts any number of
+  sessions for one project via an in-process `SessionRegistry` (each
+  session remains its own writer under the ADR-0018 invariant). The attach
+  wire format gains a select-then-attach handshake: the client sends
+  `Select { action }` (`New` / `Attach(None)` / `Attach(Some(id))`) and the
+  daemon replies `Welcome` (bound, with transcript), `Pick` (several
+  candidates — list them), or `Error`. `Wire::History` is removed.
+  `neenee daemon` starts the host in the foreground; `neenee attach [id]`
+  binds to the daemon (spawning one if none runs). The discovery record
+  drops its `session_id` field (a daemon is multi-session).
 
 - **`unattended` renamed to `autopilot`.** The no-human-intervention mode flag is renamed
   across the agent, permission store, envoy/principal profiles, events, server wire schema,

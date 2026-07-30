@@ -53,6 +53,7 @@
 pub mod agent_setup;
 pub mod bootstrap;
 pub mod commands;
+pub mod daemon;
 pub mod export;
 pub mod handlers_chat;
 pub mod handlers_permission;
@@ -61,6 +62,7 @@ pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
 pub mod project;
+pub mod registry;
 pub mod review;
 pub mod serve;
 pub mod serve_discovery;

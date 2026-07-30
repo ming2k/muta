@@ -137,7 +137,6 @@ impl FixedModalSpec {
 
     // The template chooser shares the provider list's footprint.
     pub const PROVIDER: Self = Self::new(72, 72);
-    pub const HISTORY: Self = Self::new(70, 72);
     pub const QUESTION: Self = Self::new(78, 70);
     pub const OAUTH_PENDING: Self = Self::new(72, 48);
     pub const CUSTOM_PROVIDER: Self = Self::new(66, 66);

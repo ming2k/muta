@@ -19,7 +19,7 @@ use crate::tui::model::layout::LayoutMap;
 use crate::tui::view::Theme;
 use crate::tui::view::{
     ActivityModalView, draw_activity_modal, draw_armed_toast, draw_connections_modal,
-    draw_copy_toast, draw_help_modal, draw_history_modal, draw_model_editor, draw_models_modal,
+    draw_copy_toast, draw_help_modal, draw_history_panel, draw_model_editor, draw_models_modal,
     draw_sessions_modal,
 };
 
@@ -352,7 +352,7 @@ pub fn model_editor() -> io::Result<()> {
 // ──────────────────────────── history search ──────────────────────────────
 
 struct HistoryState {
-    history: Vec<String>,
+    history: Vec<neenee_core::HistoryEntry>,
     query: String,
     cursor: usize,
     index: usize,
@@ -360,16 +360,27 @@ struct HistoryState {
 
 pub fn history() -> io::Result<()> {
     let theme = Theme::default();
-    let history: Vec<String> = vec![
-        "Refactor the renderer into overlay modules".into(),
-        "Fix the tool_call_id routing bug".into(),
-        "Add a question modal MVU extraction".into(),
-        "Wire the showcase subcommand into main".into(),
-        "How does the permission sheet scroll work?".into(),
-        "cargo test -p neenee-cli snapshot_tests".into(),
-        "Update the README with the new showcase command".into(),
-        "Why does the activity bar hide during streaming?".into(),
-    ];
+    let history: Vec<neenee_core::HistoryEntry> = [
+        "Refactor the renderer into overlay modules",
+        "Fix the tool_call_id routing bug",
+        "Add a question modal MVU extraction",
+        "Wire the showcase subcommand into main",
+        "How does the permission sheet scroll work?",
+        "cargo test -p neenee-cli snapshot_tests",
+        "Update the README with the new showcase command",
+        "Why does the activity bar hide during streaming?",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, text)| {
+        neenee_core::HistoryEntry::new(
+            text.to_string(),
+            Some(format!("demo-{i}")),
+            Some("~/projects/neenee".to_string()),
+            (i as u64) * 600,
+        )
+    })
+    .collect();
     let mut state = HistoryState {
         history,
         query: String::new(),
@@ -380,7 +391,8 @@ pub fn history() -> io::Result<()> {
     common::run_showcase(
         &mut state,
         |f, s| {
-            let ranked = fuzzy::rank(&s.history, &s.query);
+            let texts: Vec<&str> = s.history.iter().map(|e| e.text.as_str()).collect();
+            let ranked = fuzzy::rank(&texts, &s.query);
             let index = s.index.min(ranked.len().saturating_sub(1));
             let title = format!(
                 " history search · {} entries · type to fuzzy-filter · q/Ctrl+C=quit",
@@ -388,21 +400,43 @@ pub fn history() -> io::Result<()> {
             );
             let hint = " type to filter · ↑↓ navigate · Esc clear/quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                let mut lm = LayoutMap::new();
+                use neenee_tui_engine::{Modifier, Paragraph, Style};
+                use neenee_tui_engine::{Line, Span};
+                let area = f.area();
+                let composer_y = area.height.saturating_sub(2);
+                let input_rect = neenee_tui_engine::Rect::new(
+                    area.x + 1,
+                    composer_y,
+                    area.width.saturating_sub(2),
+                    1,
+                );
+                let glyph = Span::styled("› ", Style::default().fg(theme.muted()));
+                let qspan = Span::styled(
+                    if s.query.is_empty() {
+                        "type to search across all sessions"
+                    } else {
+                        &s.query
+                    },
+                    Style::default()
+                        .fg(if s.query.is_empty() {
+                            theme.muted()
+                        } else {
+                            theme.fg()
+                        })
+                        .add_modifier(Modifier::BOLD),
+                );
+                f.render_widget(Paragraph::new(Line::from(vec![glyph, qspan])), input_rect);
                 let mut scroll = 0;
-                draw_history_modal(
+                let _ = draw_history_panel(
                     f,
-                    &mut lm,
                     &s.history,
-                    &s.query,
-                    s.cursor,
                     &ranked,
                     index,
                     &mut scroll,
                     true,
                     false,
-                    true,
                     false,
+                    input_rect,
                     &theme,
                 );
             });

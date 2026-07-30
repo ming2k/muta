@@ -1083,6 +1083,17 @@ pub(super) async fn run_app_loop(
             primary_session_id.as_str()
         }
         .to_string();
+        // Keep the origin stampers in sync with whatever session the user is
+        // currently composing into: `record_input_history` tags each entry
+        // with this id + workspace so the inline ↑/↓ recall can walk only
+        // this session's prompts (while Ctrl+R searches the whole history).
+        if app.current_session_id != viewed_session_id {
+            app.current_session_id = viewed_session_id.clone();
+        }
+        let workspace = crate::tui::chrome::tilde_home(&app.cwd);
+        if app.current_workspace != workspace {
+            app.current_workspace = workspace;
+        }
         app.context_tokens = runtime
             .context_tokens
             .lock()
@@ -1591,7 +1602,6 @@ pub(super) async fn run_app_loop(
                             | Modal::Models
                             | Modal::ModelEditor
                             | Modal::CustomProvider
-                            | Modal::HistorySearch
                     ) {
                         // These modals borrow the input line as their own field
                         // (filter / key+model / history-query), so the composer
@@ -1773,21 +1783,18 @@ pub(super) async fn run_app_loop(
                     }
                     Modal::HistorySearch => {
                         let ranked = app.history_rows();
-                        Some(view::draw_history_modal(
+                        view::draw_history_panel(
                             f,
-                            &mut layout_map,
                             &app.input_history,
-                            &app.input,
-                            app.cursor_position,
                             &ranked,
                             app.modal_index,
                             &mut app.history_scroll,
                             app.history_modal_follow,
                             app.history_preview,
-                            app.history_search,
                             app.modal_keymap_open,
+                            input_rect,
                             &app.theme,
-                        ))
+                        )
                     }
                     Modal::Permission => None,
                     Modal::InputInjection => {
@@ -2682,12 +2689,20 @@ pub(super) async fn run_app_loop(
                                 expose,
                                 token: None,
                             };
-                            let handle = neenee_transport::serve::start_server(
-                                opts,
-                                app.tx.clone(),
-                                bc_tx,
-                                store,
+                            // `/serve` exposes the single live TUI session as a one-entry
+                            // prehost registry (ADR-0089).
+                            let registry = Arc::new(
+                                neenee_transport::registry::SessionRegistry::prehost_only(),
                             );
+                            registry
+                                .host(neenee_transport::registry::HostedSession {
+                                    session: store.clone(),
+                                    req_tx: app.tx.clone(),
+                                    events: bc_tx.clone(),
+                                    cancel: tokio_util::sync::CancellationToken::new(),
+                                })
+                                .await;
+                            let handle = neenee_transport::serve::start_server(opts, registry);
                             // Stash the cancel token so `/serve` (stop) can
                             // shut the listener down.
                             app.serve_cancel = Some(handle.cancel);
@@ -3283,61 +3298,38 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::OpenHistory => {
+                    // The history panel floats above the composer, and the
+                    // composer itself is the live filter field: typing narrows
+                    // the list immediately (no separate browse/search mode).
                     // Stash whatever the user was composing so Esc restores it
-                    // unchanged. The modal opens in browse mode, so the input
-                    // line stays empty until `/` enters search and borrows it as
-                    // the fuzzy query.
+                    // unchanged, and start with an empty query (show all, newest
+                    // first) — they type to narrow.
                     app.stashed_input = std::mem::take(&mut app.input);
                     app.set_cursor(0);
                     app.input_scroll = 0;
                     app.suggestion_index = None;
                     app.active_modal = Modal::HistorySearch;
                     app.modal_keymap_open = false;
-                    app.history_search = false;
-                    // Browse rows are newest-first, so index 0 is the most-recent
-                    // entry — focus the top so an immediate Enter re-inserts it.
-                    app.modal_index = 0;
-                    app.history_scroll = 0;
-                    app.history_modal_follow = true;
-                    app.history_preview = false;
-                }
-                input::InputAction::HistoryEnterSearch => {
-                    // `/` in browse mode: enter the search sub-layer. The input
-                    // line is already empty (held in `stashed_input`); typing now
-                    // builds the fuzzy query and re-ranks `history_rows`.
+                    // The composer is permanently the filter while this panel
+                    // is open, so `history_search` is latched true.
                     app.history_search = true;
-                    app.modal_keymap_open = false;
-                    app.modal_index = 0;
-                    app.history_scroll = 0;
-                    app.history_modal_follow = true;
-                    app.history_preview = false;
-                }
-                input::InputAction::HistoryExitSearch => {
-                    // First Esc while searching: drop the query and return to the
-                    // full browse list. The original draft stays parked in
-                    // `stashed_input` until the modal closes for real.
-                    app.history_search = false;
-                    app.modal_keymap_open = false;
-                    app.input.clear();
-                    app.set_cursor(0);
-                    app.input_scroll = 0;
-                    app.suggestion_index = None;
+                    // Rows are newest-first, so index 0 is the most-recent entry
+                    // — focus the top so an immediate Enter re-inserts it.
                     app.modal_index = 0;
                     app.history_scroll = 0;
                     app.history_modal_follow = true;
                     app.history_preview = false;
                 }
                 input::InputAction::HistoryInsert => {
-                    // Enter inside the Ctrl+R modal: pull the focused entry out
-                    // of `history_rows` (the browse list or the search matches)
-                    // and drop it into the input box for further editing /
-                    // sending. The message is not shipped here — the user hits
-                    // Enter again to send.
+                    // Enter inside the Ctrl+R panel: pull the focused entry out
+                    // of `history_rows` (the filtered matches) and drop it into
+                    // the input box for further editing / sending. The message
+                    // is not shipped here — the user hits Enter again to send.
                     let ranked = app.history_rows();
                     let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
                     if let Some((orig_idx, _)) = pick {
                         let original = *orig_idx;
-                        app.input = app.input_history[original].clone();
+                        app.input = app.input_history[original].text.clone();
                         app.set_cursor_end();
                     }
                     // The selection replaces the in-progress draft, so the
@@ -4301,25 +4293,27 @@ pub(super) async fn run_app_loop(
                     app.completion_dismissed = true;
                 }
                 input::InputAction::HistoryPrev => {
-                    if !app.input_history.is_empty() {
-                        let new_idx = match app.history_index {
-                            Some(i) => {
-                                if i == 0 {
-                                    0
-                                } else {
-                                    i - 1
-                                }
-                            }
+                    // Inline ↑ walks the **current session's** history only
+                    // (newest-first), not the whole cross-session log — Ctrl+R
+                    // is the global search surface. We recompute the session
+                    // slice each press so newly-recorded entries appear
+                    // without a restart; `history_index` is a position into
+                    // that slice.
+                    let session_rows = app.current_session_history();
+                    if !session_rows.is_empty() {
+                        let new_pos = match app.history_index {
+                            Some(p) => p.saturating_sub(1),
                             None => {
                                 // First ↑: stash the in-progress draft so a
                                 // later ↓ past the newest entry restores it
                                 // instead of leaving the composer empty.
                                 app.history_draft = std::mem::take(&mut app.input);
-                                app.input_history.len() - 1
+                                0
                             }
                         };
-                        app.history_index = Some(new_idx);
-                        app.input = app.input_history[new_idx].clone();
+                        let orig_idx = session_rows[new_pos];
+                        app.history_index = Some(new_pos);
+                        app.input = app.input_history[orig_idx].text.clone();
                         app.set_cursor_end();
                         // History navigation is a programmatic input replacement,
                         // not an edit — so it latches `completion_dismissed` like
@@ -4401,11 +4395,16 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::HistoryNext => {
-                    if let Some(i) = app.history_index {
-                        if i + 1 < app.input_history.len() {
-                            let new_idx = i + 1;
-                            app.history_index = Some(new_idx);
-                            app.input = app.input_history[new_idx].clone();
+                    // Inline ↓ walks the current session's history forward
+                    // (toward the newest), mirroring HistoryPrev. Walking past
+                    // the newest entry restores the stashed draft.
+                    let session_rows = app.current_session_history();
+                    if let Some(pos) = app.history_index {
+                        if pos + 1 < session_rows.len() {
+                            let new_pos = pos + 1;
+                            let orig_idx = session_rows[new_pos];
+                            app.history_index = Some(new_pos);
+                            app.input = app.input_history[orig_idx].text.clone();
                             app.set_cursor_end();
                             // Same programmatic-replacement latch as HistoryPrev.
                             app.suggestion_index = None;

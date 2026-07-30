@@ -65,6 +65,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     }
 
+    // `neenee daemon` runs the headless multi-session host in the foreground
+    // (ADR-0089). Like attach, it short-circuits before the local harness.
+    if matches!(startup, StartupMode::Daemon) {
+        let project_root = project_override
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        return neenee_transport::daemon::run(
+            neenee_transport::daemon::DaemonIdentity {
+                identity: neenee_identity(),
+                principal: principal_code(),
+                ui: Arc::new(crate::tui::clipboard::TuiClipboard),
+            },
+            &project_root,
+            neenee_transport::daemon::DaemonOptions {
+                port: 0,
+                expose: neenee_transport::serve::ServeExpose::Local,
+                token: None,
+            },
+        )
+        .await;
+    }
+
     // Assemble the session harness (ADR-0037 Step 6): channels, config,
     // stores, provider/skills/toolset wiring, agent, MCP, restores, and the
     // `SessionDriver` — shared with every frontend binary. This binary
@@ -160,66 +182,52 @@ async fn run_attached(
     project_override: Option<PathBuf>,
     autopilot_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_root = project_override.unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
-    let info = remote::ensure_server(
-        &project_root,
-        session_id.as_deref(),
-        autopilot_at_start,
-    )
-    .await?;
-    let (tx, rx, hosted_session_id, round_counter, transcript) = remote::connect(&info).await?;
-
-    // If the client requested autopilot, make sure the hosted session is in
-    // autopilot regardless of who created it:
-    //   - when the client spawned the server it already passed `--autopilot`,
-    //     so this is a harmless idempotent re-affirmation;
-    //   - when an unrelated server was already running, the spawn path never
-    //     ran, so this is the only way to apply the client's intent.
-    // `/autopilot on` flows over the same wire path the TUI uses, so the
-    // server mutates state and emits `AutopilotChanged` — the status bar
-    // reflects the flip exactly like a hand-typed `/autopilot on`.
+    let project_root = project_override
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let info = remote::ensure_server(&project_root).await?;
+    let action = match &session_id {
+        Some(id) => remote::AttachAction::Attach(Some(id.clone())),
+        None => remote::AttachAction::Attach(None),
+    };
+    let handshake = remote::connect(&info, action).await?;
+    let (tx, rx, hosted_session_id, round_counter, transcript) = match handshake {
+        remote::Handshake::Attached {
+            req_tx,
+            resp_rx,
+            session_id,
+            round_counter,
+            history,
+        } => (req_tx, resp_rx, session_id, round_counter, history),
+        remote::Handshake::Pick(sessions) => {
+            eprintln!("Multiple sessions are available on the daemon:");
+            for sess in &sessions {
+                eprintln!("  {}  ({} messages)", sess.id, sess.message_count);
+            }
+            eprintln!("Re-run with a specific id: neenee attach <id>");
+            return Ok(());
+        }
+    };
     if autopilot_at_start {
-        let _ = tx.send(neenee_core::AgentRequest::SlashCommand(
-            "/autopilot on".to_string(),
-        ));
+        let _ = tx.send(neenee_core::AgentRequest::SlashCommand("/autopilot on".to_string()));
     }
-    // Input history and `[tui]` presentation prefs are client-side concerns —
-    // the server knows nothing of them — so they load from the LOCAL config
-    // exactly as the standalone path does.
     let input_history = Config::load_history();
     let tui_config = Config::load().tui;
     let history = start_tui(
         tx,
         rx,
-        // Provider/model placeholders. The hint bar renders only the model
-        // label and skips an empty one cleanly (no context meter either); the
-        // picker falls back to the server snapshot's default id when the
-        // placeholder matches no row, and the first picker snapshot /
-        // `ProviderSwitched` from the server repopulates the real names.
         "attached".to_string(),
         String::new(),
         input_history,
         transcript,
         round_counter,
-        // Server-side custom commands are unknown to the client in v1 — the
-        // handshake carries no command list — so there are no suggestions.
         vec![],
         tui_config,
-        crate::tui::SessionSource::Remote {
-            session_id: hosted_session_id,
-        },
-        // Token accounting lives server-side; the client installs no ledger
-        // (the TokenReport modal surfaces a notice instead of an empty report).
+        crate::tui::SessionSource::Remote { session_id: hosted_session_id },
         None,
-        // Attach mode connects to a hosted session; the sessions picker is
-        // never the entry, so closing a `/sessions` modal just dismisses it.
         false,
     )
     .await?;
-    // No SessionEnd hooks: the client never owned the session. The composer
-    // history is this client's own — persist it like the standalone path.
     let _ = Config::save_history(&history);
     Ok(())
 }

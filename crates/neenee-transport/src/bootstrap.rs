@@ -95,8 +95,10 @@ pub struct Bootstrap {
     pub initial_provider_name: String,
     /// The model name the UI should display at startup.
     pub initial_model_name: String,
-    /// Persisted input history for the frontend's composer.
-    pub input_history: Vec<String>,
+    /// Persisted input history for the frontend's composer. Each entry is
+    /// tagged with the session/workspace it came from so Ctrl+R can search
+    /// the whole history while inline ↑/↓ walks only the current session's.
+    pub input_history: Vec<neenee_core::HistoryEntry>,
     /// The session's restored transcript (empty for a fresh session).
     pub restored_messages: Vec<Message>,
     /// `(slash-name, description)` pairs for user-defined `/<name>` commands,
@@ -110,6 +112,17 @@ pub struct Bootstrap {
     /// caller must hold it for the process lifetime (e.g. bind it to
     /// `let _process_lock = ...` in `main`).
     pub process_lock: Option<lock::ProcessLock>,
+}
+
+
+/// Ensure the four XDG application roots exist. Best-effort.
+pub fn ensure_app_roots() {
+    let dirs = paths::get();
+    for dir in [&dirs.config_dir, &dirs.data_dir, &dirs.state_dir, &dirs.cache_dir] {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            tracing::warn!(?error, dir = %dir.display(), "bootstrap: could not create app dir");
+        }
+    }
 }
 
 /// Assemble one live session harness. See the module docs for the contract.
@@ -300,6 +313,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
         StartupMode::Doctor => unreachable!("doctor returns before this match"),
         StartupMode::Attach(_) => unreachable!("attach returns before this match"),
+        StartupMode::Daemon => unreachable!("daemon returns before this match"),
         #[cfg(debug_assertions)]
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };

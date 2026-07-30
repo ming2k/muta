@@ -857,50 +857,51 @@ fn path_query_match_mid_path_substring() {
 }
 
 #[test]
-fn history_rows_browses_reverse_then_ranks_search() {
-    // The App-level view of the Ctrl+R modal. Browse mode (and any empty
-    // query) lists history newest-first, unhighlighted; the search sub-layer
-    // surfaces only the subsequence matches ordered by score with input order
-    // on ties.
+fn history_rows_lists_newest_first_then_ranks_search() {
+    // The App-level view of the Ctrl+R panel. With no query the whole
+    // cross-session history is listed newest-first (by created_at_ms),
+    // unhighlighted; once the user types, only the fuzzy subsequence matches
+    // surface, ordered by score with newest-first order as the stable
+    // tiebreaker.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let mk = |text: &str, sid: &str, ts: u64| {
+        neenee_core::HistoryEntry::new(
+            text.to_string(),
+            Some(sid.to_string()),
+            Some("~/p".to_string()),
+            ts,
+        )
+    };
     app.input_history = vec![
-        "scatter".to_string(),     // idx 0 — 'cat' mid-word, lowest score
-        "catalog".to_string(),     // idx 1 — 'cat' at boundary, high score
-        "cargo build".to_string(), // idx 2 — 'cat' is not a subsequence
-        "the cat sat".to_string(), // idx 3 — 'cat' at boundary, high score
+        mk("scatter", "s1", 10),     // idx 0 — 'cat' mid-word, lowest score
+        mk("catalog", "s1", 20),     // idx 1 — 'cat' at boundary, high score
+        mk("cargo build", "s1", 30), // idx 2 — 'cat' is not a subsequence
+        mk("the cat sat", "s1", 40), // idx 3 — 'cat' at boundary, high score
     ];
 
-    // Browse mode → reverse-chronological (newest first), score 0, no
-    // highlights. The newest entry (idx 3) is on top so an immediate Enter
-    // re-inserts the last-typed prompt.
-    app.history_search = false;
+    // Empty query → newest-first by timestamp, score 0, no highlights.
     app.input.clear();
     let rows = app.history_rows();
     let indices: Vec<usize> = rows.iter().map(|(i, _)| *i).collect();
-    assert_eq!(indices, vec![3, 2, 1, 0], "newest first");
+    assert_eq!(indices, vec![3, 2, 1, 0], "newest first by timestamp");
     for (_, m) in &rows {
         assert_eq!(m.score, 0);
         assert!(m.positions.is_empty());
     }
 
-    // Search mode with an empty query still shows the reverse browse list.
-    app.history_search = true;
-    let indices: Vec<usize> = app.history_rows().iter().map(|(i, _)| *i).collect();
-    assert_eq!(indices, vec![3, 2, 1, 0]);
-
     // Search "cat" → matches catalog, "the cat sat", and scatter; not
     // "cargo build" (no 't' after the 'ca'). Boundary matches outrank
-    // scatter, and stable-sort keeps catalog before "the cat sat".
+    // scatter; among the tied boundary matches the newest-first order wins
+    // (idx 3 "the cat sat" ts=40 before idx 1 "catalog" ts=20).
     app.input = "cat".to_string();
     let rows = app.history_rows();
     let indices: Vec<usize> = rows.iter().map(|(i, _)| *i).collect();
     assert_eq!(
         indices,
-        vec![1, 3, 0],
-        "boundary matches first, then scatter"
+        vec![3, 1, 0],
+        "boundary matches first (newest-first on ties), then scatter"
     );
     assert!(rows[0].1.score > rows[2].1.score);
-    // Every matched entry exposes highlight positions, one per query char.
     for (_, m) in &rows {
         assert_eq!(m.positions.len(), 3);
     }
@@ -1019,6 +1020,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         current_provider: "mock".to_string(),
         current_model: "mock".to_string(),
         cwd: cwd.clone(),
+        current_session_id: String::new(),
+        current_workspace: String::new(),
         path_scan_cache: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
@@ -2349,7 +2352,6 @@ fn caret_owner_modal_for_caret_modals() {
         Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
-        Modal::HistorySearch,
         Modal::ConfigThemeCustom,
     ] {
         app.active_modal = modal;
@@ -2493,12 +2495,15 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
     // consults `QuestionModel::is_other_highlighted`) rather than by the static
     // `owns_caret()`. It therefore appears in neither list here — it is tested
     // separately by `caret_owner_question_owns_caret_only_on_other`.
+    // HistorySearch is also a deliberate exception: its panel floats above a
+    // live composer that IS the filter field, so the composer (not the modal)
+    // owns the caret — handled state-dependently in `App::caret_owner`. It
+    // appears in `not_owns` below and is exercised by the caret-owner tests.
     let owns = [
         Modal::Models,
         Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
-        Modal::HistorySearch,
         Modal::ConfigThemeCustom,
     ];
     for m in owns {
@@ -2516,6 +2521,7 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
         Modal::Permission,
         Modal::InputInjection,
         Modal::ProviderTemplate,
+        Modal::HistorySearch,
     ];
     for m in not_owns {
         assert!(!m.owns_caret(), "{m:?} must not own the caret");

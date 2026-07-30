@@ -37,9 +37,7 @@ pub struct Discovery {
     /// The bearer token clients must present, when auth is active
     /// (`--public`); `null` for the unauthenticated loopback default.
     pub token: Option<String>,
-    /// The session this server hosts.
-    pub session_id: String,
-    /// The project root the session belongs to (as passed via `--project`).
+    /// The project root the host serves (as passed via `--project`).
     pub project_root: String,
     /// Unix seconds at startup.
     pub started_at: u64,
@@ -117,7 +115,6 @@ mod tests {
             pid: 4242,
             port: 39871,
             token: Some("deadbeef".to_string()),
-            session_id: "sess-1".to_string(),
             project_root: "/home/me/proj".to_string(),
             started_at: 1_755_000_000,
         }

@@ -105,6 +105,10 @@ pub enum StartupMode {
     /// must intercept this variant BEFORE invoking `bootstrap::assemble` — no
     /// local harness is assembled in attach mode.
     Attach(Option<String>),
+    /// `neenee daemon` (ADR-0089): start the headless multi-session host in
+    /// the FOREGROUND (equivalent to the `neenee-server` binary). The caller
+    /// intercepts this before `assemble` and runs the daemon main instead.
+    Daemon,
     /// Render a single UI component in isolation for interactive development
     /// (`neenee showcase <component>`). No agent, no session, no network —
     /// just the component's model + renderer wired to a real terminal so you

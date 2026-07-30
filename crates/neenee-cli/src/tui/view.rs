@@ -41,7 +41,7 @@ pub use crate::tui::overlays::{
     QueueModalView, draw_activity_modal, draw_armed_toast, draw_config_layout_modal,
     draw_config_modal, draw_config_theme_custom_modal, draw_config_theme_modal,
     draw_connections_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
-    draw_history_modal, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
+    draw_history_panel, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
     draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
     draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
     draw_queue_modal, draw_sessions_modal, draw_skills_modal, draw_token_report_modal,
@@ -921,22 +921,28 @@ mod tests {
                 false,
                 &theme,
             );
-            let history_roster: Vec<String> = vec!["a".to_string()];
+            let history_roster: Vec<neenee_core::HistoryEntry> =
+                [neenee_core::HistoryEntry::new(
+                    "a".to_string(),
+                    None,
+                    None,
+                    0,
+                )]
+                .into_iter()
+                .collect();
             let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> =
-                crate::tui::fuzzy::rank(&history_roster, "");
-            draw_history_modal(
+                crate::tui::fuzzy::rank(&["a"], "");
+            let input_rect = neenee_tui_engine::Rect::new(0, 20, 80, 3);
+            let _ = draw_history_panel(
                 f,
-                &mut LayoutMap::new(),
                 &history_roster,
-                "",
-                0,
                 &ranked,
                 0,
                 &mut 0,
                 true,
                 false,
-                true,
                 false,
+                input_rect,
                 &theme,
             );
             draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
@@ -2799,20 +2805,32 @@ mod tests {
         assert_eq!(result, vec![3, 3, 3]);
     }
 
-    /// Drive `draw_history_modal` against a real buffer across every input
+    /// Drive `draw_history_panel` against a real buffer across every input
     /// state the Ctrl+R picker can land in. The assertions are deliberately
     /// structural ("does not panic, produces a non-empty frame") because the
     /// fuzzy highlight math is already covered by `fuzzy::tests`; here we
     /// only need to prove the renderer consumes each state without exploding.
     #[test]
-    fn history_modal_renders_every_query_state() {
+    fn history_panel_renders_every_query_state() {
         let theme = Theme::default();
-        let history = vec![
-            "git status".to_string(),
-            "git commit -am 'ship it'".to_string(),
-            "cargo test".to_string(),
-            "review the diff before sending".to_string(),
-        ];
+        let history: Vec<neenee_core::HistoryEntry> = [
+            "git status",
+            "git commit -am 'ship it'",
+            "cargo test",
+            "review the diff before sending",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            neenee_core::HistoryEntry::new(
+                text.to_string(),
+                Some(format!("s{i}")),
+                Some("~/p".to_string()),
+                (i as u64) * 1_000,
+            )
+        })
+        .collect();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
 
         let cases: &[(&str, usize)] = &[
             ("", history.len()), // empty query → everything surfaces
@@ -2820,9 +2838,10 @@ mod tests {
             ("zzz", 0),          // no subsequence → empty placeholder
         ];
 
+        let input_rect = neenee_tui_engine::Rect::new(0, 22, 80, 2);
         for (query, expected_matches) in cases {
             let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
-            let mut ranked = crate::tui::fuzzy::rank(&history, query);
+            let mut ranked = crate::tui::fuzzy::rank(&texts, query);
             crate::tui::fuzzy::sort_by_score(&mut ranked);
             assert_eq!(
                 ranked.len(),
@@ -2832,19 +2851,16 @@ mod tests {
                 expected_matches
             );
             terminal.draw(|f| {
-                draw_history_modal(
+                let _ = draw_history_panel(
                     f,
-                    &mut LayoutMap::new(),
                     &history,
-                    query,
-                    query.chars().count(),
                     &ranked,
                     0,
                     &mut 0,
                     true,
                     false,
-                    true,
                     false,
+                    input_rect,
                     &theme,
                 );
             });
@@ -2853,72 +2869,23 @@ mod tests {
         // Empty history must render the "(no history yet)" placeholder rather
         // than indexing into an empty slice.
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
-        let empty: Vec<String> = Vec::new();
+        let empty: Vec<neenee_core::HistoryEntry> = Vec::new();
         let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> =
-            crate::tui::fuzzy::rank(&empty, "");
+            crate::tui::fuzzy::rank::<&str>(&[], "");
         terminal.draw(|f| {
-            draw_history_modal(
+            let _ = draw_history_panel(
                 f,
-                &mut LayoutMap::new(),
                 &empty,
-                "",
-                0,
                 &ranked,
                 0,
                 &mut 0,
                 true,
                 false,
-                true,
                 false,
+                input_rect,
                 &theme,
             );
         });
-    }
-
-    /// Browse mode (`search = false`) renders the plain list with the
-    /// `/ to search` hint and no query field — the default state when the
-    /// Ctrl+R modal first opens.
-    #[test]
-    fn history_modal_browse_mode_shows_search_hint() {
-        let theme = Theme::default();
-        let history = vec!["git status".to_string(), "cargo test".to_string()];
-        // Browse rows are newest-first with empty (unhighlighted) matches.
-        let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> = (0..history.len())
-            .rev()
-            .map(|i| {
-                (
-                    i,
-                    crate::tui::fuzzy::FuzzyMatch {
-                        score: 0,
-                        positions: Vec::new(),
-                    },
-                )
-            })
-            .collect();
-        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
-        terminal.draw(|f| {
-            draw_history_modal(
-                f,
-                &mut LayoutMap::new(),
-                &history,
-                "",
-                0,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false, // browse mode
-                false,
-                &theme,
-            );
-        });
-        let buf = terminal.buffer();
-        let screen: String = buf.content.iter().map(|c| c.symbol()).collect();
-        assert!(
-            screen.contains("/ to search"),
-            "browse header should advertise the search shortcut"
-        );
     }
 
     /// A multi-line history entry collapses to its first line in the fuzzy
@@ -2926,55 +2893,60 @@ mod tests {
     /// preview mode renders the full text verbatim. Both modes must consume a
     /// real buffer without panicking.
     #[test]
-    fn history_modal_folds_multiline_and_previews_full_text() {
+    fn history_panel_folds_multiline_and_previews_full_text() {
         let theme = Theme::default();
-        let history = vec![
-            "first line\nsecond line\nthird line".to_string(),
-            "single line".to_string(),
-        ];
+        let history: Vec<neenee_core::HistoryEntry> = [
+            "first line\nsecond line\nthird line",
+            "single line",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            neenee_core::HistoryEntry::new(
+                text.to_string(),
+                Some(format!("s{i}")),
+                None,
+                0,
+            )
+        })
+        .collect();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
 
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
-        let ranked = crate::tui::fuzzy::rank(&history, "");
+        let ranked = crate::tui::fuzzy::rank(&texts, "");
+        let input_rect = neenee_tui_engine::Rect::new(0, 22, 80, 2);
 
         // List mode: the multi-line entry must render as one row.
         terminal.draw(|f| {
-            draw_history_modal(
+            let _ = draw_history_panel(
                 f,
-                &mut LayoutMap::new(),
                 &history,
-                "",
-                0,
                 &ranked,
                 0,
                 &mut 0,
                 true,
                 false,
-                true,
                 false,
+                input_rect,
                 &theme,
             );
         });
         let buf = terminal.buffer();
-        // The continuation marker `↵` should appear somewhere — proving the
-        // folded entry advertises its hidden content.
         let has_marker = buf.content.iter().any(|c| c.symbol() == "↵");
         assert!(has_marker, "multi-line entry should show the ↵ fold marker");
 
         // Preview mode: the full multi-line text renders without panic.
         terminal.draw(|f| {
-            draw_history_modal(
+            let _ = draw_history_panel(
                 f,
-                &mut LayoutMap::new(),
                 &history,
-                "",
-                0,
                 &ranked,
                 0,
                 &mut 0,
                 true,
                 true,
-                true,
                 false,
+                input_rect,
                 &theme,
             );
         });

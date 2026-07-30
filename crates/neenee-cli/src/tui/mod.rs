@@ -184,7 +184,7 @@ pub async fn run_tui(
     mut rx: mpsc::UnboundedReceiver<AgentResponse>,
     initial_provider: String,
     initial_model: String,
-    input_history: Vec<String>,
+    input_history: Vec<neenee_core::HistoryEntry>,
     initial_messages: Vec<Message>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
@@ -192,7 +192,7 @@ pub async fn run_tui(
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
-) -> Result<Vec<String>, Box<dyn Error>> {
+) -> Result<Vec<neenee_core::HistoryEntry>, Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -1350,6 +1350,8 @@ pub async fn run_tui(
         current_provider: initial_provider,
         current_model: initial_model,
         cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        current_session_id: String::new(),
+        current_workspace: String::new(),
         path_scan_cache: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
@@ -1519,7 +1521,7 @@ pub async fn start_tui(
     rx: mpsc::UnboundedReceiver<AgentResponse>,
     initial_provider: String,
     initial_model: String,
-    input_history: Vec<String>,
+    input_history: Vec<neenee_core::HistoryEntry>,
     initial_messages: Vec<Message>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
@@ -1527,7 +1529,7 @@ pub async fn start_tui(
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
-) -> Result<Vec<String>, Box<dyn Error>> {
+) -> Result<Vec<neenee_core::HistoryEntry>, Box<dyn Error>> {
     run_tui(
         tx,
         rx,

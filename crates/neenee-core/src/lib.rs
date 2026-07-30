@@ -60,6 +60,8 @@ pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
 pub mod envoy;
+pub mod history;
+pub use history::{HISTORY_CAP, HistoryEntry, merge_history};
 pub mod identity;
 pub mod pressure;
 pub mod principal;

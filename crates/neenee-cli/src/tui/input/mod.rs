@@ -490,13 +490,6 @@ pub enum InputAction {
     /// the Ctrl+R modal. In preview mode the body shows the entry's complete
     /// (possibly multi-line) text; ↑/↓ re-renders the newly focused entry.
     HistoryTogglePreview,
-    /// Enter the history modal's search sub-layer (`/` in browse mode): start
-    /// borrowing the composer line as a live fuzzy query and re-rank the list.
-    HistoryEnterSearch,
-    /// Leave the history modal's search sub-layer (first Esc while searching):
-    /// clear the query and return to the full reverse-chronological browse
-    /// list. A second Esc then closes the modal.
-    HistoryExitSearch,
     /// Enter the model picker's search sub-layer (`/` in browse mode): start
     /// borrowing the composer line as a live fuzzy query and re-rank the list.
     ModelEnterSearch,
@@ -1092,12 +1085,13 @@ pub fn process_event(
                         InputAction::CancelCustomProvider
                     } else if context.active_modal == super::Modal::InputInjection {
                         InputAction::InputCancel
-                    } else if context.active_modal == super::Modal::HistorySearch
-                        && context.history_searching
-                    {
-                        // Two-stage Esc: leave the search sub-layer back to the
-                        // browse list first; the next Esc (browse mode) closes.
-                        InputAction::HistoryExitSearch
+                    } else if context.active_modal == super::Modal::HistorySearch {
+                        // The history panel floats above a live composer that is
+                        // permanently the filter field, so there is no
+                        // browse/search distinction to step out of: a single Esc
+                        // closes the panel and restores the stashed draft (the
+                        // query is discarded, since it was only ever a filter).
+                        InputAction::CloseModal
                     } else if matches!(
                         context.active_modal,
                         super::Modal::Models | super::Modal::Connections
@@ -1773,15 +1767,6 @@ pub fn process_event(
                         // printable input instead of letting the user build an
                         // impossible value that can never be saved.
                         InputAction::None
-                    } else if context.active_modal == super::Modal::HistorySearch
-                        && !context.history_searching
-                        && c == '/'
-                    {
-                        // Browse mode: `/` opens the search sub-layer rather than
-                        // inserting a literal slash. Other printable keys are
-                        // inert here (`edits_input_field` is false), so the list
-                        // stays a pure browse surface until search is entered.
-                        InputAction::HistoryEnterSearch
                     } else if edits_input_field(
                         context.active_modal,
                         context.history_searching,
@@ -4692,107 +4677,39 @@ mod tests {
         assert_eq!(cursor, 3);
     }
 
-    /// Drive a key against the history modal in **browse** mode
-    /// (`history_searching: false`) and return the resulting action.
-    fn run_history_browse_key(
-        input: &mut String,
-        cursor: &mut usize,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-    ) -> InputAction {
-        let mut drag = SelectionDrag::default();
-        process_event(
-            Event::Key(KeyEvent {
-                code,
-                modifiers,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }),
-            input,
-            cursor,
-            InputContext {
-                active_modal: crate::tui::Modal::HistorySearch,
-                session_info_detail: false,
-                is_responding: false,
-                completion_kind: crate::tui::CompletionKind::None,
-                suggestion_count: 0,
-                has_exact_suggestion: false,
-                suggestion_index: None,
-                permission_confirm_always: false,
-                permission_show_details: false,
-                in_envoy_view: false,
-                in_side_view: false,
-                has_focused_target: false,
-                has_queued: false,
-                history_searching: false,
-                model_searching: false,
-                modal_keymap_open: false,
-                editor_field: None,
-                custom_provider_field: None,
-                question_other_highlighted: false,
-            },
-            &mut drag,
-        )
+    #[test]
+    fn esc_in_history_panel_closes_modal_directly() {
+        // The history panel floats above a live composer that is permanently
+        // the filter field, so there is no browse/search distinction: a single
+        // Esc closes the panel outright (and the app loop restores the stashed
+        // draft). Whether or not a query is typed, the result is the same.
+        let mut input = "git".to_string();
+        let mut cursor = 3;
+        let action = run_history_key(&mut input, &mut cursor, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(action, InputAction::CloseModal);
     }
 
     #[test]
-    fn slash_in_history_browse_enters_search() {
-        // `/` is the gateway into the search sub-layer: it must emit
-        // HistoryEnterSearch rather than inserting a literal slash.
+    fn typing_in_history_panel_inserts_into_filter() {
+        // The composer is always the live filter: a printable key splices into
+        // the query buffer and narrows the list. There is no inert browse mode.
         let mut input = String::new();
         let mut cursor = 0;
-        let action = run_history_browse_key(
-            &mut input,
-            &mut cursor,
-            KeyCode::Char('/'),
-            KeyModifiers::NONE,
-        );
-        assert_eq!(action, InputAction::HistoryEnterSearch);
-        assert!(input.is_empty(), "`/` must not land in the buffer");
-        assert_eq!(cursor, 0);
-    }
-
-    #[test]
-    fn typing_in_history_browse_is_inert() {
-        // Browse mode is a pure list: printable keys do nothing (only `/`
-        // opens search), so a stray letter never mutates the borrowed buffer.
-        let mut input = String::new();
-        let mut cursor = 0;
-        let action = run_history_browse_key(
+        let action = run_history_key(
             &mut input,
             &mut cursor,
             KeyCode::Char('g'),
             KeyModifiers::NONE,
         );
-        assert_eq!(action, InputAction::None);
-        assert!(input.is_empty());
-        assert_eq!(cursor, 0);
+        assert_eq!(action, InputAction::InsertChar('g'));
+        assert_eq!(input, "g");
+        assert_eq!(cursor, 1);
     }
 
     #[test]
-    fn esc_in_history_browse_closes_modal() {
-        // No search layer to peel back: Esc closes the modal outright.
-        let mut input = String::new();
-        let mut cursor = 0;
-        let action =
-            run_history_browse_key(&mut input, &mut cursor, KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(action, InputAction::CloseModal);
-    }
-
-    #[test]
-    fn esc_in_history_search_returns_to_browse() {
-        // Two-stage Esc: while searching, the first Esc exits the sub-layer
-        // back to the browse list (HistoryExitSearch) instead of closing.
-        let mut input = "git".to_string();
-        let mut cursor = 3;
-        let action = run_history_key(&mut input, &mut cursor, KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(action, InputAction::HistoryExitSearch);
-    }
-
-    #[test]
-    fn slash_in_history_search_inserts_literal() {
-        // Inside search, `/` is just another query character — the sub-layer
-        // is already open, so it must splice into the buffer.
+    fn slash_in_history_panel_inserts_literal() {
+        // `/` is just another query character — the composer is always the
+        // filter, so it splices into the buffer rather than toggling a mode.
         let mut input = String::new();
         let mut cursor = 0;
         run_history_key(

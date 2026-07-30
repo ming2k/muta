@@ -1268,7 +1268,7 @@ impl Config {
         paths::get().history_file()
     }
 
-    pub fn load_history() -> Vec<String> {
+    pub fn load_history() -> Vec<neenee_core::HistoryEntry> {
         let path = Self::history_file_path();
         if let Ok(content) = fs::read_to_string(path) {
             serde_json::from_str(&content).unwrap_or_default()
@@ -1277,29 +1277,22 @@ impl Config {
         }
     }
 
-    pub fn save_history(history: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_history(
+        history: &[neenee_core::HistoryEntry],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::history_file_path();
         // Serialise against other `neenee` instances and merge so a concurrent
         // process's recent commands survive this write (ADR-0018). Without the
         // lock + reload the last writer would erase the other's history; the
-        // merge takes the union, keeping first-seen order from disk and
-        // appending this process's entries that are not already present.
+        // merge takes the union by `(text, session_id)`, keeping the newest
+        // recorded timestamp for each survivor and re-ordering newest-first.
         let _lock = fsutil::FileLock::acquire(&path)
             .map_err(|e| format!("could not lock history file: {e}"))?;
-        let mut merged: Vec<String> = fs::read_to_string(&path)
+        let existing: Vec<neenee_core::HistoryEntry> = fs::read_to_string(&path)
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default();
-        for entry in history {
-            if !merged.iter().any(|existing| existing == entry) {
-                merged.push(entry.clone());
-            }
-        }
-        const HISTORY_CAP: usize = 10_000;
-        if merged.len() > HISTORY_CAP {
-            let drain = merged.len() - HISTORY_CAP;
-            merged.drain(..drain);
-        }
+        let merged = neenee_core::merge_history(&existing, history);
         fsutil::atomic_write_json(&path, &merged).map_err(Box::<dyn std::error::Error>::from)?;
         Ok(())
     }
