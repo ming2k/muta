@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--autopilot` now works in attach mode.** Previously `--autopilot` parsed
+  alongside `attach`/`--attach` but was silently ignored (the attach client
+  drives a `neenee-server`-hosted session, which hardcoded autopilot off).
+  Now a client that spawns the server forwards `--autopilot` to
+  `neenee-server` (new server flag), and — to also cover an already-running
+  server it did not spawn — re-sends the intent over the wire as
+  `/autopilot on` immediately after the handshake. The slash command is the
+  existing, idempotent path (a freshly spawned autopilot server ignores the
+  redundant re-affirmation; an unrelated live server flips on), so the
+  status-bar `autopilot` badge reflects the flip exactly like a hand-typed
+  `/autopilot on`. Revises ADR-0081 consequence #8.
+
 ### Changed
 
 - **`unattended` renamed to `autopilot`.** The no-human-intervention mode flag is renamed

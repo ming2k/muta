@@ -57,7 +57,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // no process lock), so it must intercept before `assemble` — which accepts
     // only Fresh/Resume/Picker by contract.
     if let StartupMode::Attach(session_id) = &startup {
-        return run_attached(session_id.clone(), project_override).await;
+        return run_attached(
+            session_id.clone(),
+            project_override,
+            autopilot_at_start,
+        )
+        .await;
     }
 
     // Assemble the session harness (ADR-0037 Step 6): channels, config,
@@ -153,12 +158,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_attached(
     session_id: Option<String>,
     project_override: Option<PathBuf>,
+    autopilot_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override.unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
-    let info = remote::ensure_server(&project_root, session_id.as_deref()).await?;
+    let info = remote::ensure_server(
+        &project_root,
+        session_id.as_deref(),
+        autopilot_at_start,
+    )
+    .await?;
     let (tx, rx, hosted_session_id, round_counter, transcript) = remote::connect(&info).await?;
+
+    // If the client requested autopilot, make sure the hosted session is in
+    // autopilot regardless of who created it:
+    //   - when the client spawned the server it already passed `--autopilot`,
+    //     so this is a harmless idempotent re-affirmation;
+    //   - when an unrelated server was already running, the spawn path never
+    //     ran, so this is the only way to apply the client's intent.
+    // `/autopilot on` flows over the same wire path the TUI uses, so the
+    // server mutates state and emits `AutopilotChanged` — the status bar
+    // reflects the flip exactly like a hand-typed `/autopilot on`.
+    if autopilot_at_start {
+        let _ = tx.send(neenee_core::AgentRequest::SlashCommand(
+            "/autopilot on".to_string(),
+        ));
+    }
     // Input history and `[tui]` presentation prefs are client-side concerns —
     // the server knows nothing of them — so they load from the LOCAL config
     // exactly as the standalone path does.

@@ -175,8 +175,13 @@ Attach mode is opt-in.
      the server keeps running.
   7. Discovery liveness is a TCP probe; the WS handshake is the real
      validation.
-  8. `--autopilot`/`--single-instance` parse alongside `--attach` but do
-     not apply (server-side concerns).
+   8. `--autopilot` now applies in attach mode (revised): a client that
+      spawns the server forwards `--autopilot` to `neenee-server`, and — to
+      also cover an already-running server it did not spawn — re-sends the
+      intent over the wire as `/autopilot on` immediately after the handshake
+      (idempotent for a freshly spawned autopilot server, the only lever
+      otherwise). `--single-instance` still does not apply (the server owns
+      the process/lock story; there is no client-side flock to acquire).
 - **Neutral.** Crate count: 13 → 12 (ADR-0079) → 13 (this ADR).
 - **Migration.** None for users: the `neenee` command and standalone
   behavior are unchanged. `neenee-server` ships as a second binary.

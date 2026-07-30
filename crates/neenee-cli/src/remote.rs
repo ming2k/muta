@@ -82,6 +82,7 @@ fn discover_at(path: &Path) -> Option<ServeInfo> {
 pub async fn ensure_server(
     project_root: &Path,
     session_id: Option<&str>,
+    autopilot: bool,
 ) -> Result<ServeInfo, String> {
     if let Some(info) = discover(project_root) {
         if let Some(want) = session_id
@@ -97,7 +98,7 @@ pub async fn ensure_server(
         return Ok(info);
     }
 
-    spawn_server(project_root, session_id)?;
+    spawn_server(project_root, session_id, autopilot)?;
 
     // The server writes its discovery record only after the listener has
     // bound (which follows full harness assembly), so poll for the file.
@@ -132,7 +133,11 @@ pub async fn ensure_server(
 /// Spawn `neenee-server` for `project_root`, detached: stdio to null and the
 /// `Child` handle dropped without `wait`, so the server outlives this client
 /// by design (it owns the session lifecycle; clients come and go).
-fn spawn_server(project_root: &Path, session_id: Option<&str>) -> Result<(), String> {
+fn spawn_server(
+    project_root: &Path,
+    session_id: Option<&str>,
+    autopilot: bool,
+) -> Result<(), String> {
     // Prefer the binary installed next to this executable (same install set ⇒
     // matching wire protocol), falling back to PATH lookup.
     let program = std::env::current_exe()
@@ -149,6 +154,9 @@ fn spawn_server(project_root: &Path, session_id: Option<&str>) -> Result<(), Str
         .stderr(std::process::Stdio::null());
     if let Some(id) = session_id {
         command.arg("--session").arg(id);
+    }
+    if autopilot {
+        command.arg("--autopilot");
     }
     command
         .spawn()

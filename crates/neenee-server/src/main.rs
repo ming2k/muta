@@ -28,8 +28,7 @@ use tokio::sync::broadcast;
 use crate::identity::{neenee_identity, principal_code};
 use crate::ui::HeadlessUi;
 
-const USAGE: &str =
-    "Usage: neenee-server [--project <path>] [--session <id>] [--port <n>] [--public]";
+const USAGE: &str = "Usage: neenee-server [--project <path>] [--session <id>] [--port <n>] [--public] [--autopilot]";
 
 /// The parsed command line. Hand-rolled (the workspace does not use clap):
 /// the surface is deliberately tiny — this binary is spawned by wrappers,
@@ -43,6 +42,11 @@ struct Args {
     port: u16,
     /// `--public`: bind 0.0.0.0 (bearer token enforced by the serve layer).
     public: bool,
+    /// `--autopilot`: start the hosted session in autopilot mode, mirroring
+    /// the standalone `neenee --autopilot` path. Forwarded only when a client
+    /// (`neenee attach`) spawns the server; an already-running server is
+    /// flipped at attach time over the wire instead (see `remote.rs`).
+    autopilot: bool,
 }
 
 fn parse_args(args: Vec<String>) -> Result<Args, String> {
@@ -50,6 +54,7 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
     let mut session: Option<String> = None;
     let mut port: u16 = 0;
     let mut public = false;
+    let mut autopilot = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         if arg == "--project" {
@@ -73,6 +78,8 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
                 .map_err(|_| format!("invalid --port value '{value}'"))?;
         } else if arg == "--public" {
             public = true;
+        } else if arg == "--autopilot" {
+            autopilot = true;
         } else {
             return Err(format!("unknown argument '{arg}'"));
         }
@@ -87,6 +94,7 @@ fn parse_args(args: Vec<String>) -> Result<Args, String> {
         session,
         port,
         public,
+        autopilot,
     })
 }
 
@@ -119,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui: Arc::new(HeadlessUi),
         startup,
         project_root: Some(args.project.clone()),
-        autopilot: false,
+        autopilot: args.autopilot,
         single_instance: false,
     })
     .await?;
@@ -254,6 +262,16 @@ mod tests {
 
         let args = parse_args(vec!["--project=/tmp/y".to_string()]).unwrap();
         assert_eq!(args.project, PathBuf::from("/tmp/y"));
+    }
+
+    #[test]
+    fn autopilot_flag_parses_and_off_by_default() {
+        let args = parse_args(vec!["--autopilot".to_string()]).unwrap();
+        assert!(args.autopilot);
+
+        // Defaults (no args) keep autopilot off.
+        let args = parse_args(Vec::new()).unwrap();
+        assert!(!args.autopilot);
     }
 
     #[test]
