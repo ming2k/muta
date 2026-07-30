@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+### Removed
+
+## [0.21.3] - 2026-07-30
+
+### Added
+
+- **Project-scope MCP via `.neenee/config.toml`.** A project may now declare
+  `[mcp.*]` servers in its own `.neenee/config.toml`, layered on top of the
+  global config: a project entry overrides a same-named global one and adds new
+  servers, so a repo ships its own connectors alongside the user's global set.
+  Read through a narrow TOML projection (`Config::load_project_mcp` /
+  `merge_project_mcp`) that ignores unrelated keys, so a partial/incomplete
+  project file never fails the load. Decided in ADR-0085, implemented in
+  `crates/neenee-persistence/src/config.rs`; layered at bootstrap and on
+  `/reload`.
+- **Project trust gate.** Project-supplied MCP commands execute processes, so
+  they load only after the user explicitly trusts the project root. Trust
+  grants live in a JSON set under `$XDG_STATE_HOME/neenee/trusted_projects.json`
+  (program-generated state alongside `history.json`/`provider_usage.json`, safe
+  to lose). Untrusted projects load nothing and get a one-time hint. Global
+  config remains trusted unconditionally. New `TrustGate` in
+  `crates/neenee-persistence/src/trusted_projects.rs`; surfaced onto the
+  session driver and consulted by bootstrap and `/reload`.
+- **`/trust` and `/untrust`.** Grant or revoke trust for the current project's
+  `.neenee/config.toml` external tools. `/trust` activates the project's MCP
+  servers immediately; `/untrust` disconnects them. Registered as built-in
+  commands in `crates/neenee-transport/src/startup.rs`; handled in
+  `crates/neenee-transport/src/handlers_slash.rs`.
+- **`/reload`.** Re-read `config.toml` and apply the diff live — no restart
+  needed to add/remove/edit MCP servers, permissions, bash policy, hooks,
+  principal settings, tool variants, or prune threshold. MCP is diffed and
+  (re)connected/disconnected via the new `McpRuntime::reconfigure`
+  (`ReconfigureReport`), which also re-layers project MCP gated by trust. The
+  agent-scoped config sections that are otherwise seeded only at startup are
+  re-applied via the existing replace-style setters. Registered in
+  `crates/neenee-transport/src/startup.rs`; handled in
+  `crates/neenee-transport/src/handlers_slash.rs`.
+
+### Changed
+
 - **Status bar layout flipped.** The status bar now leads with the `unattended`
   flag on the left and trails with the tilde-shortened workspace path on the
   right — previously the workspace led and the flag trailed. A silent agent
@@ -28,8 +68,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `keycap_style` (brand color + bold), so the affordance reads
   consistently across surfaces. Updated in `input_action_spans`
   (`crates/neenee-cli/src/tui/chrome.rs`).
+- **`McpRuntime::configs` moved behind a `RwLock`.** `reconfigure` replaces the
+  whole server map while readers (`set_enabled` / `reconnect` / `refresh_all` /
+  `Drop`) only need a borrow, so the config map is now `RwLock`-guarded to
+  support live hot-reload. (`crates/neenee-agent/src/mcp/runtime.rs`.)
 
 ### Removed
+
+- **Idle progressive-disclosure machinery retired.** The `disclosure_ledger.rs`
+  and `disclosure_bridge.rs` modules — ported from kimi-code but never wired
+  behind a `select_tools` meta-tool, and carried under
+  `#[allow(dead_code)]` — are deleted. ADR-0085 records the decision to scope
+  external tools at config time (eager full-schema loading, `/reload` hot
+  reload) rather than via runtime on-demand discovery. Files removed from
+  `crates/neenee-agent/src/`; the module declarations dropped from `lib.rs`.
 
 ## [0.21.2] - 2026-07-29
 
@@ -2132,7 +2184,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.2...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.3...HEAD
+[0.21.3]: https://github.com/ming2k/neenee/releases/tag/v0.21.3
 [0.21.2]: https://github.com/ming2k/neenee/releases/tag/v0.21.2
 [0.21.1]: https://github.com/ming2k/neenee/releases/tag/v0.21.1
 [0.21.0]: https://github.com/ming2k/neenee/releases/tag/v0.21.0
