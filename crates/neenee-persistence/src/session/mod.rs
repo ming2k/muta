@@ -739,7 +739,8 @@ impl SessionStore {
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
         if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
         }
         Ok(())
     }
@@ -769,12 +770,15 @@ impl SessionStore {
                 && jobs.is_empty();
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
-                state.event_log.append(SessionEvent::ScheduledJobsSet { jobs })?;
+                state
+                    .event_log
+                    .append(SessionEvent::ScheduledJobsSet { jobs })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
         if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
         }
         Ok(())
     }
@@ -863,7 +867,8 @@ impl SessionStore {
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
         if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
         }
         Ok(())
     }
@@ -895,7 +900,8 @@ impl SessionStore {
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
         if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone()).await?;
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
         }
         Ok(())
     }
@@ -1566,9 +1572,7 @@ impl SessionStore {
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if stem.starts_with(input)
-                    && !matches.iter().any(|(id, _)| id == stem)
-                {
+                if stem.starts_with(input) && !matches.iter().any(|(id, _)| id == stem) {
                     matches.push((stem.to_string(), path));
                 }
             }
@@ -3029,10 +3033,8 @@ mod tests {
         // test pins that the deferred view still reports the right count and
         // overview for a heavy session, including a user turn buried under
         // assistant/tool output.
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-list-deferred-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-list-deferred-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
@@ -3080,10 +3082,8 @@ mod tests {
         // last genuine prompt instead — those echoes are agent operations, not
         // AI-conversation turns. This must hold through the deferred header
         // parse (which decodes `origin` as well as role/content).
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-list-echo-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-list-echo-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
@@ -3117,10 +3117,8 @@ mod tests {
         // ADR-0022: a stored title (manual or AI) wins over the user-prompt
         // fallback. The deferred header parse still reads the top-level `title`
         // field, so this precedence must hold without decoding message bodies.
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-list-title-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-list-title-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
@@ -3149,10 +3147,8 @@ mod tests {
         // COMPLETE last effective user prompt (unlike the truncated picker
         // preview), plus title/timestamps/message-count — and must exclude
         // non-driving command echoes from the prompt, like `list()` does.
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-detail-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-detail-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         let long_prompt = "This is a fairly long prompt that exceeds the \
@@ -3184,10 +3180,8 @@ mod tests {
 
     #[tokio::test]
     async fn detail_returns_none_prompt_for_echo_only_session() {
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-detail-echo-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-detail-echo-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
@@ -3317,8 +3311,8 @@ mod tests {
         // A pre-v9 snapshot written by the old `/repeat` code used the flat
         // `repeat_jobs` field with `RepeatJob { cron: String, … }`. It must
         // load as `scheduled_jobs` with cron `Schedule` triggers, no data loss.
-        let directory = std::env::temp_dir()
-            .join(format!("neenee-schedule-legacy-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-schedule-legacy-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("session.json");
         let now = chrono::Utc::now();
@@ -3409,10 +3403,8 @@ mod tests {
         // (The lazy seed may leave a `.jsonl` with one `Started` event from the
         // store constructor, but that never produces the `.json` snapshot the
         // picker lists, so the empty session stays invisible.)
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-provider-empty-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-provider-empty-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
@@ -3445,10 +3437,8 @@ mod tests {
         // history. Metadata-only mutations on a brand-new empty session
         // (title, provider, /clear to empty) stay in memory; the first real
         // message or command does persist.
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-empty-deferred-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-empty-deferred-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
@@ -3461,10 +3451,7 @@ mod tests {
             }))
             .await
             .unwrap();
-        store
-            .replace_messages(Vec::new())
-            .await
-            .unwrap(); // a no-op /clear-style replace
+        store.replace_messages(Vec::new()).await.unwrap(); // a no-op /clear-style replace
         assert!(
             !path.exists(),
             "metadata/no-op mutations on an empty session must not persist a snapshot"

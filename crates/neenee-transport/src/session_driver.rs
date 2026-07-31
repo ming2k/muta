@@ -13,10 +13,10 @@
 
 use crate::commands::CustomCommand;
 use neenee_agent::catalog;
+use neenee_agent::mcp::McpRuntime;
 use neenee_agent::orchestration::{round_response, send_harness_state};
 use neenee_agent::{Agent, EnvoyRegistry, RoundLifecycle};
 use neenee_core::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
-use neenee_agent::mcp::McpRuntime;
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
     trusted_projects::TrustGate,

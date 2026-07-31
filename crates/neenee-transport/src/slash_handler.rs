@@ -29,13 +29,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock, atomic::AtomicBool};
 
+use crate::commands::CustomCommand;
 use neenee_agent::{Agent, RoundLifecycle};
 use neenee_core::{AgentRequest, AgentResponse, Provider, Tool};
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
-use crate::commands::CustomCommand;
 
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
