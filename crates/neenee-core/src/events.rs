@@ -408,6 +408,29 @@ impl AgentNotice {
         self
     }
 
+    /// Build an ephemeral, toast-surfaced acknowledgment of a slash command or
+    /// configuration change (the *reply* to a command, not its invocation).
+    ///
+    /// `title` is the one-line confirmation (e.g. `"Autopilot ON: …"`). The
+    /// notice is `Info` severity and routed to the [`NoticeSurface::Toast`]
+    /// surface so frontends show it as a transient bubble and do **not** append
+    /// it to the transcript — it carries no conversational content. ADR-0050
+    /// keeps the command *invocation* durable; this reply is deliberately
+    /// ephemeral.
+    ///
+    /// Prefer this constructor over `AgentNotice::new(...).with_surface(Toast)`
+    /// so the `CommandAck` kind is stamped uniformly and frontends can branch
+    /// on `kind == CommandAck` (e.g. to suppress re-surfacing on reconnect).
+    pub fn command_ack(title: impl Into<String>) -> Self {
+        Self::new(
+            NoticeKind::CommandAck,
+            NoticeSeverity::Info,
+            title,
+            NoticeSource::Harness,
+        )
+        .with_surface(NoticeSurface::Toast)
+    }
+
     pub fn render_text(&self) -> String {
         match self.body.as_deref().filter(|body| !body.trim().is_empty()) {
             Some(body) => format!("{}\n{}", self.title, body),
@@ -422,6 +445,14 @@ pub enum NoticeKind {
     ProviderRetry,
     NudgeInjected,
     ReviewAlert,
+    /// A harness-level acknowledgment of a slash command / configuration change
+    /// (e.g. `/autopilot on`, `--autopilot`, `/permissions clear`). These are
+    /// status confirmations, not model output: they carry no conversational
+    /// content, so frontends should surface them as a transient notification
+    /// (toast) rather than appending them to the transcript as if the model
+    /// had spoken. See ADR-0050 for the durable-vs-ephemeral boundary — the
+    /// command *invocation* stays durable; this *reply* is ephemeral.
+    CommandAck,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1297,5 +1328,40 @@ mod tests {
         };
         assert_eq!(summary.active_ms(), 0);
         assert_eq!(summary.tps(), 0.0);
+    }
+
+    #[test]
+    fn command_ack_notice_is_toast_surfaced_info_from_harness() {
+        // A slash-command reply (the *acknowledgment*, not the invocation) is
+        // stamped uniformly so frontends can branch on kind + surface:
+        //   - severity Info (it is a status confirmation, not an error),
+        //   - surface Toast (transient bubble, never appended to transcript),
+        //   - source Harness (not the agent / a tool).
+        let notice = AgentNotice::command_ack("Autopilot ON: …");
+        assert_eq!(notice.kind, NoticeKind::CommandAck);
+        assert_eq!(notice.severity, NoticeSeverity::Info);
+        assert_eq!(notice.surface, NoticeSurface::Toast);
+        assert_eq!(notice.source, NoticeSource::Harness);
+        assert_eq!(notice.title, "Autopilot ON: …");
+        assert!(notice.body.is_none());
+    }
+
+    #[test]
+    fn command_ack_kind_serialises_as_snake_case() {
+        // The closed NoticeKind classifier must serialise the new variant
+        // distinctly so frontends (and persisted/forwarded notices) cannot
+        // confuse it with the existing kinds.
+        let notice = AgentNotice::command_ack("x");
+        let json = serde_json::to_string(&notice.kind).expect("serialise");
+        assert_eq!(json, "\"command_ack\"");
+    }
+
+    #[test]
+    fn command_ack_kind_round_trips() {
+        let notice = AgentNotice::command_ack("x");
+        let json = serde_json::to_string(&notice).expect("serialise");
+        let back: AgentNotice = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back.kind, NoticeKind::CommandAck);
+        assert_eq!(back.surface, NoticeSurface::Toast);
     }
 }

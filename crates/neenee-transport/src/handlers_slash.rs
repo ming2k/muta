@@ -211,15 +211,24 @@ pub async fn dispatch(
             };
             let enabled = next.unwrap_or_else(|| !agent.get_autopilot());
             agent.set_autopilot(enabled);
+            // The autopilot toggle's confirmation is a command acknowledgment,
+            // not model output: surface it as a transient toast rather than
+            // appending a same-color line to the transcript (ADR-0050 keeps the
+            // `/autopilot on` invocation itself durable; this reply is
+            // ephemeral). The `AutopilotChanged` event below still refreshes
+            // the badge so the new state stays visible long after the toast
+            // fades.
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::Text(format!(
-                    "Autopilot {}: the agent {} run without human intervention — the question \
-                     tool is reclaimed, tool permissions auto-approve, and no prompts or \
-                     questions can pause the session.",
-                    if enabled { "ON" } else { "OFF" },
-                    if enabled { "will" } else { "won't" },
-                )),
+                RoundEvent::Notice(
+                    AgentNotice::command_ack(format!(
+                        "Autopilot {}: the agent {} run without human intervention — the question \
+                         tool is reclaimed, tool permissions auto-approve, and no prompts or \
+                         questions can pause the session.",
+                        if enabled { "ON" } else { "OFF" },
+                        if enabled { "will" } else { "won't" },
+                    )),
+                ),
             ));
             let _ = resp_tx.send(round_response(
                 &session.id().await,

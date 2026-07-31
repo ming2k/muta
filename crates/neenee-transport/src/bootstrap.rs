@@ -25,8 +25,8 @@ use neenee_agent::orchestration::{
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_core::{
-    AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider, RoundEvent,
-    ToolContextBuilder, ToolSet, collect_toolset,
+    AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider,
+    RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
 };
 use neenee_agent::mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
@@ -470,11 +470,16 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     neenee_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
     if autopilot_at_start {
         agent.set_autopilot(true);
+        // Surface the `--autopilot` startup state as a transient toast rather
+        // than a transcript line: it is a command acknowledgment, not model
+        // output, so it should not pollute the conversation the user is about
+        // to have. The TUI badge (refreshed by the periodic harness snapshot)
+        // keeps the elevated state visible thereafter.
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::Text(
-                "Autopilot ON: the agent will run without human intervention (no confirmations, no questions).".to_string(),
-            ),
+            RoundEvent::Notice(AgentNotice::command_ack(
+                "Autopilot ON: the agent will run without human intervention (no confirmations, no questions).",
+            )),
         ));
     }
 

@@ -278,9 +278,22 @@ pub(super) struct UiRuntime {
     /// as a signal (not direct `App` mutation) because the listener and the
     /// loop own disjoint halves of `App`'s state.
     pub unsent_input_signal: Arc<Mutex<Option<UnsentInput>>>,
+    /// A toast-surfaced notice (`NoticeSurface::Toast`) the listener forwards
+    /// instead of appending it to the transcript. The loop drains it each frame
+    /// and shows it as a transient top-right bubble (command acknowledgments
+    /// such as `/autopilot on`), mirroring the copy-toast. Latest wins; a
+    /// pending older toast is replaced.
+    pub notice_toast_signal: Arc<Mutex<Option<NoticeToastSignal>>>,
     /// Ordered protocol acknowledgements for the compact outbox. The response
     /// listener cannot mutate `App`, so it forwards only these small signals.
     pub outbox_signals: Arc<Mutex<VecDeque<OutboxSignal>>>,
+}
+
+/// A toast-surfaced notice forwarded across the listener → loop boundary.
+/// `severity` drives the bubble accent color; `text` is the rendered body.
+pub(super) struct NoticeToastSignal {
+    pub severity: NoticeSeverity,
+    pub text: String,
 }
 
 pub(super) enum OutboxSignal {
@@ -984,6 +997,20 @@ pub(super) async fn run_app_loop(
         {
             app.copy_toast_until = None;
         }
+        // Drain a forwarded toast-surfaced notice (command acknowledgment).
+        // Latest wins: a newer toast replaces an in-flight older one. The
+        // duration is wall-clock consistent regardless of the loop cadence.
+        if let Some(signal) = runtime.notice_toast_signal.lock().await.take() {
+            app.notice_toast_message = signal.text;
+            app.notice_toast_severity = signal.severity;
+            app.notice_toast_until =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
+        }
+        if let Some(until) = app.notice_toast_until
+            && std::time::Instant::now() >= until
+        {
+            app.notice_toast_until = None;
+        }
         // While images are staged for the next message, keep a persistent
         // indicator visible so the user knows Enter will send them. Skipped
         // while the Ctrl+C quit window is armed so a freshly-shown
@@ -1214,6 +1241,7 @@ pub(super) async fn run_app_loop(
         let animating = runtime.is_responding.load(Ordering::SeqCst)
             || app.round_started_at.is_some()
             || app.copy_toast_until.is_some()
+            || app.notice_toast_until.is_some()
             || app.ctrl_c_armed_ticks > 0
             || app.esc_armed_ticks > 0
             || !app.pending_images.is_empty()
@@ -2166,6 +2194,16 @@ pub(super) async fn run_app_loop(
                         f,
                         &app.copy_toast_message,
                         app.copy_toast_failed,
+                        &app.theme,
+                    );
+                } else if app.notice_toast_until.is_some() {
+                    // A toast-surfaced command acknowledgment (e.g.
+                    // `/autopilot on`). Rendered only when no copy toast is
+                    // showing, since the two share the same top-right slot.
+                    view::draw_notice_toast(
+                        f,
+                        &app.notice_toast_message,
+                        app.notice_toast_severity,
                         &app.theme,
                     );
                 } else if app.ctrl_c_armed_ticks > 0 {

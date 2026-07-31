@@ -23,7 +23,7 @@ use crate::tui::completion::{CompletionItemKind, PathScan};
 use crate::tui::composer_attachments;
 use crate::tui::event_loop::resolve_focused_mut;
 use crate::tui::fuzzy;
-use crate::tui::model::document::TranscriptMessage;
+use crate::tui::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::tui::model::layout::{InteractiveTarget, LayoutMap, ModalHitMap};
 use crate::tui::model::selection::{SelectionDrag, SelectionState};
 use crate::tui::providers::{
@@ -543,6 +543,16 @@ pub struct App {
     pub copy_toast_until: Option<std::time::Instant>,
     pub copy_toast_message: String,
     pub copy_toast_failed: bool,
+    /// A transient notice toast (command acknowledgments such as
+    /// `/autopilot on`, surfaced via `NoticeSurface::Toast`). Unlike the
+    /// inline `MessageKind::Notice`, this never enters the transcript: it
+    /// renders as a top-right bubble that fades on its own, mirroring the copy
+    /// toast. Severity drives the bubble's accent color. Held until
+    /// `notice_toast_until` elapses so the duration is wall-clock consistent
+    /// regardless of the loop cadence. A newer toast replaces an in-flight one.
+    pub notice_toast_until: Option<std::time::Instant>,
+    pub notice_toast_message: String,
+    pub notice_toast_severity: NoticeSeverity,
     /// Ticks remaining in which a second Ctrl+C quits.
     pub ctrl_c_armed_ticks: u8,
     /// Ticks remaining in which a second Esc interrupts the running task.

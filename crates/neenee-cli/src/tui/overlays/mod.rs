@@ -56,6 +56,6 @@ pub use provider_delete_confirm::draw_provider_delete_confirm;
 pub use queue::{QueueModalView, draw_queue_modal};
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
-pub use toast::{draw_armed_toast, draw_copy_toast};
+pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
 pub use token_report::{ContextUsageView, draw_token_report_modal, token_report_round_count};
 pub use tools::draw_tools_modal;

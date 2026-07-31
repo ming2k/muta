@@ -343,6 +343,11 @@ pub async fn run_tui(
     // `UnsentInput`, drained by the event loop to restore the composer.
     let unsent_input_signal = Arc::new(Mutex::new(None::<event_loop::UnsentInput>));
     let unsent_input_signal_clone = unsent_input_signal.clone();
+    // Toast-surfaced notices (command acknowledgments such as `/autopilot on`)
+    // are forwarded by the listener and drained by the loop into a transient
+    // bubble, never entering the transcript.
+    let notice_toast_signal = Arc::new(Mutex::new(None::<event_loop::NoticeToastSignal>));
+    let notice_toast_signal_clone = notice_toast_signal.clone();
     let outbox_signals = Arc::new(Mutex::new(VecDeque::<event_loop::OutboxSignal>::new()));
     let outbox_signals_clone = outbox_signals.clone();
 
@@ -469,7 +474,28 @@ pub async fn run_tui(
                             // transcript disclosure driven by RetryScheduled.
                             // Do not also degrade its toast into an appended
                             // inline notice on every failed attempt.
-                            if notice.kind != neenee_core::NoticeKind::ProviderRetry {
+                            if notice.kind == neenee_core::NoticeKind::ProviderRetry {
+                                // Skip the inline append; RetryScheduled owns
+                                // the retry disclosure.
+                            } else if notice.surface
+                                == neenee_core::NoticeSurface::Toast
+                            {
+                                // Toast-surfaced notices (command
+                                // acknowledgments such as `/autopilot on`) are
+                                // forwarded as a transient bubble instead of
+                                // being appended to the transcript. They carry
+                                // no conversational content, so polluting the
+                                // scrollback with them would only muddy the
+                                // model's output. The loop drains this signal
+                                // and shows a top-right toast.
+                                *notice_toast_signal_clone.lock().await =
+                                    Some(event_loop::NoticeToastSignal {
+                                        severity: notice_severity_from_core(
+                                            notice.severity,
+                                        ),
+                                        text: notice.render_text(),
+                                    });
+                            } else {
                                 let mut msgs = buf.write().await;
                                 push_core_notice(&mut msgs, &notice);
                             }
@@ -1405,6 +1431,9 @@ pub async fn run_tui(
         copy_toast_until: None,
         copy_toast_message: String::new(),
         copy_toast_failed: false,
+        notice_toast_until: None,
+        notice_toast_message: String::new(),
+        notice_toast_severity: NoticeSeverity::Info,
         ctrl_c_armed_ticks: 0,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
@@ -1492,6 +1521,7 @@ pub async fn run_tui(
             review_alert,
             round_started_at,
             unsent_input_signal,
+            notice_toast_signal,
             outbox_signals,
         },
         session,
