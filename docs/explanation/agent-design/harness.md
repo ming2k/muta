@@ -99,8 +99,9 @@ A round ends when the model replies with no tool calls — that natural stop is
 treated as completion. This is the only round shape: there is no special
 autonomous mode, no forced-continuation gate, no completion marker. A capable
 model completes long tasks within one round by its own tool-calling. The
-clock-driven `/repeat` scheduler is the only scheduled-prompt mechanism and is
-fully orthogonal to the round loop.
+clock-driven `/schedule` scheduler (cron-recurring and one-shot
+countdown/absolute-time jobs; `/repeat` is a cron-only alias) is the only
+scheduled-prompt mechanism and is fully orthogonal to the round loop.
 
 > The pursuit stop-gate and primitive (a forced-continuation gate plus a
 > `[NEENEE_PURSUIT_COMPLETE]` completion marker) were removed in

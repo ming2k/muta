@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Removed
+
+## [0.22.0] - 2026-07-31
+
+### Added
+
+- **Scheduled prompts: one-shot timers via `/schedule`, unifying the cron
+  scheduler.** The cron-driven `/repeat` scheduler is generalized into a
+  unified scheduled-prompt system. The new `/schedule <when> <prompt>` command
+  accepts a five-field cron (recurring), a relative countdown (`10m`,
+  `2h30m`, `in 2 hours 30 minutes`), or an absolute time (`14:00`,
+  `tomorrow 09:00`, `2026-03-15 14:00`). Recurring jobs fire their first run
+  immediately and continue on schedule; one-shot jobs fire once at their
+  scheduled instant and are then removed. This enables the "schedule a future
+  input" / countdown scenario (e.g. a quota reminder that fires a new round
+  after a delay) alongside the existing recurring-cron use case. `/repeat` is
+  retained as a cron-only alias. The session state type `RepeatJob` is
+  generalized to `ScheduledJob { trigger: Schedule::Cron | Schedule::Once }`,
+  persisted as session-schema v9 with full back-compat: legacy flat
+  `repeat_jobs` snapshots and `repeat_jobs_set` event-log lines load unchanged
+  via serde aliases and a manual legacy-shape deserializer. See ADR-0090.
+
 - **`--autopilot` now works in attach mode.** Previously `--autopilot` parsed
   alongside `attach`/`--attach` but was silently ignored (the attach client
   drives a `neenee-server`-hosted session, which hardcoded autopilot off).
@@ -2268,7 +2292,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.21.3...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/ming2k/neenee/releases/tag/v0.22.0
 [0.21.3]: https://github.com/ming2k/neenee/releases/tag/v0.21.3
 [0.21.2]: https://github.com/ming2k/neenee/releases/tag/v0.21.2
 [0.21.1]: https://github.com/ming2k/neenee/releases/tag/v0.21.1

@@ -24,7 +24,8 @@ Project and user-defined commands are covered under
 | `/sessions` | Browse past sessions |
 | `/btw` | Open a side conversation that runs alongside the main session |
 | `/resume [id]` | Resume the most recent or selected session |
-| `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression |
+| `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
+| `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.neenee/` config tree |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
@@ -59,19 +60,42 @@ all share the same agent request queue.
 
 ## Subcommands
 
+### `/schedule`
+
+| Form | Effect |
+|------|--------|
+| `/schedule <when> <prompt>` | Schedule `<prompt>` to run at `<when>` (see below) |
+| `/schedule list` | List scheduled jobs (id, kind, trigger, next fire, prompt) |
+| `/schedule cancel <id>` | Cancel a scheduled job |
+| `/schedule help` | Show syntax help |
+
+`<when>` is one of:
+
+- **a cron** — five fields `minute hour day month weekday`, recurring (e.g.
+  `*/5 * * * *` every 5 min, `0 9 * * 1-5` 09:00 on weekdays);
+- **a countdown** — one or more `<number><unit>` pairs from now
+  (`10m`, `2h30m`, `1d12h`, `in 10 minutes`, `in 2 hours 30 minutes`;
+  units: `s`/`m`/`h`/`d` and their long forms);
+- **an absolute time** — `HH:MM` today (or tomorrow if already passed),
+  `today HH:MM`, `tomorrow HH:MM`, `tomorrow`, `at HH:MM`,
+  `YYYY-MM-DD HH:MM`, or `YYYY-MM-DDTHH:MM`.
+
+Cron jobs **recur** (and fire their first run immediately); countdown and
+absolute jobs fire **once** and are then removed. Jobs are durable (survive
+restarts). Recurring cron jobs auto-expire after 30 days. `/schedule` is the
+clock-driven scheduler for autopilot, reminders, and one-shot timers.
+
 ### `/repeat`
 
 | Form | Effect |
 |------|--------|
-| `/repeat <cron> <prompt>` | Schedule `<prompt>` on the five-field `<cron>` and run it now |
-| `/repeat list` | List scheduled jobs (id, cron, next fire, prompt) |
+| `/repeat <cron> <prompt>` | Schedule `<prompt>` on the five-field `<cron>` and run it now (cron-only alias for `/schedule`) |
+| `/repeat list` | List scheduled jobs (id, kind, trigger, next fire, prompt) |
 | `/repeat cancel <id>` | Cancel a scheduled job |
 | `/repeat help` | Show cron syntax help |
 
-`<cron>` is five fields — `minute hour day-of-month month day-of-week` — e.g.
-`*/5 * * * *` (every 5 minutes), `0 9 * * 1-5` (09:00 on weekdays). Jobs are
-durable (survive restarts) and auto-expire after 30 days. `/repeat` is a
-clock-driven scheduler for autopilot, scheduled prompts.
+`/repeat` is retained as a cron-only alias for `/schedule`. Use `/schedule` for
+countdown (`10m`) or absolute-time (`14:00`, `tomorrow 09:00`) one-shots.
 
 ### `/session`
 

@@ -178,7 +178,7 @@ TUI renders + WS clients receive
 
 The crucial property: `AgentRequest` carries **no source/client field**, so
 `SessionDriver` cannot tell whether a request came from the TUI, a browser, the
-`/repeat` scheduler, or an internal command tool. All frontends are
+`/schedule` (and `/repeat` cron alias) scheduler, or an internal command tool. All frontends are
 indistinguishable to the dispatcher — which is what lets them co-drive the same
 session. See the [Server WebSocket API](../reference/server-api.md) for the
 multi-frontend transport details.

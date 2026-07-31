@@ -4,11 +4,11 @@
 //! This module wraps every turn with the cross-cutting policy a frontend
 //! cannot reasonably reimplement: context compaction (pre-turn and mid-turn
 //! pruning), retry with exponential backoff, permission relay, and the
-//! `/repeat` cron scheduler.
+//! `/schedule` cron + countdown scheduler.
 //!
 //! Frontends drive the harness through [`execute_round`],
 //! [`start_interactive_round`], and
-//! [`start_repeat_scheduler`]. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
+//! [`start_schedule_scheduler`]. They own only the UI-specific input path (slash commands for the CLI, menus/dialogs for a
 //! future GUI); the actual round machinery is shared here.
 //!
 //! All items are `pub` because they are assembled by the binary, which knows
@@ -34,7 +34,7 @@ use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use neenee_core::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, estimate_bytes,
+    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule, estimate_bytes,
     repeat::DEFAULT_MAX_AGE_DAYS,
 };
 use neenee_persistence::{
@@ -1388,62 +1388,88 @@ pub fn send_compaction(
 
 // ── /repeat scheduler ─────────────────────────────────────────────────
 
-/// One scheduler tick over the session's `/repeat` schedule: drop jobs older
-/// than the max age, then dispatch every job whose `next_fire` is due,
-/// advancing its schedule before enqueueing so a slow turn cannot cause a
-/// double-fire.
+/// One scheduler tick over the session's scheduled-prompt list
+/// (`/schedule` and the legacy `/repeat`):
+///
+/// - prune recurring jobs created more than `DEFAULT_MAX_AGE_DAYS` ago;
+/// - dispatch every job whose `next_fire` is due; for **cron** jobs advance the
+///   schedule *before* enqueueing (so a slow turn cannot cause a double-fire),
+///   and for **once** jobs drop the job (it has fired).
 ///
 /// Jobs are **session-scoped**: this ticks the one session the harness is
 /// driving. Resume/fork carries the schedule because it lives on the session.
-pub async fn run_repeat_tick(
+pub async fn run_schedule_tick(
     session: &SessionStore,
     tx: &mpsc::UnboundedSender<AgentRequest>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<usize, String> {
     let cutoff = now - chrono::Duration::days(DEFAULT_MAX_AGE_DAYS);
-    let mut jobs = session.repeat_jobs().await;
+    let mut jobs = session.scheduled_jobs().await;
     let initial_len = jobs.len();
-    // Prune expired jobs (created too long ago) in place.
-    jobs.retain(|j| j.created_at >= cutoff);
+    // Prune expired *recurring* jobs (created too long ago). Once-jobs are
+    // their own expiry — a past once-job is dropped when it fires below — so
+    // they are exempt from the age cutoff.
+    jobs.retain(|j| j.trigger.is_once() || j.created_at >= cutoff);
 
     let mut dispatched = 0;
-    for job in jobs.iter_mut() {
+    let mut keep = Vec::with_capacity(jobs.len());
+    for mut job in jobs {
         if job.next_fire > now {
+            keep.push(job);
             continue;
         }
-        let next = match CronExpr::parse(&job.cron) {
-            Ok(cron) => cron
-                .next_fire(now)
-                .unwrap_or(now + chrono::Duration::days(1)),
-            Err(err) => {
-                tracing::warn!(
-                    "repeat job {} has unparseable cron '{}': {err}; skipping",
-                    job.id,
-                    job.cron
-                );
-                continue;
+        match &job.trigger {
+            Schedule::Cron { cron } => {
+                let next = match CronExpr::parse(cron) {
+                    Ok(parsed) => parsed
+                        .next_fire(now)
+                        .unwrap_or(now + chrono::Duration::days(1)),
+                    Err(err) => {
+                        tracing::warn!(
+                            "scheduled job {} has unparseable cron '{cron}': {err}; skipping",
+                            job.id
+                        );
+                        // Keep the broken job so the user can see/cancel it.
+                        keep.push(job);
+                        continue;
+                    }
+                };
+                job.last_fire = Some(now);
+                job.next_fire = next;
+                let _ = tx.send(AgentRequest::Chat {
+                    text: job.prompt.clone(),
+                    images: Vec::new(),
+                    sent_at_ms: None,
+                });
+                keep.push(job);
+                dispatched += 1;
             }
-        };
-        job.last_fire = Some(now);
-        job.next_fire = next;
-        let _ = tx.send(AgentRequest::Chat {
-            text: job.prompt.clone(),
-            images: Vec::new(),
-            sent_at_ms: None,
-        });
-        dispatched += 1;
+            Schedule::Once { .. } => {
+                // One-shot: fire and drop.
+                let _ = tx.send(AgentRequest::Chat {
+                    text: job.prompt.clone(),
+                    images: Vec::new(),
+                    sent_at_ms: None,
+                });
+                tracing::info!(job = %job.id, "scheduled once-job fired and removed");
+                dispatched += 1;
+            }
+        }
     }
-    // Only persist if the schedule actually mutated (job pruned or fired).
-    if initial_len != jobs.len() || dispatched > 0 {
-        session.set_repeat_jobs(jobs).await?;
+
+    // Only persist if the schedule actually mutated (job pruned/fired/dropped).
+    if initial_len != keep.len() || dispatched > 0 {
+        session.set_scheduled_jobs(keep).await?;
     }
     Ok(dispatched)
 }
 
-/// Spawn the `/repeat` scheduler bound to `session`. Every `tick_interval` it
-/// prunes expired jobs and fires any that are due, dispatching each prompt as
-/// a normal `AgentRequest::Chat` round through `tx`.
-pub fn start_repeat_scheduler(
+/// Spawn the scheduled-prompt scheduler bound to `session`. Every
+/// `tick_interval` it prunes expired jobs and fires any that are due,
+/// dispatching each prompt as a normal `AgentRequest::Chat` round through `tx`.
+/// Drives both recurring `/schedule <cron>` jobs and one-shot
+/// `/schedule <countdown|absolute-time>` jobs.
+pub fn start_schedule_scheduler(
     session: Arc<SessionStore>,
     tx: mpsc::UnboundedSender<AgentRequest>,
     tick_interval: std::time::Duration,
@@ -1454,23 +1480,23 @@ pub fn start_repeat_scheduler(
         loop {
             ticker.tick().await;
             let now = chrono::Utc::now();
-            if let Err(err) = run_repeat_tick(&session, &tx, now).await {
-                tracing::warn!("repeat scheduler tick failed: {err}");
+            if let Err(err) = run_schedule_tick(&session, &tx, now).await {
+                tracing::warn!("schedule scheduler tick failed: {err}");
             }
         }
     })
 }
 
 #[cfg(test)]
-mod repeat_tests {
+mod schedule_tests {
     use super::*;
     use chrono::TimeZone;
-    use neenee_core::repeat::RepeatJob;
+    use neenee_core::ScheduledJob;
 
     /// Build an isolated in-memory session for scheduler tests.
     async fn fresh_session() -> SessionStore {
         let dir = std::env::temp_dir().join(format!(
-            "neenee-repeat-session-{}",
+            "neenee-schedule-session-{}",
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1478,10 +1504,19 @@ mod repeat_tests {
         SessionStore::load_for_project(dir)
     }
 
-    fn job(cron: &str, prompt: &str, next_fire: chrono::DateTime<chrono::Utc>) -> RepeatJob {
-        RepeatJob {
+    /// Build a cron `ScheduledJob` with an explicit `next_fire` (so the test
+    /// controls exactly when it is due, independent of when the cron would
+    /// naturally next fire). Works even for an intentionally-bad cron string.
+    fn cron_job(
+        cron: &str,
+        prompt: &str,
+        next_fire: chrono::DateTime<chrono::Utc>,
+    ) -> ScheduledJob {
+        ScheduledJob {
             id: uuid::Uuid::new_v4().to_string(),
-            cron: cron.to_string(),
+            trigger: Schedule::Cron {
+                cron: cron.to_string(),
+            },
             prompt: prompt.to_string(),
             created_at: chrono::Utc::now(),
             next_fire,
@@ -1490,17 +1525,17 @@ mod repeat_tests {
     }
 
     #[tokio::test]
-    async fn tick_dispatches_and_advances_due_jobs() {
+    async fn tick_dispatches_and_advances_due_cron_jobs() {
         let session = fresh_session().await;
         let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         // A job already due (next_fire == now).
         session
-            .set_repeat_jobs(vec![job("* * * * *", "run tests", now)])
+            .set_scheduled_jobs(vec![cron_job("* * * * *", "run tests", now)])
             .await
             .unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentRequest>();
 
-        let dispatched = run_repeat_tick(&session, &tx, now).await.unwrap();
+        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 1);
 
         // The prompt was enqueued as a chat round.
@@ -1508,9 +1543,53 @@ mod repeat_tests {
             Some(AgentRequest::Chat { text, .. }) => assert_eq!(text, "run tests"),
             other => panic!("expected Chat, got {other:?}"),
         }
-        // The job is no longer due at `now` (advanced to the next minute).
-        let still_due = session.repeat_jobs().await;
-        assert!(still_due.iter().all(|j| j.next_fire > now));
+        // The cron job survives and is no longer due at `now`.
+        let after = session.scheduled_jobs().await;
+        assert_eq!(after.len(), 1);
+        assert!(after.iter().all(|j| j.next_fire > now));
+    }
+
+    #[tokio::test]
+    async fn tick_fires_once_job_and_drops_it() {
+        let session = fresh_session().await;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let once = ScheduledJob::once(
+            "once1".into(),
+            now,
+            "one-shot reminder".into(),
+            chrono::Utc::now(),
+        );
+        session.set_scheduled_jobs(vec![once]).await.unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel::<AgentRequest>();
+
+        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
+        assert_eq!(dispatched, 1);
+        match rx.recv().await {
+            Some(AgentRequest::Chat { text, .. }) => assert_eq!(text, "one-shot reminder"),
+            other => panic!("expected Chat, got {other:?}"),
+        }
+        // The once-job is removed after firing.
+        assert!(session.scheduled_jobs().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tick_keeps_future_once_job() {
+        let session = fresh_session().await;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let future = now + chrono::Duration::hours(2);
+        let once = ScheduledJob::once(
+            "once1".into(),
+            future,
+            "later reminder".into(),
+            chrono::Utc::now(),
+        );
+        session.set_scheduled_jobs(vec![once]).await.unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
+
+        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
+        assert_eq!(dispatched, 0);
+        // Still armed.
+        assert_eq!(session.scheduled_jobs().await.len(), 1);
     }
 
     #[tokio::test]
@@ -1519,11 +1598,11 @@ mod repeat_tests {
         let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         // A bogus cron can land here; the tick must skip it rather than panic.
         session
-            .set_repeat_jobs(vec![job("not a cron", "p", now)])
+            .set_scheduled_jobs(vec![cron_job("not a cron", "p", now)])
             .await
             .unwrap();
         let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
-        let dispatched = run_repeat_tick(&session, &tx, now).await.unwrap();
+        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 0);
     }
 }

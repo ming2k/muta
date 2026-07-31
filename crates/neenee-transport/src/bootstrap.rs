@@ -21,7 +21,7 @@
 use crate::commands::{CustomCommand, discover_commands};
 use neenee_agent::catalog;
 use neenee_agent::orchestration::{
-    MidTurnPruneProjectionGate, ProxyProvider, round_response, start_repeat_scheduler,
+    MidTurnPruneProjectionGate, ProxyProvider, round_response, start_schedule_scheduler,
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_core::{
@@ -129,7 +129,7 @@ pub fn ensure_app_roots() {
 ///
 /// The ordering and background-spawn behavior are identical to the original
 /// inline `main`: live model discovery, skill catalog
-/// refresh, MCP connect/refresh, and the repeat scheduler (which holds a
+/// refresh, MCP connect/refresh, and the schedule scheduler (which holds a
 /// `req_tx` clone) all run in the background so they never delay the first
 /// frame.
 #[allow(clippy::too_many_lines)]
@@ -318,12 +318,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };
 
-    // Background `/repeat` scheduler, bound to THIS session. Every 30s it prunes
+    // Background `/schedule` scheduler, bound to THIS session. Every 30s it prunes
     // expired jobs and fires any that are due, dispatching each prompt as a
-    // normal `AgentRequest::Chat` round. Jobs are session-scoped state now, so
-    // a resumed session's schedule is already loaded above and the scheduler
-    // runs against it from the first tick.
-    start_repeat_scheduler(
+    // normal `AgentRequest::Chat` round. Drives both recurring cron jobs and
+    // one-shot (countdown / absolute-time) jobs. Jobs are session-scoped state
+    // now, so a resumed session's schedule is already loaded above and the
+    // scheduler runs against it from the first tick.
+    start_schedule_scheduler(
         Arc::clone(&session),
         req_tx.clone(),
         std::time::Duration::from_secs(30),

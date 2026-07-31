@@ -4,7 +4,7 @@
 //! This is the largest handler — it fans the parsed command out across every
 //! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/clear`,
 //! `/permissions`, `/autopilot`, `/review`, `/search`, `/resume`,
-//! `/session`, `/sessions`, `/btw`, `/pursue`, `/repeat`, `/init`,
+//! `/session`, `/sessions`, `/btw`, `/repeat`, `/schedule`, `/init`,
 //! `/skills`, `/skill`, `/export`, `/debug`, `/help`, `/exit`) plus the
 //! `None` arm that runs a user-defined project command.
 //!
@@ -19,20 +19,19 @@
 //! it fires session-start hooks every time `/pursue status` runs. Preserved
 //! verbatim; not this refactor's job to fix.
 
-use crate::commands::{CustomCommand, expand_command};
+use crate::commands::{expand_command, CustomCommand};
 use crate::project::init_neenee_config;
-use neenee_agent::Agent;
 use neenee_agent::mcp::McpRuntime;
-use neenee_agent::RoundLifecycle;
 use neenee_agent::orchestration::{
-    ContextProjectionSettings, RoundInput, compact_round_history, round_response,
-    send_compaction, send_harness_state,
+    compact_round_history, round_response, send_compaction, send_harness_state,
+    ContextProjectionSettings, RoundInput,
 };
+use neenee_agent::Agent;
+use neenee_agent::RoundLifecycle;
 use neenee_core::{
-    AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent, Tool,
-    estimate_bytes, estimate_tokens,
-    repeat::RepeatJob,
+    estimate_bytes, estimate_tokens, repeat::parse_schedule_arg, AgentNotice, AgentRequest,
+    AgentResponse, CronExpr, LoopStatus, Message, NoticeKind, NoticeSeverity, NoticeSource,
+    NoticeSurface, Provider, RoundEvent, Schedule, ScheduledJob, Tool,
 };
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
@@ -42,17 +41,17 @@ use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
 use std::collections::HashMap;
 use std::sync::{
-    Arc, RwLock,
     atomic::{AtomicBool, Ordering},
+    Arc, RwLock,
 };
-use tokio::sync::{RwLock as AsyncRwLock, mpsc};
+use tokio::sync::{mpsc, RwLock as AsyncRwLock};
 
 use crate::agent_setup::active_context_window;
 use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
-use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
+use crate::side::{spawn_parent_status_watcher, start_active_turn, SideSession};
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
-use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
+use crate::startup::{split_custom_command, BuiltinCmd, StartupMode};
 
 async fn supersede_for_session_switch(
     lifecycle: &RoundLifecycle,
@@ -726,126 +725,175 @@ pub async fn dispatch(
             agent.fire_post_compact().await;
         }
         Some(BuiltinCmd::Repeat) => {
+            // `/repeat` is retained as a cron-only alias for the unified
+            // `/schedule` command. It only accepts a five-field cron expression
+            // plus a prompt; for countdown / absolute-time one-shots use
+            // `/schedule`. `list` / `cancel` / `help` are shared verbatim.
             let rest = cmd.strip_prefix("/repeat").unwrap_or("").trim();
             if rest.is_empty() || rest == "help" {
                 let _ = resp_tx.send(round_response(
-                                    &session.id().await,
-                                    RoundEvent::Text(
-                                        "Usage: /repeat <cron> <prompt>\n\
-                                         cron is five fields: minute hour day month weekday \
-                                         (e.g. `*/5 * * * *` = every 5 min, `0 9 * * 1-5` = 09:00 weekdays).\n\
-                                         Also: /repeat list, /repeat cancel <id>."
-                                            .to_string(),
-                                    ),
-                                ));
+                    &session.id().await,
+                    RoundEvent::Text(
+                        "Usage: /repeat <cron> <prompt>  (cron-only alias for /schedule)\n\
+                         cron is five fields: minute hour day month weekday \
+                         (e.g. `*/5 * * * *` = every 5 min, `0 9 * * 1-5` = 09:00 weekdays).\n\
+                         For one-shot timers use /schedule <countdown|time> <prompt>.\n\
+                         Also: /repeat list, /repeat cancel <id>."
+                            .to_string(),
+                    ),
+                ));
                 return;
             }
             if rest == "list" {
-                let mut jobs = session.repeat_jobs().await;
-                if jobs.is_empty() {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text("No /repeat jobs scheduled.".to_string()),
-                    ));
-                } else {
-                    jobs.sort_by_key(|j| j.next_fire);
-                    let mut lines = vec!["Scheduled /repeat jobs:".to_string()];
-                    for j in &jobs {
-                        lines.push(format!(
-                            "  {} · `{}` · next {} · {}",
-                            &j.id[..8.min(j.id.len())],
-                            j.cron,
-                            j.next_fire.format("%Y-%m-%d %H:%M"),
-                            j.prompt,
-                        ));
-                    }
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(lines.join("\n")),
-                    ));
-                }
+                list_scheduled_jobs(session, resp_tx).await;
                 return;
             }
             if let Some(id) = rest.strip_prefix("cancel ") {
-                let id = id.trim();
-                let mut jobs = session.repeat_jobs().await;
-                let before = jobs.len();
-                jobs.retain(|j| j.id != id);
-                if before == jobs.len() {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!("No repeat job with id {id}.")),
-                    ));
-                    return;
-                }
-                match session.set_repeat_jobs(jobs).await {
-                    Ok(()) => {
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("Cancelled repeat job {id}.")),
-                        ));
-                    }
-                    Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
-                    }
-                }
+                cancel_scheduled_job(session, id.trim(), resp_tx).await;
                 return;
             }
-            // `/repeat <5-field cron> <prompt>`
+            // `/repeat <5-field cron> <prompt>` — enforce cron shape.
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() < 6 {
                 let _ = resp_tx.send(AgentResponse::Error(
                     "Usage: /repeat <5-field cron> <prompt>. \
-                                      Example: /repeat */5 * * * * check the deploy"
+                      Example: /repeat */5 * * * * check the deploy"
                         .to_string(),
                 ));
                 return;
             }
             let cron = tokens[0..5].join(" ");
             let prompt = tokens[5..].join(" ");
-            let parsed = match CronExpr::parse(&cron) {
-                Ok(p) => p,
-                Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!("Invalid cron: {error}")));
-                    return;
-                }
-            };
+            if let Err(error) = CronExpr::parse(&cron) {
+                let _ = resp_tx.send(AgentResponse::Error(format!(
+                    "/repeat takes a cron expression; got '{cron}': {error}. \
+                     Use /schedule for countdown / absolute-time one-shots."
+                )));
+                return;
+            }
+            add_scheduled_job(session, &cron, &prompt, resp_tx, req_tx_for_commands).await;
+        }
+        Some(BuiltinCmd::Schedule) => {
+            // `/schedule` is the unified scheduled-prompt command. Its time
+            // argument is one of:
+            //   - a five-field cron expression (recurring),
+            //   - a relative countdown (`10m`, `in 2 hours 30 minutes`),
+            //   - an absolute time (`14:00`, `tomorrow 09:00`,
+            //     `2026-03-15 14:00`).
+            // followed by the prompt to run. `list` / `cancel <id>` / `help`
+            // are shared with `/repeat`.
+            let rest = cmd.strip_prefix("/schedule").unwrap_or("").trim();
+            if rest.is_empty() || rest == "help" {
+                let _ = resp_tx.send(round_response(
+                    &session.id().await,
+                    RoundEvent::Text(
+                        "Usage: /schedule <when> <prompt>\n\
+                         <when> is one of:\n\
+                         • a cron: `*/5 * * * *`, `0 9 * * 1-5`\n\
+                         • a countdown: `10m`, `2h30m`, `in 2 hours 30 minutes`\n\
+                         • an absolute time: `14:00`, `tomorrow 09:00`, `2026-03-15 14:00`\n\
+                         Cron jobs recur; countdown / absolute jobs fire once.\n\
+                         Also: /schedule list, /schedule cancel <id>."
+                            .to_string(),
+                    ),
+                ));
+                return;
+            }
+            if rest == "list" {
+                list_scheduled_jobs(session, resp_tx).await;
+                return;
+            }
+            if let Some(id) = rest.strip_prefix("cancel ") {
+                cancel_scheduled_job(session, id.trim(), resp_tx).await;
+                return;
+            }
+            // Split the time spec from the prompt. The time spec is either:
+            //   - exactly five cron fields, or
+            //   - everything up to the first run of alphabetic/non-numeric text
+            //     that begins the prompt. We detect by: if the first five
+            //     whitespace tokens parse as cron, the time spec is those five
+            //     fields; otherwise the time spec is the first token (a compact
+            //     countdown like `10m` / `2h30m`) OR a small fixed phrase
+            //     (`in …`, `today …`, `tomorrow …`, `at …`, `YYYY-MM-DD…`).
             let now = chrono::Utc::now();
-            let next = match parsed.next_fire(now) {
-                Some(n) => n,
+            let (time_spec, prompt) = match split_schedule_spec(rest) {
+                Some(pair) => pair,
                 None => {
                     let _ = resp_tx.send(AgentResponse::Error(
-                        "That cron expression never fires within the next year.".to_string(),
+                        "Usage: /schedule <when> <prompt>. \
+                         Example: /schedule 10m re-run the tests"
+                            .to_string(),
                     ));
                     return;
                 }
             };
-            let mut jobs = session.repeat_jobs().await;
-            let job = RepeatJob {
-                id: uuid::Uuid::new_v4().to_string(),
-                cron: cron.clone(),
-                prompt: prompt.clone(),
+            let prompt = prompt.trim();
+            if prompt.is_empty() {
+                let _ = resp_tx.send(AgentResponse::Error(
+                    "Usage: /schedule <when> <prompt>. The prompt is required.".to_string(),
+                ));
+                return;
+            }
+            let when = match parse_schedule_arg(&time_spec, now) {
+                Some(w) => w,
+                None => {
+                    let _ = resp_tx.send(AgentResponse::Error(format!(
+                        "Could not parse `{time_spec}` as a cron, countdown, or absolute time.\n\
+                         Try `*/5 * * * *`, `10m`, `in 2 hours`, `14:00`, `tomorrow 09:00`, \
+                         or `2026-03-15 14:00`."
+                    )));
+                    return;
+                }
+            };
+            let (trigger, next) = match when.resolve(now) {
+                Some(pair) => pair,
+                None => {
+                    let _ = resp_tx.send(AgentResponse::Error(
+                        "That schedule never fires (the time already passed or the cron is \
+                         impossible)."
+                            .to_string(),
+                    ));
+                    return;
+                }
+            };
+            let mut jobs = session.scheduled_jobs().await;
+            let id = uuid::Uuid::new_v4().to_string();
+            let short_id = id[..8.min(id.len())].to_string();
+            let job = ScheduledJob {
+                id: id.clone(),
+                trigger: trigger.clone(),
+                prompt: prompt.to_string(),
                 created_at: now,
                 next_fire: next,
                 last_fire: None,
             };
-            let short_id = job.id[..8.min(job.id.len())].to_string();
             jobs.push(job);
-            match session.set_repeat_jobs(jobs).await {
+            match session.set_scheduled_jobs(jobs).await {
                 Ok(()) => {
+                    let kind = trigger.kind_label();
                     let _ = resp_tx.send(round_response(
                         &session.id().await,
                         RoundEvent::Text(format!(
-                            "Scheduled repeat job {short_id} (`{cron}`), next {}. Running now.",
+                            "Scheduled {kind} job {short_id} ({}), next {}.{}",
+                            trigger.display(),
                             next.format("%Y-%m-%d %H:%M"),
+                            if trigger.is_once() {
+                                String::new()
+                            } else {
+                                " Running now.".to_string()
+                            }
                         )),
                     ));
-                    // Fire the first run immediately (the scheduler handles the rest).
-                    let _ = req_tx_for_commands.send(AgentRequest::Chat {
-                        text: prompt,
-                        images: Vec::new(),
-                        sent_at_ms: None,
-                    });
+                    // Recurring cron jobs fire the first run immediately (the
+                    // scheduler handles the rest); one-shot jobs wait for their
+                    // scheduled fire time and are NOT run now.
+                    if !trigger.is_once() {
+                        let _ = req_tx_for_commands.send(AgentRequest::Chat {
+                            text: prompt.to_string(),
+                            images: Vec::new(),
+                            sent_at_ms: None,
+                        });
+                    }
                 }
                 Err(error) => {
                     let _ = resp_tx.send(AgentResponse::Error(error));
@@ -924,10 +972,7 @@ pub async fn dispatch(
                 lines.push("No MCP servers configured.".to_string());
             } else {
                 if !report.unchanged.is_empty() {
-                    lines.push(format!(
-                        "MCP unchanged: {}",
-                        report.unchanged.join(", ")
-                    ));
+                    lines.push(format!("MCP unchanged: {}", report.unchanged.join(", ")));
                 }
                 if !report.connected.is_empty() {
                     let ok: Vec<&str> = report
@@ -996,10 +1041,7 @@ pub async fn dispatch(
                 } else {
                     "Project already trusted; reloaded its MCP servers.".to_string()
                 };
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(msg),
-                ));
+                let _ = resp_tx.send(round_response(&session.id().await, RoundEvent::Text(msg)));
             }
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
@@ -1022,8 +1064,7 @@ pub async fn dispatch(
             } else {
                 "Project was not trusted; nothing to revoke.".to_string()
             };
-            let _ = resp_tx
-                .send(round_response(&session.id().await, RoundEvent::Text(msg)));
+            let _ = resp_tx.send(round_response(&session.id().await, RoundEvent::Text(msg)));
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Skills) => {
@@ -1413,5 +1454,264 @@ pub async fn dispatch(
             )
             .await;
         }
+    }
+}
+
+// ── `/schedule` + `/repeat` helpers ───────────────────────────────────────
+//
+// Shared list / cancel / add paths for the unified scheduled-prompt command.
+// `/repeat` is a cron-only alias that funnels into `add_scheduled_job`; the
+// `list` / `cancel` sub-commands are identical for both commands.
+
+/// `/schedule list` / `/repeat list`: list every scheduled job sorted by next
+/// fire, showing kind, trigger, next-fire, and prompt.
+async fn list_scheduled_jobs(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+) {
+    let mut jobs = session.scheduled_jobs().await;
+    if jobs.is_empty() {
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Text("No scheduled jobs.".to_string()),
+        ));
+        return;
+    }
+    jobs.sort_by_key(|j| j.next_fire);
+    let mut lines = vec!["Scheduled jobs:".to_string()];
+    for j in &jobs {
+        lines.push(format!(
+            "  {} · {} · `{}` · next {} · {}",
+            &j.id[..8.min(j.id.len())],
+            j.trigger.kind_label(),
+            j.trigger.display(),
+            j.next_fire.format("%Y-%m-%d %H:%M"),
+            j.prompt,
+        ));
+    }
+    let _ = resp_tx.send(round_response(
+        &session.id().await,
+        RoundEvent::Text(lines.join("\n")),
+    ));
+}
+
+/// `/schedule cancel <id>` / `/repeat cancel <id>`: drop the job with that id.
+async fn cancel_scheduled_job(
+    session: &Arc<SessionStore>,
+    id: &str,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+) {
+    let mut jobs = session.scheduled_jobs().await;
+    let before = jobs.len();
+    jobs.retain(|j| j.id != id);
+    if before == jobs.len() {
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Text(format!("No scheduled job with id {id}.")),
+        ));
+        return;
+    }
+    match session.set_scheduled_jobs(jobs).await {
+        Ok(()) => {
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Text(format!("Cancelled scheduled job {id}.")),
+            ));
+        }
+        Err(error) => {
+            let _ = resp_tx.send(AgentResponse::Error(error));
+        }
+    }
+}
+
+/// `/repeat <cron> <prompt>` shared add path: build a cron `ScheduledJob`,
+/// persist it, confirm, and fire the first run immediately (the scheduler
+/// handles subsequent firings). The caller validates `cron` is a real cron.
+async fn add_scheduled_job(
+    session: &Arc<SessionStore>,
+    cron: &str,
+    prompt: &str,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    req_tx: &mpsc::UnboundedSender<AgentRequest>,
+) {
+    let now = chrono::Utc::now();
+    let next = match CronExpr::parse(cron)
+        .and_then(|c| c.next_fire(now).ok_or_else(|| "never fires".to_string()))
+    {
+        Ok(n) => n,
+        Err(error) => {
+            let _ = resp_tx.send(AgentResponse::Error(format!(
+                "Invalid cron `{cron}`: {error}"
+            )));
+            return;
+        }
+    };
+    let mut jobs = session.scheduled_jobs().await;
+    let id = uuid::Uuid::new_v4().to_string();
+    let short_id = id[..8.min(id.len())].to_string();
+    let job = ScheduledJob {
+        id,
+        trigger: Schedule::Cron {
+            cron: cron.to_string(),
+        },
+        prompt: prompt.to_string(),
+        created_at: now,
+        next_fire: next,
+        last_fire: None,
+    };
+    jobs.push(job);
+    match session.set_scheduled_jobs(jobs).await {
+        Ok(()) => {
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Text(format!(
+                    "Scheduled cron job {short_id} (`{cron}`), next {}. Running now.",
+                    next.format("%Y-%m-%d %H:%M"),
+                )),
+            ));
+            // Fire the first run immediately (the scheduler handles the rest).
+            let _ = req_tx.send(AgentRequest::Chat {
+                text: prompt.to_string(),
+                images: Vec::new(),
+                sent_at_ms: None,
+            });
+        }
+        Err(error) => {
+            let _ = resp_tx.send(AgentResponse::Error(error));
+        }
+    }
+}
+
+/// Split a `/schedule <when> <prompt>` argument string into `(time_spec,
+/// prompt)`. Returns `None` when no prompt follows the time spec.
+///
+/// The time spec is one of:
+/// - the first five whitespace tokens, when they parse as a cron expression;
+/// - a leading phrase beginning with `in `, `today`, `tomorrow`, or `at `
+///   (consumed up to the first token that does not look like a clock time or
+///   a `<number><unit>` continuation);
+/// - a single leading compact token for everything else
+///   (`10m`, `2h30m`, `14:00`, `2026-03-15T14:00`).
+fn split_schedule_spec(rest: &str) -> Option<(String, String)> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    // Five-field cron: spec = first five tokens, prompt = the rest.
+    if tokens.len() >= 6 {
+        let maybe_cron = tokens[0..5].join(" ");
+        if CronExpr::parse(&maybe_cron).is_ok() {
+            return Some((maybe_cron, tokens[5..].join(" ")));
+        }
+    }
+
+    let first = tokens[0];
+    let first_lower = first.to_ascii_lowercase();
+
+    // Phrase specs (`in …`, `today …`, `tomorrow …`, `at …`): consume the
+    // leading word plus any following time/countdown tokens until the prompt
+    // begins. The prompt begins at the first remaining alphabetic word that is
+    // not itself a time token. Heuristic: keep consuming while tokens look like
+    // `<number>`, `<unit>` (m/min/h/...), or a clock time / ISO date.
+    if first_lower == "in"
+        || first_lower == "today"
+        || first_lower == "tomorrow"
+        || first_lower == "at"
+    {
+        // Find the boundary: the first token after the phrase head that does
+        // NOT look like a number, a unit, or a clock/date.
+        let mut end = 1; // include the head word
+        while end < tokens.len() {
+            let tok = tokens[end];
+            if looks_like_time_token(tok) {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if end >= tokens.len() {
+            return None; // no prompt left
+        }
+        return Some((tokens[..end].join(" "), tokens[end..].join(" ")));
+    }
+
+    // Otherwise the spec is the single first token (compact countdown or bare
+    // clock time / ISO date), and the rest is the prompt.
+    Some((first.to_string(), tokens[1..].join(" ")))
+}
+
+/// `true` if `tok` could be part of a time spec: a number, a unit word, a
+/// clock time (`HH:MM[:SS]`), or an ISO date/time (`YYYY-MM-DD[T…]`).
+fn looks_like_time_token(tok: &str) -> bool {
+    if tok.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let l = tok.to_ascii_lowercase();
+    matches!(
+        l.as_str(),
+        "s" | "sec"
+            | "secs"
+            | "second"
+            | "seconds"
+            | "m"
+            | "min"
+            | "mins"
+            | "minute"
+            | "minutes"
+            | "h"
+            | "hr"
+            | "hrs"
+            | "hour"
+            | "hours"
+            | "d"
+            | "day"
+            | "days"
+    ) || tok.contains(':')
+        || (tok.contains('-') && tok.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
+#[cfg(test)]
+mod schedule_spec_tests {
+    use super::split_schedule_spec;
+
+    #[test]
+    fn splits_cron_spec() {
+        let (spec, prompt) = split_schedule_arg("*/5 * * * * run the tests");
+        assert_eq!(spec, "*/5 * * * *");
+        assert_eq!(prompt, "run the tests");
+    }
+
+    #[test]
+    fn splits_compact_countdown() {
+        let (spec, prompt) = split_schedule_arg("10m re-run the tests");
+        assert_eq!(spec, "10m");
+        assert_eq!(prompt, "re-run the tests");
+    }
+
+    #[test]
+    fn splits_verbose_countdown() {
+        let (spec, prompt) = split_schedule_arg("in 2 hours 30 minutes do the thing");
+        assert_eq!(spec, "in 2 hours 30 minutes");
+        assert_eq!(prompt, "do the thing");
+    }
+
+    #[test]
+    fn splits_absolute_clock() {
+        let (spec, prompt) = split_schedule_arg("14:00 ship the build");
+        assert_eq!(spec, "14:00");
+        assert_eq!(prompt, "ship the build");
+    }
+
+    #[test]
+    fn splits_tomorrow_phrase() {
+        let (spec, prompt) = split_schedule_arg("tomorrow 09:00 morning standup");
+        assert_eq!(spec, "tomorrow 09:00");
+        assert_eq!(prompt, "morning standup");
+    }
+
+    /// convenience wrapper so the tests read like the public parse path
+    fn split_schedule_arg(rest: &str) -> (String, String) {
+        split_schedule_spec(rest).unwrap_or(("".into(), "".into()))
     }
 }

@@ -7,7 +7,7 @@
 //! This crate is **pure domain, zero I/O** (ADR-0005): no filesystem, no
 //! network. It keeps only contracts shared by independent layers: domain
 //! values
-//! (`TokenUsage`, `RepeatJob`, `TodoList`, …), wire DTOs, and
+//! (`TokenUsage`, `ScheduledJob`, `TodoList`, …), wire DTOs, and
 //! capability traits (`Provider`, `Tool`, `Hook`, `SessionReview`). Pure logic
 //! owned only by the agent belongs in `neenee-agent` (ADR-0057).
 
@@ -22,7 +22,9 @@ pub use colorschemeconfig::ColorSchemeConfig;
 pub mod cache;
 pub use cache::CachePolicy;
 pub mod repeat;
-pub use repeat::{DEFAULT_MAX_AGE_DAYS, RepeatJob};
+pub use repeat::{
+    DEFAULT_MAX_AGE_DAYS, RepeatJob, Schedule, ScheduleAt, ScheduledJob, parse_schedule_arg,
+};
 pub mod usage;
 pub use usage::TokenUsage;
 

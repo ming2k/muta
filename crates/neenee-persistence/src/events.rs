@@ -62,12 +62,15 @@ pub enum SessionEvent {
     /// stored on every change (snapshot semantics); history of individual
     /// items is reconstructable from the log itself.
     TodosSet { todos: neenee_core::TodoList },
-    /// The `/repeat` cron-job schedule changed. Snapshot semantics: the full
-    /// list is stored on every add / cancel / fire so resume restores the same
-    /// schedule. The session that created a job owns it; fork and resume carry
-    /// it along just like the todos.
-    RepeatJobsSet {
-        jobs: Vec<neenee_core::RepeatJob>,
+    /// The scheduled-prompt list changed (`/schedule` add / cancel / fire, and
+    /// the legacy `/repeat`). Snapshot semantics: the full list is stored on
+    /// every change so resume restores the same schedule. The session that
+    /// created a job owns it; fork and resume carry it along just like the
+    /// todos. Aliased from the pre-v9 `repeat_jobs_set` tag so legacy event
+    /// logs replay unchanged.
+    #[serde(alias = "repeat_jobs_set")]
+    ScheduledJobsSet {
+        jobs: Vec<neenee_core::ScheduledJob>,
     },
     /// The session title changed (ADR-0022). `title = None` clears it. `manual`
     /// marks a user-set title (`/title <text>`) that AI generation must not

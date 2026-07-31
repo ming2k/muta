@@ -46,7 +46,8 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **`/repeat` cron scheduler** | Clock-driven scheduler: schedules a prompt on a five-field cron expression, stores jobs durably, fires a fresh round per tick, auto-expires after 30 days. |
+| **`/schedule` scheduler** | Clock-driven scheduler: schedules a prompt on a cron expression (recurring) or a countdown / absolute-time (one-shot), stores jobs durably as session-scoped `ScheduledJob` state, fires a fresh round per tick, drops once-jobs after firing, and auto-expires recurring jobs after 30 days. |
+| **`/repeat`** | Cron-only alias for `/schedule`, retained for the recurring-cron use case. |
 
 ## Task list
 

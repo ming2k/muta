@@ -33,7 +33,7 @@ use tokio::sync::Mutex;
 /// `provider_selection`. A session that has run `/models` pins its own
 /// provider + model here so the live selection does not leak into the global
 /// `config.toml` or affect other concurrent sessions.
-const CURRENT_SCHEMA_VERSION: u32 = 8;
+const CURRENT_SCHEMA_VERSION: u32 = 9;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
@@ -98,12 +98,15 @@ struct SessionData {
     /// an empty list with no migration.
     #[serde(default)]
     todos: neenee_core::TodoList,
-    /// Session-scoped `/repeat` cron-job schedule (ADR on repeat-as-session-state).
-    /// The session that created a job owns it; the background scheduler polls the
-    /// live session and dispatches each due job as a chat round. `#[serde(default)]`
-    /// so legacy snapshots load with an empty schedule and no migration.
-    #[serde(default)]
-    repeat_jobs: Vec<neenee_core::RepeatJob>,
+    /// Session-scoped scheduled-prompt list (`/schedule`, formerly `/repeat`).
+    /// Each entry is either a recurring cron job or a one-shot (countdown /
+    /// absolute-time) job. The session that created a job owns it; the
+    /// background scheduler polls the live session and dispatches each due job
+    /// as a chat round. `#[serde(default, alias = "repeat_jobs")]` so legacy
+    /// snapshots load with whatever they had and no migration is required for
+    /// the field rename (only the schema bump records the change).
+    #[serde(default, alias = "repeat_jobs")]
+    scheduled_jobs: Vec<neenee_core::ScheduledJob>,
     /// Schema version of this session file. Migrations increment this and are
     /// applied lazily on load.
     schema_version: u32,
@@ -171,7 +174,7 @@ impl Default for SessionData {
             last_projection: None,
             project_root: default_project_root(),
             todos: neenee_core::TodoList::default(),
-            repeat_jobs: Vec::new(),
+            scheduled_jobs: Vec::new(),
             schema_version: CURRENT_SCHEMA_VERSION,
             checksum: None,
             title: None,
@@ -224,6 +227,16 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     // jobs that previously lived in a separate store are not migrated — they
     // are rebuildable scheduler state and the new semantics bind a job to
     // the session that created it.
+    // schema v9 (scheduled-prompt unification): the flat `repeat_jobs: Vec<RepeatJob>`
+    // field was renamed to `scheduled_jobs: Vec<ScheduledJob>` and the event
+    // tag `repeat_jobs_set` renamed to `scheduled_jobs_set`. Both carry serde
+    // aliases for the old names, and `ScheduledJob` deserialises the legacy
+    // flat `cron` shape, so no payload transformation is needed — only the
+    // version bump records the change. The new model also adds one-shot
+    // (countdown / absolute-time) jobs alongside the existing cron jobs.
+    if data.schema_version < 9 {
+        data.schema_version = 9;
+    }
     data.schema_version = CURRENT_SCHEMA_VERSION;
     data
 }
@@ -399,8 +412,8 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::TodosSet { todos } => {
                 data.todos = todos.clone();
             }
-            SessionEvent::RepeatJobsSet { jobs } => {
-                data.repeat_jobs = jobs.clone();
+            SessionEvent::ScheduledJobsSet { jobs } => {
+                data.scheduled_jobs = jobs.clone();
             }
             SessionEvent::TitleSet { title, manual } => {
                 data.title = title.clone();
@@ -494,12 +507,12 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             },
         });
     }
-    if !data.repeat_jobs.is_empty() {
+    if !data.scheduled_jobs.is_empty() {
         events.push(crate::events::EventEnvelope {
             seq: events.len() as u64,
             timestamp: data.updated_at,
-            event: SessionEvent::RepeatJobsSet {
-                jobs: data.repeat_jobs.clone(),
+            event: SessionEvent::ScheduledJobsSet {
+                jobs: data.scheduled_jobs.clone(),
             },
         });
     }
@@ -731,20 +744,24 @@ impl SessionStore {
         Ok(())
     }
 
-    /// The `/repeat` cron-job schedule owned by this session. Empty means no
-    /// scheduled jobs. Read by the background scheduler to find due jobs and
-    /// on resume to re-arm the schedule.
-    pub async fn repeat_jobs(&self) -> Vec<neenee_core::RepeatJob> {
-        self.state.lock().await.data.repeat_jobs.clone()
+    /// The scheduled-prompt list owned by this session (`/schedule`, formerly
+    /// `/repeat`). Empty means no scheduled jobs. Read by the background
+    /// scheduler to find due jobs and on resume to re-arm the schedule.
+    pub async fn scheduled_jobs(&self) -> Vec<neenee_core::ScheduledJob> {
+        self.state.lock().await.data.scheduled_jobs.clone()
     }
 
-    /// Replace the `/repeat` schedule. Snapshot semantics: store the full list
-    /// on every change so resume restores the exact schedule. Used by the
-    /// `/repeat` command (add / cancel) and by the scheduler (mark fired).
-    pub async fn set_repeat_jobs(&self, jobs: Vec<neenee_core::RepeatJob>) -> Result<(), String> {
+    /// Replace the scheduled-prompt list. Snapshot semantics: store the full
+    /// list on every change so resume restores the exact schedule. Used by the
+    /// `/schedule` command (add / cancel) and by the scheduler (mark fired /
+    /// drop once-jobs).
+    pub async fn set_scheduled_jobs(
+        &self,
+        jobs: Vec<neenee_core::ScheduledJob>,
+    ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.repeat_jobs = jobs.clone();
+            state.data.scheduled_jobs = jobs.clone();
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = !state.path.exists()
                 && state.data.model_window.is_empty()
@@ -752,7 +769,7 @@ impl SessionStore {
                 && jobs.is_empty();
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
-                state.event_log.append(SessionEvent::RepeatJobsSet { jobs })?;
+                state.event_log.append(SessionEvent::ScheduledJobsSet { jobs })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -3234,53 +3251,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeat_jobs_round_trip_through_disk() {
+    async fn scheduled_jobs_round_trip_through_disk() {
         let directory =
-            std::env::temp_dir().join(format!("neenee-repeat-state-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-schedule-state-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
-        assert!(store.repeat_jobs().await.is_empty());
+        assert!(store.scheduled_jobs().await.is_empty());
 
-        // Seed two jobs and persist.
+        // Seed two jobs (one cron, one once) and persist.
         let now = chrono::Utc::now();
-        let job_a = neenee_core::RepeatJob {
-            id: "aaaa".to_string(),
-            cron: "*/5 * * * *".to_string(),
-            prompt: "check the deploy".to_string(),
-            created_at: now,
-            next_fire: now,
-            last_fire: None,
-        };
-        let job_b = neenee_core::RepeatJob {
-            id: "bbbb".to_string(),
-            cron: "0 9 * * 1-5".to_string(),
-            prompt: "standup".to_string(),
-            created_at: now,
-            next_fire: now + chrono::Duration::days(1),
-            last_fire: Some(now),
-        };
+        let job_a = neenee_core::ScheduledJob::cron(
+            "aaaa".into(),
+            "*/5 * * * *".into(),
+            "check the deploy".into(),
+            now,
+        )
+        .unwrap();
+        let job_b = neenee_core::ScheduledJob::cron(
+            "bbbb".into(),
+            "0 9 * * 1-5".into(),
+            "standup".into(),
+            now,
+        )
+        .unwrap();
+        let job_c = neenee_core::ScheduledJob::once(
+            "cccc".into(),
+            now + chrono::Duration::hours(2),
+            "one-shot reminder".into(),
+            now,
+        );
         store
-            .set_repeat_jobs(vec![job_a.clone(), job_b.clone()])
+            .set_scheduled_jobs(vec![job_a.clone(), job_b.clone(), job_c.clone()])
             .await
             .unwrap();
 
         // Mutate (cancel one) and persist again — snapshot semantics.
         store
-            .set_repeat_jobs(vec![job_b.clone()])
+            .set_scheduled_jobs(vec![job_b.clone(), job_c.clone()])
             .await
             .unwrap();
 
         // Reload from disk via the event log + snapshot and confirm round-trip.
         let reloaded = SessionStore::for_path(path.clone());
-        let loaded = reloaded.repeat_jobs().await;
-        assert_eq!(loaded.len(), 1, "only the surviving job round-trips");
+        let loaded = reloaded.scheduled_jobs().await;
+        assert_eq!(loaded.len(), 2, "only the surviving jobs round-trip");
         assert_eq!(loaded[0].id, "bbbb");
-        assert_eq!(loaded[0].cron, "0 9 * * 1-5");
-        assert_eq!(loaded[0].last_fire, Some(now));
+        assert_eq!(
+            loaded[0].trigger,
+            neenee_core::Schedule::Cron {
+                cron: "0 9 * * 1-5".to_string()
+            }
+        );
+        assert_eq!(loaded[1].id, "cccc");
+        assert!(loaded[1].trigger.is_once());
 
         // Clearing persists (empty list is the "no schedule" state).
-        reloaded.set_repeat_jobs(Vec::new()).await.unwrap();
-        assert!(reloaded.repeat_jobs().await.is_empty());
+        reloaded.set_scheduled_jobs(Vec::new()).await.unwrap();
+        assert!(reloaded.scheduled_jobs().await.is_empty());
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn legacy_repeat_snapshot_loads_as_scheduled_jobs() {
+        // A pre-v9 snapshot written by the old `/repeat` code used the flat
+        // `repeat_jobs` field with `RepeatJob { cron: String, … }`. It must
+        // load as `scheduled_jobs` with cron `Schedule` triggers, no data loss.
+        let directory = std::env::temp_dir()
+            .join(format!("neenee-schedule-legacy-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+        let now = chrono::Utc::now();
+        let legacy = serde_json::json!({
+            "id": "legacy-repeat",
+            "parent_id": null,
+            "created_at": 0u64,
+            "project_root": ".",
+            "model_window": [],
+            "archived_transcript": [],
+            "todos": [],
+            "repeat_jobs": [{
+                "id": "legacy1",
+                "cron": "0 9 * * 1-5",
+                "prompt": "standup",
+                "created_at": now,
+                "next_fire": now,
+                "last_fire": null,
+            }],
+            "schema_version": 8u32,
+            "checksum": null,
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let store = SessionStore::for_path(path.clone());
+        let jobs = store.scheduled_jobs().await;
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, "legacy1");
+        assert_eq!(
+            jobs[0].trigger,
+            neenee_core::Schedule::Cron {
+                cron: "0 9 * * 1-5".to_string()
+            }
+        );
 
         let _ = fs::remove_dir_all(directory);
     }

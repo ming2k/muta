@@ -68,6 +68,7 @@ define_builtin_commands! {
     Btw         = "/btw"          : "Open a side conversation that runs alongside the main session",
     Resume      = "/resume"       : "Resume the most recent or selected session",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
+    Schedule    = "/schedule"     : "Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot). /schedule <when> <prompt>",
     Skills      = "/skills"       : "List or reload available skills (list|reload)",
     Skill       = "/skill"        : "Load a skill by name",
     Init        = "/init"         : "Initialize a .neenee/ config tree",
