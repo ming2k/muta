@@ -26,9 +26,12 @@ use crate::tui::primitives::{
 };
 use crate::tui::view::Theme;
 
-/// Maximum number of rows the dropdown reserves vertically. Capped so a huge
-/// history never eats the whole screen — the body scrolls within this budget.
-const HISTORY_PANEL_MAX_ROWS: u16 = 20;
+/// Maximum number of rows the dropdown reserves vertically. Capped so a long
+/// history stays scannable — a Ctrl+R picker is a glance surface, not a full
+/// browser — and the body scrolls within this budget. Ten entries is enough to
+/// recall a recent prompt at a glance; anything older is a search away (the
+/// composer below is the live filter field).
+const HISTORY_PANEL_MAX_ROWS: u16 = 10;
 
 /// Draw the history search dropdown, anchored above `input_rect`.
 ///
@@ -84,8 +87,11 @@ pub fn draw_history_panel(
     let room_above = area_top;
     let row_count = ranked.len().max(1) as u16;
     let desired_rows = row_count.min(HISTORY_PANEL_MAX_ROWS);
-    // +1 header (title), +1 footer (origin strip + key hints).
-    let desired_h = desired_rows.saturating_add(2);
+    // +1 header (title), +1 footer (origin strip + key hints), +2 composer
+    // chrome (the half-block `▄`/`▀` top/bottom transition rows the panel
+    // shares with the composer below it).
+    const CHROME_ROWS: u16 = 4;
+    let desired_h = desired_rows.saturating_add(CHROME_ROWS);
     let panel_h = desired_h.min(room_above);
     if panel_h == 0 {
         return None;
@@ -95,41 +101,66 @@ pub fn draw_history_panel(
     // of the activity bar's rows. Its footprint is [area_top - panel_h, area_top).
     let panel_y = area_top.saturating_sub(panel_h);
     let area = Rect::new(input_rect.x, panel_y, input_rect.width, panel_h);
+    let full_w = area.width as usize;
 
-    // Erase whatever the transcript painted behind the panel, then draw a
-    // bordered solid-bg panel (a left accent bar + panel background, the same
-    // surface language as the permission sheet so it reads as a focused
-    // surface rather than a dimmed modal).
+    // The panel shares the composer's surface language so the dropdown reads as
+    // an extension of the input box rather than a separate floating window: a
+    // solid `panel()` fill bracketed by half-block `▄` (top) / `▀` (bottom)
+    // transition rows, so it floats a half row off the app background exactly
+    // like the composer does. No left accent bar — the composer has none, and a
+    // full-height brand column would read as selection/severity, which a
+    // history list is not.
+    let panel_bg = theme.panel();
+    let app_bg = theme.surface();
+    let inner_w = area.width;
     frame.render_widget(RtClear, area);
-    frame.render_widget(RtBlock::default().style(Style::default().bg(theme.panel())), area);
-    // Left accent border column.
-    let bar_rect = Rect::new(area.x, area.y, 1, area.height);
-    frame.render_widget(RtBlock::default().style(Style::default().bg(theme.brand())), bar_rect);
+    frame.render_widget(RtBlock::default().style(Style::default().bg(panel_bg)), area);
 
-    // Header row: title + live query echo + counts.
-    let header_rect = Rect::new(area.x + 1, area.y, area.width.saturating_sub(1), 1);
-    let footer_rect = Rect::new(
-        area.x + 1,
+    // Top transition row (▄) then bottom transition row (▀): painted as
+    // single-row Paragraphs so they overlay the panel fill on the edge rows.
+    let top_edge = Line::from(Span::styled(
+        "▄".repeat(full_w),
+        Style::default().fg(panel_bg).bg(app_bg),
+    ));
+    let bottom_edge = Line::from(Span::styled(
+        "▀".repeat(full_w),
+        Style::default().fg(panel_bg).bg(app_bg),
+    ));
+    let top_row = Rect::new(area.x, area.y, inner_w, 1);
+    let bottom_row = Rect::new(
+        area.x,
         area.y + area.height.saturating_sub(1),
-        area.width.saturating_sub(1),
+        inner_w,
+        1,
+    );
+    frame.render_widget(Paragraph::new(top_edge), top_row);
+    frame.render_widget(Paragraph::new(bottom_edge), bottom_row);
+
+    // Header row: title + live query echo + counts. Sits just inside the top
+    // transition row, full width (no left-accent column to inset around).
+    let header_rect = Rect::new(area.x, area.y + 1, inner_w, 1);
+    let footer_rect = Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(2),
+        inner_w,
         1,
     );
     // Body sits between header and footer.
-    let body_rect = if area.height >= 3 {
+    let body_rect = if area.height >= CHROME_ROWS {
         Rect::new(
-            header_rect.x,
+            area.x,
             header_rect.y + 1,
-            header_rect.width,
-            area.height.saturating_sub(2),
+            inner_w,
+            area.height.saturating_sub(CHROME_ROWS),
         )
     } else {
-        // Degenerate single/two-row terminal: give the body whatever is left
-        // after the header so the list is still visible.
+        // Degenerate tiny terminal: give the body whatever is left after the
+        // top transition + header so the list is still visible.
         Rect::new(
-            header_rect.x,
+            area.x,
             header_rect.y + 1,
-            header_rect.width,
-            area.height.saturating_sub(1),
+            inner_w,
+            area.height.saturating_sub(2),
         )
     };
 

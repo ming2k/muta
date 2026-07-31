@@ -28,13 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **History dropdown is now an extension of the composer.** The Ctrl+R input-
-  history panel now collapses to its actual row count (plus header and footer)
-  instead of reserving a fixed minimum, so a short list reads as a sliver
-  rather than an oversized box. It also reserves the transient activity bar's
-  rows as a ceiling: the panel never grows into the activity bar above the
-  composer, so the live status surface is always visible and always reads as
-  above the history list. The dropdown is treated as part of the input area,
-  not an independent window that can occlude the status chrome.
+  history panel is restyled to share the composer's surface language — a solid
+  panel fill bracketed by half-block `▄`/`▀` transition rows — so it reads as
+  continuous with the input box rather than a separately-bordered floating
+  window. The previous full-height brand-colored left accent bar (which read
+  as selection/severity) is gone. The panel now collapses to its actual row
+  count (plus the edge/header/footer rows) instead of reserving a fixed
+  minimum, and is capped at ten entries beyond which the body scrolls — a
+  Ctrl+R picker is a glance surface, not a full browser. It also reserves the
+  transient activity bar's rows as a ceiling: the panel never grows into the
+  activity bar above the composer, so the live status surface is always visible
+  and always reads as above the history list.
 
 - **The activity bar signals a pending permission request.** While a tool-
   permission request awaits the user's decision, the activity bar above the

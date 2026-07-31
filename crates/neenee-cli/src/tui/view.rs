@@ -3018,15 +3018,89 @@ mod tests {
             )
         });
         let panel = panel.expect("panel should render with ample room above");
-        // 2 entries + 1 header + 1 footer = 4 rows. The old fixed minimum of
-        // 6 would have produced 8 rows here.
+        // 2 entries + 4 chrome rows (top ▄ transition, header, footer, bottom
+        // ▀ transition) = 6 rows. The panel still collapses to the actual row
+        // count — a fixed minimum would have forced 8+ regardless of entries.
         assert_eq!(
-            panel.height, 4,
-            "panel must collapse to actual row count (4), not a fixed minimum"
+            panel.height, 6,
+            "panel must collapse to actual row count + chrome (6), not a fixed minimum"
         );
     }
 
-    /// The dropdown treats the activity bar's bottom edge as a ceiling: it
+    /// The dropdown shares the composer's surface language, not the permission
+    /// sheet's: it is bracketed by half-block `▄`/`▀` transition rows and never
+    /// paints a full-height brand-colored left column (which would read as
+    /// selection/severity). The top and bottom rows must carry the half-block
+    /// glyphs, and the left column must NOT be brand-colored.
+    #[test]
+    fn history_panel_uses_composer_edge_language_not_brand_column() {
+        let theme = Theme::default();
+        let history: Vec<neenee_core::HistoryEntry> = ["one", "two", "three"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                neenee_core::HistoryEntry::new(
+                    text.to_string(),
+                    Some(format!("s{i}")),
+                    None,
+                    i as u64,
+                )
+            })
+            .collect();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
+        let ranked = crate::tui::fuzzy::rank(&texts, "");
+        let input_rect = neenee_tui_engine::Rect::new(0, 40, 30, 2);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(30, 42);
+        let mut panel: Option<neenee_tui_engine::Rect> = None;
+        terminal.draw(|f| {
+            panel = draw_history_panel(
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+            )
+        });
+        let panel = panel.expect("panel should render");
+        let buf = terminal.buffer();
+
+        // Top row carries the ▄ lower-half transition glyph.
+        let top_left = buf.get(panel.x, panel.y).expect("top-left cell");
+        assert_eq!(
+            top_left.symbol(),
+            "▄",
+            "top edge must use the composer's ▄ transition glyph"
+        );
+        // Bottom row carries the ▀ upper-half transition glyph.
+        let bottom_left = buf
+            .get(panel.x, panel.y + panel.height - 1)
+            .expect("bottom-left cell");
+        assert_eq!(
+            bottom_left.symbol(),
+            "▀",
+            "bottom edge must use the composer's ▀ transition glyph"
+        );
+
+        // No full-height brand column: the background of the left column on the
+        // header row (which is never selection-tinted) must NOT be the brand
+        // color. A brand column would paint every left-edge cell, including the
+        // header's, with brand as its background. The header sits one row below
+        // the top transition edge.
+        let header_left = buf
+            .get(panel.x, panel.y + 1)
+            .expect("header left cell");
+        assert_ne!(
+            header_left.bg,
+            theme.brand(),
+            "no full-height brand left column — the composer edge language has none"
+        );
+    }
     /// never grows into the activity bar's rows, so the live status surface
     /// above the composer always stays visible and always reads as above the
     /// history dropdown.
