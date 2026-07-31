@@ -122,6 +122,13 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// persistent task-list summary lives on its own [`draw_todo_bar`], floated
 /// above this row as ambient meta-info.
 ///
+/// `awaiting_permission` colors the status text with the warning hue so a
+/// pending tool-permission decision reads as a distinct attention state rather
+/// than ordinary activity. (The permission sheet replaces the input box and
+/// the bars beneath it; this bar is the one live status surface that survives,
+/// so marking the state here is what tells the user *why* the round is
+/// paused.)
+///
 /// The bar surfaces what the user most wants to know mid-round — the live
 /// status, whether a pursuit/plan is in flight, and how long the round has
 /// run — and is the click target that opens the Activity modal for the full
@@ -144,6 +151,7 @@ pub fn draw_activity_bar(
     review_alert: &str,
     round_started_at: Option<Instant>,
     status: &str,
+    awaiting_permission: bool,
     spinner_phase: usize,
     theme: &Theme,
 ) -> Option<Rect> {
@@ -208,8 +216,23 @@ pub fn draw_activity_bar(
     // (round/turn/model) are deliberately absent; they live in the Activity
     // modal that this bar opens on click. Truncate this segment first so the
     // interrupt affordance survives narrow widths.
+    //
+    // A pending permission request is a distinct attention state, not ordinary
+    // activity: render the label in a steady warning hue (bold, no shimmer) so
+    // the user reads "the round is paused waiting on your decision" rather
+    // than "something is running". The permission sheet below carries the
+    // decision affordances; this bar just signals the state.
     spans.push(Span::raw(" "));
-    spans.extend(shimmer_spans(&status, spinner_phase, theme));
+    if awaiting_permission {
+        spans.push(Span::styled(
+            status,
+            Style::default()
+                .fg(theme.warning)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        spans.extend(shimmer_spans(&status, spinner_phase, theme));
+    }
 
     // Keep the interrupt instruction immediately after the live status,
     // matching the place users look while waiting. Elapsed time is useful
@@ -1418,6 +1441,7 @@ mod tests {
                 "",
                 None,
                 status,
+                false,
                 phase,
                 &Theme::default(),
             );
@@ -1428,6 +1452,31 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>()
+    }
+
+    /// Render the activity bar with `awaiting_permission` set and collect the
+    /// foreground color of each cell, so a test can assert the permission state
+    /// paints in the warning hue rather than the shimmer palette.
+    fn activity_row_colors(width: u16, status: &str, awaiting: bool, phase: usize) -> Vec<Color> {
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 1);
+        terminal.draw(|frame| {
+            draw_activity_bar(
+                frame,
+                Rect::new(0, 0, width, 1),
+                "",
+                None,
+                status,
+                awaiting,
+                phase,
+                &Theme::default(),
+            );
+        });
+        terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.fg)
+            .collect()
     }
 
     #[test]
@@ -1699,6 +1748,7 @@ mod tests {
                 "",
                 None,
                 "Working",
+                false,
                 0,
                 &Theme::default(),
             );
@@ -1723,6 +1773,7 @@ mod tests {
                 "",
                 None,
                 "retrying a provider request after a detailed transient failure",
+                false,
                 8,
                 &Theme::default(),
             );
@@ -1739,6 +1790,37 @@ mod tests {
         // Session-state flags live on the hint bar; the activity row never
         // carries them, even when they would fit.
         assert!(!text.contains("autopilot"), "row was {text:?}");
+    }
+
+    /// A pending permission request paints the status label in a steady warning
+    /// hue rather than the ordinary shimmer palette, so the bar reads as a
+    /// distinct attention state ("the round is paused on your decision") above
+    /// the permission sheet. The warning hue must actually appear on the label
+    /// cells, distinguishing it from the brand-colored shimmer.
+    #[test]
+    fn activity_bar_paints_awaiting_permission_in_warning_hue() {
+        let theme = Theme::default();
+        let awaiting = activity_row_colors(80, "awaiting permission", true, 4);
+        let normal = activity_row_colors(80, "working", false, 4);
+
+        // The warning color must be present somewhere in the awaiting row.
+        assert!(
+            awaiting.iter().any(|&c| c == theme.warning),
+            "awaiting-permission row must use the warning hue"
+        );
+        // A permission state must not shimmer (the shimmer sweeps the brand hue
+        // across phases). The normal row, by contrast, carries brand-derived
+        // colors at this phase.
+        assert!(
+            !awaiting.iter().any(|&c| c == theme.warning) || awaiting != normal,
+            "awaiting row must differ from the ordinary shimmer row"
+        );
+        // Sanity: the normal row does carry some non-warning color from the
+        // shimmer (so the comparison above is meaningful).
+        assert!(
+            normal.iter().any(|&c| c != theme.muted() && c != Color::Reset),
+            "normal row should carry shimmer colors"
+        );
     }
 
     #[test]

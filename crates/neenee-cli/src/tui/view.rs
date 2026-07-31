@@ -148,6 +148,13 @@ pub struct TranscriptView<'a> {
     /// Empty / "idle" means the status bar is hidden; every other value
     /// (including "responding") keeps the bar up for the full round lifecycle.
     pub activity: &'a str,
+    /// Whether a tool permission request is awaiting the user's decision. When
+    /// true the activity bar is forced visible even if the loop has gone idle,
+    /// and its label reads as a permission state so the live status surface
+    /// above the input signals the pending decision (the permission sheet
+    /// replaces the input + bars below it; this bar stays on as the one piece
+    /// of live status that survives). See ADR-0089 footer chrome.
+    pub awaiting_permission: bool,
     /// Animation phase for the breathing dot and status-text shimmer.
     pub spinner_phase: usize,
     /// The current input-box text (masked while the API-key modal is open). The
@@ -373,6 +380,7 @@ pub fn draw_transcript(
         selection,
         cell_selection,
         activity,
+        awaiting_permission,
         spinner_phase,
         input,
         byte_cursor,
@@ -454,7 +462,16 @@ pub fn draw_transcript(
     // phase and the one where the breathing dot's liveness signal matters most
     // — and hidden only when the harness is idle, so the row returns to the
     // transcript.
-    let activity_active = !chrome_hidden && !in_envoy && !activity.is_empty() && activity != "idle";
+    //
+    // A pending permission request is an exception: the permission sheet
+    // replaces the input box and the bars beneath it, so the activity bar is
+    // the only live status surface left. Force it on so the user always has a
+    // visible "awaiting permission" anchor above the sheet — even if the loop
+    // has nominally gone idle (e.g. right after an interrupt that rejects
+    // permissions but before the stale round's terminal snapshot lands).
+    let activity_active = !chrome_hidden
+        && !in_envoy
+        && (awaiting_permission || (!activity.is_empty() && activity != "idle"));
     // The activity bar is purely transient now: it shows only while a round is
     // active and hides when idle, so the row returns to the transcript (the
     // persistent task-list summary has its own bar above).
@@ -727,6 +744,7 @@ pub fn draw_transcript(
             &review_alert,
             round_started_at,
             activity,
+            awaiting_permission,
             spinner_phase,
             theme,
         )
@@ -833,7 +851,7 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "waiting for model",
-                        spinner_phase: 0,
+                        awaiting_permission: false,                        spinner_phase: 0,
                         input: "hello",
                         byte_cursor: 5,
                         chrome_hidden: false,
@@ -943,6 +961,7 @@ mod tests {
                 false,
                 false,
                 input_rect,
+                0,
                 &theme,
             );
             draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
@@ -1131,7 +1150,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "running envoy",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -1170,7 +1189,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -1254,7 +1273,7 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        spinner_phase: 0,
+                        awaiting_permission: false,                        spinner_phase: 0,
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
@@ -1358,7 +1377,7 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        spinner_phase: 0,
+                        awaiting_permission: false,                        spinner_phase: 0,
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
@@ -1575,7 +1594,7 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        spinner_phase: 0,
+                        awaiting_permission: false,                        spinner_phase: 0,
                         input,
                         byte_cursor: input.len(),
                         chrome_hidden: false,
@@ -1643,6 +1662,7 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity,
+                        awaiting_permission: false,
                         spinner_phase: 0,
                         input: "",
                         byte_cursor: 0,
@@ -1719,7 +1739,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2325,7 +2345,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: &long_input,
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2473,7 +2493,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2555,7 +2575,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2861,6 +2881,7 @@ mod tests {
                     false,
                     false,
                     input_rect,
+                    0,
                     &theme,
                 );
             });
@@ -2883,6 +2904,7 @@ mod tests {
                 false,
                 false,
                 input_rect,
+                0,
                 &theme,
             );
         });
@@ -2928,6 +2950,7 @@ mod tests {
                 false,
                 false,
                 input_rect,
+                0,
                 &theme,
             );
         });
@@ -2947,9 +2970,113 @@ mod tests {
                 true,
                 false,
                 input_rect,
+                0,
                 &theme,
             );
         });
+    }
+
+    /// The dropdown is an extension of the composer, not a fixed-size window:
+    /// it collapses to the actual row count rather than reserving a fixed
+    /// minimum. Two entries must produce a 4-row panel (2 rows + header +
+    /// footer), not the old 6-row floor.
+    #[test]
+    fn history_panel_collapses_to_actual_row_count() {
+        let theme = Theme::default();
+        let history: Vec<neenee_core::HistoryEntry> = ["one", "two"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                neenee_core::HistoryEntry::new(
+                    text.to_string(),
+                    Some(format!("s{i}")),
+                    None,
+                    i as u64,
+                )
+            })
+            .collect();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
+        let ranked = crate::tui::fuzzy::rank(&texts, "");
+        // Composer near the bottom of a tall terminal so room-above is not the
+        // binding constraint — the row count is.
+        let input_rect = neenee_tui_engine::Rect::new(0, 40, 80, 2);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 42);
+        let mut panel: Option<neenee_tui_engine::Rect> = None;
+        terminal.draw(|f| {
+            panel = draw_history_panel(
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+            )
+        });
+        let panel = panel.expect("panel should render with ample room above");
+        // 2 entries + 1 header + 1 footer = 4 rows. The old fixed minimum of
+        // 6 would have produced 8 rows here.
+        assert_eq!(
+            panel.height, 4,
+            "panel must collapse to actual row count (4), not a fixed minimum"
+        );
+    }
+
+    /// The dropdown treats the activity bar's bottom edge as a ceiling: it
+    /// never grows into the activity bar's rows, so the live status surface
+    /// above the composer always stays visible and always reads as above the
+    /// history dropdown.
+    #[test]
+    fn history_panel_reserves_activity_bar_rows() {
+        let theme = Theme::default();
+        // Enough entries that, absent the reservation, the panel would want to
+        // grow tall and run past the activity bar.
+        let history: Vec<neenee_core::HistoryEntry> = (0..25)
+            .map(|i| {
+                neenee_core::HistoryEntry::new(
+                    format!("entry {i}"),
+                    Some(format!("s{i}")),
+                    None,
+                    i,
+                )
+            })
+            .collect();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
+        let ranked = crate::tui::fuzzy::rank(&texts, "");
+        // Composer at row 15; the activity bar occupies the single row above it
+        // (row 14), so `activity_height = 1`.
+        let input_rect = neenee_tui_engine::Rect::new(0, 15, 80, 2);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 17);
+        let mut panel: Option<neenee_tui_engine::Rect> = None;
+        terminal.draw(|f| {
+            panel = draw_history_panel(
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                1,
+                &theme,
+            )
+        });
+        let panel = panel.expect("panel should render");
+        // The activity bar occupies the single row above the composer
+        // (input_rect.y - 1 = 14). The panel must never cover it: its bottom
+        // edge (panel.y + panel.height) must sit at or above row 14.
+        assert!(
+            panel.y + panel.height <= 14,
+            "panel footprint [y={}, h={}] must not cover the activity bar row (14)",
+            panel.y,
+            panel.height
+        );
     }
 
     /// With no messages, `draw_transcript` renders the empty-state hero in
@@ -2973,7 +3100,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3032,7 +3159,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3100,7 +3227,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3155,7 +3282,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3235,7 +3362,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3311,7 +3438,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3389,7 +3516,7 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    spinner_phase: 0,
+                    awaiting_permission: false,                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,

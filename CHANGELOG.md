@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the entry point instead of only via in-text cross-references.
 
 ### Changed
+- **History dropdown is now an extension of the composer.** The Ctrl+R input-
+  history panel now collapses to its actual row count (plus header and footer)
+  instead of reserving a fixed minimum, so a short list reads as a sliver
+  rather than an oversized box. It also reserves the transient activity bar's
+  rows as a ceiling: the panel never grows into the activity bar above the
+  composer, so the live status surface is always visible and always reads as
+  above the history list. The dropdown is treated as part of the input area,
+  not an independent window that can occlude the status chrome.
+
+- **The activity bar signals a pending permission request.** While a tool-
+  permission request awaits the user's decision, the activity bar above the
+  input box is forced on (even if the loop has nominally gone idle) and its
+  label is rendered in a steady warning hue rather than the ordinary shimmer,
+  so it reads as a distinct "paused on your decision" attention state. The
+  permission sheet replaces the input box and the bars beneath it; this bar is
+  the one piece of live status that survives, so marking the state here is
+  what tells the user why the round is waiting.
+
 - **Multi-session daemon and select-then-attach protocol (ADR-0089).** A
   single `neenee-server`/`neenee daemon` process now hosts any number of
   sessions for one project via an in-process `SessionRegistry` (each

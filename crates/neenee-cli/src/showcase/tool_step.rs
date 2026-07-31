@@ -83,6 +83,7 @@ pub fn run() -> io::Result<()> {
                     selection: &selection,
                     cell_selection: None,
                     activity: "",
+                    awaiting_permission: false,
                     spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,

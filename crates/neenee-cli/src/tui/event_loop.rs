@@ -1448,6 +1448,11 @@ pub(super) async fn run_app_loop(
                         selection: &app.selection,
                         cell_selection: app.drag.cell_info.as_ref(),
                         activity: &status,
+                        // A pending permission request forces the activity bar
+                        // on (and tints it warning) so it stays the visible
+                        // anchor above the permission sheet even if the loop
+                        // has gone idle.
+                        awaiting_permission: app.pending_permission.is_some(),
                         // ~100ms per phase keeps one breathing cycle near 1.2s
                         // (SPINNER_PHASES steps); `breathing_color` wraps modulo.
                         spinner_phase: (app.spinner_epoch.elapsed().as_millis() / 100) as usize,
@@ -1783,6 +1788,13 @@ pub(super) async fn run_app_loop(
                     }
                     Modal::HistorySearch => {
                         let ranked = app.history_rows();
+                        // The activity bar sits directly above the composer, so
+                        // reserve its rows: the dropdown must never paint over
+                        // the live status bar above it. `activity_rect` carries
+                        // the bar's exact footprint this frame (None when idle,
+                        // height 0).
+                        let activity_height =
+                            activity_rect.map_or(0, |r| r.height);
                         view::draw_history_panel(
                             f,
                             &app.input_history,
@@ -1793,6 +1805,7 @@ pub(super) async fn run_app_loop(
                             app.history_preview,
                             app.modal_keymap_open,
                             input_rect,
+                            activity_height,
                             &app.theme,
                         )
                     }

@@ -29,9 +29,6 @@ use crate::tui::view::Theme;
 /// Maximum number of rows the dropdown reserves vertically. Capped so a huge
 /// history never eats the whole screen — the body scrolls within this budget.
 const HISTORY_PANEL_MAX_ROWS: u16 = 20;
-/// Minimum height so an empty/short history still reads as a panel, not a
-/// sliver.
-const HISTORY_PANEL_MIN_ROWS: u16 = 6;
 
 /// Draw the history search dropdown, anchored above `input_rect`.
 ///
@@ -47,10 +44,19 @@ const HISTORY_PANEL_MIN_ROWS: u16 = 6;
 /// in-panel keybindings list (the `?` expand).
 ///
 /// The panel floats with `Recess::None` (no dimming), and the composer below
-/// stays fully live as the filter field — the caller still renders it. The
-/// returned rect is the panel's footprint (for click-outside-dismiss hit
-/// testing); it is `None` when there is no room above the composer (height 0),
-/// in which case nothing is drawn.
+/// stays fully live as the filter field — the caller still renders it.
+///
+/// `activity_height` is the row count the transient activity bar occupies in
+/// the row(s) immediately above the composer this frame (0 when the bar is
+/// hidden). The dropdown treats the activity bar's bottom edge as an upper
+/// bound: it never grows into the activity bar's rows, so the activity bar is
+/// always visible and always reads as above the history dropdown. This keeps
+/// the dropdown an extension of the composer rather than something that can
+/// occlude the live status surface above it.
+///
+/// The returned rect is the panel's footprint (for click-outside-dismiss hit
+/// testing); it is `None` when there is no room above the activity bar
+/// (height 0), in which case nothing is drawn.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_history_panel(
     frame: &mut Frame,
@@ -62,22 +68,31 @@ pub fn draw_history_panel(
     preview: bool,
     keymap_open: bool,
     input_rect: Rect,
+    activity_height: u16,
     theme: &Theme,
 ) -> Option<Rect> {
     // Compute the panel footprint: it grows upward from the top edge of the
-    // composer. Height is bounded by the room above the composer and by the
-    // content (rows + 1 header + 1 footer), floored at the min so a short
-    // history still looks like a panel.
-    let area_top = input_rect.y;
+    // composer. The activity bar sits directly above the composer, so reserve
+    // its rows: the dropdown's ceiling is the activity bar's top edge, never
+    // the composer's top edge — it must never paint over the live status bar
+    // above it. Height tracks the actual content (one row per entry) floored
+    // at a single body row so an empty/short history reads as a sliver rather
+    // than a fixed-size box, capped at the max so a huge history scrolls
+    // instead of eating the whole screen.
+    let activity_h = activity_height.min(input_rect.y);
+    let area_top = input_rect.y.saturating_sub(activity_h);
     let room_above = area_top;
     let row_count = ranked.len().max(1) as u16;
-    let desired_rows = row_count.clamp(HISTORY_PANEL_MIN_ROWS, HISTORY_PANEL_MAX_ROWS);
+    let desired_rows = row_count.min(HISTORY_PANEL_MAX_ROWS);
     // +1 header (title), +1 footer (origin strip + key hints).
     let desired_h = desired_rows.saturating_add(2);
     let panel_h = desired_h.min(room_above);
     if panel_h == 0 {
         return None;
     }
+    // The panel grows upward from the activity bar's top edge (its reserved
+    // ceiling), never from the composer's top edge: this is what keeps it out
+    // of the activity bar's rows. Its footprint is [area_top - panel_h, area_top).
     let panel_y = area_top.saturating_sub(panel_h);
     let area = Rect::new(input_rect.x, panel_y, input_rect.width, panel_h);
 

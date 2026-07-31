@@ -255,6 +255,15 @@ reverse-chronological — newest first. Once a query is present in search mode
 the rows are the fuzzy-ranked matches, best score first, with input order as
 the stable tiebreaker.
 
+The dropdown is an **extension of the composer**, not an independent window:
+it floats anchored to the top edge of the input box and grows upward. Its
+height tracks the actual row count (capped so a huge history scrolls rather
+than eats the whole screen) — a short list collapses to just its rows plus
+header and footer, instead of reserving a fixed minimum. The activity bar
+sits directly above the composer and is always treated as above the dropdown:
+the panel reserves the activity bar's rows as a ceiling and never paints over
+them, so the live status surface stays visible even while browsing history.
+
 | Key | Effect |
 |-----|--------|
 | `/` (browse) | Enter search mode (borrow the composer line as the query) |

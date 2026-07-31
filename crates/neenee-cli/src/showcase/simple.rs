@@ -437,6 +437,7 @@ pub fn history() -> io::Result<()> {
                     false,
                     false,
                     input_rect,
+                    0,
                     &theme,
                 );
             });
