@@ -574,12 +574,7 @@ pub async fn delete(
         .providers
         .iter()
         .find(|p| p.id == id)
-        .map(|p| {
-            p.channels
-                .iter()
-                .filter_map(|c| c.model.clone())
-                .collect()
-        })
+        .map(|p| p.channels.iter().filter_map(|c| c.model.clone()).collect())
         .unwrap_or_default();
     let before = config.providers.len();
     config.providers.retain(|p| p.id != id);
@@ -590,7 +585,9 @@ pub async fn delete(
     // Prune the deleted provider's model ids from favorites (model-level) so
     // the picker never references a model that is no longer served.
     if !deleted_models.is_empty() {
-        config.favorites.retain(|fav| !deleted_models.iter().any(|m| m == fav));
+        config
+            .favorites
+            .retain(|fav| !deleted_models.iter().any(|m| m == fav));
     }
 
     let was_active = config.default_provider == id;
@@ -840,11 +837,16 @@ async fn run_oauth(
     let oauth = OAuth::new(cfg);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    let result = match method {
-        neenee_core::LoginMethod::Device => match cfg.device_flow {
-            neenee_providers::oauth::config::DeviceFlow::ChatGpt => {
-                let device =
-                    match neenee_providers::oauth::request_chatgpt_device_code(oauth.client(), &cfg).await {
+    let result =
+        match method {
+            neenee_core::LoginMethod::Device => match cfg.device_flow {
+                neenee_providers::oauth::config::DeviceFlow::ChatGpt => {
+                    let device = match neenee_providers::oauth::request_chatgpt_device_code(
+                        oauth.client(),
+                        &cfg,
+                    )
+                    .await
+                    {
                         Ok(d) => d,
                         Err(e) => {
                             let msg = e.to_string();
@@ -857,29 +859,66 @@ async fn run_oauth(
                             return false;
                         }
                     };
-                let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                    neenee_core::ConnectStatus::Pending {
-                        provider: label.to_string(),
-                        url: device.user_url(&cfg),
-                        user_code: device.user_code.clone(),
-                        message: "Open the URL on any device and enter the code to authorize."
-                            .to_string(),
-                    },
-                ));
-                let polled =
-                    neenee_providers::oauth::poll_chatgpt_device_code(oauth.client(), &cfg, &device).await;
-                match polled {
-                    Ok(token) => {
-                        neenee_providers::oauth::exchange_chatgpt_device_code(oauth.client(), &cfg, &token)
-                            .await
-                            .map_err(|e| e.to_string())
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_core::ConnectStatus::Pending {
+                            provider: label.to_string(),
+                            url: device.user_url(&cfg),
+                            user_code: device.user_code.clone(),
+                            message: "Open the URL on any device and enter the code to authorize."
+                                .to_string(),
+                        },
+                    ));
+                    let polled = neenee_providers::oauth::poll_chatgpt_device_code(
+                        oauth.client(),
+                        &cfg,
+                        &device,
+                    )
+                    .await;
+                    match polled {
+                        Ok(token) => neenee_providers::oauth::exchange_chatgpt_device_code(
+                            oauth.client(),
+                            &cfg,
+                            &token,
+                        )
+                        .await
+                        .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.to_string()),
                     }
-                    Err(e) => Err(e.to_string()),
                 }
-            }
-            neenee_providers::oauth::config::DeviceFlow::Rfc8628 => {
-                let device = match neenee_providers::oauth::request_device_code(oauth.client(), &cfg).await {
-                    Ok(d) => d,
+                neenee_providers::oauth::config::DeviceFlow::Rfc8628 => {
+                    let device =
+                        match neenee_providers::oauth::request_device_code(oauth.client(), &cfg)
+                            .await
+                        {
+                            Ok(d) => d,
+                            Err(e) => {
+                                let msg = e.to_string();
+                                let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                                    neenee_core::ConnectStatus::Failed {
+                                        provider: label.to_string(),
+                                        message: msg,
+                                    },
+                                ));
+                                return false;
+                            }
+                        };
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_core::ConnectStatus::Pending {
+                            provider: label.to_string(),
+                            url: device.user_url().to_string(),
+                            user_code: device.user_code.clone(),
+                            message: "Open the URL on any device and enter the code to authorize."
+                                .to_string(),
+                        },
+                    ));
+                    neenee_providers::oauth::poll_device_code(oauth.client(), &cfg, &device)
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+            },
+            neenee_core::LoginMethod::Browser => {
+                let login = match oauth.begin_browser_login().await {
+                    Ok(l) => l,
                     Err(e) => {
                         let msg = e.to_string();
                         let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -894,46 +933,18 @@ async fn run_oauth(
                 let _ = resp_tx.send(AgentResponse::ConnectStatus(
                     neenee_core::ConnectStatus::Pending {
                         provider: label.to_string(),
-                        url: device.user_url().to_string(),
-                        user_code: device.user_code.clone(),
-                        message: "Open the URL on any device and enter the code to authorize."
+                        url: login.url.clone(),
+                        user_code: String::new(),
+                        message: "Complete authorization in your browser (or open the link below)."
                             .to_string(),
                     },
                 ));
-                neenee_providers::oauth::poll_device_code(oauth.client(), &cfg, &device)
+                login
+                    .complete(oauth.client())
                     .await
                     .map_err(|e| e.to_string())
             }
-        },
-        neenee_core::LoginMethod::Browser => {
-            let login = match oauth.begin_browser_login().await {
-                Ok(l) => l,
-                Err(e) => {
-                    let msg = e.to_string();
-                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                        neenee_core::ConnectStatus::Failed {
-                            provider: label.to_string(),
-                            message: msg,
-                        },
-                    ));
-                    return false;
-                }
-            };
-            let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                neenee_core::ConnectStatus::Pending {
-                    provider: label.to_string(),
-                    url: login.url.clone(),
-                    user_code: String::new(),
-                    message: "Complete authorization in your browser (or open the link below)."
-                        .to_string(),
-                },
-            ));
-            login
-                .complete(oauth.client())
-                .await
-                .map_err(|e| e.to_string())
-        }
-    };
+        };
 
     let tokens = match result {
         Ok(t) => t,
