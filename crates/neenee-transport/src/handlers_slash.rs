@@ -19,19 +19,19 @@
 //! it fires session-start hooks every time `/pursue status` runs. Preserved
 //! verbatim; not this refactor's job to fix.
 
-use crate::commands::{expand_command, CustomCommand};
+use crate::commands::{CustomCommand, expand_command};
 use crate::project::init_neenee_config;
-use neenee_agent::mcp::McpRuntime;
-use neenee_agent::orchestration::{
-    compact_round_history, round_response, send_compaction, send_harness_state,
-    ContextProjectionSettings, RoundInput,
-};
 use neenee_agent::Agent;
 use neenee_agent::RoundLifecycle;
+use neenee_agent::mcp::McpRuntime;
+use neenee_agent::orchestration::{
+    ContextProjectionSettings, RoundInput, compact_round_history, round_response, send_compaction,
+    send_harness_state,
+};
 use neenee_core::{
-    estimate_bytes, estimate_tokens, repeat::parse_schedule_arg, AgentNotice, AgentRequest,
-    AgentResponse, CronExpr, LoopStatus, Message, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, RoundEvent, Schedule, ScheduledJob, Tool,
+    AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
+    NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent, Schedule, ScheduledJob,
+    Tool, estimate_bytes, estimate_tokens, repeat::parse_schedule_arg,
 };
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
@@ -41,17 +41,17 @@ use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, RwLock,
+    atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{mpsc, RwLock as AsyncRwLock};
+use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
 use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
-use crate::side::{spawn_parent_status_watcher, start_active_turn, SideSession};
+use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
-use crate::startup::{split_custom_command, BuiltinCmd, StartupMode};
+use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
 
 async fn supersede_for_session_switch(
     lifecycle: &RoundLifecycle,
@@ -220,15 +220,13 @@ pub async fn dispatch(
             // fades.
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::Notice(
-                    AgentNotice::command_ack(format!(
-                        "Autopilot {}: the agent {} run without human intervention — the question \
+                RoundEvent::Notice(AgentNotice::command_ack(format!(
+                    "Autopilot {}: the agent {} run without human intervention — the question \
                          tool is reclaimed, tool permissions auto-approve, and no prompts or \
                          questions can pause the session.",
-                        if enabled { "ON" } else { "OFF" },
-                        if enabled { "will" } else { "won't" },
-                    )),
-                ),
+                    if enabled { "ON" } else { "OFF" },
+                    if enabled { "will" } else { "won't" },
+                ))),
             ));
             let _ = resp_tx.send(round_response(
                 &session.id().await,
@@ -947,13 +945,19 @@ pub async fn dispatch(
             // fs-watch): only the user knows when their edit is complete, and
             // a half-written file would otherwise tear down live sessions.
             let mut reloaded = Config::load();
-            // Re-apply the project-scope MCP layer too (ADR-0085 §2/§3): a
-            // project `.neenee/config.toml` edit is exactly the kind of change
-            // `/reload` exists to surface without a restart. Project MCP is
-            // still gated by trust (§5): untrusted projects load nothing here.
+            // Re-apply the project-scope MCP AND hooks layer (ADR-0085 §2/§3 +
+            // hooks extension): a project `.neenee/config.toml` edit is exactly
+            // the kind of change `/reload` exists to surface without a restart.
+            // Both are still gated by trust (§5): untrusted projects load
+            // nothing here.
+            let project_trusted = trust_gate.is_trusted(project_root_for_side);
             let project_mcp = Config::load_project_mcp(project_root_for_side);
-            if !project_mcp.is_empty() && trust_gate.is_trusted(project_root_for_side) {
+            if project_trusted && !project_mcp.is_empty() {
                 reloaded.merge_project_mcp(project_mcp);
+            }
+            let project_hooks = Config::load_project_hooks(project_root_for_side);
+            if project_trusted && !project_hooks.is_empty() {
+                reloaded.merge_project_hooks(project_hooks);
             }
             // MCP: diff + (re)connect/disconnect. The next request picks up the
             // new tool set automatically (visible_tools recomputes each turn).
@@ -963,7 +967,15 @@ pub async fn dispatch(
             // seeded only at startup. Each setter is replace-style and safe to
             // re-run; permissions seeding is additive (new allow-rules take
             // effect; removed rules are noted but not revoked this session).
-            agent.set_bash_policy(&reloaded.bash_policy);
+            // Bash policy: harden for untrusted projects (P2). Mirrors the
+            // bootstrap decision: a config edit must not drop the untrusted
+            // `confirm` rule mid-run.
+            let effective_bash_policy = if project_trusted {
+                reloaded.bash_policy.clone()
+            } else {
+                reloaded.bash_policy.clone().with_untrusted_hardening()
+            };
+            agent.set_bash_policy(&effective_bash_policy);
             agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
             agent.set_doom_guard_config(reloaded.principal.nudge.clone());
             agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
@@ -1015,23 +1027,36 @@ pub async fn dispatch(
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Trust) => {
-            // ADR-0085 §5: grant trust for this project, then activate its
-            // project-scope MCP by reconfiguring with the merged config.
+            // ADR-0085 §5 (+ hooks extension): grant trust for this project,
+            // then activate its project-scope MCP servers AND hooks by
+            // reconfiguring/re-seeding with the merged config. Trust applies to
+            // the git repo root, so subdirectories and worktrees share one
+            // grant.
             let project_mcp = Config::load_project_mcp(project_root_for_side);
-            if project_mcp.is_empty() {
+            let project_hooks = Config::load_project_hooks(project_root_for_side);
+            if project_mcp.is_empty() && project_hooks.is_empty() {
                 let _ = resp_tx.send(round_response(
                     &session.id().await,
                     RoundEvent::Text(
-                        "No MCP servers declared in .neenee/config.toml. Nothing to trust."
+                        "No MCP servers or hooks declared in .neenee/config.toml. Nothing to trust."
                             .to_string(),
                     ),
                 ));
             } else {
                 let newly = trust_gate.trust(project_root_for_side);
-                // Build the effective config = global + now-trusted project MCP.
+                // Build the effective config = global + now-trusted project MCP
+                // and hooks.
                 let mut reloaded = Config::load();
                 reloaded.merge_project_mcp(project_mcp);
+                reloaded.merge_project_hooks(project_hooks);
                 let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+                // Re-seed the hook registry so newly-trusted project hooks take
+                // effect immediately (same path as `/reload`).
+                agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
+                // Trust granted: re-seed bash policy with the RAW (un-hardened)
+                // config so the untrusted `confirm` rule is dropped now that the
+                // project is trusted.
+                agent.set_bash_policy(&reloaded.bash_policy);
                 let connected: Vec<&str> = report
                     .connected
                     .iter()
@@ -1039,36 +1064,42 @@ pub async fn dispatch(
                     .map(|(n, _)| n.as_str())
                     .collect();
                 let msg = if newly {
-                    format!(
-                        "Project trusted. MCP activated: {}",
-                        if connected.is_empty() {
-                            "(none connected)".to_string()
-                        } else {
-                            connected.join(", ")
-                        }
-                    )
+                    let mcp_part = if connected.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" MCP activated: {}.", connected.join(", "))
+                    };
+                    format!("Project trusted.{mcp_part} Project hooks loaded.")
                 } else {
-                    "Project already trusted; reloaded its MCP servers.".to_string()
+                    "Project already trusted; reloaded its MCP servers and hooks.".to_string()
                 };
                 let _ = resp_tx.send(round_response(&session.id().await, RoundEvent::Text(msg)));
             }
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Untrust) => {
-            // ADR-0085 §5: revoke trust and disconnect project-scope MCP by
-            // reconfiguring with global-only config (project servers vanish
-            // from the set → reconfigure removes them).
+            // ADR-0085 §5 (+ hooks extension): revoke trust and disconnect
+            // project-scope MCP by reconfiguring with global-only config
+            // (project servers vanish from the set → reconfigure removes them).
+            // Project hooks are also dropped: re-seeding with global-only hooks
+            // leaves the registry free of any project-supplied commands.
             let was_trusted = trust_gate.untrust(project_root_for_side);
             let reloaded = Config::load(); // global only; no project merge now
             let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
+            // Trust revoked: re-seed the hardened bash policy so the
+            // untrusted `confirm` rule is back in force for fetch/install/
+            // pipe-to-shell commands.
+            let hardened = reloaded.bash_policy.clone().with_untrusted_hardening();
+            agent.set_bash_policy(&hardened);
             let msg = if was_trusted {
+                let mcp_part = if report.removed.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", report.removed.join(", "))
+                };
                 format!(
-                    "Project untrusted. Disconnected project MCP servers{}.",
-                    if report.removed.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {}", report.removed.join(", "))
-                    }
+                    "Project untrusted. Disconnected project MCP servers{mcp_part}. Project hooks unloaded."
                 )
             } else {
                 "Project was not trusted; nothing to revoke.".to_string()

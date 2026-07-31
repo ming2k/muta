@@ -21,7 +21,7 @@ use crate::fsutil;
 use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The on-disk trust set. Serialized as a JSON array of canonical path strings
 /// for human readability and audit (`cat` shows real paths, not opaque hashes).
@@ -109,12 +109,94 @@ impl TrustedProjects {
     }
 }
 
+/// Resolve the path that should be used for trust checks, mirroring the codex
+/// `resolve_root_git_project_for_trust` idea: a trust decision should apply to
+/// the whole repository, not just the current subdirectory or worktree, so a
+/// single grant covers every checkout.
+///
+/// Walks **up** from `start` looking for the nearest ancestor containing a
+/// `.git` entry (pure filesystem inspection — no `git` subprocess):
+/// - `.git` is a directory → a normal repo; return that repo root.
+/// - `.git` is a file (a linked worktree pointer) → read the `gitdir:` line
+///   and, if it points under a `worktrees/` dir, return the **main** repo root
+///   (the common dir's parent) so all worktrees share one trust entry. Other
+///   `gitdir:` shapes are left unresolved (`None`).
+/// - No `.git` ancestor → `None` (caller falls back to `start`).
+///
+/// `start` is treated as a directory; if a file path is passed its parent is
+/// used. Symlinks are *not* canonicalized here — the caller canonicalizes the
+/// final answer via [`TrustedProjects::canon`] before storage/lookup.
+pub fn resolve_trust_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = if start.is_dir() {
+        Some(start)
+    } else {
+        start.parent()
+    };
+
+    while let Some(current) = dir {
+        let git = current.join(".git");
+        if git.is_dir() {
+            // Normal repository: the trust root is this directory.
+            return Some(current.to_path_buf());
+        }
+        if git.is_file() {
+            // Linked worktree: `.git` is a `gitdir: <path>` pointer. Resolve to
+            // the main repository root so a single trust entry covers every
+            // worktree of this repo.
+            if let Some(main_root) = resolve_worktree_main_root(&git) {
+                return Some(main_root);
+            }
+            // Unrecognized gitdir pointer — do not trust a guess.
+            return None;
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// Parse a worktree `.git` pointer file (`gitdir: <path>`) and resolve the
+/// main repository root. Returns `None` unless the pointer resolves into a
+/// `…/.git/worktrees/<name>/<files>` layout, in which case the main root is the
+/// `…/.git` directory's parent.
+fn resolve_worktree_main_root(git_pointer: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(git_pointer).ok()?;
+    let line = content.lines().next()?;
+    let target = line.strip_prefix("gitdir:")?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let resolved = if Path::new(target).is_absolute() {
+        PathBuf::from(target)
+    } else {
+        git_pointer.parent()?.join(target)
+    };
+    // Linked-worktree layout: <main>/.git/worktrees/<name>/<files>. Walk up to
+    // the `worktrees` segment, then one more to `.git`, then one more to the
+    // main repo root.
+    let mut cursor = resolved.parent()?;
+    for _ in 0..3 {
+        if cursor.file_name().and_then(|n| n.to_str()) == Some("worktrees") {
+            // parent = .git, parent again = main repo root.
+            return cursor
+                .parent()
+                .and_then(|p| p.parent())
+                .map(Path::to_path_buf);
+        }
+        cursor = cursor.parent()?;
+    }
+    None
+}
 /// Owned handle pairing a loaded trust store with thread-safe mutation,
 /// exposing the gated decision the bootstrap/reload path needs: "should this
 /// project's external tools auto-load?"
 ///
 /// Held as a single value for the session; share it by wrapping in `Arc` when
 /// multiple owners need to mutate it (`/trust` / `/untrust`).
+///
+/// All membership checks are **git-aware**: the `project_root` passed in is
+/// first resolved to its repository trust root via [`resolve_trust_root`], so a
+/// trust grant made at the repo root covers subdirectories and linked
+/// worktrees. When `start` is outside any git repo, the path is used as-is.
 #[derive(Debug, Default)]
 pub struct TrustGate {
     inner: std::sync::Mutex<TrustedProjects>,
@@ -136,34 +218,39 @@ impl TrustGate {
         }
     }
 
+    /// Resolve a raw project path to its trust root (the git repository root
+    /// when `start` is inside one, else `start` unchanged).
+    fn trust_root(start: &Path) -> PathBuf {
+        resolve_trust_root(start).unwrap_or_else(|| start.to_path_buf())
+    }
+
     /// Whether `project_root` is trusted (project-scope external tools may
-    /// auto-load).
+    /// auto-load). Git-aware: resolves to the repo root first.
     pub fn is_trusted(&self, project_root: &Path) -> bool {
+        let root = Self::trust_root(project_root);
         self.inner
             .lock()
-            .map(|s| s.contains(project_root))
+            .map(|s| s.contains(&root))
             .unwrap_or(false)
     }
 
     /// Mark `project_root` trusted and persist. Returns whether it was newly
-    /// added.
+    /// added. Git-aware: the grant is recorded against the repo root.
     pub fn trust(&self, project_root: &Path) -> bool {
-        self.inner
-            .lock()
-            .map(|mut s| s.add(project_root))
-            .unwrap_or(false)
+        let root = Self::trust_root(project_root);
+        self.inner.lock().map(|mut s| s.add(&root)).unwrap_or(false)
     }
 
     /// Revoke trust for `project_root` and persist. Returns whether it was
-    /// previously trusted.
+    /// previously trusted. Git-aware: revokes the repo-root entry.
     pub fn untrust(&self, project_root: &Path) -> bool {
+        let root = Self::trust_root(project_root);
         self.inner
             .lock()
-            .map(|mut s| s.remove(project_root))
+            .map(|mut s| s.remove(&root))
             .unwrap_or(false)
     }
 }
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -224,12 +311,80 @@ mod tests {
     #[test]
     fn missing_or_corrupt_file_is_empty() {
         // Non-existent path.
-        assert!(TrustedProjects::load_from(std::path::Path::new("/no/such/file"))
-            .roots_sorted()
-            .is_empty());
+        assert!(
+            TrustedProjects::load_from(std::path::Path::new("/no/such/file"))
+                .roots_sorted()
+                .is_empty()
+        );
         // Corrupt JSON.
         let path = scratch_file();
         std::fs::write(&path, "not json {").unwrap();
         assert!(TrustedProjects::load_from(&path).roots_sorted().is_empty());
+    }
+
+    // --- git-aware trust-root resolution ---
+
+    /// A scratch repo root with a `.git` directory marker.
+    fn git_repo(subdirs: &[&str]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("neenee-git-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        for sub in subdirs {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn resolve_trust_root_finds_repo_from_subdirectory() {
+        let root = git_repo(&["src/nested"]);
+        let deep = root.join("src/nested");
+        assert_eq!(resolve_trust_root(&deep), Some(root.clone()));
+        // The repo root itself resolves to itself.
+        assert_eq!(resolve_trust_root(&root), Some(root));
+    }
+
+    #[test]
+    fn resolve_trust_root_none_when_outside_any_repo() {
+        let dir = std::env::temp_dir().join(format!("neenee-nogit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(resolve_trust_root(&dir), None);
+    }
+
+    #[test]
+    fn resolve_trust_root_follows_worktree_pointer_to_main_root() {
+        // Build <main>/.git/worktrees/<name>/ and a worktree dir whose `.git`
+        // file points at it.
+        let main = std::env::temp_dir().join(format!("neenee-main-{}", uuid::Uuid::new_v4()));
+        let wt_private = main.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&wt_private).unwrap();
+        let worktree = std::env::temp_dir().join(format!("neenee-wt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", wt_private.display()),
+        )
+        .unwrap();
+
+        // Resolving from the worktree should land on the MAIN repo root, so a
+        // single trust grant covers both the main checkout and the worktree.
+        assert_eq!(resolve_trust_root(&worktree), Some(main));
+    }
+
+    #[test]
+    fn trust_gate_grant_at_repo_root_covers_subdirectory() {
+        // Git-awareness lives in TrustGate: trusting the repo root means an
+        // is_trusted query from a subdirectory returns true.
+        let root = git_repo(&["pkg/inner"]);
+        let deep = root.join("pkg/inner");
+
+        let gate = TrustGate::from_store(TrustedProjects::default());
+        assert!(!gate.is_trusted(&deep), "nothing trusted yet");
+        gate.trust(&root);
+        assert!(gate.is_trusted(&deep), "subdir covered by repo-root grant");
+        gate.untrust(&deep);
+        assert!(
+            !gate.is_trusted(&root),
+            "untrust from a subdir revokes the grant"
+        );
     }
 }

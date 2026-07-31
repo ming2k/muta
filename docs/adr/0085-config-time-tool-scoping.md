@@ -176,6 +176,26 @@ connect, recorded as a remembered decision:
 This mirrors git's `safe.directory` and macOS Gatekeeper: opt-in execution of
 repo-supplied code paths. Global-only configs are unaffected.
 
+> **Scope extension (post-ADR).** The trust gate was broadened from MCP-only to
+> a whole-package gate, matching the codex "project-local config, hooks, and
+> exec policies" model:
+> - **`[[hooks]]`** declared in a project `.neenee/config.toml` now load only
+>   under the same trust grant (`Config::load_project_hooks` +
+>   `merge_project_hooks`). A project hook's `command` typically runs a
+>   repo-supplied script, so it is the same hazard as a project MCP server.
+> - **`.neenee/commands/`** slash-command templates are skipped when the project
+>   is untrusted (`discover_commands_trusted`); user-global commands always load.
+> - **Trust is git-aware:** the grant resolves to the repository root
+>   (`resolve_trust_root`, pure filesystem `.git` walk incl. linked worktrees),
+>   so one grant covers every subdirectory and worktree of a repo.
+> - **Bash hardening for untrusted projects:** `bash_policy` gets a
+>   `with_untrusted_hardening` layer — `autopilot_confirm` locked to deny and a
+>   `confirm` rule prepended for fetch/install/pipe-to-shell commands (the
+>   classic prompt-injection payloads). `/trust` re-seeds the raw config.
+> The `/trust` and `/untrust` commands apply/revoke the whole package (MCP +
+> hooks) and re-seed the bash policy accordingly.
+
+
 ### 6. Hot reload via explicit command, not file watching
 
 Because `McpRuntime.configs` is frozen, editing config requires an explicit

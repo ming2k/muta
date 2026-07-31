@@ -18,8 +18,9 @@
 //! short-circuits and must be dispatched by the caller before invoking
 //! [`assemble`].
 
-use crate::commands::{CustomCommand, discover_commands};
+use crate::commands::{CustomCommand, discover_commands_trusted};
 use neenee_agent::catalog;
+use neenee_agent::mcp::{McpCatalog, McpRuntime};
 use neenee_agent::orchestration::{
     MidTurnPruneProjectionGate, ProxyProvider, round_response, start_schedule_scheduler,
 };
@@ -28,7 +29,6 @@ use neenee_core::{
     AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider,
     RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
 };
-use neenee_agent::mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
     config::{Config, TuiConfig},
     embedding, lock, paths, provider_usage,
@@ -114,11 +114,15 @@ pub struct Bootstrap {
     pub process_lock: Option<lock::ProcessLock>,
 }
 
-
 /// Ensure the four XDG application roots exist. Best-effort.
 pub fn ensure_app_roots() {
     let dirs = paths::get();
-    for dir in [&dirs.config_dir, &dirs.data_dir, &dirs.state_dir, &dirs.cache_dir] {
+    for dir in [
+        &dirs.config_dir,
+        &dirs.data_dir,
+        &dirs.state_dir,
+        &dirs.cache_dir,
+    ] {
         if let Err(error) = std::fs::create_dir_all(dir) {
             tracing::warn!(?error, dir = %dir.display(), "bootstrap: could not create app dir");
         }
@@ -174,31 +178,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
 
     let (req_tx, req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
-    let custom_commands = discover_commands()
-        .into_iter()
-        .filter(|command| {
-            !BuiltinCmd::ALL
-                .iter()
-                .any(|(name, _)| *name == command.name)
-        })
-        .map(|command| (command.name.clone(), command))
-        .collect::<HashMap<String, CustomCommand>>();
-    let custom_command_suggestions = {
-        let mut suggestions = custom_commands
-            .values()
-            .map(|command| {
-                (
-                    format!("/{}", command.name),
-                    command
-                        .description
-                        .clone()
-                        .unwrap_or_else(|| "Run project command".to_string()),
-                )
-            })
-            .collect::<Vec<_>>();
-        suggestions.sort_by(|left, right| left.0.cmp(&right.0));
-        suggestions
-    };
 
     let mut config = Config::load();
     if catalog::migrate_legacy_provider_instances(&mut config)
@@ -429,29 +408,70 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // policies are data-driven. Runtime "Always" decisions still write to
     // permissions.json; these config rules re-apply on every start.
     agent.seed_permissions_from_config(&config.permissions.allow);
-    // Project-scope trust gate (ADR-0085 §5). A project's `.neenee/config.toml`
-    // may execute processes via `[mcp.*]`, so it loads only after the user has
-    // explicitly trusted this project root (`/trust`). Global config is
+    // Project-scope trust gate (ADR-0085 §5, extended). A project's
+    // `.neenee/config.toml` may declare `[mcp.*]` servers (which execute
+    // processes) and `[[hooks]]` entries (which run shell commands at lifecycle
+    // points). Loading those automatically from a cloned or vendored working
+    // tree is the same class of hazard as an npm `postinstall` script or a git
+    // hook: a malicious repo must not gain code execution merely because the
+    // user opened it. The whole package — MCP servers AND hooks — loads only
+    // after the user has explicitly trusted this project root (`/trust`). The
+    // trust root is git-aware (resolve_trust_root), so one grant covers every
+    // subdirectory and linked worktree of the repo. Global config is
     // user-authored and trusted unconditionally.
     let trust_gate = Arc::new(TrustGate::load());
-    // Layer project-scope MCP on top of global (ADR-0085 §2/§3): a project
-    // `[mcp.*]` entry overrides a same-named global one and adds new servers.
-    // Applied only when the project is trusted; otherwise recorded-but-not-
-    // loaded, with a one-time hint directing the user to `/trust`.
+    let project_trusted = trust_gate.is_trusted(&project_root);
     let project_mcp = Config::load_project_mcp(&project_root);
-    if !project_mcp.is_empty() {
-        if trust_gate.is_trusted(&project_root) {
+    let project_hooks = Config::load_project_hooks(&project_root);
+    let has_project_external = !project_mcp.is_empty() || !project_hooks.is_empty();
+    if project_trusted {
+        if !project_mcp.is_empty() {
             config.merge_project_mcp(project_mcp);
-        } else {
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format!(
-                    "This project declares MCP servers in .neenee/config.toml. \
-                     Run /trust to load them (they run project-supplied commands)."
-                )),
-            ));
+        }
+        if !project_hooks.is_empty() {
+            config.merge_project_hooks(project_hooks);
         }
     }
+    if !project_trusted && has_project_external {
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Text(
+                "This project declares MCP servers and/or hooks in .neenee/config.toml. \
+                 They run project-supplied commands, so they stay disabled until you run \
+                 /trust to load them."
+                    .to_string(),
+            ),
+        ));
+    }
+    // Project-local slash commands (`.neenee/commands/`) are prompt-text
+    // templates: a malicious repo must not inject `/<name>` commands just
+    // because the directory was opened. Only the user-global commands dir
+    // loads when the project is untrusted; project commands join once trusted.
+    let custom_commands = discover_commands_trusted(project_trusted)
+        .into_iter()
+        .filter(|command| {
+            !BuiltinCmd::ALL
+                .iter()
+                .any(|(name, _)| *name == command.name)
+        })
+        .map(|command| (command.name.clone(), command))
+        .collect::<HashMap<String, CustomCommand>>();
+    let custom_command_suggestions = {
+        let mut suggestions = custom_commands
+            .values()
+            .map(|command| {
+                (
+                    format!("/{}", command.name),
+                    command
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| "Run project command".to_string()),
+                )
+            })
+            .collect::<Vec<_>>();
+        suggestions.sort_by(|left, right| left.0.cmp(&right.0));
+        suggestions
+    };
     // Connect every configured MCP server in the BACKGROUND so a slow/unreachable
     // server (8s connect timeout each) never delays the first frame. The
     // runtime is ready immediately with every enabled server in `Connecting`;
@@ -542,7 +562,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);
     agent.set_skip_interactive_input(config.principal.skip_interactive_input);
-    agent.set_bash_policy(&config.bash_policy);
+    // Bash policy: harden for untrusted projects (P2). An untrusted project's
+    // `bash_policy` gets a fetch/install/pipe-to-shell `confirm` rule prepended
+    // and its `autopilot_confirm` locked to deny, so a human eyeballs classic
+    // prompt-injection payloads from a cloned/vendored tree. `/trust` re-seeds
+    // with the raw config.
+    let bash_policy = if project_trusted {
+        config.bash_policy.clone()
+    } else {
+        config.bash_policy.clone().with_untrusted_hardening()
+    };
+    agent.set_bash_policy(&bash_policy);
 
     // Lifecycle event hooks (ADR-0025): each `[[hooks]]` entry runs a shell
     // command at one lifecycle point (PreToolUse / PostToolUse / Stop / …).

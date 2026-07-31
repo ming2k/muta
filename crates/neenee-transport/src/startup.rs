@@ -73,8 +73,8 @@ define_builtin_commands! {
     Skill       = "/skill"        : "Load a skill by name",
     Init        = "/init"         : "Initialize a .neenee/ config tree",
     Reload      = "/reload"       : "Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks)",
-    Trust       = "/trust"        : "Trust this project's .neenee/config.toml external tools (MCP) and load them",
-    Untrust     = "/untrust"      : "Revoke trust for this project's external tools and disconnect them",
+    Trust       = "/trust"        : "Trust this project's .neenee/config.toml (MCP servers + hooks) and load them",
+    Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks)",
     Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
     Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
     Help        = "/help"         : "Show available commands and keybindings",
@@ -153,12 +153,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
 
     if let Some(id) = attach {
         if rest.is_empty() {
-            return (
-                StartupMode::Attach(id),
-                project,
-                autopilot,
-                single_instance,
-            );
+            return (StartupMode::Attach(id), project, autopilot, single_instance);
         }
         // `--attach` with a positional subcommand is ambiguous (the client
         // drives a remote session; local modes like resume/doctor do not

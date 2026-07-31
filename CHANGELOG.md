@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Project trust gate extended to the whole package (hooks + commands),
+  git-root alignment, and untrusted bash hardening.** The per-project trust
+  gate (ADR-0085 §5) previously gated only project-scope `[mcp.*]` servers. It
+  now matches the codex "project-local config, hooks, and exec policies" model:
+  - **`[[hooks]]` declared in a project `.neenee/config.toml`** now load only
+    under the same trust grant. A project hook runs a repo-supplied shell
+    command (`.neenee/hooks/*.sh`), so it is the same class of prompt-injection
+    hazard as a project MCP server and must not auto-execute from a
+    cloned/vendored tree. (`Config::load_project_hooks` + `merge_project_hooks`.)
+  - **`.neenee/commands/` slash-command templates** are skipped while a project
+    is untrusted; user-global commands always load. (`discover_commands_trusted`.)
+  - **Trust is now git-aware.** A grant resolves to the repository root via a
+    pure-filesystem `.git` walk (including linked worktrees), so one trust
+    decision covers every subdirectory and worktree of a repository — no more
+    re-prompting when `cwd` is a subdirectory or a linked worktree.
+    (`resolve_trust_root`.)
+  - **Bash hardening for untrusted projects.** While a project is untrusted,
+    `bash_policy` gets `autopilot_confirm` locked to `deny` and a `confirm`
+    rule prepended for fetch/install/pipe-to-shell commands (`npm install`,
+    `pip install`, `curl … | sh`, …) — the classic prompt-injection payloads.
+    `/trust` re-seeds the raw (un-hardened) policy.
+  - `/trust` and `/untrust` now apply/revoke the whole package (MCP + hooks)
+    and re-seed the bash policy accordingly; their help text reflects this.
+
 ### Changed
 
 ### Removed

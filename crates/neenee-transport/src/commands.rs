@@ -29,6 +29,24 @@ pub fn discover_commands() -> Vec<CustomCommand> {
     discover_commands_in(&dirs)
 }
 
+/// Discover commands, gating the *project-local* directory (`.neenee/commands`)
+/// behind a trust flag. User-global commands (`$XDG_DATA_HOME/neenee/commands`)
+/// always load — they live on the user's own machine and are trusted
+/// unconditionally, mirroring the global-config rule.
+///
+/// When `project_trusted` is `false`, project-local slash commands are skipped
+/// entirely (not discovered, so not completable, not runnable). This closes the
+/// gap where a cloned/vendored repo could inject `/<name>` command templates
+/// (arbitrary prompt text) merely because the user opened the directory.
+pub fn discover_commands_trusted(project_trusted: bool) -> Vec<CustomCommand> {
+    let mut dirs = Vec::with_capacity(2);
+    if project_trusted {
+        dirs.push(project_commands_dir());
+    }
+    dirs.push(paths::get().user_commands_dir());
+    discover_commands_in(&dirs)
+}
+
 fn discover_commands_in(dirs: &[PathBuf]) -> Vec<CustomCommand> {
     let mut commands = Vec::new();
     let mut seen_names = HashSet::new();
@@ -195,6 +213,39 @@ mod tests {
         assert_eq!(commands[0].name, "review");
         assert_eq!(commands[0].description.as_deref(), Some("Review changes"));
         assert_eq!(commands[0].template, "Inspect $ARGUMENTS");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trusted_gate_skips_project_dir_when_untrusted() {
+        // discover_commands_trusted must OMIT the project dir when
+        // `project_trusted` is false (so a cloned/vendored repo cannot inject
+        // `/<name>` prompt templates), while still loading user-global ones.
+        let root = std::env::temp_dir().join(format!("neenee-trust-cmd-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let user = root.join("user");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(project.join("danger.md"), "pwn $ARGUMENTS").unwrap();
+        std::fs::write(user.join("safe.md"), "safe $ARGUMENTS").unwrap();
+
+        // Untrusted: project command must NOT appear.
+        let untrusted = discover_commands_in(&[user.clone()]);
+        assert_eq!(untrusted.len(), 1);
+        assert_eq!(
+            untrusted[0].name, "safe",
+            "project command hidden when untrusted"
+        );
+
+        // Trusted: both project and user commands appear; project wins on name
+        // clash (first-seen priority).
+        let trusted = discover_commands_in(&[project, user]);
+        assert_eq!(trusted.len(), 2);
+        assert!(
+            trusted.iter().any(|c| c.name == "danger"),
+            "project command visible when trusted"
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -242,6 +242,47 @@ impl Default for BashPolicyConfig {
     }
 }
 
+impl BashPolicyConfig {
+    /// Return a copy hardened for an **untrusted** project (codex
+    /// `UnlessTrusted` analogue). Applied only when the project is not yet
+    /// trusted; `/trust` re-seeds with the raw config.
+    ///
+    /// Two adjustments, both reversibly additive:
+    /// 1. Lock `autopilot_confirm` to `Deny`. A confirmation-gated command
+    ///    must not auto-proceed when no human is reachable — a cloned/vendored
+    ///    repo is exactly the case a human should eyeball.
+    /// 2. Prepend a `confirm` rule matching common prompt-injection payloads:
+    ///    package-manager installs (`npm i`, `pip install`, `cargo add`,
+    ///    `go get`, …) and pipe-to-shell execution (`curl … | sh`, `wget … |
+    ///    bash`). The built-in destructive-command rules already cover `rm`/
+    ///    `git reset`; this layer covers *fetch-and-execute*, the other classic
+    ///    untrusted-repo hazard.
+    ///
+    /// This is a lint (see `bash_policy.rs`), not a capability boundary — the
+    /// envoy `OperationScope` remains the real wall — but it surfaces the
+    /// decision to the human in the loop instead of letting it run silently.
+    pub fn with_untrusted_hardening(mut self) -> Self {
+        self.autopilot_confirm = BashPolicyAutopilotAction::Deny;
+        let hardening_rule = BashPolicyRuleConfig {
+            name: "untrusted-project confirm".to_string(),
+            matcher: BashPolicyMatcherConfig::Regex,
+            pattern: r"(?i)(^|[;&|]\s*|\s\|\s)*(?:npm\s+(?:install|i|ci|exec)\b|npx\s+-y\b|pnpm\s+(?:install|add|exec)\b|yarn\s+(?:add|install)\b|pip3?\s+install\b|pipx\s+install\b|uv\s+(?:pip\s+)?install\b|poetry\s+add\b|cargo\s+(?:add|install)\b|go\s+get\b|gem\s+install\b|brew\s+install\b|apt(?:-get)?\s+install\b|yum\s+install\b|dnf\s+install\b|pacman\s+-S\b|\b(?:curl|wget)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|ruby|perl)\b)".to_string(),
+            action: BashPolicyActionConfig::Confirm,
+            reason: Some(
+                "Project is not trusted: confirm fetch/install/pipe-to-shell commands."
+                    .to_string(),
+            ),
+        };
+        // Prepend so it is evaluated first (a later user `allow` rule for the
+        // same command still wins, matching the override semantics).
+        let mut rules = Vec::with_capacity(self.rules.len() + 1);
+        rules.push(hardening_rule);
+        rules.append(&mut self.rules);
+        self.rules = rules;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BashPolicyAutopilotAction {
@@ -1145,6 +1186,50 @@ impl Config {
         }
     }
 
+    /// Load only the `[[hooks]]` array from a project-local
+    /// `.neenee/config.toml`. Returns an empty vec when the file or table is
+    /// absent. Like [`Self::load_project_mcp`], this is a *narrow* projection
+    /// (just the hooks array) so an unrelated key in the project file does not
+    /// fail the whole load. Project-scope hooks are untrusted until a trust
+    /// grant exists; the caller applies the gate.
+    ///
+    /// A project `[[hooks]]` entry whose `command` points at a project-supplied
+    /// script (e.g. `.neenee/hooks/lint.sh`) is the same class of hazard as a
+    /// project `[mcp.*]` server: a cloned/vendored repo must not gain shell
+    /// execution merely because the user opened it.
+    pub fn load_project_hooks(project_root: &std::path::Path) -> Vec<HookSpec> {
+        let path = project_root.join(".neenee/config.toml");
+        let Some(content) = fs::read_to_string(&path).ok() else {
+            return Vec::new();
+        };
+        // Deserialize into a struct that only declares `hooks`, ignoring every
+        // other key the project file may carry (deny_unknown_fields off).
+        #[derive(Deserialize)]
+        struct ProjectHooksProjection {
+            #[serde(default)]
+            hooks: Vec<HookSpec>,
+        }
+        match toml::from_str::<ProjectHooksProjection>(&content) {
+            Ok(parsed) => parsed.hooks,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "project .neenee/config.toml has invalid [[hooks]]; ignoring project hooks"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Append project-local `[[hooks]]` to this config's (global-origin) hooks.
+    /// Project hooks are appended *after* global ones so the global ordering is
+    /// preserved; hook semantics within one event are order-independent (each
+    /// hook decides independently), so concatenation is sufficient.
+    pub fn merge_project_hooks(&mut self, project_hooks: Vec<HookSpec>) {
+        self.hooks.extend(project_hooks);
+    }
+
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         Self::save_inner(self, false)
     }
@@ -1301,6 +1386,74 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_hardening_locks_autopilot_confirm_and_prepends_rule() {
+        // A default (trusted-shape) policy allows autopilot-confirm to be
+        // configured; hardening for an untrusted project forces Deny and
+        // prepends exactly one `confirm` rule for fetch/install/pipe-to-shell.
+        let mut base = BashPolicyConfig::default();
+        base.autopilot_confirm = BashPolicyAutopilotAction::Allow; // user opted in
+        let hardened = base.clone().with_untrusted_hardening();
+
+        assert_eq!(
+            hardened.autopilot_confirm,
+            BashPolicyAutopilotAction::Deny,
+            "untrusted project must not auto-proceed confirm-gated commands"
+        );
+        // Exactly one hardening rule prepended.
+        assert!(
+            hardened
+                .rules
+                .iter()
+                .any(|r| r.name == "untrusted-project confirm"),
+            "hardening rule present"
+        );
+        assert_eq!(
+            hardened.rules.len(),
+            base.rules.len() + 1,
+            "only the hardening rule was added"
+        );
+        // The hardening rule is first (prepended) so it is evaluated before any
+        // user rule.
+        assert_eq!(hardened.rules[0].name, "untrusted-project confirm");
+        assert_eq!(hardened.rules[0].action, BashPolicyActionConfig::Confirm);
+    }
+
+    #[test]
+    fn untrusted_hardening_matches_common_injection_payloads() {
+        // The hardening rule's pattern must target the classic untrusted-repo
+        // payloads. The regex itself is compiled and exercised in the agent
+        // crate (which owns `regex`); here we assert the pattern text covers
+        // the expected command families so a refactor cannot silently narrow it.
+        let hardened = BashPolicyConfig::default().with_untrusted_hardening();
+        let rule = hardened
+            .rules
+            .iter()
+            .find(|r| r.name == "untrusted-project confirm")
+            .expect("hardening rule");
+        let pattern = rule.pattern.as_str();
+
+        // Each token anchors one payload family the rule must catch.
+        for needle in [
+            "npm\\s+(?:install",
+            "npx\\s+-y",
+            "pip3?\\s+install",
+            "uv\\s+(?:pip\\s+)?install",
+            "cargo\\s+(?:add|install)",
+            "go\\s+get",
+            "brew\\s+install",
+            "apt",
+            "curl",
+            "wget",
+            "\\|\\s*(?:sh|bash|zsh|python3?|ruby|perl)",
+        ] {
+            assert!(
+                pattern.contains(needle),
+                "hardening pattern missing {needle:?} (got: {pattern})"
+            );
+        }
+    }
 
     #[test]
     fn agent_table_round_trips_through_toml() {
@@ -1818,10 +1971,7 @@ openai = "creds-key"
     // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------
 
     fn scratch_project_root() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "neenee-project-mcp-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("neenee-project-mcp-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join(".neenee")).unwrap();
         dir
     }
@@ -1894,10 +2044,9 @@ openai = "creds-key"
                 ..McpServerConfig::default()
             },
         );
-        global.mcp.insert(
-            "only-global".to_string(),
-            McpServerConfig::default(),
-        );
+        global
+            .mcp
+            .insert("only-global".to_string(), McpServerConfig::default());
 
         let mut project = HashMap::new();
         // Same name → wholesale override (new command).
@@ -1915,11 +2064,95 @@ openai = "creds-key"
         global.merge_project_mcp(project);
 
         // Override took effect.
-        assert_eq!(global.mcp["shared"].command, vec!["project-cmd".to_string()]);
+        assert_eq!(
+            global.mcp["shared"].command,
+            vec!["project-cmd".to_string()]
+        );
         assert!(!global.mcp["shared"].enabled);
         // Both pre-existing and added survive.
         assert!(global.mcp.contains_key("only-global"));
         assert!(global.mcp.contains_key("only-project"));
         assert_eq!(global.mcp.len(), 3);
+    }
+
+    #[test]
+    fn load_project_hooks_reads_hooks_array() {
+        let root = scratch_project_root();
+        std::fs::write(
+            root.join(".neenee/config.toml"),
+            r#"
+                [[hooks]]
+                event   = "PostToolUse"
+                matcher = "Write|Edit"
+                command = ".neenee/hooks/lint.sh"
+
+                [[hooks]]
+                event   = "Stop"
+                command = ".neenee/hooks/notify.sh"
+            "#,
+        )
+        .unwrap();
+
+        let hooks = Config::load_project_hooks(&root);
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].event, HookEventKind::PostToolUse);
+        assert_eq!(hooks[0].command, ".neenee/hooks/lint.sh");
+        assert_eq!(hooks[1].event, HookEventKind::Stop);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_project_hooks_is_empty_when_file_absent() {
+        let root = scratch_project_root();
+        // No config.toml written.
+        assert!(Config::load_project_hooks(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_project_hooks_ignores_unrelated_keys_and_bad_toml() {
+        let root = scratch_project_root();
+        // A project file may carry non-hooks tables; only [[hooks]] projects.
+        std::fs::write(
+            root.join(".neenee/config.toml"),
+            r#"
+                [mcp.something]
+                command = ["x"]
+
+                [[hooks]]
+                event = "Stop"
+                command = "echo done"
+            "#,
+        )
+        .unwrap();
+        let hooks = Config::load_project_hooks(&root);
+        assert_eq!(hooks.len(), 1, "mcp ignored, one hook projected");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Structurally invalid TOML → empty (never panics).
+        let root2 = scratch_project_root();
+        std::fs::write(root2.join(".neenee/config.toml"), "this is = = not toml").unwrap();
+        assert!(Config::load_project_hooks(&root2).is_empty());
+        let _ = std::fs::remove_dir_all(&root2);
+    }
+
+    #[test]
+    fn merge_project_hooks_appends_to_global() {
+        let mut global = Config::default();
+        global.hooks.push(HookSpec {
+            event: HookEventKind::Stop,
+            matcher: None,
+            command: "global-notify.sh".to_string(),
+        });
+        let project_hooks = vec![HookSpec {
+            event: HookEventKind::PostToolUse,
+            matcher: Some("Write".to_string()),
+            command: ".neenee/hooks/lint.sh".to_string(),
+        }];
+        global.merge_project_hooks(project_hooks);
+        assert_eq!(global.hooks.len(), 2, "global + project appended");
+        // Global hook ordering preserved; project hooks come after.
+        assert_eq!(global.hooks[0].command, "global-notify.sh");
+        assert_eq!(global.hooks[1].command, ".neenee/hooks/lint.sh");
     }
 }
