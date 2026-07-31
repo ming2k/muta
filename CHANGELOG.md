@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status-bar `autopilot` badge reflects the flip exactly like a hand-typed
   `/autopilot on`. Revises ADR-0081 consequence #8.
 
+- **ADRs are linked from the documentation index.** `docs/index.md` now lists
+  Architecture Decision Records alongside the How-to, Reference, Explanation,
+  and Contributor sections, so the decision-record catalog is reachable from
+  the entry point instead of only via in-text cross-references.
+
 ### Changed
 - **Multi-session daemon and select-then-attach protocol (ADR-0089).** A
   single `neenee-server`/`neenee daemon` process now hosts any number of
