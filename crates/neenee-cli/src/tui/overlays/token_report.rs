@@ -428,16 +428,12 @@ fn detail_body(
     body.push(Line::from(""));
     body.push(section_heading("Turns", theme));
 
-    // The table is flattened: one row per provider request *attempt*, labelled
-    // "<turn> - <attempt>" (e.g. "1st - 1st", "1st - 2nd"), so a retried turn
-    // shows its attempts individually rather than collapsed into "1st ×2".
-    // Newest-first within each actor bucket; principal turns first, then any
-    // envoy sub-turns beneath an "Envoy" label.
+    // The table is one flat list of the principal's own attempts, newest-first.
+    // (Envoy sub-conversations are forks — their usage belongs to the fork's own
+    // context, so they are not shown here.) One row per attempt: a single-
+    // attempt turn shows a bare ordinal ("1st"); a retried turn shows its later
+    // attempts as "<turn> - <attempt>" ("1st - 2nd").
     let attempts = flat_attempts(report, round.number);
-    let principal_attempts: Vec<&FlatAttempt<'_>> =
-        attempts.iter().filter(|a| a.actor == "principal").collect();
-    let envoy_attempts: Vec<&FlatAttempt<'_>> =
-        attempts.iter().filter(|a| a.actor != "principal").collect();
 
     // Token totals are tinted by their provenance: green when fully reported
     // by the provider, yellow when estimated locally, plain when unknown. A
@@ -455,19 +451,8 @@ fn detail_body(
             Style::default().fg(theme.muted()),
         )));
 
-        for a in &principal_attempts {
+        for a in &attempts {
             push_full_attempt_row(&mut body, a, label_w, theme);
-        }
-
-        if !envoy_attempts.is_empty() {
-            body.push(Line::from(""));
-            body.push(Line::from(Span::styled(
-                "Envoy".to_string(),
-                Style::default().fg(theme.muted()),
-            )));
-            for a in &envoy_attempts {
-                push_full_attempt_row(&mut body, a, label_w, theme);
-            }
         }
     } else {
         const STATE_W: usize = 16;
@@ -481,19 +466,8 @@ fn detail_body(
             Style::default().fg(theme.muted()),
         )));
 
-        for a in &principal_attempts {
+        for a in &attempts {
             push_compact_attempt_row(&mut body, a, label_w, theme);
-        }
-
-        if !envoy_attempts.is_empty() {
-            body.push(Line::from(""));
-            body.push(Line::from(Span::styled(
-                "Envoy".to_string(),
-                Style::default().fg(theme.muted()),
-            )));
-            for a in &envoy_attempts {
-                push_compact_attempt_row(&mut body, a, label_w, theme);
-            }
         }
     }
 
@@ -800,6 +774,12 @@ impl TurnUsage {
 /// Regroup the provider/model ledger rows into the user-facing Round -> Turn
 /// hierarchy. Lifecycle records are authoritative when present; `turns` is
 /// retained as a fallback for legacy in-memory bookings.
+///
+/// Only the principal actor's requests are counted here — an `envoy` tool
+/// call is a forked sub-conversation whose usage belongs to the fork's own
+/// context, not to this main round's usage. So envoy attempts (`actor_id !=
+/// "principal"`) are dropped before aggregation, keeping the round totals,
+/// the round-list table, and the detail table all principal-only.
 fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     let mut rounds = BTreeMap::<u64, RoundUsage>::new();
     for row in &report.rows {
@@ -812,6 +792,9 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
             }
         } else {
             for record in &row.requests {
+                if record.key.actor_id != "principal" {
+                    continue;
+                }
                 rounds
                     .entry(record.key.round)
                     .or_insert_with(|| RoundUsage::new(record.key.round))
@@ -822,58 +805,49 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     rounds.into_values().collect()
 }
 
-/// One per-attempt row in the flattened detail table: the record plus enough
-/// identity to render a `<turn> - <attempt>` label and bucket it under its
-/// actor (principal vs envoy). Newest-first within each bucket.
+/// One per-attempt row in the flattened detail table: the record plus its turn
+/// and attempt numbers, enough to render a `<turn>` / `<turn> - <attempt>`
+/// label. Principal-only (envoy attempts are filtered upstream in
+/// [`usage_rounds`]).
 #[derive(Debug)]
 struct FlatAttempt<'a> {
-    actor: &'a str,
     turn: u32,
     attempt: u32,
     record: &'a RequestUsageRecord,
 }
 
-/// Collect every per-attempt record for `round`, sorted newest-first within
-/// each actor bucket (principal turns first, then envoys). This is the flat
-/// view the detail table renders — one row per attempt rather than the
-/// aggregated `TurnUsage` (so a retried turn shows as `1st - 1st` then
-/// `1st - 2nd` instead of `1st ×2`).
+/// Collect every principal per-attempt record for `round`, newest-first. One
+/// row per attempt rather than the aggregated `TurnUsage`, so a retried turn
+/// shows `1st - 2nd` after `1st` instead of a collapsed `1st ×2`.
 fn flat_attempts<'a>(report: &'a TokenSourceReport, round: u64) -> Vec<FlatAttempt<'a>> {
     let mut out: Vec<FlatAttempt<'a>> = report
         .rows
         .iter()
         .flat_map(|row| row.requests.iter())
-        .filter(|r| r.key.round == round)
+        .filter(|r| r.key.round == round && r.key.actor_id == "principal")
         .map(|r| FlatAttempt {
-            actor: &r.key.actor_id,
             turn: r.key.turn,
             attempt: r.key.attempt,
             record: r,
         })
         .collect();
-    // Sort by (is_envoy, actor, turn, attempt) ascending so a stable reverse
-    // yields newest-first within each bucket while keeping buckets grouped.
-    out.sort_by(|a, b| {
-        (
-            a.actor != "principal",
-            a.actor,
-            a.turn,
-            a.attempt,
-        )
-            .cmp(&(
-                b.actor != "principal",
-                b.actor,
-                b.turn,
-                b.attempt,
-            ))
-    });
+    // Sort by (turn, attempt) ascending, then reverse for newest-first. Ties
+    // in turn are broken by attempt, so a retried turn lists attempt 2 before
+    // attempt 1.
+    out.sort_by_key(|a| (a.turn, a.attempt));
     out.reverse();
     out
 }
 
-/// `<turn ordinal> - <attempt ordinal>` label for a flattened attempt row.
+/// Label for one flattened attempt row. A turn with a single attempt reads as
+/// a bare ordinal ("1st"); a retried turn reads as "<turn> - <attempt>"
+/// ("1st - 2nd").
 fn attempt_label(turn: u32, attempt: u32) -> String {
-    format!("{} - {}", ordinal(turn as u64), ordinal(attempt as u64))
+    if attempt > 1 {
+        format!("{} - {}", ordinal(turn as u64), ordinal(attempt as u64))
+    } else {
+        ordinal(turn as u64)
+    }
 }
 
 fn section_heading(text: &str, theme: &Theme) -> Line<'static> {
@@ -1137,13 +1111,15 @@ mod tests {
 
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
-        // The table is flattened: one row per attempt. Turn 1 was retried, so
-        // it shows as "1st - 1st" (interrupted) then "1st - 2nd" (completed),
-        // not the old collapsed "1st ×2".
-        assert!(detail_text.contains("1st - 1st"));
+        // The table is flattened: one row per attempt, principal-only. Turn 1
+        // was retried (attempt 1 interrupted, attempt 2 completed). A turn's
+        // first attempt shows a bare ordinal; later attempts show
+        // "<turn> - <attempt>".
+        assert!(detail_text.contains("2nd"));
         assert!(detail_text.contains("1st - 2nd"));
+        assert!(detail_text.contains("1st"));
         assert!(!detail_text.contains("×2"));
-        assert!(detail_text.contains("2nd - 1st"));
+        assert!(!detail_text.contains("1st - 1st"));
         assert!(detail_text.contains("2 / 3"));
         assert!(!detail_text.contains("another-provider"));
         assert!(!detail_text.contains("Provider-reported"));
@@ -1357,17 +1333,12 @@ mod tests {
         let detail_text = body_text(&detail);
 
         // Newest-first: turn 2 appears before turn 1. Both have a single
-        // attempt, so the flattened labels are "2nd - 1st" and "1st - 1st".
-        let pos_2nd = detail_text
-            .find("2nd - 1st")
-            .expect("2nd turn attempt label");
-        let pos_1st = detail_text
-            .find("1st - 1st")
-            .expect("1st turn attempt label");
+        // attempt, so they show as bare ordinals ("2nd", "1st").
+        let pos_2nd = detail_text.find("2nd").expect("2nd turn label");
+        let pos_1st = detail_text.find("1st").expect("1st turn label");
         assert!(
             pos_2nd < pos_1st,
-            "attempts must be newest-first (2nd - 1st before 1st - 1st): \
-             got {pos_2nd} vs {pos_1st}"
+            "turns must be newest-first (2nd before 1st): got 2nd@{pos_2nd} vs 1st@{pos_1st}"
         );
 
         // The estimated turn's total (60) is tinted warning-yellow; the
@@ -1399,11 +1370,12 @@ mod tests {
         assert!(detail_text.contains("local estimate"));
     }
 
-    /// Envoy sub-turns are grouped beneath an "Envoy" label and rendered with
-    /// their own bare ordinal (no `↳` glyph), separate from the principal's
-    /// own turns.
+    /// Envoy sub-conversations are forks: their usage belongs to the fork's own
+    /// context, so the round usage view is principal-only. Envoy attempts must
+    /// not appear in the detail table, and their tokens must not leak into the
+    /// round's totals.
     #[test]
-    fn detail_envoy_turns_are_grouped_without_arrow_glyph() {
+    fn detail_excludes_envoy_attempts_and_totals() {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
 
@@ -1412,7 +1384,8 @@ mod tests {
         ledger.settle_request(&p1, RequestUsageStatus::Completed, None, 40);
         let p2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
         ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60);
-        // An envoy sub-turn (turn 1 of the envoy actor) in the same round.
+        // An envoy sub-turn (turn 1 of the envoy actor) in the same round,
+        // with its own token spend that must NOT count toward the round.
         let e1 = ledger.begin_request_for_actor(
             "session", "envoy:call_xyz", "relay", "model-a", 2, 1, 0,
         );
@@ -1422,27 +1395,16 @@ mod tests {
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
 
-        // No stray arrow glyph anywhere.
+        // No envoy section, no envoy attempts, no arrow glyph.
+        assert!(!detail_text.contains("Envoy"));
         assert!(!detail_text.contains('↳'));
-        // Principal turns render newest-first, before the envoy block. With
-        // single attempts each, the flattened labels are "2nd - 1st" then
-        // "1st - 1st".
-        let pos_2nd = detail_text
-            .find("2nd - 1st")
-            .expect("2nd principal attempt");
-        let pos_1st = detail_text
-            .find("1st - 1st")
-            .expect("1st principal attempt");
-        let pos_envoy = detail_text.find("Envoy").expect("Envoy group label");
-        assert!(
-            pos_2nd < pos_1st,
-            "principal attempts must be newest-first (2nd - 1st before 1st - 1st)"
-        );
-        assert!(
-            pos_1st < pos_envoy,
-            "principal turns must come before the Envoy block"
-        );
-        // The envoy block header is present.
-        assert!(detail_text.contains("Envoy"));
+        // The envoy's token spend (120) does not appear — the round total is
+        // the principal-only sum (40 + 60 = 100).
+        assert!(!detail_text.contains("120"));
+        assert!(detail_text.contains("100"));
+        // Principal turns are the only rows; newest-first as bare ordinals.
+        let pos_2nd = detail_text.find("2nd").expect("2nd turn");
+        let pos_1st = detail_text.find("1st").expect("1st turn");
+        assert!(pos_2nd < pos_1st, "principal turns newest-first");
     }
 }
