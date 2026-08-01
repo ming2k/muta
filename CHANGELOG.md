@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-08-01
+
 ### Added
+
+- **DeepSeek V4 Flash (0731) support.** Added `deepseek-v4-flash-0731` model to built-in provider templates (`deepseek`, `opencode_go`), capability registry, baseline fidelity tests, and catalog tests.
 
 - **Project trust gate extended to the whole package (hooks + commands),
   git-root alignment, and untrusted bash hardening.** The per-project trust
@@ -35,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-### Removed
+- **TUI breadcrumb navigation for modal headers.** Updated connection chooser, provider editor, and model settings modals with breadcrumb title headers.
 
 ## [0.22.0] - 2026-07-31
 
@@ -2316,7 +2320,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/ming2k/neenee/releases/tag/v0.22.1
 [0.22.0]: https://github.com/ming2k/neenee/releases/tag/v0.22.0
 [0.21.3]: https://github.com/ming2k/neenee/releases/tag/v0.21.3
 [0.21.2]: https://github.com/ming2k/neenee/releases/tag/v0.21.2
