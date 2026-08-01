@@ -13,13 +13,16 @@ use super::ProviderTemplateSpec;
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash + Pro over
 /// the OpenAI-compatible API, one key). Each id exists in the model registry.
-pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &["deepseek-v4-flash", "deepseek-v4-pro"];
+pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-0731",
+    "deepseek-v4-pro",
+];
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
         id: "deepseek-v4-flash",
@@ -33,8 +36,18 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
+    Model {
+        id: "deepseek-v4-flash-0731",
+        name: "DeepSeek V4 Flash (0731)",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
     Model {
         id: "deepseek-v4-pro",
         name: "DeepSeek V4 Pro",

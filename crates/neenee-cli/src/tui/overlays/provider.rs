@@ -12,9 +12,9 @@ use crate::tui::model::layout::LayoutMap;
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::tui::primitives::{
     ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    content_modal_area, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area,
-    modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
-    render_modal_footer_with_more,
+    breadcrumb_parts, content_modal_area, keymap_body_lines, keymap_page_footer_hints, keyvocab,
+    modal_area, modal_chrome_rows, modal_frame, modal_header, modal_header_parts, render_body,
+    render_modal_footer, render_modal_footer_with_more,
 };
 use crate::tui::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::tui::view::Theme;
@@ -57,15 +57,14 @@ pub fn draw_connections_modal(
 
     let header_rect = f.header;
 
-    // `D delete` is a one-key destructive action the user must always be able
-    // to find, so it rides a custom band (70) that survives width collapse
-    // longer than plain secondaries. `a add` opens the template chooser. There
-    // is no `Enter activate` here — switching the active provider is the Models
+    // `a add` opens the template chooser and is the primary action in this view
+    // (rank 80), surviving width collapse longer than `D delete` (rank 70).
+    // There is no `Enter activate` here — switching the active provider is the Models
     // picker's job; this surface only manages instances.
     let browse_hints: [FooterHint; 5] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::secondary("a", "add"),
+        FooterHint::primary("a", "add"),
         FooterHint::secondary("e", "edit"),
         FooterHint::always(keyvocab::ESC, "close"),
     ];
@@ -597,7 +596,9 @@ pub fn draw_model_editor(
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, &format!("Edit · {title}"), theme);
+    let child_title = format!("Edit {title}");
+    let header = breadcrumb_parts("Models", &child_title);
+    modal_header_parts(frame, f.header, &header, theme);
 
     // Row 0: API key. Present for provider auth editing; hidden for
     // per-model/channel settings.
@@ -916,7 +917,8 @@ pub fn draw_provider_template_chooser(
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    modal_header(frame, f.header, "Connections / Add connection", theme);
+    let header = breadcrumb_parts("Connections", "Add connection");
+    modal_header_parts(frame, f.header, &header, theme);
 
     let mut body: Vec<Line> = Vec::new();
     for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {
@@ -1110,7 +1112,8 @@ pub fn draw_custom_provider_editor(
         Line::from(vec![field_label("Model", focused), value])
     };
 
-    modal_header(frame, f.header, title, theme);
+    let header = breadcrumb_parts("Connections", title);
+    modal_header_parts(frame, f.header, &header, theme);
 
     let token_hint = if editing {
         "blank = keep existing"

@@ -543,6 +543,18 @@ const PRE_MIGRATION: &[Model] = &[
         effort_levels: &[],
     },
     Model {
+        id: "deepseek-v4-flash-0731",
+        name: "DeepSeek V4 Flash (0731)",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
         id: "deepseek-v4-pro",
         name: "DeepSeek V4 Pro",
         family: "deepseek",

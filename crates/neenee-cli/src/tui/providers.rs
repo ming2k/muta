@@ -158,7 +158,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "deepseek",
         label: "DeepSeek",
-        description: "DeepSeek V4 Flash + Pro over OpenAI chat completions",
+        description: "DeepSeek V4 Flash (0731) + Pro over OpenAI chat completions",
         protocol: "openai",
         models: neenee_providers::DEEPSEEK_BUILTIN_MODELS,
         // Official endpoint: the base URL is fixed and pre-filled from

@@ -22,6 +22,7 @@ pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek
 /// are registered for other providers but unserved by go, for example.)
 pub const OPENCODE_GO_SERVED_MODELS: &[&str] = &[
     "deepseek-v4-flash",
+    "deepseek-v4-flash-0731",
     "deepseek-v4-pro",
     "glm-5",
     "glm-5.1",
@@ -60,8 +61,18 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
+    Model {
+        id: "deepseek-v4-flash-0731",
+        name: "DeepSeek V4 Flash (0731)",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
     Model {
         id: "deepseek-v4-pro",
         name: "DeepSeek V4 Pro",

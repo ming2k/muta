@@ -2314,6 +2314,7 @@ mod tests {
             .find(|e| e.id == "deepseek")
             .expect("deepseek entry");
         assert!(entry.offers_model("deepseek-v4-flash"));
+        assert!(entry.offers_model("deepseek-v4-flash-0731"));
         assert!(entry.offers_model("deepseek-v4-pro"));
         let flash = entry.channel_for_model("deepseek-v4-flash").unwrap();
         match &flash.transport {
