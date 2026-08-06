@@ -47,7 +47,7 @@ multiple independent layers exchange it, it prevents a dependency cycle, or
 it is stable serialized/domain vocabulary. Agent-owned policy stays with the
 agent even when it performs no I/O (ADR-0057).
 
-### Foundation implementations — providers, skills, store, and AI SDKs
+### Foundation implementations — providers, persistence, and the LLM client
 
 These crates implement the contracts below orchestration:
 

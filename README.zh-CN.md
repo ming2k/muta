@@ -21,7 +21,7 @@
 
 - **语义化终端界面** — 自研网格+差分渲染引擎（`neenee-tui-engine`），从零构建以替代 ratatui。保留模式网格、写时脏标记差分、宽字符所有权管理、`bce` 感知的 crossterm 后端。支持实时状态、可展开的工具步骤、结构化 diff 展示。
 - **工具调用** — 完整的 ReAct 循环，支持原生与文本回退两种工具调用协议；内置 bash、文件读写、grep、glob、网页搜索及 MCP 服务器。
-- **定时提示** — 用 `/repeat <cron> <提示>` 按时钟调度周期性提示，让代理在无人值守时按计划运行。
+- **定时提示** — 用 `/schedule` 按时钟调度提示：周期性 cron 任务，或倒计时 / 绝对时间的一次性定时器，让代理在无人值守时按计划运行。
 - **持久会话** — 原子写入、上下文压缩、会话恢复与分叉。
 - **技能系统** — 按需加载领域知识，或在被提及时自动注入。
 
@@ -33,7 +33,7 @@
 curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
 ```
 
-> 可用 `NEENEE_VERSION=0.10.0` 指定版本，或用 `INSTALL_DIR=/usr/local/bin` 自定义安装目录。
+> 可用 `NEENEE_VERSION=0.22.1` 指定版本，或用 `INSTALL_DIR=/usr/local/bin` 自定义安装目录。
 
 **或从源码编译**：
 
@@ -53,7 +53,7 @@ cargo run --release
 | `Tab` | 接受斜杠命令 / `@path` 补全 |
 | `Ctrl+M` | 打开模型选择器 |
 | `Ctrl+T` | 打开待办 |
-| `Ctrl+B` | 在输入框和对话流之间切换 |
+| `Ctrl+B` | 光标向左移动一个字符（readline backward-char） |
 | `Ctrl+C` | 复制 → 中断 → 关闭弹窗 → 清空 → 退出 |
 | `Ctrl+V` | 粘贴剪贴板内容 |
 
@@ -61,7 +61,7 @@ cargo run --release
 
 | 命令 | 说明 |
 |------|------|
-| `/repeat <cron> <提示>` | 按 cron 表达式调度提示 |
+| `/schedule <when> <提示>` | 按 cron（周期性）或倒计时 / 绝对时间（一次性）调度提示 |
 | `/compact` | 压缩上下文以释放空间 |
 | `/session list` | 浏览和恢复历史会话 |
 | `/export` | 将对话导出为 Markdown |

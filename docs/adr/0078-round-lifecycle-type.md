@@ -117,12 +117,11 @@ Explicit non-goals: no runner crate, no formal round state machine, and no
 ## References
 
 - [ADR-0009](0009-uncapped-agentic-loop.md),
-  [ADR-0010](0010-slim-goal-primitive.md) — event-driven loop over hard
-  caps and status machines.
+  ADR-0010 — event-driven loop over hard caps and status machines.
 - [ADR-0017](0017-side-conversations.md) — `/btw` side sessions peer the
   protocol.
-- [ADR-0031](0031-pursuit-tools-removed.md) — pursuit is one round with an
-  armed stop-gate, not a loop of turns.
+- ADR-0031 — pursuit is one round with an armed stop-gate, not a loop of
+  turns.
 - [ADR-0047](0047-round-contains-turn-vocabulary.md) — round / turn
   vocabulary this ADR's naming follows.
 - [ADR-0055](0055-session-scoped-request-lifecycle-accounting.md) —

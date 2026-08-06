@@ -97,8 +97,8 @@ execution boundaries in ADR-0062 remain unchanged.
 
 ## References
 
-- [How to use the intelligence workbench](../how-to/use-intelligence-workbench.md)
-- [Configuration reference](../reference/configuration.md#intelligence-workbench)
+- The intelligence workbench and its how-to/configuration pages were removed
+  with the product workspace ([ADR-0073](0073-flat-coding-focused-workspace.md)).
 - [ADR-0014](0014-xdg-persistence-architecture.md)
 - [ADR-0035](0035-application-layer-split.md)
 - [ADR-0062](0062-longport-openapi-quant-adapter.md)

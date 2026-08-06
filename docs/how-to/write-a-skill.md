@@ -129,9 +129,10 @@ Two paths take a discovered skill into context:
 
 - **Explicit** — the model calls the `use_skill` tool with the skill name.
 - **Implicit** — the harness scans the latest user message for skill mentions
-  (`@skill-name`, `skill://skill-name`, or the bare name as a standalone token)
-  and auto-loads any mentioned skill whose `policy.allow_implicit_invocation`
-  is true.
+  (`@skill-name`, the disambiguated `@skill:name` / `@skills:name`, or a
+  `skill://` URI) and auto-loads any mentioned skill whose
+  `policy.allow_implicit_invocation` is true. A plain name occurrence does not
+  trigger loading.
 
 Newly added, removed, or edited skill files are picked up without a restart:
 run `/skills reload` (also bound to the `r` key in the `/skills` modal) to

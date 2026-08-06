@@ -100,17 +100,23 @@ window = 8
 
 ## Built-in provider credentials and models
 
-API keys accept an environment variable or an inline value; see
-[Providers](providers.md) for the env-var names and capability matrix.
+API keys may be supplied as top-level `*_api_key` fields (legacy form, still
+migrated) or — the current form — as `[[providers]]` channel fields / the
+`credentials.toml` secret file. See [Providers](providers.md) for the provider
+matrix and [Paths](paths.md) for `credentials.toml`. On first launch the
+top-level fields below are migrated into explicit `[[providers]]` instances;
+the model ids live in `default_model` (multi-model providers have no
+per-provider model slot).
 
 | Key | Default model | Purpose |
 |-----|---------------|---------|
 | `openai_api_key`, `openai_model` | `gpt-5.6-sol` | OpenAI |
-| `gemini_api_key`, `gemini_model` | `gemini-3.5-flash` | Google Gemini |
+| `google_api_key` (alias `gemini_api_key`), `google_base_url` (alias `gemini_base_url`) | via `default_model` | Google Gemini |
 | `moonshot_api_key`, `moonshot_model` | `k3` | Moonshot / Kimi Code |
-| `deepseek_api_key`, `deepseek_flash_model`, `deepseek_pro_model` | `deepseek-v4-flash` / `deepseek-v4-pro` | DeepSeek V4 (shared key) |
+| `deepseek_api_key` | via `default_model` | DeepSeek V4 (Flash + Pro share one key) |
 | `zai_api_key`, `zai_model` | `glm-5.2` | Z.AI coding plan (GLM-5) |
-| `anthropic_api_key`, `anthropic_model` | `claude-opus-4-8` | Anthropic |
+| `anthropic_api_key`, `anthropic_base_url` | via `default_model` | Anthropic (Claude) |
+| `opencode_go_api_key` | via `default_model` | OpenCode Go relay |
 
 ## User-defined providers
 
@@ -142,7 +148,41 @@ default_channel = 0
 
 | `favorites` | Default | Meaning |
 |-----|---------|---------|
-| `favorites` | `[]` | Provider ids pinned for quick access in the picker |
+| `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts to the top wherever it is served |
+
+## Permissions, bash policy, and tool variants
+
+The optional `[permissions]` and `[bash_policy]` tables govern the permission
+broker and the bash command guard.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `bash`) — no prefix or substring matching |
+| `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `bash` is broadly allowed |
+| `bash_policy.autopilot_confirm` | `"deny"` | What a `confirm` decision becomes while autopilot/no-human mode is active |
+| `bash_policy.allow_user_override_builtin_deny` | `false` | Whether an explicit user `allow` rule may override a compiled-in `deny` rule (user `allow` can still override compiled-in `confirm` rules) |
+| `bash_policy.rules` | `[]` | User rules evaluated before built-in `confirm` rules: each rule is a `{ name, match, pattern, action, reason }` tuple. `match` is `"regex"` (default), `"contains"`, `"startswith"`, or `"program"`; `action` is `"allow"`, `"confirm"`, or `"deny"` |
+
+```toml
+[permissions]
+allow = [ { tool = "bash", scope = "git status" } ]
+
+[bash_policy]
+enabled = true
+autopilot_confirm = "deny"
+allow_user_override_builtin_deny = false
+
+[[bash_policy.rules]]
+name = "block rm -rf"
+match = "regex"
+pattern = "^rm -rf"
+action = "deny"
+reason = "Destructive command"
+```
+
+The optional `[tool_variants]` table pins per-model tool variant selections
+(`capability → variant_id`), one table per model id — e.g. which tool schema
+variant a model receives for a capability with several implementations.
 
 ## Per-model reasoning settings
 

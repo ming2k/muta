@@ -25,8 +25,10 @@ User-edited configuration. Lossy; back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `config.toml` | User-edited configuration (`[provider]`, `[skills]`, `[mcp]`, ...) | Yes |
-| `.migrated-v3` | Marker that the legacy `~/.config/neenee` data files have been migrated to the split layout | Rebuildable |
+| `config.toml` | User-edited configuration (`[principal]`, `[[providers]]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[model_reasoning]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...) | Yes |
+| `credentials.toml` | Secret API keys, split out of `config.toml` (written `rw-------`) — the built-in `*_api_key` fields and per-channel keys | Yes |
+| `auth.toml` | OAuth token sets for SuperGrok and other OAuth providers (0600); sibling of `credentials.toml` | Yes |
+| `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
 
 Default location: `~/.config/neenee/`.
 
@@ -38,10 +40,12 @@ Persistent, program-generated, must survive restart. Back it up.
 |------|---------|--------|
 | `blobs/<2-char-prefix>/<hash>` | Content-addressed blob store for large payloads | Yes |
 | `projects/<16-hex-bucket>/` | Per-project bucket: sessions, current pointer, metadata | Yes |
+| `projects/<bucket>/sessions/` | Durable per-session files: `sessions/<id>.json` (snapshot) plus `sessions/<id>.jsonl` (event log). Each live instance pins its own file, so concurrent instances never share a mutable one | Yes |
+| `projects/<bucket>/network/` | Per-project `/debug trace` capture directory (mirrors the `sessions/` layout) | Rebuildable |
+| `projects/<bucket>/debug/` | Per-project `/debug preview` capture directory (one owner-only JSON per invocation) | Rebuildable |
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |
 | `projects/<bucket>/neenee.lock` | Per-project advisory lock | Rebuildable |
 | `projects/<bucket>/permissions.json` | Per-project cached "always allow" permission rules | Rebuildable (re-prompts) |
-| `sessions/` | Legacy flat session archive (transitional) | Yes |
 | `skills/` | User-global skills (`SKILL.md` per skill) | Yes (user-authored) |
 | `commands/` | User-global slash commands | Yes (user-authored) |
 
@@ -58,6 +62,7 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
+| `trusted_projects.json` | The per-project trust grant set (which projects' `.neenee/config.toml` external tools are loaded) | Rebuildable (re-trust) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `neenee.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
 | `log/` | Structured rolling-log appender output (reserved) | Rebuildable |
@@ -92,7 +97,8 @@ Lives with the project root; travels with the repository.
 |------|---------|
 | `.neenee/skills/<name>/SKILL.md` | Project-local skills (highest discovery priority) |
 | `.neenee/commands/<name>.md` | Project-local slash commands (highest discovery priority) |
-| `.neenee/session.json`, `.neenee/sessions/` | Legacy in-project session storage ( transitional) |
+| `.neenee/config.toml` | Project-scope configuration (MCP servers + hooks); loaded only after the project is trusted (ADR-0085) |
+| `session.json`, `events.jsonl` | Legacy in-project session storage at the project root (transitional; superseded by `projects/<bucket>/sessions/`) |
 | `.agents/skills/`, `.claude/skills/` | External application conventions (read-only) |
 | `.agents/commands/` | External application conventions (read-only) |
 

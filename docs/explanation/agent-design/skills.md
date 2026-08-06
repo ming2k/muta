@@ -89,6 +89,7 @@ There are two paths from identifying a skill to placing its body in context:
 2. **Implicit — mention detection.** Before a round runs, the harness scans the
    latest visible user message for skill mentions. A mention is one of:
    - an `@skill-name` reference,
+   - the disambiguated `@skill:skill-name` / `@skills:skill-name` namespace,
    - a `skill://skill-name` or source-path URI.
 
    Each mentioned skill whose policy allows implicit invocation is loaded as a

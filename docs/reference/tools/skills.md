@@ -85,5 +85,6 @@ layout](../../explanation/persistence.md) for the conceptual model.
 
 The catalog is **not** injected into the system prompt. Skills are discovered
 on demand via `list_skills` and loaded via `use_skill`. Skills whose names are
-explicitly mentioned with `@skill-name` or a `skill://` URI are auto-loaded
-during model-context preparation when their policy allows implicit invocation.
+explicitly mentioned with `@skill-name`, the disambiguated `@skill:name` /
+`@skills:name`, or a `skill://` URI are auto-loaded during model-context
+preparation when their policy allows implicit invocation.

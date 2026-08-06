@@ -71,6 +71,6 @@ without creating a reusable lower-level contract.
 
 - [LongPort OpenAPI overview](https://open.longportapp.com/docs)
 - [LongPort OpenAPI SDKs](https://open.longportapp.com/sdk)
-- [How to enable the live quant broker](../how-to/enable-live-quant-broker.md)
-- [Quant runtime configuration](../reference/configuration.md#quant-runtime)
+- The quant broker and its how-to/configuration pages were removed with the
+  product workspace ([ADR-0073](0073-flat-coding-focused-workspace.md)).
 - [ADR-0035](0035-application-layer-split.md)

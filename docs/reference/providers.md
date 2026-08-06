@@ -45,9 +45,13 @@ Responses API used by the ChatGPT subscription backend.
 provider a new launch lands on. The `/models` picker accepts the same names
 and, on a switch, persists the choice back to `default_provider` so the next
 launch follows it; see [Dual-write provider/model
-selection](../adr/0066-dual-write-provider-selection.md). API keys may be
-supplied through environment variables or `config.toml` fields; model selection
-uses a separate `<NAME>_MODEL` env var.
+selection](../adr/0066-dual-write-provider-selection.md). Credentials resolve
+from the `config.toml` fields below (or the `credentials.toml` secret file —
+see [Paths](paths.md)) through the catalog. Environment variables are read
+only where a channel explicitly declares an `api_key_env` (user-defined
+`[[providers.channels]]`, and template presets that still carry one). The
+legacy `<PROVIDER>_API_KEY` environment variables of earlier releases are no
+longer read at runtime.
 
 ### OpenAI-compatible presets
 
@@ -55,19 +59,19 @@ Each row corresponds to one entry in the `OPENAI_PROVIDER_SPECS` table in
 `crates/neenee-providers/src/registry/mod.rs`. The endpoint, default model, and
 env vars are data in that table, not hard-coded per struct.
 
-| `default_provider` | Endpoint | API key env | Model env | Default / popular models |
-|--------------------|----------|-------------|-----------|--------------------------|
-| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `MOONSHOT_API_KEY` | `MOONSHOT_MODEL` | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
-| `zai-code` | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `ZAI_API_KEY` | `ZAI_MODEL` | `glm-5.2` (default), `glm-5.1`, `glm-4.7` |
+| `default_provider` | Endpoint | Credentials | Default / popular models |
+|--------------------|----------|-------------|--------------------------|
+| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `moonshot_api_key` config field / `credentials.toml` | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
+| `zai-code` | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `zai_api_key` config field / `credentials.toml` | `glm-5.2` (default), `glm-5.1`, `glm-4.7` |
 
 ### Bespoke providers
 
-| `default_provider` | Struct | Endpoint | API key env | Model env | Default / popular models |
-|--------------------|--------|----------|-------------|-----------|--------------------------|
-| `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | `OPENAI_API_KEY` | `OPENAI_MODEL` | `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
-| `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | `claude-opus-4-8` (default), `claude-fable-5`, `claude-sonnet-5`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
-| `gemini` | `GoogleProvider` | `{gemini_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GEMINI_BASE_URL`, then `config.gemini_base_url`) | `GEMINI_API_KEY` | `GEMINI_MODEL` | `gemini-3.5-flash` (default), `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
-| `deepseek` | `OpenAiChatCompletionsProvider` | `https://api.deepseek.com/v1/chat/completions` | `DEEPSEEK_API_KEY` | `DEEPSEEK_FLASH_MODEL` / `DEEPSEEK_PRO_MODEL` | `deepseek-v4-flash`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
+| `default_provider` | Struct | Endpoint | Credentials | Default / popular models |
+|--------------------|--------|----------|-------------|--------------------------|
+| `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | `openai_api_key` config field / `credentials.toml` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
+| `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `anthropic_api_key` config field / `credentials.toml` | `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
+| `google` | `GoogleProvider` | `{google_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GOOGLE_BASE_URL`, then `config.google_base_url`; legacy `GEMINI_BASE_URL` alias) | `google_api_key` config field (legacy alias `gemini_api_key`) / `credentials.toml` | `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
+| `deepseek` | `OpenAiChatCompletionsProvider` | `https://api.deepseek.com/v1/chat/completions` | `deepseek_api_key` config field / `credentials.toml` | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
 
 Notes:
 
@@ -96,6 +100,33 @@ Notes:
   its local baseline table at startup, spanning OpenAI- and
   Anthropic-compatible models (e.g. MiniMax, Qwen) behind opencode-go's
   endpoints.
+
+### OAuth and subscription providers
+
+Provider templates that authenticate with a browser OAuth flow instead of an
+API key (the `oauth` module in `neenee-providers`; tokens persist in
+`auth.toml` — see [Paths](paths.md)). Added from the TUI's add-provider flow;
+the `/models` picker accepts them like any other provider.
+
+| Template id | Backend | Notes |
+|-------------|---------|-------|
+| `xai-oauth` | xAI SuperGrok subscription | OAuth2 (PKCE + device code) against xAI; serves the Grok family ([ADR-0052](../adr/0052-xai-supergrok-provider.md)) |
+| `chatgpt-oauth` | ChatGPT Pro/Plus subscription | ChatGPT JSON device-code grant against the Responses backend at `chatgpt.com/backend-api/codex/responses`; fixed model set (no `/models` discovery) |
+| `copilot-oauth` | GitHub Copilot subscription | Public Copilot OAuth App client id (shared with opencode); tracks the plan-unlocked model list with live discovery + fitting. See [Copilot Provider Pitfalls](../how-to/copilot-provider-pitfalls.md) |
+
+### sub2api relay templates
+
+Templates for sub2api-style relays that forward another vendor's protocol —
+configured with the relay's `base_url` and an API key, exactly like the
+built-ins:
+
+| Template id | Protocol | Notes |
+|-------------|----------|-------|
+| `anthropic-sub2api` | `anthropic` | Anthropic-format relay; live discovery surfaces the relay's Claude set |
+| `openai-sub2api` | `openai` | OpenAI-format relay |
+| `antigravity-sub2api` | `google` | Google-native relay (Antigravity/Atmosphere family) |
+
+See [How to use sub2api relays](../how-to/use-sub2api.md).
 
 ## Dispatch sites
 

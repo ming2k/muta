@@ -10,4 +10,5 @@ with the relevant reference material.
 | [How to ask the user a question during a task](ask-the-user.md) | Use `ask_user` to resolve ambiguity or collect preferences mid-task |
 | [How to configure TUI appearance](configure-tui-appearance.md) | Apply a color preset or edit a custom semantic palette from `/config` |
 | [How to use sub2api relays](use-sub2api.md) | Configure OpenAI, Anthropic, and Google-compatible sub2api relays |
+| [How to write a skill](write-a-skill.md) | Author a `SKILL.md` skill: frontmatter, policy, explicit vs implicit invocation, reload |
 | [How to avoid Copilot provider pitfalls](copilot-provider-pitfalls.md) | Diagnose why GitHub Copilot shows fewer models than expected and pick the right OAuth client/token type |

@@ -67,12 +67,15 @@ model = "gemini-2.5-flash"
 
 To redirect the **built-in** `google` preset instead (so picking `google` in
 `/models` and `default_provider = "google"` route through the relay), set the
-top-level `gemini_base_url` (or export `GEMINI_BASE_URL`):
+top-level `google_base_url` (or export `GOOGLE_BASE_URL`):
 
 ```toml
 default_provider = "google"
-gemini_base_url = "https://relay.example.com/v1beta"
+google_base_url = "https://relay.example.com/v1beta"
 ```
+
+The legacy spellings `gemini_base_url` / `GEMINI_BASE_URL` are still accepted
+as aliases.
 
 Per-channel fields:
 
@@ -153,11 +156,12 @@ call.
 
 ### Optional: persist the API key in config
 
-By default a built-in reads its API key from an environment variable. To also
-let users persist it in `credentials.toml`, add the provider id to
-`CREDENTIALED_BUILTINS` and a corresponding `*_api_key` field on `Config` in
-`crates/neenee-persistence/src/config.rs`. The catalog's credential
-resolution then checks config after env vars, so a preset with a config field
+By default a built-in resolves its API key from `config.toml`/`credentials.toml`
+through the catalog, not from an environment variable. To let users persist it
+in `credentials.toml` (or read it from an `api_key_env` channel field), add the
+provider id to `CREDENTIALED_BUILTINS` and a corresponding `*_api_key` field on
+`Config` in `crates/neenee-persistence/src/config.rs`. The catalog's credential
+resolution then picks the config field up after `credentials.toml`, so a preset
 works through either path.
 
 ## Path 3: Standalone adapter (incompatible contract)

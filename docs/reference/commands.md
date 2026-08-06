@@ -18,6 +18,7 @@ Project and user-defined commands are covered under
 | `/clear` | Clear the conversation history |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
+| `/principal <code\|architect\|reviewer\|security>` | Switch the principal role — changes persona and capability scope |
 | `/review` | Run an on-demand session-review diagnostic of the current round |
 | `/search <query>` | Semantic search over the project's session history |
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
@@ -27,6 +28,9 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.neenee/` config tree |
+| `/reload` | Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks) |
+| `/trust` | Trust this project's `.neenee/config.toml` (MCP servers + hooks) and load them |
+| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks) |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
@@ -38,8 +42,9 @@ Project and user-defined commands are covered under
 | `/exit` | Exit the program |
 
 Several interactive management commands, including `/models`, `/connections`,
-`/tools`, and `/config`, are handled in the TUI. Commands that mutate agent or
-session state are dispatched to the backend.
+`/permissions`, `/tools`, `/mcp`, `/skills`, and `/config`, are handled in the
+TUI. Commands that mutate agent or session state are dispatched to the
+backend.
 
 ### `/serve`
 
@@ -158,6 +163,27 @@ reachable. Affects the live process only. For the design intent and every
 surface the flag enforces, see
 [Autopilot operation](../explanation/agent-design/autopilot.md).
 
+### `/principal`
+
+| Form | Effect |
+|------|--------|
+| `/principal <role>` | Switch the active principal role (persona + capability scope) |
+| `/principal` | List the available roles and the current one |
+
+Switches the live agent's principal role at runtime (ADR-0053). Each role is
+a preset over the product's base identity — the mission/persona shifts, the
+product identity stays. It can also be triggered mid-message with the
+`@principal:<role>` mention:
+
+| Role | Scope |
+|------|-------|
+| `code` | The default coding principal — full capabilities, unrestricted writes |
+| `architect` | Design and review focus — full read, writes retained but the persona steers toward analysis and written rationale before changes |
+| `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_file`, or `bash`) |
+| `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
+
+Unknown role names are rejected with the list of valid roles.
+
 ### `/btw`
 
 | Form | Effect |
@@ -207,6 +233,26 @@ Returns the most relevant past messages for the query (see the
 |------|--------|
 | `/init [path]` | Initialize a `.neenee/` config tree; `path` defaults to `.` |
 
+### `/reload`
+
+| Form | Effect |
+|------|--------|
+| `/reload` | Re-read `config.toml` and apply changes live |
+
+Re-loads configuration without restarting: MCP servers, permissions,
+`bash_policy`, and hooks are all applied to the live process.
+
+### `/trust` and `/untrust`
+
+| Form | Effect |
+|------|--------|
+| `/trust` | Trust this project's `.neenee/config.toml` (MCP servers + hooks) and load them |
+| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks) |
+
+A project's `.neenee/config.toml` is only loaded after you trust the project;
+`/trust` grants that once, and `/untrust` revokes it. The trust posture is
+defined in [ADR-0085](../adr/0085-config-time-tool-scoping.md).
+
 ### `/export`
 
 | Form | Effect |
@@ -223,12 +269,11 @@ back to OSC52 or surfaces the underlying clipboard error.
 ## Custom commands
 
 Markdown files discovered in `.neenee/commands/` (project-local, higher
-priority), `$XDG_DATA_HOME/neenee/commands/` (user-global, XDG; default
-`~/.local/share/neenee/commands/`), and `~/.neenee/commands/` (legacy
-pre-XDG fallback, emits a deprecation warning — see
-[ADR-0013](../adr/0013-skills-xdg-paths-and-bundled-embed.md)). The
-filename stem or frontmatter `name` becomes `/name` after lowercasing and
-stripping a leading `/`. Names allow ASCII letters, digits, `-`, and `_`.
+priority) and `$XDG_DATA_HOME/neenee/commands/` (user-global, XDG; default
+`~/.local/share/neenee/commands/`). The legacy pre-XDG fallback
+`~/.neenee/commands/` was removed (ADR-0013 → ADR-0058); the filename stem or
+frontmatter `name` becomes `/name` after lowercasing and stripping a leading
+`/`. Names allow ASCII letters, digits, `-`, and `_`.
 
 See [Paths](paths.md) for the full override stack and the project-vs-XDG
 boundary.

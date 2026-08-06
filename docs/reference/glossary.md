@@ -95,7 +95,20 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **skill discovery** | On-demand skill metadata returned by the `list_skills` tool; the system prompt carries no skills catalog. [Skills](../explanation/agent-design/skills.md) |
 | **skill body** | The full Markdown expertise document, delivered on demand through `use_skill` or an explicit implicit-invocation marker. [Skills](../explanation/agent-design/skills.md) |
 | **skill scope** | The ordered source priority cascade (lowest→highest): Remote, User, Extra, Repo. Higher scope overrides a same-named lower scope. [Skills](../explanation/agent-design/skills.md) |
-| **implicit invocation** | Explicit mention detection: the harness recognizes `@skill-name` or `skill://…` and loads allowed skills as a hidden user message. Plain name occurrences do not trigger loading. [Skills](../explanation/agent-design/skills.md) |
+| **implicit invocation** | Explicit mention detection: the harness recognizes `@skill-name`, the disambiguated `@skill:name` / `@skills:name`, or `skill://…` and loads allowed skills as a hidden user message. Plain name occurrences do not trigger loading. [Skills](../explanation/agent-design/skills.md) |
+
+## Input mentions
+
+The user input box recognizes `@`-prefixed mention syntax in the latest
+visible user message. Each mention form injects context or switches state
+before the round runs.
+
+| Term | Definition |
+|------|------------|
+| **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_file` call. Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. Rejections surface as a hidden error note so the model learns why and can recover. |
+| **`@skill:` mention** | Disambiguated skill mention: `@skill:name` / `@skills:name` (plural mirrors `@files:`) load the named skill as a hidden user message, alongside the bare `@name` and `skill://…` forms. See [Skills](#skills) |
+| **`@principal:` mention** | Runtime role switch: `@principal:architect` (code / architect / reviewer / security) switches the active principal role for the round — same effect as `/principal <role>`. [Slash commands](commands.md#principal) |
+| **`@path` mention** | TUI completion trigger only: typing `@` opens path completion; the `@` is dropped on accept. Not an injection form. [Input box](tui/input-box.md) |
 
 ## Context projection
 

@@ -124,4 +124,5 @@ and negotiate the session over the socket.
   host this revises.
 - [ADR-0018](0018-per-project-multi-instance-concurrency.md) — the
   one-writer invariant the registry preserves by construction.
-- [ADR-0088](0088-attach-subcommand.md) — `--attach` -> `attach`.
+- ADR-0088 — `--attach` -> `attach` (recorded in the changelog; the ADR-0088
+  slot itself covers command acknowledgments as toast notices).

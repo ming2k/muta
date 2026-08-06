@@ -157,8 +157,8 @@ after six nudges the turn is allowed to end and the user resumes.
   these forcing functions sit behind.
 - [ADR-0009](0009-uncapped-agentic-loop.md) — the uncapped loop; this ADR
   bounds only forced re-injection, not distinct tool calls.
-- [ADR-0015](0015-pursue-stop-gate-and-repeat-cron.md) — the pursue stop-gate,
-  the model for bounded within-turn forcing.
+- ADR-0015 — the pursue stop-gate, the model for bounded within-turn
+  forcing.
 - [ADR-0020](0020-unified-task-list.md) — the unified todo list the
   todo-continuation gate reads.
 - [ADR-0033](0033-remove-plan-and-verify-workflow.md) — the end-to-end

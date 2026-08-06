@@ -21,7 +21,7 @@
 
 - **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
-- **Scheduled Prompts** — Schedule recurring prompts on a clock with `/repeat` so the agent can run on autopilot on a schedule.
+- **Scheduled Prompts** — Schedule prompts on a clock with `/schedule`: recurring cron jobs or one-shot countdown/absolute-time timers, so the agent can run on autopilot on a schedule.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
 
@@ -33,7 +33,7 @@
 curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
 ```
 
-> Pin a version with `NEENEE_VERSION=0.10.0`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
+> Pin a version with `NEENEE_VERSION=0.22.1`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
 
 **Or build from source**:
 
@@ -53,7 +53,7 @@ On first launch, press `Ctrl+M` to pick a model and enter your API key. Then jus
 | `Tab` | Accept slash-command / `@path` completion |
 | `Ctrl+M` | Open the model picker |
 | `Ctrl+T` | Open todos |
-| `Ctrl+B` | Toggle between input and conversation stream |
+| `Ctrl+B` | Move the caret back one character (readline backward-char) |
 | `Ctrl+C` | Copy → interrupt → close modal → clear → quit |
 | `Ctrl+V` | Paste from clipboard |
 
@@ -61,7 +61,7 @@ On first launch, press `Ctrl+M` to pick a model and enter your API key. Then jus
 
 | Command | Description |
 |---------|-------------|
-| `/repeat <cron> <prompt>` | Schedule a prompt on a cron expression |
+| `/schedule <when> <prompt>` | Schedule a prompt on a cron (recurring) or a countdown/absolute time (one-shot) |
 | `/compact` | Compact context to free up space |
 | `/session list` | Browse and resume past sessions |
 | `/export` | Export conversation as Markdown |

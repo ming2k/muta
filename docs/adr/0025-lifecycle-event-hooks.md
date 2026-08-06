@@ -241,9 +241,9 @@ it. MCP tools surface as `mcp__<server>__<tool>` and match identically.
 
 - [ADR-0009](0009-uncapped-agentic-loop.md) — uncapped loop; `Stop` hooks must
   not reintroduce a blanket round cap.
-- [ADR-0015](0015-pursue-stop-gate-and-repeat-cron.md) — `/pursue` stop-gate and
-  `/repeat` cron already own the stop-gate and clock concerns; `Stop` hooks
-  compose with `/pursue`, they do not replace it.
+- ADR-0015 — `/pursue` stop-gate and `/repeat` cron already own the
+  stop-gate and clock concerns; `Stop` hooks compose with `/pursue`, they do
+  not replace it.
 - [ADR-0019](0019-model-relative-context-compaction.md) — compaction thresholds
   stay deterministic in `CompactionPolicy`; only `PreCompact`/`PostCompact`
   *events* are hookable.

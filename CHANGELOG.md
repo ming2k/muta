@@ -913,7 +913,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`autopilot`, warning tone + bold). The row still costs zero vertical space
   while no indicator is active and remains the designated home for future
   ambient state (workspace, etc.). See the
-  [state bar reference](docs/reference/tui/state-bar.md).
+  [status bar reference](docs/reference/tui/status-bar.md).
 
 - **`Ctrl+T` now opens the Todos modal.** It no longer bulk-toggles tool-step
   expansion; that affordance moved to per-step click / `Enter` / `Space`. The

@@ -299,10 +299,10 @@ Two invariants shape the interaction between retry and the ReAct loop:
   turn, retryable errors become terminal. Re-issuing would risk replaying
   side effects (a second file write, a second shell command).
 
-The deferred-execution rule from [Tool call reassembly](#tool-call-
-reassembly) is what makes the first invariant hold. Because tools only
-fire after `[DONE]`, a mid-stream failure always lands in the safe
-pre-tool window.
+The deferred-execution rule from
+[Tool call reassembly](#tool-call-reassembly) is what makes the first
+invariant hold. Because tools only fire after `[DONE]`, a mid-stream failure
+always lands in the safe pre-tool window.
 
 Partial streamed assistant text is withdrawn from the visible transcript
 before a retry so the user does not see a half-finished answer followed

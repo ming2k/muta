@@ -19,6 +19,7 @@ crates/
   neenee-core/          # shared domain and wire contracts (no deps)
   neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)
   neenee-providers/     # channel registry, factory, discovery + provider facade + OAuth flows
+  neenee-tool-derive/   # proc-macro derive for tool adapters (implementation detail of tools)
 ```
 
 ## Ownership rules

@@ -32,6 +32,9 @@ before the individual docs.
 | [Rounds and turns](agent-design/rounds-and-turns.md) | The two-layer execution model (round vs turn) and the lifecycle inside one turn: declaration, gating, execution, and how outcomes re-enter the conversation |
 | [Session persistence](agent-design/session-persistence.md) | The durable local session scene: model window, archived transcript, projection metadata, and resume recovery contract |
 | [Model context](agent-design/model-context.md) | The request-scoped context sent to a provider: rebuilt system prompt, model-visible messages, tool schemas, tool-call arguments, and tool results |
+| [Prompt and message assembly](agent-design/prompt-assembly.md) | How the harness composes the model-visible message window into one request: hidden harness context, non-driving command echoes, and the singleton system message |
+| [Context pruning](agent-design/context-pruning.md) | The cheap first context-projection layer: clears stale tool-result bodies while preserving the `tool_call_id` chain |
+| [Context compaction](agent-design/context-compaction.md) | The heavier second projection layer: summarizes older complete rounds into a durable checkpoint with a visible `Compacted` notice |
 | [Envoys](agent-design/envoys.md) | The `envoy` tool's read-only child agent: isolation model, event streaming, and the TUI zoom view |
 | [MCP servers](agent-design/mcp.md) | Local stdio MCP server discovery, the `mcp__<server>__<tool>` wrapper, failure isolation, and access-tier gating |
 | [User questions](agent-design/user-questions.md) | How the `ask_user` tool blocks the agent, renders a modal, and returns answers |
@@ -54,6 +57,7 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Markdown rendering](markdown-rendering.md) | The custom markdown parser → semantic `Block` model → grid rendering pipeline: why it exists, the two-path parse, inline range tracking, adaptive table layout, and how selection returns original source |
 | [Table hit-testing and cell-locked selection](table-hit-testing.md) | How table cells get a parallel hit-test system: layout, dual coordinate maps, cell-locked drag, and border-stripped copy |
 | [Request flow](request-flow.md) | HTTP transaction shape, SSE streaming, and the ReAct loop's message evolution |
+| [Tool-call wire formats](tool-call-wire-formats.md) | How OpenAI Chat Completions and Anthropic Messages serialize tool declarations and tool-call arguments |
 | [Interrupt semantics](interrupt-semantics.md) | Why neenee is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, and the billing reality of an interrupted round |
 | [Provider capabilities](provider-capabilities.md) | Where tool calling and reasoning actually live across model weights, serving runtime, and client |
 | [Guided decoding](guided-decoding.md) | Constrained decoding, FSM compilation, and chat templates — the layer that guarantees valid tool calls |
