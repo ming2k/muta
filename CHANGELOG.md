@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`/autopilot` with no argument now toggles, and `on|off` complete.**
+  Previously a bare `/autopilot` was an error ("Unknown value ''. Use
+  `/autopilot on|off`.") even though the dispatch carried an (unreachable)
+  toggle branch; and once the space was typed after `/autopilot` the
+  completion menu dead-ended because no subcommand candidates existed. The
+  missing-argument case is now wired to flip the current state (`on`/`true`/`1`
+  and `off`/`false`/`0` still set explicitly), the error hint names the toggle
+  form, the command vocabulary says "no argument toggles", and the completion
+  menu offers `/autopilot on` / `/autopilot off` after the space. The toggle
+  is surfaced exactly like the explicit forms: an `Ack` toast plus an
+  `AutopilotChanged` event, so the status-bar badge always reflects the flip.
+  (`parse_autopilot_arg`, `App::completions`.)
+
 - **Todo and queue bars de-cluttered.** The one-row todo summary no longer
   leads with a `📌` pin glyph, and the two-row queue bar no longer leads with a
   `📤` tray glyph or a next-item send time (`HH:MM`); neither sits on a raised

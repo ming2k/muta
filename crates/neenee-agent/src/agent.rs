@@ -4133,12 +4133,9 @@ impl Agent {
                     // future against a bounded grace period. The envoy stops
                     // at its next safe boundary and returns its partial
                     // transcript as a terminal result.
-                    self.tool_manager
-                        .find(&call.name)
-                        .into_iter()
-                        .for_each(|sourced| {
-                            sourced.tool.request_cancel(call_id);
-                        });
+                    if let Some(sourced) = self.tool_manager.find(&call.name) {
+                        sourced.tool.request_cancel(call_id);
+                    }
                     let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
                     tokio::pin!(grace);
                     loop {
@@ -4196,10 +4193,12 @@ impl Agent {
     /// to the callback in real time. Returns `(result, duration_ms)` pairs in
     /// the same order as the input calls.
     ///
-    /// Cancellation-aware: an interrupt emits a [`AgentEvent::ToolCancelled`]
-    /// for every dispatched call id (the whole batch is abandoned — partial
-    /// side effects are neither recorded nor replayed by the caller) and
-    /// returns `Err(HarnessError::Interrupted)`.
+    /// Cancellation-aware: an interrupt signals cooperatively-cancellable
+    /// calls (envoys), drains them within a bounded grace period, and returns
+    /// [`ConcurrentOutcome`] with `interrupted: true` — completed/drained
+    /// results are preserved in the outcome (the caller records them), and
+    /// every call that produced no result is paired with a terminal
+    /// [`AgentEvent::ToolCancelled`]. The caller decides how to end the round.
     async fn execute_tools_concurrent<F>(
         &self,
         calls: &[ToolCall],

@@ -259,21 +259,14 @@ pub async fn dispatch(
         }
         Some(BuiltinCmd::Autopilot) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-            let next = match arg.as_str() {
-                "on" | "true" | "1" => Some(true),
-                "off" | "false" | "0" => Some(false),
-                _ => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        format!("Unknown value '{arg}'. Use `/autopilot on|off`."),
-                    )
-                    .await;
+            let next = match parse_autopilot_arg(&arg) {
+                Ok(next) => next,
+                Err(msg) => {
+                    record_error(session, resp_tx, name, args, msg).await;
                     return;
                 }
             };
+            // A bare `/autopilot` (`None`) toggles the current state.
             let enabled = next.unwrap_or_else(|| !agent.get_autopilot());
             agent.set_autopilot(enabled);
             // The autopilot toggle's confirmation is a command acknowledgment,
@@ -1966,6 +1959,24 @@ async fn add_scheduled_job(
     }
 }
 
+/// Parse the argument of `/autopilot` (already lowercased by the caller).
+///
+/// - `""` (bare `/autopilot`, no argument) → `Ok(None)`: the dispatch flips
+///   the current state, so the command doubles as a toggle.
+/// - `on` / `true` / `1` → `Ok(Some(true))`
+/// - `off` / `false` / `0` → `Ok(Some(false))`
+/// - anything else → `Err` with a usage hint.
+fn parse_autopilot_arg(arg: &str) -> Result<Option<bool>, String> {
+    match arg {
+        "" => Ok(None),
+        "on" | "true" | "1" => Ok(Some(true)),
+        "off" | "false" | "0" => Ok(Some(false)),
+        other => Err(format!(
+            "Unknown value '{other}'. Use `/autopilot` to toggle, or `/autopilot on|off`."
+        )),
+    }
+}
+
 /// Split a `/schedule <when> <prompt>` argument string into `(time_spec,
 /// prompt)`. Returns `None` when no prompt follows the time spec.
 ///
@@ -2097,5 +2108,41 @@ mod schedule_spec_tests {
     /// convenience wrapper so the tests read like the public parse path
     fn split_schedule_arg(rest: &str) -> (String, String) {
         split_schedule_spec(rest).unwrap_or(("".into(), "".into()))
+    }
+}
+
+#[cfg(test)]
+mod autopilot_arg_tests {
+    use super::parse_autopilot_arg;
+
+    #[test]
+    fn bare_argument_means_toggle() {
+        // A bare `/autopilot` (no argument) yields `None` so the dispatch
+        // flips the current state.
+        assert_eq!(parse_autopilot_arg(""), Ok(None));
+    }
+
+    #[test]
+    fn on_forms_enable() {
+        assert_eq!(parse_autopilot_arg("on"), Ok(Some(true)));
+        assert_eq!(parse_autopilot_arg("true"), Ok(Some(true)));
+        assert_eq!(parse_autopilot_arg("1"), Ok(Some(true)));
+    }
+
+    #[test]
+    fn off_forms_disable() {
+        assert_eq!(parse_autopilot_arg("off"), Ok(Some(false)));
+        assert_eq!(parse_autopilot_arg("false"), Ok(Some(false)));
+        assert_eq!(parse_autopilot_arg("0"), Ok(Some(false)));
+    }
+
+    #[test]
+    fn unknown_value_is_an_error_with_a_usage_hint() {
+        let err = parse_autopilot_arg("maybe").unwrap_err();
+        assert!(
+            err.contains("`/autopilot` to toggle")
+                && err.contains("`/autopilot on|off`"),
+            "usage hint missing the toggle form: {err}"
+        );
     }
 }

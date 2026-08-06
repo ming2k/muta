@@ -59,7 +59,7 @@ define_builtin_commands! {
     Clear       = "/clear"        : "Clear the conversation history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
     Config      = "/config"       : "Open user configuration",
-    Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on/off)",
+    Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on|off; no argument toggles)",
     Principal   = "/principal"    : "Switch the principal role (code|architect|reviewer|security) — changes persona and capability scope",
     Review      = "/review"       : "Run an on-demand session-review diagnostic of the current round",
     Search      = "/search"       : "Semantic search over the project's session history",

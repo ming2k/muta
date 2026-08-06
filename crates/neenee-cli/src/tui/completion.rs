@@ -505,6 +505,27 @@ impl App {
             .collect();
         }
 
+        if let Some(after) = current.strip_prefix("/autopilot ") {
+            return [
+                (
+                    "/autopilot on",
+                    "Run without human intervention (no confirmations, no questions)",
+                ),
+                (
+                    "/autopilot off",
+                    "Return to interactive mode with confirmations",
+                ),
+            ]
+            .iter()
+            .filter(|(cmd, _)| {
+                cmd.strip_prefix("/autopilot ")
+                    .map(|sub| sub.starts_with(after))
+                    .unwrap_or(false)
+            })
+            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .collect();
+        }
+
         if let Some(after) = current.strip_prefix("/session ") {
             return [
                 ("/session status", "Show session id and loop checkpoint"),

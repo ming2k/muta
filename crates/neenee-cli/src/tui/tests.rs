@@ -1229,6 +1229,40 @@ fn completions_classifies_slash_input_as_slash_kind() {
     }
 }
 
+#[test]
+fn completions_autopilot_subcommand_offers_on_off() {
+    // After `/autopilot ` (a space the user types to opt into subcommand
+    // discovery), the menu must offer `on` and `off` so the pair can be
+    // completed instead of dead-ending.
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/autopilot ".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(app.completion_kind(), CompletionKind::Slash);
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert!(
+        labels.contains(&"/autopilot on") && labels.contains(&"/autopilot off"),
+        "expected both on/off subcommands, got {labels:?}"
+    );
+    // Candidates replace the whole input.
+    for c in &completions {
+        assert_eq!(c.replace_start, 0);
+        assert_eq!(c.replace_end, app.input.len());
+    }
+
+    // Typing a prefix narrows the pair.
+    app.input = "/autopilot of".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/autopilot off"]);
+
+    // An unknown suffix dead-ends (no candidates, like any non-prefix).
+    app.input = "/autopilot x".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(app.completions().is_empty());
+}
+
 /// The OpenAI sub2api template (Name / Base URL / Token) seeds OpenAI text
 /// models directly.
 fn openai_template() -> &'static crate::tui::providers::ProviderTemplate {
