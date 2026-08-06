@@ -27,7 +27,6 @@ pub const OPENAI_SUB2API_MODELS: &[&str] = &[
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     Model {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
@@ -40,8 +39,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     Model {
         id: "gpt-5.6-terra",
         name: "GPT-5.6 Terra",
@@ -54,8 +51,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     Model {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
@@ -68,8 +63,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
     // API. All reason (surfaced via the `reasoning_content` stream) and take
@@ -87,8 +80,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -101,8 +92,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.4-mini",
         name: "GPT-5.4 Mini",
@@ -115,8 +104,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     // OpenAI sub2api relays can expose additional text aliases not used by the
     // official built-in template. Keep their metadata conservative when the
     // exact serving contract is relay-defined.
@@ -132,8 +119,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.2",
         name: "GPT-5.2",
@@ -146,8 +131,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.2-chat-latest",
         name: "GPT-5.2 Chat Latest",
@@ -160,8 +143,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.2-pro",
         name: "GPT-5.2 Pro",

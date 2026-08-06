@@ -47,7 +47,6 @@ pub const OPENCODE_GO_SERVED_MODELS: &[&str] = &[
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
         id: "deepseek-v4-flash",
@@ -85,8 +84,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "glm-5",
         name: "GLM-5",
@@ -99,8 +96,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "glm-5.1",
         name: "GLM-5.1",
@@ -113,7 +108,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
     Model {
         id: "glm-5.2",
@@ -127,8 +121,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.5",
         name: "Kimi K2.5",
@@ -141,8 +133,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.6",
         name: "Kimi K2.6",
@@ -155,8 +145,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.7-code",
         name: "Kimi K2.7 Code",
@@ -169,8 +157,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "mimo-v2-omni",
         name: "MiMo V2 Omni",
@@ -183,8 +169,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "mimo-v2-pro",
         name: "MiMo V2 Pro",
@@ -197,8 +181,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
     Model {
         id: "mimo-v2.5",
@@ -212,8 +194,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "mimo-v2.5-pro",
         name: "MiMo V2.5 Pro",
@@ -226,8 +206,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "minimax-m2.5",
         name: "MiniMax M2.5",
@@ -240,8 +218,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     Model {
         id: "minimax-m2.7",
         name: "MiniMax M2.7",
@@ -254,8 +230,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
     Model {
         id: "minimax-m3",
@@ -269,8 +243,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     Model {
         id: "qwen3.5-plus",
         name: "Qwen3.5 Plus",
@@ -283,8 +255,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     Model {
         id: "qwen3.6-plus",
         name: "Qwen3.6 Plus",
@@ -297,8 +267,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
     // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
     // opencode-go; this baseline table mirrors that so the offline
@@ -315,8 +283,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_COMMON,
     },
-
-
     Model {
         id: "qwen3.7-plus",
         name: "Qwen3.7 Plus",

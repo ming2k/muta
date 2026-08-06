@@ -125,6 +125,13 @@ pub enum ToolOutput {
     /// carries an `Error:` prefix for the *parent model's* benefit (so it
     /// understands the sub-task did not succeed), but UI classification now
     /// reads this field instead of pattern-matching the prose.
+    ///
+    /// `interrupted` is set when the envoy was stopped *by the parent* (the
+    /// turn was cancelled) before finishing, as opposed to failing on its own.
+    /// It is distinct from `failed`: the partial transcript is preserved either
+    /// way, but an interruption is a user-initiated stop (the work may be
+    /// resumed or re-delegated), while a failure is the sub-task's own
+    /// termination. `#[serde(default)]` keeps pre-interrupt sessions readable.
     Envoy {
         summary: String,
         messages: Vec<crate::Message>,
@@ -137,6 +144,8 @@ pub enum ToolOutput {
         /// inflating the displayed tok/s for any delegating round.
         generation_ms: u64,
         failed: bool,
+        #[serde(default)]
+        interrupted: bool,
     },
     /// An image read from disk (by `read_image`). `mime` is the content type
     /// (e.g. `"image/png"`); `data` is the already-base64-encoded bytes. The
@@ -564,6 +573,17 @@ impl ToolOutput {
         }
     }
 
+    /// If this output is a [`ToolOutput::Envoy`] that was interrupted by the
+    /// parent (turn cancelled mid-flight), return `true`. Distinct from
+    /// [`ToolOutput::is_error`]: an interrupted envoy preserved its partial
+    /// transcript rather than failing on its own.
+    pub fn envoy_interrupted(&self) -> bool {
+        match self {
+            ToolOutput::Envoy { interrupted, .. } => *interrupted,
+            _ => false,
+        }
+    }
+
     /// If this output is a [`ToolOutput::Envoy`], return its nested
     /// transcript and token usage so the harness can attach `children` to the
     /// parent's tool-result message and accumulate real cost into the parent
@@ -964,6 +984,7 @@ mod tests {
             usage,
             generation_ms: 0,
             failed: false,
+            interrupted: false,
         };
         assert_eq!(o.to_text(), "external summary");
         assert!(!o.is_error());
@@ -987,6 +1008,7 @@ mod tests {
             usage,
             generation_ms: 0,
             failed: false,
+            interrupted: false,
         };
         let (got_messages, got_usage) = o.envoy_payload().expect("envoy payload");
         assert_eq!(got_messages.len(), 2);
@@ -1010,6 +1032,7 @@ mod tests {
             usage: crate::TokenUsage::default(),
             generation_ms: 0,
             failed: true,
+            interrupted: false,
         };
         assert!(with_flag.is_error());
 
@@ -1019,7 +1042,50 @@ mod tests {
             usage: crate::TokenUsage::default(),
             generation_ms: 0,
             failed: false,
+            interrupted: false,
         };
         assert!(!no_flag.is_error());
+    }
+
+    #[test]
+    fn interrupted_flag_round_trips_and_defaults_to_false() {
+        // An interrupted envoy survives serialization with its flag intact.
+        let interrupted = ToolOutput::Envoy {
+            summary: "Interrupted: stopped".into(),
+            messages: Vec::new(),
+            usage: crate::TokenUsage::default(),
+            generation_ms: 0,
+            failed: false,
+            interrupted: true,
+        };
+        let json = serde_json::to_string(&interrupted).unwrap();
+        let back: ToolOutput = serde_json::from_str(&json).unwrap();
+        assert!(back.envoy_interrupted());
+        assert!(!back.is_error());
+
+        // Sessions persisted before the field existed deserialize with
+        // `interrupted: false` — never a hard load failure. Build the legacy
+        // JSON by serializing and dropping the field, so the shape is exact
+        // regardless of TokenUsage's field set.
+        let with_flag = ToolOutput::Envoy {
+            summary: "x".into(),
+            messages: Vec::new(),
+            usage: crate::TokenUsage::default(),
+            generation_ms: 0,
+            failed: true,
+            interrupted: false,
+        };
+        let mut legacy_json = serde_json::to_value(&with_flag).unwrap();
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .get_mut("Envoy")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("interrupted");
+        let legacy: ToolOutput = serde_json::from_value(legacy_json).unwrap();
+        assert!(!legacy.envoy_interrupted());
+        assert!(legacy.is_error());
     }
 }

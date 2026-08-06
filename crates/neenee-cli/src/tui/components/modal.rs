@@ -88,10 +88,20 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     if page.keymap_open {
-        // Title gets a " · keybindings" suffix when the page is open.
+        // Breadcrumb: `{title}` modal › its keybindings sub-page (hierarchy is
+        // never joined with `·`, which is reserved for same-rank modifiers).
         match page.header {
             ModalHeader::Title(title) => {
-                modal_header(frame, f.header, &format!("{title} · keybindings"), theme);
+                modal_header(
+                    frame,
+                    f.header,
+                    &format!(
+                        "{title}{}{}",
+                        crate::tui::design::JOIN_BREADCRUMB,
+                        "keybindings"
+                    ),
+                    theme,
+                );
             }
             ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
         }

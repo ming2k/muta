@@ -76,7 +76,9 @@ impl<'a> MetaStrip<'a> {
     pub(crate) fn new() -> Self {
         Self {
             chips: Vec::new(),
-            separator: Cow::Borrowed(" · "),
+            // R1: every trailing chip is a state/measure/attribute of the
+            // anchor — the one sanctioned use of the middle dot.
+            separator: Cow::Borrowed(crate::tui::design::JOIN_MODIFY),
             left_pad_cols: 0,
             fill_bg: None,
         }

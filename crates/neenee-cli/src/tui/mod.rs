@@ -113,7 +113,8 @@ use crate::tui::model::document::{
 use crate::tui::model::layout::LayoutMap;
 use crate::tui::model::selection::{SelectionDrag, SelectionState};
 use crate::tui::transcript::{
-    finalize_streaming_reasoning, rebase_transcript_rounds, transcript_messages_from_core,
+    finalize_streaming_reasoning, rebase_transcript_rounds, transcript_commands_from_ledger,
+    transcript_messages_from_core,
 };
 use crate::tui::view::Theme;
 
@@ -186,9 +187,11 @@ pub async fn run_tui(
     initial_model: String,
     input_history: Vec<neenee_core::HistoryEntry>,
     initial_messages: Vec<Message>,
+    initial_commands: Vec<neenee_core::CommandRecord>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
     tui_config: config::TuiConfig,
+    input_history_config: config::InputHistoryConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
@@ -219,6 +222,7 @@ pub async fn run_tui(
     terminal::spawn_signal_guard();
     let tui_config = Arc::new(tui_config);
     let mut restored = transcript_messages_from_core(initial_messages, &tui_config);
+    restored.extend(transcript_commands_from_ledger(initial_commands));
     rebase_transcript_rounds(&mut restored, initial_round_count);
     let messages = Arc::new(versioned::Versioned::new(restored));
     let messages_clone = messages.clone();
@@ -477,9 +481,7 @@ pub async fn run_tui(
                             if notice.kind == neenee_core::NoticeKind::ProviderRetry {
                                 // Skip the inline append; RetryScheduled owns
                                 // the retry disclosure.
-                            } else if notice.surface
-                                == neenee_core::NoticeSurface::Toast
-                            {
+                            } else if notice.surface == neenee_core::NoticeSurface::Toast {
                                 // Toast-surfaced notices (command
                                 // acknowledgments such as `/autopilot on`) are
                                 // forwarded as a transient bubble instead of
@@ -490,9 +492,7 @@ pub async fn run_tui(
                                 // and shows a top-right toast.
                                 *notice_toast_signal_clone.lock().await =
                                     Some(event_loop::NoticeToastSignal {
-                                        severity: notice_severity_from_core(
-                                            notice.severity,
-                                        ),
+                                        severity: notice_severity_from_core(notice.severity),
                                         text: notice.render_text(),
                                     });
                             } else {
@@ -515,8 +515,45 @@ pub async fn run_tui(
                             }
                             msgs.push(message);
                             if !routes_to_side {
-                                ir_clone.store(false, Ordering::SeqCst);
-                                activity_clone.lock().await.clear();
+                                // `Text` is *content*, not a lifecycle signal
+                                // (ADR-0091). Clearing the optimistic activity
+                                // surface here was what let a toast-only slash
+                                // reply leave the bar stuck on "queued" after
+                                // ADR-0088 migrated `/autopilot` from `Text` to
+                                // `Notice`. Only collapse the surface when the
+                                // harness is actually idle: a slash reply
+                                // delivered mid-round must not tear down the
+                                // running round's bar, and the round's terminal
+                                // `HarnessState(Idle)` (or the driver's
+                                // post-dispatch reconcile) is what retires the
+                                // surface when the harness truly goes idle.
+                                if harness_clone.lock().await.loop_status.is_idle() {
+                                    ir_clone.store(false, Ordering::SeqCst);
+                                    activity_clone.lock().await.clear();
+                                }
+                            }
+                        }
+                        RoundEvent::CommandResult { name, args, result } => {
+                            // A typed slash-command result (ADR-0091): render a
+                            // compact command block, never assistant prose.
+                            // Content-bearing like `Text` — same idle-only
+                            // activity-surface handling.
+                            let mut msgs = buf.write().await;
+                            clear_provider_retry(&mut msgs);
+                            let mut message =
+                                TranscriptMessage::command_result(name, args, Some(result));
+                            if let Some((round, turn)) =
+                                positions_by_session.get(&session_id).copied()
+                            {
+                                message.round = Some(round);
+                                message.turn = Some(turn);
+                            }
+                            msgs.push(message);
+                            if !routes_to_side {
+                                if harness_clone.lock().await.loop_status.is_idle() {
+                                    ir_clone.store(false, Ordering::SeqCst);
+                                    activity_clone.lock().await.clear();
+                                }
                             }
                         }
                         RoundEvent::Activity(status) => {
@@ -1180,9 +1217,10 @@ pub async fn run_tui(
                     needs_round_rebase = false;
                     context_tokens_clone.lock().await.clear();
                 }
-                AgentResponse::ConversationReplaced(messages) => {
-                    *messages_clone.write().await =
-                        transcript_messages_from_core(messages, &tui_config_clone);
+                AgentResponse::ConversationReplaced { messages, commands } => {
+                    let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
+                    rebuilt.extend(transcript_commands_from_ledger(commands));
+                    *messages_clone.write().await = rebuilt;
                     needs_round_rebase = true;
                     // The model-window revision changed; do not reuse an API
                     // anchor from the previous session/projection.
@@ -1192,8 +1230,7 @@ pub async fn run_tui(
                     *sessions_overview_clone.lock().await = sessions;
                     // Bump the revision so the loop's per-iteration mirror can
                     // skip the deep clone when the overview is unchanged.
-                    sessions_overview_rev_clone
-                        .fetch_add(1, std::sync::atomic::Ordering::Release);
+                    sessions_overview_rev_clone.fetch_add(1, std::sync::atomic::Ordering::Release);
                     open_sessions_clone.store(true, Ordering::SeqCst);
                 }
                 AgentResponse::SessionDetail(detail) => {
@@ -1405,9 +1442,27 @@ pub async fn run_tui(
         permission_show_details: false,
         permission_scroll: 0,
         permission_max_scroll: 0,
-        input_history,
+        input_history: if input_history_config.record_commands {
+            input_history
+        } else {
+            // `[input_history] record_commands = false` (default): scrub any
+            // legacy `/slash` invocations from the loaded history so they stop
+            // showing in the picker, and — since this list is what gets
+            // `save_history`d on exit — the on-disk file heals itself too.
+            input_history
+                .into_iter()
+                .filter(|e| !e.text.starts_with('/'))
+                .collect()
+        },
         history_index: None,
         history_draft: String::new(),
+        history_draft_images: Vec::new(),
+        history_draft_text_pastes: Vec::new(),
+        history_attachments: std::collections::HashMap::new(),
+        history_attachments_order: std::collections::VecDeque::new(),
+        history_clear_confirm: false,
+        input_history_dedup: input_history_config.dedup,
+        input_history_record_commands: input_history_config.record_commands,
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
@@ -1553,9 +1608,11 @@ pub async fn start_tui(
     initial_model: String,
     input_history: Vec<neenee_core::HistoryEntry>,
     initial_messages: Vec<Message>,
+    initial_commands: Vec<neenee_core::CommandRecord>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
     tui_config: config::TuiConfig,
+    input_history_config: config::InputHistoryConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
@@ -1567,9 +1624,11 @@ pub async fn start_tui(
         initial_model,
         input_history,
         initial_messages,
+        initial_commands,
         initial_round_count,
         custom_commands,
         tui_config,
+        input_history_config,
         session,
         token_ledger,
         startup_picker,

@@ -37,6 +37,9 @@ pub use error::{
 pub mod message;
 pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, ToolCall, ToolResult};
 
+pub mod command;
+pub use command::{CommandRecord, CommandResult, CommandStatus, SearchHit};
+
 pub mod tool_output;
 pub use tool_output::{PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream};
 
@@ -80,9 +83,8 @@ pub mod skillsconfig;
 pub mod tool_registry;
 pub mod webconfig;
 pub use capability::{
-    CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints,
-    ProviderStreamEvent, ScopeTarget, Tool, ToolSpec, VariantSelection,
-    empty_variant_selection,
+    CommandScope, ModelRequest, OperationScope, Provider, ProviderPromptHints, ProviderStreamEvent,
+    ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
 };
 pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channelauth::{ChannelAuth, LoginMethod};

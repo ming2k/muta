@@ -136,6 +136,8 @@ pub mod keyvocab {
     /// completeness; call sites currently use `Key::CTRL_T.display()`.
     #[allow(dead_code)]
     pub const CTRL_T: &str = "Ctrl+T";
+    /// `Ctrl+X` — the history-clear shortcut (inside the Ctrl+R panel).
+    pub const CTRL_X: &str = "Ctrl+X";
 }
 
 /// The compact token for a core [`KeyCode`] — the lowercase `enter` / `esc` /
@@ -592,7 +594,7 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             },
             gate: Gate::Always,
             action: Action::CopyOrClear,
-            description: "copy · clear input · quit (×2)",
+            description: "copy  clear input  quit (×2)",
         },
         Binding {
             key: Key {

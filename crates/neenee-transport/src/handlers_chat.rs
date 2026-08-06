@@ -7,7 +7,7 @@
 //! …) so the body reads exactly as it did inline.
 
 use neenee_agent::orchestration::{RoundInput, round_response};
-use neenee_agent::{Agent, NoProvider, RoundLifecycle};
+use neenee_agent::{Agent, RoundLifecycle};
 use neenee_core::{AgentResponse, QueuedUserInput, RoundEvent};
 use neenee_persistence::{config::Config, session::SessionStore};
 use std::sync::Arc;
@@ -15,7 +15,9 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
-use crate::side::{SideSession, start_active_turn, start_session_turn, target_agent};
+use crate::side::{
+    SideSession, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
+};
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
@@ -36,12 +38,12 @@ pub async fn chat(
     // is parked on the `NoProvider` sentinel (catalog could not resolve a
     // channel at startup or the last `/models` switch). Failing here keeps
     // the user's text out of the transcript and surfaces a single notice
-    // instead of letting the request reach a non-functional provider.
-    if NoProvider::is(agent.provider.as_ref()) {
-        let _ = resp_tx.send(AgentResponse::Error(
-            "No provider configured. Add one with /connections before sending a message."
-                .to_string(),
-        ));
+    // instead of letting the request reach a non-functional provider. Use the
+    // same refusal contract as every other round-entry path (`RoundEvent::Error`
+    // + idle `HarnessState`): the TUI has already optimistically painted
+    // "queued" for this send, and a bare top-level `Error` would leave that
+    // state stuck on the activity bar forever.
+    if refuse_if_no_provider(resp_tx, agent, &session.id().await) {
         return;
     }
     start_active_turn(

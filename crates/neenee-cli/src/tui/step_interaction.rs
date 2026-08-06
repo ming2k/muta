@@ -91,6 +91,10 @@ pub fn default_tool_expanded(
         ToolStepStatus::Running => false,
         ToolStepStatus::Failed | ToolStepStatus::Denied => true,
         ToolStepStatus::Cancelled => false,
+        // An interrupted envoy preserved partial work, but the user stopped
+        // it deliberately — leave it collapsed (like Cancelled); the summary
+        // line and the drill-in view surface the recovered findings.
+        ToolStepStatus::Interrupted => false,
         ToolStepStatus::Ok => density || tool_default_expanded(config, name),
     }
 }

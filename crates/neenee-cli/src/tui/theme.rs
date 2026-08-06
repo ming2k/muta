@@ -489,6 +489,36 @@ impl Theme {
     pub fn info(&self) -> Color {
         self.info
     }
+
+    // ── Attachment chips ──
+    // Paste chips (`[Pasted text #N +M lines · size]`) and image chips
+    // (`[Image #N · size]`) are the composer's identifiers for staged
+    // attachments. Each kind gets its own foreground + tinted band so pasted
+    // blocks read as distinct typed objects inside the live input — the blue
+    // marks "text block", the amber marks "image block". Both derive from
+    // existing palette tokens so every color scheme gets a coherent pair.
+    /// Foreground of a staged large-text-paste chip. A calm blue reads as
+    /// "document / content block" — distinct from plain prose and from the
+    /// brand-colored `/command` accent.
+    pub fn chip_paste_fg(&self) -> Color {
+        self.info
+    }
+    /// Tinted pill background behind a paste chip. Derived from the surface
+    /// the chip sits on (the composer panel) so the band reads on both the
+    /// focused and the blurred input box.
+    pub fn chip_paste_bg(&self, on: Color) -> Color {
+        mix(on, self.info, 0.22)
+    }
+    /// Foreground of a staged image chip. A warm amber reads as "media
+    /// attachment", clearly distinguishable from the text-block blue.
+    pub fn chip_image_fg(&self) -> Color {
+        self.warning
+    }
+    /// Tinted pill background behind an image chip (see
+    /// [`Theme::chip_paste_bg`]).
+    pub fn chip_image_bg(&self, on: Color) -> Color {
+        mix(on, self.warning, 0.18)
+    }
     pub fn code_text(&self) -> Color {
         self.code_fg
     }

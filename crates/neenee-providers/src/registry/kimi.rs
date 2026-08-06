@@ -36,7 +36,6 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
     Model {
         // The Kimi Code platform's current flagship. The platform's live
@@ -56,8 +55,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.7-code",
         name: "Kimi K2.7 Code",
@@ -70,8 +67,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.6",
         name: "Kimi K2.6",
@@ -84,8 +79,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "kimi-k2.5",
         name: "Kimi K2.5",

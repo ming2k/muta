@@ -427,7 +427,8 @@ mod tests {
 
     #[test]
     fn prompt_hints_emit_no_system_guidance() {
-        let provider = OpenAiChatCompletionsProvider::new("test-key".to_string(), "test-model".to_string());
+        let provider =
+            OpenAiChatCompletionsProvider::new("test-key".to_string(), "test-model".to_string());
         // No protocol note: native tool calls are the wire default and the
         // ToolCallEchoFilter strips text-mirrored calls regardless.
         assert!(provider.prompt_hints().system_guidance.is_empty());

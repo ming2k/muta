@@ -106,6 +106,46 @@ pub(super) fn transcript_messages_from_core(
     messages: Vec<Message>,
     config: &TuiConfig,
 ) -> Vec<TranscriptMessage> {
+    transcript_from_core_inner(messages, config, true)
+}
+
+/// Rebuild the command rows of the ADR-0091 durable command ledger into the
+/// TUI document model: one compact, dimmed, non-conversational row per
+/// invocation, with the typed result as its expandable body. The ledger is the
+/// source of truth for commands on resume — the message stream is pure
+/// dialogue. Rows carry no round/turn position (a command is not a turn); the
+/// caller rebases round positions over the returned slice as usual.
+pub(super) fn transcript_commands_from_ledger(
+    commands: Vec<neenee_core::CommandRecord>,
+) -> Vec<TranscriptMessage> {
+    commands
+        .into_iter()
+        .map(|record| TranscriptMessage::command_result(record.name, record.args, record.result))
+        .collect()
+}
+
+/// Rebuild the nested transcript of an envoy run (the `children` carried by a
+/// Tool-role message) into the TUI document model. Mirrors the live
+/// event-driven build — assistant text, reasoning traces, and nested tool
+/// steps with their own results — and recurses for arbitrarily deep envoy
+/// trees, so the drill-in envoy view works after a resume.
+fn transcript_children_from_core(
+    messages: Vec<Message>,
+    config: &TuiConfig,
+) -> Vec<TranscriptMessage> {
+    transcript_from_core_inner(messages, config, false)
+}
+
+/// Shared restore engine. With `track_rounds` the caller gets the canonical
+/// Round → Turn reconstruction used for the top-level transcript; with it off
+/// (envoy children) round/turn attribution is skipped, since nested transcripts
+/// render inside their parent step rather than against the session's global
+/// round counter.
+fn transcript_from_core_inner(
+    messages: Vec<Message>,
+    config: &TuiConfig,
+    track_rounds: bool,
+) -> Vec<TranscriptMessage> {
     let mut restored = Vec::new();
     // Reconstruct the canonical Round -> Turn position from the durable
     // transcript. A driving visible user message opens a round; every
@@ -123,14 +163,17 @@ pub(super) fn transcript_messages_from_core(
         if message.hidden || message.role == Role::System {
             continue;
         }
-        let is_insert = message
-            .origin
-            .as_ref()
-            .is_some_and(|origin| origin.kind == neenee_core::InjectionKind::UserSteer);
-        let opens_round = message.role == Role::User && !is_insert && !message.is_command_echo();
-        if opens_round {
-            restored_round = restored_round.saturating_add(1);
-            restored_turn = 0;
+        if track_rounds {
+            let is_insert = message
+                .origin
+                .as_ref()
+                .is_some_and(|origin| origin.kind == neenee_core::InjectionKind::UserSteer);
+            let opens_round =
+                message.role == Role::User && !is_insert && !message.is_command_echo();
+            if opens_round {
+                restored_round = restored_round.saturating_add(1);
+                restored_turn = 0;
+            }
         }
         // Attribution travels on every part so a resumed session that mixed
         // models still shows which model produced each turn.
@@ -142,12 +185,14 @@ pub(super) fn transcript_messages_from_core(
                 .map(|seconds| seconds.saturating_mul(1000))
         });
         if message.role == Role::Assistant {
-            if restored_round == 0 {
-                // Defensive compatibility for imported assistant-first
-                // transcripts that predate a driving user message.
-                restored_round = 1;
+            if track_rounds {
+                if restored_round == 0 {
+                    // Defensive compatibility for imported assistant-first
+                    // transcripts that predate a driving user message.
+                    restored_round = 1;
+                }
+                restored_turn = restored_turn.saturating_add(1);
             }
-            restored_turn = restored_turn.saturating_add(1);
             // Mirrors the live path's `StreamReasoningDelta` gate: a hidden-chain
             // model (`ReasoningSummary`, e.g. GPT-5.x) never disclosed its full
             // reasoning chain, so its persisted `reasoning_content` is only a
@@ -172,8 +217,10 @@ pub(super) fn transcript_messages_from_core(
                 let mut thinking = TranscriptMessage::thinking(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();
-                thinking.round = Some(restored_round);
-                thinking.turn = Some(restored_turn);
+                if track_rounds {
+                    thinking.round = Some(restored_round);
+                    thinking.turn = Some(restored_turn);
+                }
                 thinking.set_thinking_duration(0);
                 // Honor the configured default expand state for reasoning
                 // traces so resumed sessions match live behavior.
@@ -194,8 +241,10 @@ pub(super) fn transcript_messages_from_core(
                     );
                     step.provider = provider.clone();
                     step.model = model.clone();
-                    step.round = Some(restored_round);
-                    step.turn = Some(restored_turn);
+                    if track_rounds {
+                        step.round = Some(restored_round);
+                        step.turn = Some(restored_turn);
+                    }
                     step.sent_at_ms = message_sent_at_ms;
                     pending_steps
                         .entry(call.name)
@@ -216,7 +265,38 @@ pub(super) fn transcript_messages_from_core(
             // orphan result is then rendered as a plain message below.
             if let Some(idx) = pending_steps.get_mut(name).and_then(|q| q.pop_front()) {
                 let item = &mut restored[idx];
-                if item.finish_tool_step(name, output, neenee_core::ToolOutput::text(output), 0) {
+                let meta = message.envoy_meta.take();
+                let children = message.children.take();
+                // Rebuild a structured output that preserves the envoy's true
+                // classification (failed / interrupted / ok) and real duration;
+                // the bare summary text cannot distinguish them. `children`
+                // round-trip separately below so the drill-in view works after
+                // resume.
+                let (structured, duration_ms) = match &meta {
+                    Some(meta) => (
+                        neenee_core::ToolOutput::Envoy {
+                            summary: output.to_string(),
+                            messages: Vec::new(),
+                            usage: neenee_core::TokenUsage::default(),
+                            generation_ms: 0,
+                            failed: meta.failed,
+                            interrupted: meta.interrupted,
+                        },
+                        meta.duration_ms.unwrap_or(0),
+                    ),
+                    None => (neenee_core::ToolOutput::text(output), 0),
+                };
+                if item.finish_tool_step(name, output, structured, duration_ms) {
+                    // Restore the envoy's nested transcript so its partial /
+                    // completed work is drillable after resume.
+                    if let Some(child_messages) = children {
+                        let grand = transcript_children_from_core(child_messages, config);
+                        if !grand.is_empty()
+                            && let Some(slot) = item.envoy_children_mut()
+                        {
+                            *slot = grand;
+                        }
+                    }
                     // Apply the lifecycle-aware default disclosure so
                     // restored steps match live (Failed/Denied expand,
                     // Ok follows per-tool config).
@@ -230,17 +310,19 @@ pub(super) fn transcript_messages_from_core(
             }
         }
         if let Some(mut transcript_message) = transcript_message_from_core(message) {
-            if transcript_message.role == Role::Assistant {
-                transcript_message.round = Some(restored_round);
-                transcript_message.turn = Some(restored_turn);
-            } else if transcript_message.role == Role::User
-                && transcript_message.origin == UserMessageOrigin::Chat
-            {
-                transcript_message.round = Some(restored_round);
-            } else if transcript_message.role == Role::User
-                && transcript_message.origin == UserMessageOrigin::Insert
-            {
-                transcript_message.round = (restored_round > 0).then_some(restored_round);
+            if track_rounds {
+                if transcript_message.role == Role::Assistant {
+                    transcript_message.round = Some(restored_round);
+                    transcript_message.turn = Some(restored_turn);
+                } else if transcript_message.role == Role::User
+                    && transcript_message.origin == UserMessageOrigin::Chat
+                {
+                    transcript_message.round = Some(restored_round);
+                } else if transcript_message.role == Role::User
+                    && transcript_message.origin == UserMessageOrigin::Insert
+                {
+                    transcript_message.round = (restored_round > 0).then_some(restored_round);
+                }
             }
             restored.push(transcript_message);
         }
@@ -332,5 +414,73 @@ mod tests {
 
         assert_eq!(messages[0].round, Some(41));
         assert_eq!(messages[1].round, Some(42));
+    }
+
+    /// An interrupted envoy survives a resume with its true classification and
+    /// its partial children intact: the persisted `envoy_meta.interrupted` flag
+    /// drives the `Interrupted` status (not `Ok` — the bare summary text cannot
+    /// say it), and the nested transcript rebuilds the drill-in view.
+    #[test]
+    fn restores_interrupted_envoy_with_children_and_status() {
+        use crate::tui::config::TuiConfig;
+        use neenee_core::message::EnvoyMeta;
+        use neenee_core::{Message, ToolCall};
+
+        let call = ToolCall {
+            id: "call_9".to_string(),
+            name: "envoy".to_string(),
+            arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
+        };
+        let inner_call = ToolCall {
+            id: "inner_1".to_string(),
+            name: "read_text".to_string(),
+            arguments: "{}".to_string(),
+        };
+        // The envoy's partial internal transcript: one completed read round.
+        let children = vec![
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_calls: Some(vec![inner_call.clone()]),
+                ..Message::new(Role::Assistant, "")
+            },
+            Message::tool_result(&inner_call, "[read_text result]:\nfound 1 of 3"),
+        ];
+        let messages = vec![
+            Message::new(Role::User, "research the handlers"),
+            Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_calls: Some(vec![call.clone()]),
+                ..Message::new(Role::Assistant, "")
+            },
+            Message::tool_result(&call, "[envoy result]:\nInterrupted: stopped by the user")
+                .with_children(children)
+                .with_envoy_meta(EnvoyMeta {
+                    duration_ms: Some(42),
+                    failed: false,
+                    interrupted: true,
+                    ..Default::default()
+                }),
+        ];
+
+        let restored = super::transcript_messages_from_core(messages, &TuiConfig::default());
+        let step = restored
+            .iter()
+            .find(|m| m.is_envoy_task())
+            .expect("the envoy step must be restored");
+        assert_eq!(
+            step.tool_step_status(),
+            Some(crate::tui::model::document::ToolStepStatus::Interrupted),
+            "restored interrupted envoy must classify as Interrupted, not Ok/Failed"
+        );
+        let kids = step.envoy_children().expect("children must be restored");
+        assert_eq!(kids.len(), 1, "one completed child tool step expected");
+        assert!(kids[0].is_tool_step());
+        assert_eq!(
+            kids[0].tool_step_status(),
+            Some(crate::tui::model::document::ToolStepStatus::Ok),
+            "the child read_text step completed normally"
+        );
     }
 }

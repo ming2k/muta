@@ -9,16 +9,18 @@
 //! to the current session (see `App::current_session_history`).
 //!
 //! Each row is a single line (multi-line prompts collapse to the first line
-//! with a `↵` marker); the selected row's full origin — workspace, session,
-//! and when it was sent — is shown on a one-line status strip at the panel's
-//! foot so the dense list stays scannable.
+//! with a `↵` marker); the row numbers + prompt text are enough to navigate,
+//! so there is no origin status strip — the `~/project · #session… · time`
+//! line was redundant noise and was removed. `Ctrl+X` clears the whole
+//! history (with an explicit `y` confirm), `Enter` inserts the focused entry
+//! into the composer, `Tab` previews the full multi-line text.
 
 use neenee_core::HistoryEntry;
 use neenee_tui_engine::{
     Block as RtBlock, Clear as RtClear, Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
 };
 
-use super::common::{relative_time_at, truncate_ellipsis};
+use super::common::truncate_ellipsis;
 use crate::tui::fuzzy::FuzzyMatch;
 use crate::tui::primitives::{
     FooterHint, SCROLL_EDGE_MARGIN, contrast_fg, keymap_body_lines, keyvocab, render_body,
@@ -114,7 +116,10 @@ pub fn draw_history_panel(
     let app_bg = theme.surface();
     let inner_w = area.width;
     frame.render_widget(RtClear, area);
-    frame.render_widget(RtBlock::default().style(Style::default().bg(panel_bg)), area);
+    frame.render_widget(
+        RtBlock::default().style(Style::default().bg(panel_bg)),
+        area,
+    );
 
     // Top transition row (▄) then bottom transition row (▀): painted as
     // single-row Paragraphs so they overlay the panel fill on the edge rows.
@@ -127,24 +132,14 @@ pub fn draw_history_panel(
         Style::default().fg(panel_bg).bg(app_bg),
     ));
     let top_row = Rect::new(area.x, area.y, inner_w, 1);
-    let bottom_row = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(1),
-        inner_w,
-        1,
-    );
+    let bottom_row = Rect::new(area.x, area.y + area.height.saturating_sub(1), inner_w, 1);
     frame.render_widget(Paragraph::new(top_edge), top_row);
     frame.render_widget(Paragraph::new(bottom_edge), bottom_row);
 
     // Header row: title + live query echo + counts. Sits just inside the top
     // transition row, full width (no left-accent column to inset around).
     let header_rect = Rect::new(area.x, area.y + 1, inner_w, 1);
-    let footer_rect = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(2),
-        inner_w,
-        1,
-    );
+    let footer_rect = Rect::new(area.x, area.y + area.height.saturating_sub(2), inner_w, 1);
     // Body sits between header and footer.
     let body_rect = if area.height >= CHROME_ROWS {
         Rect::new(
@@ -192,7 +187,13 @@ pub fn draw_history_panel(
         let body = preview_body(history, ranked, modal_index, theme);
         render_body(frame, body_rect, body, scroll, None, 0, true, theme);
     } else {
-        let body = list_body(history, ranked, modal_index, theme, body_rect.width as usize);
+        let body = list_body(
+            history,
+            ranked,
+            modal_index,
+            theme,
+            body_rect.width as usize,
+        );
         let follow = follow_selection.then_some(modal_index);
         render_body(
             frame,
@@ -206,21 +207,15 @@ pub fn draw_history_panel(
         );
     }
 
-    // Footer: a two-part strip. The left half is the selected row's origin
-    // (workspace · session · relative time); the right half is the key hints.
-    draw_footer(frame, footer_rect, history, ranked, modal_index, theme);
+    // Footer: the key hints strip (right-aligned). The selected row's origin
+    // strip was removed as redundant — see [`draw_footer`].
+    draw_footer(frame, footer_rect, theme);
 
     Some(area)
 }
 
 /// Header: `History` title, the count of visible/total.
-fn draw_header(
-    frame: &mut Frame,
-    rect: Rect,
-    total: usize,
-    shown: usize,
-    theme: &Theme,
-) {
+fn draw_header(frame: &mut Frame, rect: Rect, total: usize, shown: usize, theme: &Theme) {
     let title = Span::styled(
         "History",
         Style::default()
@@ -240,97 +235,20 @@ fn draw_header(
     frame.render_widget(Paragraph::new(Line::from(vec![title, count])), rect);
 }
 
-/// Footer: selected-row origin (left) + key hints (right). When the `?`
-/// keymap page is open the caller draws its own footer, so this is only the
-/// normal-mode strip.
-fn draw_footer(
-    frame: &mut Frame,
-    rect: Rect,
-    history: &[HistoryEntry],
-    ranked: &[(usize, FuzzyMatch)],
-    modal_index: usize,
-    theme: &Theme,
-) {
-    let origin_spans = selected_origin_spans(history, ranked, modal_index, theme);
-    let hints: [FooterHint; 4] = [
+/// Footer: the key hints strip (right-aligned). The selected row's origin
+/// (workspace · session · time) used to trail on the left, but that line was
+/// redundant noise — the prompt text itself is the entry, and the row numbers
+/// already anchor selection — so it was removed. When the `?` keymap page is
+/// open the caller draws its own footer, so this is only the normal-mode strip.
+fn draw_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
+    let hints: [FooterHint; 5] = [
         FooterHint::secondary("type", "filter"),
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::primary(keyvocab::ENTER, "insert"),
+        FooterHint::always(keyvocab::CTRL_X, "clear"),
         FooterHint::always(keyvocab::ESC, "close"),
     ];
-    // The footer renderer lays the hints out right-aligned with
-    // width-aware dropping; the origin line is painted first into the left
-    // half of the footer so it never overlaps the hints on the right.
-    let hint_rect = Rect {
-        width: rect.width.min(40),
-        x: rect.x + rect.width.saturating_sub(40),
-        ..rect
-    };
-    let origin_rect = Rect {
-        width: rect.width.saturating_sub(hint_rect.width),
-        ..rect
-    };
-    frame.render_widget(Paragraph::new(Line::from(origin_spans)), origin_rect);
-    render_modal_footer_with_more(frame, hint_rect, &hints, &[], theme);
-}
-
-/// Build the spans for the selected row's origin strip: workspace, session
-/// id (short), and a relative time. Falls back to a muted placeholder when
-/// nothing is selected or the entry has no known origin.
-fn selected_origin_spans(
-    history: &[HistoryEntry],
-    ranked: &[(usize, FuzzyMatch)],
-    modal_index: usize,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
-    let Some((orig_idx, _)) = ranked.get(modal_index) else {
-        return vec![Span::styled(" ", Style::default().fg(theme.muted()))];
-    };
-    let Some(entry) = history.get(*orig_idx) else {
-        return vec![Span::styled(" ", Style::default().fg(theme.muted()))];
-    };
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(6);
-    spans.push(Span::styled(" ", Style::default().fg(theme.muted())));
-    if let Some(ws) = &entry.workspace {
-        spans.push(Span::styled(
-            crate::tui::chrome::tilde_home(std::path::Path::new(ws)),
-            Style::default().fg(theme.fg()),
-        ));
-    } else {
-        spans.push(Span::styled("unknown workspace", Style::default().fg(theme.muted())));
-    }
-    if let Some(sid) = &entry.session_id {
-        spans.push(Span::styled(" · ", Style::default().fg(theme.muted())));
-        spans.push(Span::styled(short_id(sid), Style::default().fg(theme.muted())));
-    }
-    if entry.created_at_ms > 0 {
-        let now = now_epoch_secs();
-        spans.push(Span::styled(" · ", Style::default().fg(theme.muted())));
-        spans.push(Span::styled(
-            relative_time_at(entry.created_at_ms / 1000, now),
-            Style::default().fg(theme.muted()),
-        ));
-    }
-    spans
-}
-
-/// Wall-clock seconds since the epoch, read once per footer draw.
-fn now_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
-}
-
-/// Shorten a session id for display: keep the first 8 chars (the uuid prefix
-/// is enough to tell two sessions apart at a glance).
-fn short_id(id: &str) -> String {
-    let prefix: String = id.chars().take(8).collect();
-    if id.len() > 8 {
-        format!("#{prefix}…")
-    } else {
-        format!("#{prefix}")
-    }
+    render_modal_footer_with_more(frame, rect, &hints, &[], theme);
 }
 
 /// Build the one-line-per-entry fuzzy list body. Multi-line entries are
@@ -394,7 +312,10 @@ fn list_body<'a>(
                 .add_modifier(Modifier::BOLD)
         };
 
-        let raw = history.get(*orig_idx).map(|e| e.text.as_str()).unwrap_or("");
+        let raw = history
+            .get(*orig_idx)
+            .map(|e| e.text.as_str())
+            .unwrap_or("");
         // Collapse to a single line: take the first physical line and mark
         // continuation so a multi-line prompt reads as one row. The highlight
         // positions (computed against `raw`) map onto the first line since any
@@ -449,7 +370,10 @@ fn preview_body(
             Style::default().fg(theme.muted()),
         ))];
     };
-    let raw = history.get(*orig_idx).map(|e| e.text.as_str()).unwrap_or("");
+    let raw = history
+        .get(*orig_idx)
+        .map(|e| e.text.as_str())
+        .unwrap_or("");
     let matched: std::collections::HashSet<usize> = m.positions.iter().copied().collect();
 
     let body_style = Style::default().fg(theme.fg());

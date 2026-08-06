@@ -94,10 +94,10 @@ pub fn provider() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " connections picker · {} providers · / to search · q/Ctrl+C=quit",
+                " connections picker · {} providers  / to search  q/Ctrl+C=quit",
                 s.picker.rows.len(),
             );
-            let hint = " ↑↓ navigate · Enter select · / search · Esc back/quit ";
+            let hint = " ↑↓ navigate  Enter select  / search  Esc back/quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut lm = LayoutMap::new();
                 let query = if s.search { s.query.trim() } else { "" };
@@ -232,10 +232,10 @@ pub fn models() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " models picker · {} pairs · / to search · q/Ctrl+C=quit",
+                " models picker · {} pairs  / to search  q/Ctrl+C=quit",
                 s.picker.rows.iter().map(|r| r.models.len()).sum::<usize>(),
             );
-            let hint = " ↑↓ navigate · Enter activate · * favorite · e settings · Esc back/quit ";
+            let hint = " ↑↓ navigate  Enter activate  * favorite  e settings  Esc back/quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut lm = LayoutMap::new();
                 let query = if s.search { s.query.trim() } else { "" };
@@ -322,8 +322,8 @@ pub fn model_editor() -> io::Result<()> {
     common::run_showcase(
         &mut state,
         |f, s| {
-            let title = " key editor · API key · q/Ctrl+C=quit".to_string();
-            let hint = " type to edit · Enter save · Esc quit ";
+            let title = " key editor · API key  q/Ctrl+C=quit".to_string();
+            let hint = " type to edit  Enter save  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 draw_model_editor(f, "OpenAI", &s.input, s.cursor, true, 0, None, None, &theme);
             });
@@ -395,13 +395,13 @@ pub fn history() -> io::Result<()> {
             let ranked = fuzzy::rank(&texts, &s.query);
             let index = s.index.min(ranked.len().saturating_sub(1));
             let title = format!(
-                " history search · {} entries · type to fuzzy-filter · q/Ctrl+C=quit",
+                " history search · {} entries  type to fuzzy-filter  q/Ctrl+C=quit",
                 s.history.len(),
             );
-            let hint = " type to filter · ↑↓ navigate · Esc clear/quit ";
+            let hint = " type to filter  ↑↓ navigate  Esc clear/quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                use neenee_tui_engine::{Modifier, Paragraph, Style};
                 use neenee_tui_engine::{Line, Span};
+                use neenee_tui_engine::{Modifier, Paragraph, Style};
                 let area = f.area();
                 let composer_y = area.height.saturating_sub(2);
                 let input_rect = neenee_tui_engine::Rect::new(

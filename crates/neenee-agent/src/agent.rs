@@ -23,17 +23,35 @@ framing does not transfer to you: you (the principal agent) retain your full too
 — including write and edit tools and the shell. Act directly on the findings above, \
 or re-delegate with a narrower scope.";
 
+/// Same role-reanchoring for an *interrupted* envoy: stopped by the user, not
+/// failed. The partial findings above are real work; the principal may continue
+/// them directly or re-delegate, and stays accountable for the outcome.
+const ENVOY_REANCHOR_INTERRUPTED: &str = "\
+[system] That envoy was interrupted mid-task (stopped by the user before it finished). \
+Its partial findings above are real work, and its read-only / toolset-scoped framing \
+does not transfer to you: you (the principal agent) retain your full toolset — \
+including write and edit tools and the shell. Continue the work directly from where \
+it stopped, or re-delegate with a narrower scope.";
+
 /// Build the model-visible text for an envoy tool result: the envoy's summary
 /// wrapped in the standard `[<tool> result]:` header, followed by a
 /// deterministic role-reanchoring note (`ENVOY_REANCHOR_OK` on success,
-/// `ENVOY_REANCHOR_FAILED` on `failed`). This is the single choke point where
+/// `ENVOY_REANCHOR_FAILED` on `failed`, `ENVOY_REANCHOR_INTERRUPTED` on
+/// `interrupted`). This is the single choke point where
 /// an envoy's read-only framing enters the principal's transcript, so the
 /// re-anchor is applied here unconditionally — it cannot be forgotten by a
 /// missing `[hooks]` config. Extracted from [`Agent::record_tool_result`] so the
 /// contract (the anchor is present, and its tone tracks the failure flag) is
 /// unit-testable without a full `Agent` fixture.
-pub(crate) fn envoy_result_text(name: &str, summary: &str, failed: bool) -> String {
-    let reanchor = if failed {
+pub(crate) fn envoy_result_text(
+    name: &str,
+    summary: &str,
+    failed: bool,
+    interrupted: bool,
+) -> String {
+    let reanchor = if interrupted {
+        ENVOY_REANCHOR_INTERRUPTED
+    } else if failed {
         ENVOY_REANCHOR_FAILED
     } else {
         ENVOY_REANCHOR_OK
@@ -509,6 +527,34 @@ struct UserInputRound {
     queue: std::collections::VecDeque<neenee_core::QueuedUserInput>,
 }
 
+/// Result of one tool-execution phase, returned by the cancellation-aware
+/// executors ([`Agent::execute_tools_concurrent`] and
+/// [`Agent::execute_tool_evented`]). The executors never return
+/// `Err(HarnessError::Interrupted)` themselves anymore: when the user
+/// interrupts a turn they signal cooperatively-cancellable in-flight calls
+/// (envoys), drain them within a bounded grace period, and report
+/// `interrupted: true` with whatever results were recovered. The caller
+/// ([`Agent::dispatch_tool_calls`]) records the recovered results, then
+/// propagates the interruption itself — so an interrupted envoy's partial
+/// transcript survives into the persisted transcript even though the round
+/// ends as interrupted.
+pub(crate) struct ConcurrentOutcome {
+    /// Per-input results in input order. A `None` slot means the call was
+    /// dropped by the cancel grace deadline (no result recovered); the
+    /// executor already paired it with a terminal [`AgentEvent::ToolCancelled`].
+    pub(crate) results: Vec<Option<(ToolOutput, u64)>>,
+    /// Whether the cancellation token fired during execution.
+    pub(crate) interrupted: bool,
+}
+
+/// Single-call counterpart of [`ConcurrentOutcome`] for
+/// [`Agent::execute_tool_evented`]. `result` is `Some` when the call reached a
+/// terminal result — normally, or after a graceful drain on interrupt.
+pub(crate) struct SingleToolOutcome {
+    pub(crate) result: Option<ToolOutput>,
+    pub(crate) interrupted: bool,
+}
+
 /// RAII settlement for one concrete provider request. Any early-return path
 /// (interrupt, timeout, provider error, invalid response) still terminally
 /// records the attempt; normal completion explicitly settles it with the
@@ -812,8 +858,7 @@ impl Agent {
         )));
         let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
         let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
-        let scoped_disabled_tools =
-            Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
+        let scoped_disabled_tools = Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
         let user_tools = Arc::new(std::sync::RwLock::new(Vec::new()));
         // The unified ToolManager view (kimi-code port) owns the single
         // authority for classification, per-turn schema, and dispatch lookup.
@@ -959,9 +1004,7 @@ impl Agent {
     /// Holds the synchronous permission gates; the asynchronous gates (hook,
     /// bash-policy, ask_user, broker park) stay in `execute_tool`.
     pub(crate) fn permission_chain(&self) -> crate::permission_policy::PermissionChain {
-        crate::permission_policy::PermissionChain::new(
-            crate::permission_policy::default_chain(),
-        )
+        crate::permission_policy::PermissionChain::new(crate::permission_policy::default_chain())
     }
 
     /// Snapshot the live state available to declarative system-prompt policy.
@@ -1610,7 +1653,8 @@ impl Agent {
     /// `receiver.await` so the round exit gate can subtract it from the
     /// wall-clock for an honest tokens/sec. No-op after saturating at `u64::MAX`.
     fn book_pause(&self, ms: u64) {
-        self.round_paused_ms.fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
+        self.round_paused_ms
+            .fetch_add(ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn thread_id(&self) -> Option<String> {
@@ -2831,9 +2875,12 @@ impl Agent {
     /// (the caller should loop again), `false` when the round is complete.
     ///
     /// `cancel` makes tool execution cooperative: if the turn is interrupted
-    /// mid-flight, every already-announced [`AgentEvent::ToolCall`] is paired
-    /// with a terminal [`AgentEvent::ToolCancelled`] before this returns
-    /// `Err(HarnessError::Interrupted)`, so no step is left "running".
+    /// mid-flight, cooperatively-cancellable calls (envoys) are drained and
+    /// their partial results recorded into `messages` before this returns
+    /// `Err(HarnessError::Interrupted)` — so interrupted envoy work survives
+    /// into the persisted transcript. Every other already-announced
+    /// [`AgentEvent::ToolCall`] is paired with a terminal
+    /// [`AgentEvent::ToolCancelled`] before this returns.
     async fn dispatch_tool_calls<F>(
         &self,
         response: &Message,
@@ -3047,11 +3094,40 @@ impl Agent {
                     .collect();
                 let exec_ids: Vec<String> =
                     exec_indices.iter().map(|&i| call_ids[i].clone()).collect();
-                let exec_results = self
+                let outcome = self
                     .execute_tools_concurrent(&exec_calls, &exec_ids, cancel, on_event)
                     .await?;
-                for (pos, &idx) in exec_indices.iter().enumerate() {
-                    results[idx] = exec_results.get(pos).cloned();
+                // Destructure so the per-call results can move out by value.
+                let ConcurrentOutcome {
+                    results: recovered,
+                    interrupted,
+                } = outcome;
+                if interrupted {
+                    // The user interrupted this turn mid-flight. Record
+                    // whatever real work drained (an interrupted envoy's
+                    // partial transcript), then end the round as interrupted
+                    // — the caller commits the transcript so the recovered
+                    // work survives into the session. Dropped calls already
+                    // received their terminal `ToolCancelled` event.
+                    for (&idx, recovered) in exec_indices.iter().zip(recovered) {
+                        if let Some((result, duration_ms)) = recovered {
+                            self.record_tool_result(
+                                &tool_calls[idx],
+                                &call_ids[idx],
+                                &result,
+                                duration_ms,
+                                messages,
+                                state,
+                                false,
+                                false,
+                                on_event,
+                            );
+                        }
+                    }
+                    return Err(HarnessError::Interrupted);
+                }
+                for (&idx, recovered) in exec_indices.iter().zip(recovered) {
+                    results[idx] = recovered;
                     state.remember_completed_tool(&tool_calls[idx]);
                 }
             }
@@ -3225,8 +3301,40 @@ impl Agent {
                 });
                 output
             } else {
-                self.execute_tool_evented(&call, &call_id, cancel, on_event)
-                    .await?
+                let outcome = self
+                    .execute_tool_evented(&call, &call_id, cancel, on_event)
+                    .await?;
+                if outcome.interrupted {
+                    // Record a drained result (an interrupted envoy's partial
+                    // transcript) before ending the round as interrupted.
+                    if let Some(result) = outcome.result {
+                        let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
+                        self.record_tool_result(
+                            &call,
+                            &call_id,
+                            &result,
+                            duration_ms,
+                            messages,
+                            state,
+                            checkpoint_replay,
+                            true,
+                            on_event,
+                        );
+                    }
+                    return Err(HarnessError::Interrupted);
+                }
+                match outcome.result {
+                    Some(result) => result,
+                    // Defensive: a non-interrupted outcome must carry a
+                    // result — the executor guarantees it. Surface an
+                    // internal error rather than panicking the harness.
+                    None => {
+                        return Err(HarnessError::Other(
+                            "internal error: non-interrupted tool outcome lost its result"
+                                .to_string(),
+                        ));
+                    }
+                }
             };
             if !checkpoint_replay && !guard_blocked {
                 state.remember_completed_tool(&call);
@@ -3332,21 +3440,28 @@ impl Agent {
         // arbitrarily deep envoy trees round-trip through session.json.
         // Sidecar `envoy_meta` captures what the live event stream knew but
         // the bare transcript cannot reconstruct on resume: duration, the
-        // task description, the toolset size, and an explicit failure flag.
-        // The envoy result text is built by `envoy_result_text`, which appends
-        // a deterministic role-reanchoring note at this single choke point (see
-        // its doc for the "role bleed" rationale). For non-envoy results the
-        // plain header is used unchanged.
+        // task description, the toolset size, and explicit failed /
+        // interrupted flags. The envoy result text is built by
+        // `envoy_result_text`, which appends a deterministic
+        // role-reanchoring note at this single choke point (see its doc for
+        // the "role bleed" rationale). For non-envoy results the plain header
+        // is used unchanged.
         let tool_message = match result.envoy_payload() {
             Some((sub_messages, _)) => {
                 let meta = crate::message::EnvoyMeta {
                     duration_ms: Some(duration_ms),
                     failed: result.is_error(),
+                    interrupted: result.envoy_interrupted(),
                     ..Default::default()
                 };
                 Message::tool_result(
                     call,
-                    envoy_result_text(&call.name, &text, result.is_error()),
+                    envoy_result_text(
+                        &call.name,
+                        &text,
+                        result.is_error(),
+                        result.envoy_interrupted(),
+                    ),
                 )
                 .with_children(sub_messages.to_vec())
                 .with_envoy_meta(meta)
@@ -3856,61 +3971,61 @@ impl Agent {
             ctx: self, // Agent: PermissionContext
         };
         match self.permission_chain().evaluate(&pctx).await {
-                crate::permission_policy::PolicyDecision::Pass
-                | crate::permission_policy::PolicyDecision::Approve => {}
-                crate::permission_policy::PolicyDecision::Deny { output, .. } => {
-                    return output;
-                }
-                crate::permission_policy::PolicyDecision::Ask { request, rule } => {
-                    // The single interactive-park path. Both the broker (a
-                    // write/execute the user must approve) and the bash
-                    // dangerous-command confirm reach here; `request.one_off`
-                    // distinguishes them. Fill the request id, emit, fire
-                    // observe hooks, await the user's decision.
-                    let one_off = request.one_off;
-                    let request = neenee_core::PermissionRequest {
-                        id: format!("permission_{}", uuid::Uuid::new_v4()),
-                        ..request
-                    };
-                    let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
-                    tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
-                    let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
-                    self.fire_permission_request_hooks(&request).await;
-                    let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
-                    // Charge the human-thinking pause to the round so the exit
-                    // gate can subtract it for an honest tokens/sec.
-                    self.book_pause(parked_at.elapsed().as_millis() as u64);
-                    match decision {
-                        PermissionDecision::Once => {
-                            tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
+            crate::permission_policy::PolicyDecision::Pass
+            | crate::permission_policy::PolicyDecision::Approve => {}
+            crate::permission_policy::PolicyDecision::Deny { output, .. } => {
+                return output;
+            }
+            crate::permission_policy::PolicyDecision::Ask { request, rule } => {
+                // The single interactive-park path. Both the broker (a
+                // write/execute the user must approve) and the bash
+                // dangerous-command confirm reach here; `request.one_off`
+                // distinguishes them. Fill the request id, emit, fire
+                // observe hooks, await the user's decision.
+                let one_off = request.one_off;
+                let request = neenee_core::PermissionRequest {
+                    id: format!("permission_{}", uuid::Uuid::new_v4()),
+                    ..request
+                };
+                let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
+                tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
+                let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
+                self.fire_permission_request_hooks(&request).await;
+                let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
+                // Charge the human-thinking pause to the round so the exit
+                // gate can subtract it for an honest tokens/sec.
+                self.book_pause(parked_at.elapsed().as_millis() as u64);
+                match decision {
+                    PermissionDecision::Once => {
+                        tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
+                    }
+                    PermissionDecision::Always => {
+                        if one_off {
+                            // A bash dangerous-command confirm: honour the
+                            // grant for this one call but do NOT persist it.
+                            // A dangerous-command confirmation is sharper
+                            // than ordinary tool permission and must stay
+                            // one-off unless the user writes an explicit
+                            // `[bash_policy.rules] action = "allow"` override.
+                            tracing::info!(
+                                tool = %tool.name(),
+                                decision = "always",
+                                "one-off permission granted (not persisted)"
+                            );
+                        } else {
+                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
+                            self.permissions.add_always(rule);
                         }
-                        PermissionDecision::Always => {
-                            if one_off {
-                                // A bash dangerous-command confirm: honour the
-                                // grant for this one call but do NOT persist it.
-                                // A dangerous-command confirmation is sharper
-                                // than ordinary tool permission and must stay
-                                // one-off unless the user writes an explicit
-                                // `[bash_policy.rules] action = "allow"` override.
-                                tracing::info!(
-                                    tool = %tool.name(),
-                                    decision = "always",
-                                    "one-off permission granted (not persisted)"
-                                );
-                            } else {
-                                tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
-                                self.permissions.add_always(rule);
-                            }
-                        }
-                        PermissionDecision::Reject => {
-                            tracing::warn!(tool = %tool.name(), "permission denied");
-                            return ToolOutput::PermissionDenied {
-                                tool: tool.name().to_string(),
-                            };
-                        }
+                    }
+                    PermissionDecision::Reject => {
+                        tracing::warn!(tool = %tool.name(), "permission denied");
+                        return ToolOutput::PermissionDenied {
+                            tool: tool.name().to_string(),
+                        };
                     }
                 }
             }
+        }
 
         // ask_user: the chain's AskUserPolicy refused under autopilot; here we
         // execute the interactive path (park for a user answer).
@@ -3973,17 +4088,20 @@ impl Agent {
     /// Single-call wrapper that forwards channel events to a mutable callback.
     /// Used by text-fallback paths (one tool call at a time).
     ///
-    /// Cancellation-aware: if `cancel` fires while the tool is in flight, the
-    /// already-announced call (identified by `call_id`) is paired with a
-    /// terminal [`AgentEvent::ToolCancelled`] and this returns
-    /// `Err(HarnessError::Interrupted)`.
+    /// Cancellation-aware: if `cancel` fires while the tool is in flight, a
+    /// cooperatively-cancellable tool (an envoy) is given a bounded grace
+    /// period to drain and return its terminal result — the interrupted
+    /// result is carried in [`SingleToolOutcome`] so the caller can record the
+    /// partial work before ending the round. A non-cancellable tool keeps the
+    /// historical fast path: its in-flight call is paired with a terminal
+    /// [`AgentEvent::ToolCancelled`] and the outcome reports no result.
     pub(crate) async fn execute_tool_evented<F>(
         &self,
         call: &ToolCall,
         call_id: &str,
         cancel: &CancellationToken,
         on_event: &mut F,
-    ) -> Result<ToolOutput, HarnessError>
+    ) -> Result<SingleToolOutcome, HarnessError>
     where
         F: FnMut(AgentEvent) + Send,
     {
@@ -3994,14 +4112,67 @@ impl Agent {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
-                    while let Ok(event) = rx.try_recv() {
-                        on_event(event);
+                    let cancellable = self
+                        .tool_manager
+                        .find(&call.name)
+                        .is_some_and(|sourced| sourced.tool.supports_cooperative_cancel());
+                    if !cancellable {
+                        while let Ok(event) = rx.try_recv() {
+                            on_event(event);
+                        }
+                        on_event(AgentEvent::ToolCancelled {
+                            id: call_id.to_string(),
+                            name: call.name.clone(),
+                        });
+                        return Ok(SingleToolOutcome {
+                            result: None,
+                            interrupted: true,
+                        });
                     }
-                    on_event(AgentEvent::ToolCancelled {
-                        id: call_id.to_string(),
-                        name: call.name.clone(),
-                    });
-                    return Err(HarnessError::Interrupted);
+                    // Cooperative drain: signal the tool, then race its
+                    // future against a bounded grace period. The envoy stops
+                    // at its next safe boundary and returns its partial
+                    // transcript as a terminal result.
+                    self.tool_manager
+                        .find(&call.name)
+                        .into_iter()
+                        .for_each(|sourced| {
+                            sourced.tool.request_cancel(call_id);
+                        });
+                    let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
+                    tokio::pin!(grace);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = &mut grace => {
+                                while let Ok(event) = rx.try_recv() {
+                                    on_event(event);
+                                }
+                                on_event(AgentEvent::ToolCancelled {
+                                    id: call_id.to_string(),
+                                    name: call.name.clone(),
+                                });
+                                return Ok(SingleToolOutcome {
+                                    result: None,
+                                    interrupted: true,
+                                });
+                            }
+                            event = rx.recv() => {
+                                if let Some(event) = event {
+                                    on_event(event);
+                                }
+                            }
+                            result = &mut fut => {
+                                while let Ok(event) = rx.try_recv() {
+                                    on_event(event);
+                                }
+                                return Ok(SingleToolOutcome {
+                                    result: Some(result),
+                                    interrupted: true,
+                                });
+                            }
+                        }
+                    }
                 }
                 event = rx.recv() => {
                     if let Some(event) = event {
@@ -4012,7 +4183,10 @@ impl Agent {
                     while let Ok(event) = rx.try_recv() {
                         on_event(event);
                     }
-                    return Ok(result);
+                    return Ok(SingleToolOutcome {
+                        result: Some(result),
+                        interrupted: false,
+                    });
                 }
             }
         }
@@ -4032,7 +4206,7 @@ impl Agent {
         call_ids: &[String],
         cancel: &CancellationToken,
         on_event: &mut F,
-    ) -> Result<Vec<(ToolOutput, u64)>, HarnessError>
+    ) -> Result<ConcurrentOutcome, HarnessError>
     where
         F: FnMut(AgentEvent) + Send,
     {
@@ -4055,14 +4229,17 @@ impl Agent {
         let assignment = neenee_core::tool_access::group_by_conflict(&accesses);
         let batch_count = assignment.iter().copied().max().map(|m| m + 1).unwrap_or(0);
 
-        let mut results: Vec<(ToolOutput, u64)> = Vec::with_capacity(calls.len());
         // Per-input result slots, filled as batches complete, then flattened in
         // input order at the end (preserving the dispatcher's order invariant).
+        // On interrupt the slots keep whatever completed before the cancel, so
+        // the caller can record real work even though the round ends.
         let mut slots: Vec<Option<(ToolOutput, u64)>> = vec![None; calls.len()];
 
         for batch in 0..batch_count {
             // Collect this batch's (call_index) members, in input order.
-            let members: Vec<usize> = (0..calls.len()).filter(|&i| assignment[i] == batch).collect();
+            let members: Vec<usize> = (0..calls.len())
+                .filter(|&i| assignment[i] == batch)
+                .collect();
             if members.is_empty() {
                 continue;
             }
@@ -4103,19 +4280,94 @@ impl Agent {
                 tokio::select! {
                     biased;
                     _ = cancel.cancelled() => {
-                        while let Ok(event) = rx.try_recv() {
-                            on_event(event);
-                        }
-                        // Cancel abandons the whole batch (and round): emit
-                        // ToolCancelled for every dispatched id, not just this
-                        // batch's, matching the historical whole-batch abort.
-                        for (id, call) in call_ids.iter().zip(calls) {
-                            on_event(AgentEvent::ToolCancelled {
-                                id: id.clone(),
-                                name: call.name.clone(),
+                        // Cooperative cancel: if any in-flight call can stop on
+                        // the token (an envoy), signal it and give the batch a
+                        // bounded grace period to drain, so the envoy's partial
+                        // transcript is recovered instead of dropped. Without a
+                        // cancellable member we keep the historical fast path —
+                        // completed results (already in `slots`) are preserved,
+                        // in-flight calls are dropped.
+                        let cancellable: Vec<usize> = members
+                            .iter()
+                            .copied()
+                            .filter(|&i| {
+                                self.tool_manager
+                                    .find(&calls[i].name)
+                                    .is_some_and(|sourced| {
+                                        sourced.tool.supports_cooperative_cancel()
+                                    })
+                            })
+                            .collect();
+                        if cancellable.is_empty() {
+                            while let Ok(event) = rx.try_recv() {
+                                on_event(event);
+                            }
+                            for (i, (id, call)) in
+                                call_ids.iter().zip(calls).enumerate()
+                            {
+                                if slots[i].is_none() {
+                                    on_event(AgentEvent::ToolCancelled {
+                                        id: id.clone(),
+                                        name: call.name.clone(),
+                                    });
+                                }
+                            }
+                            return Ok(ConcurrentOutcome {
+                                results: slots,
+                                interrupted: true,
                             });
                         }
-                        return Err(HarnessError::Interrupted);
+                        for i in &cancellable {
+                            if let Some(sourced) = self.tool_manager.find(&calls[*i].name) {
+                                sourced.tool.request_cancel(&call_ids[*i]);
+                            }
+                        }
+                        let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
+                        tokio::pin!(grace);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut grace => {
+                                    while let Ok(event) = rx.try_recv() {
+                                        on_event(event);
+                                    }
+                                    // Grace expired: drop whatever did not
+                                    // drain. Drained calls already emitted
+                                    // ToolResult; the rest get ToolCancelled.
+                                    for (i, (id, call)) in
+                                        call_ids.iter().zip(calls).enumerate()
+                                    {
+                                        if slots[i].is_none() {
+                                            on_event(AgentEvent::ToolCancelled {
+                                                id: id.clone(),
+                                                name: call.name.clone(),
+                                            });
+                                        }
+                                    }
+                                    return Ok(ConcurrentOutcome {
+                                        results: slots,
+                                        interrupted: true,
+                                    });
+                                }
+                                event = rx.recv() => {
+                                    if let Some(event) = event {
+                                        on_event(event);
+                                    }
+                                }
+                                batch_results = &mut batch_fut => {
+                                    while let Ok(event) = rx.try_recv() {
+                                        on_event(event);
+                                    }
+                                    for (i, result, duration_ms) in batch_results {
+                                        slots[i] = Some((result, duration_ms));
+                                    }
+                                    return Ok(ConcurrentOutcome {
+                                        results: slots,
+                                        interrupted: true,
+                                    });
+                                }
+                            }
+                        }
                     }
                     event = rx.recv() => {
                         if let Some(event) = event {
@@ -4138,13 +4390,14 @@ impl Agent {
         // Flatten in input order. Any slot still None means its batch was
         // never reached (shouldn't happen outside cancel); synthesize a
         // loop-guard placeholder to keep the contract non-panicking.
-        for slot in slots {
-            results.push(slot.unwrap_or((
-                ToolOutput::Text("[loop guard] blocked".to_string()),
-                0,
-            )));
+        for slot in slots.iter_mut() {
+            let _ = slot
+                .get_or_insert_with(|| (ToolOutput::Text("[loop guard] blocked".to_string()), 0));
         }
-        Ok(results)
+        Ok(ConcurrentOutcome {
+            results: slots,
+            interrupted: false,
+        })
     }
 
     /// Resolve `call`'s tool (resolved → dynamic fallback) and return its
@@ -4267,7 +4520,7 @@ mod tests {
     /// original summary verbatim, and the success re-anchor note.
     #[test]
     fn envoy_result_text_reanchors_on_success() {
-        let text = envoy_result_text("envoy", "Found the symbol in lib.rs", false);
+        let text = envoy_result_text("envoy", "Found the symbol in lib.rs", false, false);
         assert!(
             text.starts_with("[envoy result]:\n"),
             "header present: {text}"
@@ -4292,7 +4545,7 @@ mod tests {
     /// and still preserves the partial summary for the principal to act on.
     #[test]
     fn envoy_result_text_reanchors_on_failure() {
-        let text = envoy_result_text("envoy", "partial findings before crash", true);
+        let text = envoy_result_text("envoy", "partial findings before crash", true, false);
         assert!(
             text.contains("partial findings before crash"),
             "partial summary preserved: {text}"
@@ -4318,13 +4571,37 @@ mod tests {
     /// that a future refactor cannot silently drop it.
     #[test]
     fn envoy_result_text_anchor_is_unconditional() {
-        for failed in [false, true] {
-            let text = envoy_result_text("envoy", "x", failed);
+        for (failed, interrupted) in [(false, false), (true, false), (false, true)] {
+            let text = envoy_result_text("envoy", "x", failed, interrupted);
             assert!(
                 text.contains("[system]"),
-                "system anchor tag present (failed={failed}): {text}"
+                "system anchor tag present (failed={failed}, interrupted={interrupted}): {text}"
             );
         }
+    }
+
+    /// An interrupted envoy gets its own re-anchor: the partial findings are
+    /// real work to continue, not an error to work around — and the read-only
+    /// framing still does not transfer to the principal.
+    #[test]
+    fn envoy_result_text_reanchors_interruption() {
+        let text = envoy_result_text("envoy", "found 2 of 5 handlers", false, true);
+        assert!(
+            text.contains("found 2 of 5 handlers"),
+            "partial summary preserved: {text}"
+        );
+        assert!(
+            text.contains("interrupted mid-task"),
+            "interruption anchor missing: {text}"
+        );
+        assert!(
+            !text.contains("could not complete its sub-task"),
+            "failure anchor leaked onto interruption: {text}"
+        );
+        assert!(
+            text.contains("retain your full toolset"),
+            "principal re-anchor missing: {text}"
+        );
     }
 
     use neenee_core::RestorePoint;
@@ -4389,10 +4666,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl neenee_core::Provider for NoopProvider {
-        async fn chat(
-            &self,
-            _: neenee_core::ModelRequest,
-        ) -> Result<neenee_core::Message, String> {
+        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<neenee_core::Message, String> {
             unreachable!("decide_bash_stdin must not call the provider")
         }
         async fn stream_chat(
@@ -4487,7 +4761,10 @@ mod tests {
             ..Default::default()
         });
         agent.apply_principal_profile(&profile);
-        assert!(agent.skip_interactive_input(), "profile overlay took effect");
+        assert!(
+            agent.skip_interactive_input(),
+            "profile overlay took effect"
+        );
     }
 }
 

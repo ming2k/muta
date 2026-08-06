@@ -30,7 +30,7 @@ use neenee_core::{
     RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
 };
 use neenee_persistence::{
-    config::{Config, TuiConfig},
+    config::{Config, InputHistoryConfig, TuiConfig},
     embedding, lock, paths, provider_usage,
     session::SessionStore,
     trusted_projects::TrustGate,
@@ -107,6 +107,9 @@ pub struct Bootstrap {
     /// The `[tui]` presentation config, pulled out of the live config before
     /// the driver takes ownership of it.
     pub tui_config: TuiConfig,
+    /// The `[input_history]` config, pulled out of the live config alongside
+    /// `tui_config` so the frontend can dedup / filter history as it records.
+    pub input_history_config: InputHistoryConfig,
     /// The per-project advisory process lock (ADR-0018), when
     /// `--single-instance` requested it. **The guard releases on drop** — the
     /// caller must hold it for the process lifetime (e.g. bind it to
@@ -655,6 +658,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // The driver task takes ownership of `config`; pull the frontend
     // presentation config out first so it can be handed back to the caller.
     let tui_config = config.tui.clone();
+    let input_history_config = config.input_history.clone();
     // Keep an Arc handle for the caller so SessionEnd hooks (ADR-0025) can
     // fire after its UI returns — the driver below moves `agent`.
     let agent_for_session_end = Arc::clone(&agent);
@@ -708,6 +712,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         restored_messages,
         custom_command_suggestions,
         tui_config,
+        input_history_config,
         process_lock,
     })
 }

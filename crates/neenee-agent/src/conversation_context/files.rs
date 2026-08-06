@@ -133,7 +133,10 @@ fn parse_file_refs(text: &str) -> Vec<String> {
         let Some(rest) = text.get(after_at..) else {
             break;
         };
-        let Some(stripped) = rest.strip_prefix("files:").or_else(|| rest.strip_prefix("file:")) else {
+        let Some(stripped) = rest
+            .strip_prefix("files:")
+            .or_else(|| rest.strip_prefix("file:"))
+        else {
             search_from = after_at;
             continue;
         };
@@ -173,7 +176,10 @@ fn load_sandboxed(root: &Path, raw: &str) -> Result<(PathBuf, Vec<u8>), String> 
     // (`../secret`) cannot live under the workspace by construction.
     let candidate = Path::new(raw);
     if candidate.is_absolute() {
-        return Err("absolute paths are not allowed — reference a path relative to the workspace root".to_string());
+        return Err(
+            "absolute paths are not allowed — reference a path relative to the workspace root"
+                .to_string(),
+        );
     }
     if candidate
         .components()
@@ -187,15 +193,18 @@ fn load_sandboxed(root: &Path, raw: &str) -> Result<(PathBuf, Vec<u8>), String> 
 
     let joined = root.join(candidate);
     let canonical = joined.canonicalize().map_err(|e| {
-        format!("could not resolve '{}' under the workspace root: {}", raw, e)
+        format!(
+            "could not resolve '{}' under the workspace root: {}",
+            raw, e
+        )
     })?;
 
     // Symlink-hardened containment: the canonicalized path must start with the
     // canonicalized root. This catches a relative path that resolves through a
     // symlink out of the workspace.
-    let canonical_root = root.canonicalize().map_err(|e| {
-        format!("workspace root is not resolvable: {}", e)
-    })?;
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("workspace root is not resolvable: {}", e))?;
     if !canonical.starts_with(&canonical_root) {
         return Err("path escapes the workspace root".to_string());
     }
@@ -253,7 +262,10 @@ fn is_binary_content(buf: &[u8]) -> bool {
     if buf.contains(&0) {
         return true;
     }
-    let control = buf.iter().filter(|b| **b < 0x20 && **b != b'\n' && **b != b'\r' && **b != b'\t').count();
+    let control = buf
+        .iter()
+        .filter(|b| **b < 0x20 && **b != b'\n' && **b != b'\r' && **b != b'\t')
+        .count();
     control * 10 > buf.len()
 }
 
@@ -289,7 +301,10 @@ mod tests {
 
     #[test]
     fn parses_single_file_ref() {
-        assert_eq!(parse_file_refs("refactor @file:src/main.rs now"), vec!["src/main.rs"]);
+        assert_eq!(
+            parse_file_refs("refactor @file:src/main.rs now"),
+            vec!["src/main.rs"]
+        );
     }
 
     #[test]
@@ -344,10 +359,8 @@ mod tests {
     fn rejects_symlink_escape() {
         let tmp = tempdir();
         // An outside file the workspace has no business reading.
-        let outside = std::env::temp_dir().join(format!(
-            "neenee-file-inject-outside-{}",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("neenee-file-inject-outside-{}", std::process::id()));
         std::fs::write(&outside, "secret").unwrap();
         // A symlink inside the workspace that points outside.
         #[cfg(unix)]
@@ -385,7 +398,10 @@ mod tests {
         assert!(bytes.len() > MAX_FILE_BYTES);
         assert!(bytes.len() < MAX_FILE_BYTES * 2);
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("truncated"), "should carry the truncation marker");
+        assert!(
+            text.contains("truncated"),
+            "should carry the truncation marker"
+        );
     }
 
     #[test]
@@ -409,7 +425,10 @@ mod tests {
         inject_mentioned_files(Some(&tmp), &mut messages);
         assert_eq!(messages.len(), 2);
         // Second turn: mention it again — must NOT re-inject.
-        messages.push(Message::new(Role::User, "and @file:lib.rs again".to_string()));
+        messages.push(Message::new(
+            Role::User,
+            "and @file:lib.rs again".to_string(),
+        ));
         inject_mentioned_files(Some(&tmp), &mut messages);
         // One user turn each + exactly one hidden load.
         assert_eq!(messages.len(), 3);

@@ -94,18 +94,20 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
                     Some(std::time::Instant::now() + Duration::from_millis(2000));
                 return;
             }
+            let raw_size = data.len();
             let encoded = clipboard::base64_image(&data);
             app.pending_images.push(ImagePart {
                 mime,
                 data: encoded,
             });
-            // Insert a short `[Image #N]` chip at the cursor so the user has
-            // a visible, atomic affordance for the staged attachment — the
-            // chip is what they backspace to undo the paste. The trailing
-            // space keeps the cursor on a word boundary so typing resumes
-            // naturally.
+            // Insert a short `[Image #N · size]` chip at the cursor so the
+            // user has a visible, atomic affordance for the staged
+            // attachment — the chip is what they backspace to undo the
+            // paste. The trailing space keeps the cursor on a word boundary
+            // so typing resumes naturally. The size badge is the identifier's
+            // payload info: the raw byte count of the image.
             let n = app.pending_images.len();
-            insert_chip_at_cursor(app, &image_chip(n));
+            insert_chip_at_cursor(app, &image_chip(n, raw_size));
             app.copy_toast_message = format!(
                 "{n} image{} attached — enter to send",
                 if n == 1 { "" } else { "s" }
@@ -115,14 +117,17 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
         }
         ClipboardRead::Text(text) => {
             // Large pastes (multi-line or long enough to balloon the input
-            // box) are staged behind a `[Pasted text #N +M lines]` chip
-            // instead of being inlined verbatim. Short snippets keep flowing
-            // through the cursor like an ordinary editor paste.
+            // box) are staged behind a `[Pasted text #N +M lines · size]`
+            // chip instead of being inlined verbatim. Short snippets keep
+            // flowing through the cursor like an ordinary editor paste. The
+            // line count and byte size in the label tell the user exactly
+            // how much text the chip hides.
             if should_chip_paste(&text) {
                 let n = app.pending_text_pastes.len() + 1;
                 let line_count = paste_line_count(&text);
+                let size_bytes = text.len();
                 app.pending_text_pastes.push(text);
-                insert_chip_at_cursor(app, &paste_chip(n, line_count));
+                insert_chip_at_cursor(app, &paste_chip(n, line_count, size_bytes));
                 app.copy_toast_message = format!(
                     "pasted {line_count} line{} as a chip",
                     if line_count == 1 { "" } else { "s" }

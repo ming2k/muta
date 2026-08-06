@@ -190,9 +190,7 @@ impl ToolManager {
     /// Mirrors the historical "resolved first, dynamic fallback" lookup, now
     /// extended with the user bucket in between (builtin > user > mcp).
     pub(crate) fn find(&self, name: &str) -> Option<SourcedTool> {
-        self.installed()
-            .into_iter()
-            .find(|s| s.tool.name() == name)
+        self.installed().into_iter().find(|s| s.tool.name() == name)
     }
 
     /// Whether `name` is a known tool in any bucket (before disable filtering).
@@ -225,8 +223,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use neenee_core::DynamicToolSink;
-    use neenee_core::ToolAccesses;
     use neenee_core::ScopeTarget;
+    use neenee_core::ToolAccesses;
 
     /// Minimal tool stub for classification tests.
     struct StubTool {
@@ -272,9 +270,7 @@ mod tests {
         let user = Arc::new(RwLock::new(user));
         // Publish dynamic tools under a synthetic MCP source.
         dynamic.replace("mcp:test", dynamic_tools);
-        let disabled = Arc::new(Mutex::new(
-            disabled.iter().map(|s| s.to_string()).collect(),
-        ));
+        let disabled = Arc::new(Mutex::new(disabled.iter().map(|s| s.to_string()).collect()));
         let scoped = Arc::new(Mutex::new(crate::agent::ScopedToolDisable::default()));
         ToolManager::new(resolved, dynamic, user, disabled, scoped)
     }
@@ -319,7 +315,12 @@ mod tests {
 
     #[test]
     fn user_shadows_mcp_on_name_clash() {
-        let m = manager(vec![], vec![StubTool::new("dup")], vec![StubTool::new("dup")], vec![]);
+        let m = manager(
+            vec![],
+            vec![StubTool::new("dup")],
+            vec![StubTool::new("dup")],
+            vec![],
+        );
         let installed = m.installed();
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].source, ToolSource::User);
@@ -339,10 +340,7 @@ mod tests {
 
         // Autopilot drops ask_user too.
         let live_autopilot = m.loop_tools(true);
-        assert!(
-            live_autopilot.is_empty(),
-            "autopilot must reclaim ask_user"
-        );
+        assert!(live_autopilot.is_empty(), "autopilot must reclaim ask_user");
     }
 
     #[test]

@@ -237,6 +237,23 @@ warning = "#b5955d"
 error = "#be6f68"
 ```
 
+## Input history
+
+The optional `[input_history]` table controls how the prompt history (the
+`Ctrl+R` picker and the persisted `history.json`) treats repeated prompts and
+slash-command invocations.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `input_history.dedup` | `true` | Collapse identical prompt text into a single entry, keyed on the text **alone** (across sessions and workspaces). Re-sending the same prompt bumps it to the top of the newest-first picker. Set `false` to keep `(text, session)` entries distinct — the same words typed in two sessions then stay as two rows, each with its own origin |
+| `input_history.record_commands` | `false` | Record `/slash` command invocations (`/model`, `/clear`, …) into the input history. With the default `false`, new commands are not recorded and any legacy ones stop showing in the picker. Commands are UI gestures, not prompts — they are already visible in the transcript. Set `true` to make them recallable from `Ctrl+R` again |
+
+```toml
+[input_history]
+dedup = true
+record_commands = false
+```
+
 ## Hooks
 
 Lifecycle event hooks (ADR-0025): each entry runs a shell command at one

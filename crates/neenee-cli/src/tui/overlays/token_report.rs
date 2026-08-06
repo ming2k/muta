@@ -291,15 +291,21 @@ fn list_body(
     let pad_span = |text: &str, width: usize, style: Style| {
         Span::styled(format_padded_left(text, width), style)
     };
-    let gap_span = |i: usize, bg| {
-        Span::styled(" ".repeat(gap_w(i)), Style::default().bg(bg))
-    };
+    let gap_span = |i: usize, bg| Span::styled(" ".repeat(gap_w(i)), Style::default().bg(bg));
 
     body.push(Line::from(vec![
         Span::styled(" ".repeat(LEFT_INSET), Style::default().bg(header_bg)),
-        pad_span("Round", label_w, Style::default().bg(header_bg).fg(theme.muted())),
+        pad_span(
+            "Round",
+            label_w,
+            Style::default().bg(header_bg).fg(theme.muted()),
+        ),
         gap_span(0, header_bg),
-        pad_span("State", state_w, Style::default().bg(header_bg).fg(theme.muted())),
+        pad_span(
+            "State",
+            state_w,
+            Style::default().bg(header_bg).fg(theme.muted()),
+        ),
         gap_span(1, header_bg),
         Span::styled(
             format!("{:>width$}", "Tokens", width = tokens_w),
@@ -473,17 +479,17 @@ fn detail_body(
 
     body.push(Line::from(""));
     body.push(Line::from(vec![
-        Span::styled(
-            "Tokens:  ".to_string(),
-            Style::default().fg(theme.muted()),
-        ),
+        Span::styled("Tokens:  ".to_string(), Style::default().fg(theme.muted())),
         Span::styled("green", Style::default().fg(theme.ok())),
         Span::styled(
             " = provider-reported   ".to_string(),
             Style::default().fg(theme.muted()),
         ),
         Span::styled("yellow", Style::default().fg(theme.warn())),
-        Span::styled(" = local estimate".to_string(), Style::default().fg(theme.muted())),
+        Span::styled(
+            " = local estimate".to_string(),
+            Style::default().fg(theme.muted()),
+        ),
     ]));
 
     body
@@ -1075,8 +1081,7 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         assert_eq!(token_report_round_count(&report), 2);
-        let (list_body_lines, follow) =
-            list_body(&report, None, 0, None, 0, 80, &theme);
+        let (list_body_lines, follow) = list_body(&report, None, 0, None, 0, 80, &theme);
         let list = body_text(&list_body_lines);
         // List rows use bare ordinals ("2nd", "3rd"); the round context is
         // carried by the table header, and there is no longer a "Usage by
@@ -1131,10 +1136,11 @@ mod tests {
         assert!(!detail_text.contains("2nd round"));
         // No in-table separator rule beneath the Turns header.
         assert!(
-            !detail
-                .iter()
-                .any(|line| line.spans.iter().any(|s| s.content.chars().all(|c| c == '─')
-                    && !s.content.is_empty())),
+            !detail.iter().any(|line| line.spans.iter().any(|s| s
+                .content
+                .chars()
+                .all(|c| c == '─')
+                && !s.content.is_empty())),
             "turns table must not carry a separator rule"
         );
 
@@ -1165,9 +1171,7 @@ mod tests {
 
         // No ">" arrow marker anywhere in the selected row.
         assert!(
-            !line.spans
-                .iter()
-                .any(|span| span.content.contains('>')),
+            !line.spans.iter().any(|span| span.content.contains('>')),
             "selected row must not carry an arrow marker"
         );
         // Every span of the selected row carries the selection background.
@@ -1256,8 +1260,10 @@ mod tests {
         let data_rows: Vec<&Line> = body
             .iter()
             .filter(|line| {
-                let has_ordinal =
-                    line.spans.iter().any(|span| is_ordinal(span.content.trim()));
+                let has_ordinal = line
+                    .spans
+                    .iter()
+                    .any(|span| is_ordinal(span.content.trim()));
                 let has_number = line.spans.iter().any(|span| {
                     let c = span.content.trim();
                     !c.is_empty()
@@ -1281,10 +1287,7 @@ mod tests {
                 .sum()
         };
         let header_off = token_offset(header);
-        let offsets: Vec<usize> = data_rows
-            .iter()
-            .map(|row| token_offset(row))
-            .collect();
+        let offsets: Vec<usize> = data_rows.iter().map(|row| token_offset(row)).collect();
         for off in &offsets {
             assert_eq!(
                 *off, header_off,
@@ -1387,7 +1390,13 @@ mod tests {
         // An envoy sub-turn (turn 1 of the envoy actor) in the same round,
         // with its own token spend that must NOT count toward the round.
         let e1 = ledger.begin_request_for_actor(
-            "session", "envoy:call_xyz", "relay", "model-a", 2, 1, 0,
+            "session",
+            "envoy:call_xyz",
+            "relay",
+            "model-a",
+            2,
+            1,
+            0,
         );
         ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120);
         let report = ledger.snapshot_for_session("session");

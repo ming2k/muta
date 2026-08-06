@@ -20,7 +20,6 @@ pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── sub2api / antigravity relay models ────────────────────────────────
     // Google-native 中转站 variants that advertise effort-tiered 3.1 Pro
     // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
@@ -40,8 +39,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "gemini-3.1-pro-low",
         name: "Gemini 3.1 Pro Low",
@@ -54,8 +51,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "gemini-3-flash",
         name: "Gemini 3 Flash",

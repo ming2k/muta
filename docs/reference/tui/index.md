@@ -60,11 +60,12 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
-| [Todo bar](todo-bar.md) | One-row task-list summary: `todo` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
+| [Todo bar](todo-bar.md) | One-row task-list summary: `TODOS` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
 | [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
 | [Status bar](status-bar.md) | Ambient session state: `autopilot` flag (left) + tilde-shortened workspace path (right) |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |
+| [Visual language](visual-language.md) | The join ladder: how ` · `, whitespace, and ` › ` encode relationship strength between adjacent tokens |
 
 ## Other reference
 

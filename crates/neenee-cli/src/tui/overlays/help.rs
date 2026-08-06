@@ -110,7 +110,7 @@ pub fn draw_help_modal(
         Line::from(""),
         Line::from(section("Modes")),
         Line::from(""),
-        Line::from(desc("Drag to select · Ctrl+C or Ctrl+Shift+C to copy.")),
+        Line::from(desc("Drag to select; copy with Ctrl+C or Ctrl+Shift+C.")),
     ]);
 
     draw_modal_page(

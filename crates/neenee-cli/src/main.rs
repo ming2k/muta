@@ -9,8 +9,8 @@ mod remote;
 mod showcase;
 mod tui;
 
-pub(crate) use neenee_transport::startup;
 use neenee_transport::session_view::short_session_id;
+pub(crate) use neenee_transport::startup;
 
 /// This CLI's identity, handed to the engine as its opening system prompt.
 /// Lives here (not in `neenee-agent`) so the engine stays identity-agnostic
@@ -57,12 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // no process lock), so it must intercept before `assemble` — which accepts
     // only Fresh/Resume/Picker by contract.
     if let StartupMode::Attach(session_id) = &startup {
-        return run_attached(
-            session_id.clone(),
-            project_override,
-            autopilot_at_start,
-        )
-        .await;
+        return run_attached(session_id.clone(), project_override, autopilot_at_start).await;
     }
 
     // `neenee daemon` runs the headless multi-session host in the foreground
@@ -119,12 +114,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         restored_messages,
         custom_command_suggestions,
         tui_config,
+        input_history_config,
         process_lock,
     } = boot;
     // The advisory process lock (ADR-0018, `--single-instance`) releases on
     // drop — hold the guard in `main`'s scope for the process lifetime.
     let _process_lock = process_lock;
     let initial_round_count = session.round_counter().await;
+    let initial_commands = session.commands().await;
     // Keep a handle on this session so we can print a `neenee resume <id>`
     // hint after the TUI exits. `start_tui` moves the `Arc` into the
     // session source, so clone first.
@@ -140,9 +137,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_model_name,
         input_history,
         restored_messages,
+        initial_commands,
         initial_round_count,
         custom_command_suggestions,
         tui_config,
+        input_history_config,
         crate::tui::SessionSource::Local(session),
         Some(token_ledger),
         startup_picker,
@@ -152,7 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(history) => {
             // SessionEnd hooks (ADR-0025): observers fire on clean exit.
             agent_for_session_end.fire_session_end().await;
-            let _ = Config::save_history(&history);
+            let dedup = Config::load().input_history.dedup;
+            let _ = Config::save_history(&history, dedup);
             // The terminal is already restored to cooked mode here, so a
             // plain `println!` renders correctly. Hint how to reopen this
             // session — but only if it actually gained content, otherwise we
@@ -209,10 +209,14 @@ async fn run_attached(
         }
     };
     if autopilot_at_start {
-        let _ = tx.send(neenee_core::AgentRequest::SlashCommand("/autopilot on".to_string()));
+        let _ = tx.send(neenee_core::AgentRequest::SlashCommand(
+            "/autopilot on".to_string(),
+        ));
     }
     let input_history = Config::load_history();
-    let tui_config = Config::load().tui;
+    let config = Config::load();
+    let tui_config = config.tui.clone();
+    let input_history_config = config.input_history.clone();
     let history = start_tui(
         tx,
         rx,
@@ -220,15 +224,19 @@ async fn run_attached(
         String::new(),
         input_history,
         transcript,
+        Vec::new(),
         round_counter,
         vec![],
         tui_config,
-        crate::tui::SessionSource::Remote { session_id: hosted_session_id },
+        input_history_config,
+        crate::tui::SessionSource::Remote {
+            session_id: hosted_session_id,
+        },
         None,
         false,
     )
     .await?;
-    let _ = Config::save_history(&history);
+    let _ = Config::save_history(&history, config.input_history.dedup);
     Ok(())
 }
 

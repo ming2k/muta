@@ -475,10 +475,7 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
     // "Always allow" option, collapsing to [Allow once, Reject, Details]
     // (indices 0..2). Resolve the index→action mapping accordingly so the
     // Removed/Always/Reject/Details semantics stay correct in both layouts.
-    let one_off = app
-        .pending_permission
-        .as_ref()
-        .is_some_and(|r| r.one_off);
+    let one_off = app.pending_permission.as_ref().is_some_and(|r| r.one_off);
     let reject_idx = if one_off { 1 } else { 2 };
     let details_idx = if one_off { 2 } else { 3 };
     if app.permission_confirm_always {
@@ -920,9 +917,7 @@ pub(super) async fn run_app_loop(
             // avoids cloning the full overview Vec every iteration — the
             // listener bumps `sessions_overview_rev` on every replacement.
             {
-                let rev = runtime
-                    .sessions_overview_rev
-                    .load(Ordering::Acquire);
+                let rev = runtime.sessions_overview_rev.load(Ordering::Acquire);
                 if rev != sessions_overview_rev_seen {
                     app.sessions_overview = runtime.sessions_overview.lock().await.clone();
                     sessions_overview_rev_seen = rev;
@@ -1175,16 +1170,11 @@ pub(super) async fn run_app_loop(
         // the prompt + images into the composer so the user can edit and resend
         // — the same restore `App::recall_queued` performs for a queued message.
         if let Some(unsent) = runtime.unsent_input_signal.lock().await.take() {
-            app.input = unsent.prompt;
-            app.set_cursor_end();
-            if !unsent.images.is_empty() {
-                app.pending_images = unsent.images;
-            }
-            // Mirror recall_queued's completion/history-nav cleanup so a stale
-            // popup or history cursor doesn't interfere with the restored draft.
-            app.history_index = None;
-            app.suggestion_index = None;
-            app.completion_dismissed = true;
+            // Phase-1 unsend: the interrupted input becomes the new draft —
+            // the newest *unsent* slot. `adopt_as_draft` enters draft mode,
+            // replaces any stale remembered draft, and mirrors the staged
+            // attachments into both the pending slots and the draft stash.
+            app.adopt_as_draft(unsent.prompt, unsent.images, Vec::new());
         }
 
         // A next-round item auto-runs only after both a natural-completion
@@ -1211,6 +1201,12 @@ pub(super) async fn run_app_loop(
             let sent_at_ms = now_epoch_ms();
             let expanded_text =
                 composer_attachments::expand_paste_chips(&dispatch.text, &dispatch.text_pastes);
+            // Drop orphaned image labels (no staged payload) so a queued
+            // message recalled from history never ships a phantom chip.
+            let expanded_text = composer_attachments::strip_orphan_image_chips(
+                &expanded_text,
+                dispatch.images.len(),
+            );
             app.naturally_completed_sessions.remove(&session_id);
             app.idle_sessions.remove(&session_id);
             app.running_sessions.insert(session_id.clone());
@@ -1364,11 +1360,13 @@ pub(super) async fn run_app_loop(
 
                     app.layout_map = layout_map;
                     app.modal_body_height = drawn_modal_rect.height.saturating_sub(
-                        crate::tui::primitives::modal_chrome_rows(crate::tui::primitives::ModalSpec {
-                            width_percent: 0,
-                            header: true,
-                            footer: true,
-                        }),
+                        crate::tui::primitives::modal_chrome_rows(
+                            crate::tui::primitives::ModalSpec {
+                                width_percent: 0,
+                                header: true,
+                                footer: true,
+                            },
+                        ),
                     );
                     app.modal_rect = if app.active_modal.dismissable_by_outside_click() {
                         Some(drawn_modal_rect)
@@ -1580,9 +1578,7 @@ pub(super) async fn run_app_loop(
                 // composer's mutable borrow of `app.input_scroll` below. The
                 // permission sheet covers this row too, so suppress it while
                 // the sheet is open.
-                if !chrome_hidden
-                    && status_rect.height > 0
-                    && app.active_modal != Modal::Permission
+                if !chrome_hidden && status_rect.height > 0 && app.active_modal != Modal::Permission
                 {
                     let workspace = crate::tui::chrome::tilde_home(&app.cwd);
                     view::draw_status_bar(
@@ -1689,6 +1685,8 @@ pub(super) async fn run_app_loop(
                                 &mut app.input_scroll,
                                 &app.selection,
                                 len,
+                                app.pending_images.len(),
+                                app.pending_text_pastes.len(),
                             ),
                             None => view::draw_composer(
                                 f,
@@ -1702,6 +1700,8 @@ pub(super) async fn run_app_loop(
                                 true,
                                 &mut app.input_scroll,
                                 &app.selection,
+                                app.pending_images.len(),
+                                app.pending_text_pastes.len(),
                             ),
                         }
                     }
@@ -1738,13 +1738,23 @@ pub(super) async fn run_app_loop(
 
                 // Completion menu: slash commands or `@path` file mentions.
                 // Honors `completion_dismissed` so Esc / Enter-commit keep the
-                // popup hidden until the next edit clears the latch.
+                // popup hidden until the next edit clears the latch. Also
+                // suppressed for a fully-typed command whose exact match is the
+                // text already in the box — that is a *resolved* state (the
+                // composer paints it bold + accent), the popup has nothing left
+                // to offer, and ↑/↓ keep walking history instead of cycling a
+                // single pinned row.
                 if app.active_modal == Modal::None
                     && !app.completion_dismissed
                     && app.completion_kind() != CompletionKind::None
                 {
                     let completions = app.completions();
-                    if !completions.is_empty() {
+                    let exact_match = completions.iter().any(|c| {
+                        c.replace_start == 0
+                            && c.replace_end == app.input.len()
+                            && c.label == app.input
+                    });
+                    if !completions.is_empty() && !exact_match {
                         // Hang the popup's leading edge off the trigger token
                         // it completes — column 0 of the composer text area
                         // for a `/command`, the `@`'s column for a path
@@ -1821,8 +1831,7 @@ pub(super) async fn run_app_loop(
                         // the live status bar above it. `activity_rect` carries
                         // the bar's exact footprint this frame (None when idle,
                         // height 0).
-                        let activity_height =
-                            activity_rect.map_or(0, |r| r.height);
+                        let activity_height = activity_rect.map_or(0, |r| r.height);
                         view::draw_history_panel(
                             f,
                             &app.input_history,
@@ -2463,6 +2472,7 @@ pub(super) async fn run_app_loop(
                             .question
                             .as_ref()
                             .is_some_and(|q| q.is_other_highlighted()),
+                        history_clear_confirm: app.history_clear_confirm,
                     },
                     &mut app.drag,
                 )
@@ -2514,7 +2524,7 @@ pub(super) async fn run_app_loop(
                     TranscriptMessage::new(Role::User, entry.clone())
                         .with_origin(UserMessageOrigin::Slash),
                 );
-                app.record_input_history(entry);
+                app.record_input_history(entry, Vec::new(), Vec::new());
             }
 
             match action {
@@ -2579,7 +2589,14 @@ pub(super) async fn run_app_loop(
                                     images: images.clone(),
                                     text_pastes: text_pastes.clone(),
                                 });
-                            app.record_input_history(text.clone());
+                            app.record_input_history(
+                                text.clone(),
+                                images.clone(),
+                                text_pastes.clone(),
+                            );
+                            // The draft's content has been taken into the
+                            // outbox — it is no longer the unsent slot.
+                            app.clear_history_draft();
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
                         } else {
@@ -2590,6 +2607,15 @@ pub(super) async fn run_app_loop(
                             // in the text as positional labels.
                             let expanded =
                                 composer_attachments::expand_paste_chips(&text, &text_pastes);
+                            // An image chip with no staged payload (e.g.
+                            // recalled from a history entry recorded before
+                            // attachment staging) is a bare label — drop it
+                            // so the model never receives a phantom
+                            // `[Image #N …]` it cannot see.
+                            let expanded = composer_attachments::strip_orphan_image_chips(
+                                &expanded,
+                                images.len(),
+                            );
                             if !app.in_side_view {
                                 runtime.is_responding.store(true, Ordering::SeqCst);
                                 *runtime.activity_status.lock().await = "queued".to_string();
@@ -2604,7 +2630,14 @@ pub(super) async fn run_app_loop(
                             } else {
                                 runtime.side_messages.write().await.push(sent);
                             }
-                            app.record_input_history(text.clone());
+                            app.record_input_history(
+                                text.clone(),
+                                images.clone(),
+                                text_pastes.clone(),
+                            );
+                            // The draft's content has been sent — it is now a
+                            // history row, not the unsent slot.
+                            app.clear_history_draft();
                             app.follow_bottom = true;
                             app.pin_summary_line = None;
                             let _ = app.tx.send(AgentRequest::Chat {
@@ -2645,8 +2678,17 @@ pub(super) async fn run_app_loop(
                 input::InputAction::SendSlash(cmd) => {
                     app.suggestion_index = None;
                     app.input_scroll = 0;
-                    runtime.is_responding.store(true, Ordering::SeqCst);
-                    *runtime.activity_status.lock().await = "queued".to_string();
+                    // A running round owns the activity surface. Do not paint
+                    // an optimistic "queued" over its live label, and do not
+                    // arm the responding flag for a control-plane command the
+                    // round did not ask for: the round's own events keep the
+                    // bar truthful, and the command's reply must not be able
+                    // to leave a fabricated "queued" behind.
+                    let session_busy = app.running_sessions.contains(&viewed_session_id);
+                    if !session_busy {
+                        runtime.is_responding.store(true, Ordering::SeqCst);
+                        *runtime.activity_status.lock().await = "queued".to_string();
+                    }
                     app.follow_bottom = true;
                     app.pin_summary_line = None;
                     runtime
@@ -2662,7 +2704,7 @@ pub(super) async fn run_app_loop(
                             TranscriptMessage::new(Role::User, cmd.clone())
                                 .with_origin(UserMessageOrigin::Slash),
                         );
-                    app.record_input_history(cmd.clone());
+                    app.record_input_history(cmd.clone(), Vec::new(), Vec::new());
                     // `/serve` is a pure frontend concern (hot-attach a
                     // WebSocket listener to the running session). Intercept
                     // it here rather than routing through SessionDriver.
@@ -2684,7 +2726,14 @@ pub(super) async fn run_app_loop(
                                     )
                                     .with_origin(UserMessageOrigin::Slash),
                                 );
-                                runtime.is_responding.store(false, Ordering::SeqCst);
+                                // `/serve` resolves inline (never reaches the
+                                // driver), so retire the optimistic "queued"
+                                // state ourselves — and only when we painted
+                                // it (a live round owns the flag otherwise).
+                                if !session_busy {
+                                    runtime.is_responding.store(false, Ordering::SeqCst);
+                                    runtime.activity_status.lock().await.clear();
+                                }
                                 continue;
                             }
                         };
@@ -2780,7 +2829,14 @@ pub(super) async fn run_app_loop(
                                     .with_origin(UserMessageOrigin::Slash),
                             );
                         }
-                        runtime.is_responding.store(false, Ordering::SeqCst);
+                        // `/serve` resolves inline (never reaches the driver),
+                        // so retire the optimistic "queued" state ourselves —
+                        // and only when we painted it (a live round owns the
+                        // responding flag otherwise).
+                        if !session_busy {
+                            runtime.is_responding.store(false, Ordering::SeqCst);
+                            runtime.activity_status.lock().await.clear();
+                        }
                         return Ok(());
                     }
                     let _ = app.tx.send(AgentRequest::SlashCommand(cmd));
@@ -2793,8 +2849,15 @@ pub(super) async fn run_app_loop(
                     app.active_modal = Modal::None;
                     app.suggestion_index = None;
                     app.input_scroll = 0;
-                    runtime.is_responding.store(true, Ordering::SeqCst);
-                    *runtime.activity_status.lock().await = "queued".to_string();
+                    // The shell path begins its own round (which emits its own
+                    // `HarnessState` + ToolCall events). When a round is
+                    // already live, that round owns the activity surface — do
+                    // not paint an optimistic "queued" over it.
+                    let session_busy = app.running_sessions.contains(&viewed_session_id);
+                    if !session_busy {
+                        runtime.is_responding.store(true, Ordering::SeqCst);
+                        *runtime.activity_status.lock().await = "queued".to_string();
+                    }
                     app.follow_bottom = true;
                     app.pin_summary_line = None;
                     let display = format!("!{}", command);
@@ -2810,7 +2873,7 @@ pub(super) async fn run_app_loop(
                             TranscriptMessage::new(Role::User, display.clone())
                                 .with_origin(UserMessageOrigin::Shell),
                         );
-                    app.record_input_history(display);
+                    app.record_input_history(display, Vec::new(), Vec::new());
                     let _ = app.tx.send(AgentRequest::ShellCommand { command });
                 }
                 input::InputAction::ProviderPickerActivate => {
@@ -3364,6 +3427,7 @@ pub(super) async fn run_app_loop(
                     // The composer is permanently the filter while this panel
                     // is open, so `history_search` is latched true.
                     app.history_search = true;
+                    app.history_clear_confirm = false;
                     // Rows are newest-first, so index 0 is the most-recent entry
                     // — focus the top so an immediate Enter re-inserts it.
                     app.modal_index = 0;
@@ -3380,8 +3444,20 @@ pub(super) async fn run_app_loop(
                     let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
                     if let Some((orig_idx, _)) = pick {
                         let original = *orig_idx;
-                        app.input = app.input_history[original].text.clone();
-                        app.set_cursor_end();
+                        let text = app.input_history[original].text.clone();
+                        // Restore the attachments cached behind this entry (if
+                        // any) so a re-send ships the real image / paste
+                        // payloads rather than a bare chip label; with no
+                        // cache the staged vectors are cleared.
+                        app.restore_history_attachments(original);
+                        // The inserted entry becomes the new draft: it is the
+                        // newest *unsent* input, so ↓ past the newest history
+                        // row restores it, never a stale remembered draft.
+                        app.adopt_as_draft(
+                            text,
+                            app.pending_images.clone(),
+                            app.pending_text_pastes.clone(),
+                        );
                     }
                     // The selection replaces the in-progress draft, so the
                     // stash is dropped (not restored).
@@ -3403,6 +3479,39 @@ pub(super) async fn run_app_loop(
                     app.history_preview = !app.history_preview;
                     app.history_scroll = 0;
                     app.history_modal_follow = true;
+                }
+                input::InputAction::HistoryClearAll => {
+                    // Ctrl+X inside the Ctrl+R modal: arm the clear-history
+                    // confirmation. Nothing is deleted yet — the next `y`
+                    // (or Enter) wipes, any other key cancels.
+                    app.history_clear_confirm = true;
+                    let n = app.input_history.len();
+                    show_local_toast(
+                        app,
+                        format!(
+                            "Press y to clear all {n} history entr{} (any other key cancels)",
+                            if n == 1 { "y" } else { "ies" }
+                        ),
+                        false,
+                        std::time::Duration::from_millis(2600),
+                    );
+                }
+                input::InputAction::HistoryClearConfirm => {
+                    let n = app.input_history.len();
+                    app.clear_input_history();
+                    show_local_toast(
+                        app,
+                        if n == 0 {
+                            "Input history is already empty."
+                        } else {
+                            "Input history cleared."
+                        },
+                        false,
+                        std::time::Duration::from_millis(2600),
+                    );
+                }
+                input::InputAction::HistoryClearCancel => {
+                    app.history_clear_confirm = false;
                 }
                 input::InputAction::OpenHelp => {
                     app.active_modal = Modal::Help;
@@ -3766,9 +3875,9 @@ pub(super) async fn run_app_loop(
                         app.session_info_detail = true;
                         app.session_detail = None;
                         app.session_info_scroll = 0;
-                        let _ = app
-                            .tx
-                            .send(AgentRequest::QuerySessionDetail { id: session.id.clone() });
+                        let _ = app.tx.send(AgentRequest::QuerySessionDetail {
+                            id: session.id.clone(),
+                        });
                     }
                 }
                 input::InputAction::CloseModal => {
@@ -3807,6 +3916,7 @@ pub(super) async fn run_app_loop(
                             // draft back so Esc is a true cancel, and clear the
                             // search sub-layer / preview flags for the next open.
                             app.restore_history_draft();
+                            app.history_clear_confirm = false;
                         } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
                             // The input box may have been borrowed as the fuzzy
                             // filter (search sub-layer); hand the parked draft back
@@ -4043,10 +4153,7 @@ pub(super) async fn run_app_loop(
                         // Ctrl+C used to close the modal and land the user in a
                         // bare empty chat (which a stray /models then persisted
                         // as an empty-session file).
-                        tracing::info!(
-                            reason = "startup_picker_cancelled",
-                            "app exiting"
-                        );
+                        tracing::info!(reason = "startup_picker_cancelled", "app exiting");
                         app.should_quit.store(true, Ordering::SeqCst);
                     } else if app.active_modal != Modal::None
                         && app.active_modal != Modal::Permission
@@ -4186,6 +4293,17 @@ pub(super) async fn run_app_loop(
                                 }
                             }
                             InteractiveTargetKind::ProviderRetry => {
+                                let mut messages = runtime.messages.write().await;
+                                let toggled =
+                                    app.toggle_step_pinned(&mut messages, target.message_idx);
+                                drop(messages);
+                                if toggled {
+                                    app.selection = SelectionState::None;
+                                }
+                            }
+                            InteractiveTargetKind::CommandResult => {
+                                // Enter mirrors the mouse click on a command
+                                // row: toggle its expandable result body.
                                 let mut messages = runtime.messages.write().await;
                                 let toggled =
                                     app.toggle_step_pinned(&mut messages, target.message_idx);
@@ -4349,32 +4467,11 @@ pub(super) async fn run_app_loop(
                     // is the global search surface. We recompute the session
                     // slice each press so newly-recorded entries appear
                     // without a restart; `history_index` is a position into
-                    // that slice.
+                    // that slice. `App::history_prev` advances toward older
+                    // entries and stashes the in-progress draft on the first
+                    // press (so ↓ can restore it).
                     let session_rows = app.current_session_history();
-                    if !session_rows.is_empty() {
-                        let new_pos = match app.history_index {
-                            Some(p) => p.saturating_sub(1),
-                            None => {
-                                // First ↑: stash the in-progress draft so a
-                                // later ↓ past the newest entry restores it
-                                // instead of leaving the composer empty.
-                                app.history_draft = std::mem::take(&mut app.input);
-                                0
-                            }
-                        };
-                        let orig_idx = session_rows[new_pos];
-                        app.history_index = Some(new_pos);
-                        app.input = app.input_history[orig_idx].text.clone();
-                        app.set_cursor_end();
-                        // History navigation is a programmatic input replacement,
-                        // not an edit — so it latches `completion_dismissed` like
-                        // a slash-command accept rather than re-enabling the popup
-                        // the way InsertChar/Backspace do. This keeps a recalled
-                        // slash command from flashing its completion menu until
-                        // the next real keystroke clears the latch.
-                        app.suggestion_index = None;
-                        app.completion_dismissed = true;
-                    }
+                    app.history_prev(&session_rows);
                 }
                 input::InputAction::RecallQueued => {
                     // Top-level `↑` (in an empty composer while the queue is
@@ -4450,31 +4547,7 @@ pub(super) async fn run_app_loop(
                     // (toward the newest), mirroring HistoryPrev. Walking past
                     // the newest entry restores the stashed draft.
                     let session_rows = app.current_session_history();
-                    if let Some(pos) = app.history_index {
-                        if pos + 1 < session_rows.len() {
-                            let new_pos = pos + 1;
-                            let orig_idx = session_rows[new_pos];
-                            app.history_index = Some(new_pos);
-                            app.input = app.input_history[orig_idx].text.clone();
-                            app.set_cursor_end();
-                            // Same programmatic-replacement latch as HistoryPrev.
-                            app.suggestion_index = None;
-                            app.completion_dismissed = true;
-                        } else {
-                            // Walked past the newest entry: restore the draft
-                            // the user was composing before the first ↑,
-                            // rather than blanking the composer.
-                            app.history_index = None;
-                            app.input = std::mem::take(&mut app.history_draft);
-                            app.set_cursor_end();
-                            // The restored draft may be a partial slash/path
-                            // the user was mid-edit on, but it still arrived
-                            // via navigation rather than a keystroke, so hold
-                            // the latch until the next edit.
-                            app.suggestion_index = None;
-                            app.completion_dismissed = true;
-                        }
-                    }
+                    app.history_next(&session_rows);
                 }
                 input::InputAction::ModalUp => match app.active_modal {
                     Modal::Connections | Modal::Models => {

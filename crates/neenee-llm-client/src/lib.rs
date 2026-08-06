@@ -52,9 +52,9 @@ pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvide
 /// is no collision with providers' own inventory submissions.
 #[cfg(test)]
 mod test_baselines {
+    use neenee_core::model::BaselineModels;
     use neenee_core::thinking::ThinkingSupport;
     use neenee_core::{Model, WireFormat};
-    use neenee_core::model::BaselineModels;
 
     const CLAUDE_BASELINES: &[Model] = &[
         Model {

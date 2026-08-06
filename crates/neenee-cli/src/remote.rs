@@ -9,9 +9,9 @@ use neenee_core::{AgentRequest, AgentResponse, Message, SessionOverview};
 use neenee_transport::serve::Wire;
 use neenee_transport::serve_discovery as discovery;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 pub use neenee_transport::serve::AttachAction;
 pub use neenee_transport::serve_discovery::Discovery as ServeInfo;
@@ -114,12 +114,20 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
         loop {
             match ws_source.next().await {
                 Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Welcome { session_id, round_counter, messages }) => {
-                        return Ok(Reply::Welcome(Welcome { session_id, round_counter, messages }))
+                    Ok(Wire::Welcome {
+                        session_id,
+                        round_counter,
+                        messages,
+                    }) => {
+                        return Ok(Reply::Welcome(Welcome {
+                            session_id,
+                            round_counter,
+                            messages,
+                        }));
                     }
                     Ok(Wire::Pick { sessions }) => return Ok(Reply::Pick(sessions)),
                     Ok(Wire::Error { message }) => {
-                        return Err(format!("daemon rejected the attach: {message}"))
+                        return Err(format!("daemon rejected the attach: {message}"));
                     }
                     Ok(_) => tracing::warn!("attach: unexpected frame during handshake, ignored"),
                     Err(error) => tracing::warn!(%error, "attach: bad frame during handshake"),
@@ -192,8 +200,15 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
     })
 }
 
-struct Welcome { session_id: String, round_counter: u64, messages: Vec<Message> }
-enum Reply { Welcome(Welcome), Pick(Vec<SessionOverview>) }
+struct Welcome {
+    session_id: String,
+    round_counter: u64,
+    messages: Vec<Message>,
+}
+enum Reply {
+    Welcome(Welcome),
+    Pick(Vec<SessionOverview>),
+}
 
 #[cfg(test)]
 mod tests {
@@ -202,7 +217,13 @@ mod tests {
     use tokio::sync::broadcast;
 
     fn record(port: u16, token: Option<String>) -> ServeInfo {
-        ServeInfo { pid: std::process::id(), port, token, project_root: "/tmp/proj".to_string(), started_at: 0 }
+        ServeInfo {
+            pid: std::process::id(),
+            port,
+            token,
+            project_root: "/tmp/proj".to_string(),
+            started_at: 0,
+        }
     }
     fn dead_port() -> u16 {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -212,7 +233,11 @@ mod tests {
     fn discover_at_returns_none_and_removes_stale_record() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("serve.json");
-        std::fs::write(&path, serde_json::to_vec(&record(dead_port(), None)).unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&record(dead_port(), None)).unwrap(),
+        )
+        .unwrap();
         assert!(discover_at(&path).is_none());
         assert!(!path.exists());
     }

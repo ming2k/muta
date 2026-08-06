@@ -76,6 +76,12 @@ pub struct InputContext {
     /// field instead of toggling an option. Mirrors
     /// `App::question.is_some_and(|q| q.is_other_highlighted())`.
     pub question_other_highlighted: bool,
+    /// Whether the Ctrl+R history modal is awaiting an explicit clear
+    /// confirmation (`Ctrl+X` armed it). While true, every key either
+    /// confirms (`y` / Enter) or cancels (anything else / Esc) — the modal
+    /// owns the keyboard until the decision is made. Mirrors
+    /// `App::history_clear_confirm`.
+    pub history_clear_confirm: bool,
 }
 
 impl InputContext {
@@ -480,7 +486,9 @@ pub enum InputAction {
     /// Move the queue modal's selected item one slot. `delta = -1` toward the
     /// front (next to pop), `delta = 1` toward the tail. Bound to `K` / `J`
     /// (vim convention) inside the queue modal.
-    QueueMoveItem { delta: i32 },
+    QueueMoveItem {
+        delta: i32,
+    },
     /// Accept the focused entry in the Ctrl+R history modal (Enter, in either
     /// browse or search mode): insert it into the input box and close the modal.
     /// The message is not sent — the user can edit and press Enter again to ship
@@ -490,6 +498,16 @@ pub enum InputAction {
     /// the Ctrl+R modal. In preview mode the body shows the entry's complete
     /// (possibly multi-line) text; ↑/↓ re-renders the newly focused entry.
     HistoryTogglePreview,
+    /// Arm the Ctrl+R modal's "clear all history" confirmation (`Ctrl+X`).
+    /// The next `y` wipes the entire input history; any other key / Esc
+    /// cancels. Kept out of the top level so a stray `Ctrl+X` can never wipe
+    /// history while composing.
+    HistoryClearAll,
+    /// Confirm the armed clear-history action (`y` / Enter while
+    /// `history_clear_confirm` is latched): wipe the entire input history.
+    HistoryClearConfirm,
+    /// Cancel the armed clear-history action (any other key / Esc).
+    HistoryClearCancel,
     /// Enter the model picker's search sub-layer (`/` in browse mode): start
     /// borrowing the composer line as a live fuzzy query and re-rank the list.
     ModelEnterSearch,
@@ -1037,6 +1055,20 @@ pub fn process_event(
             }
         }
         Event::Key(key) => {
+            // While the Ctrl+R clear-history confirmation is armed, the modal
+            // owns EVERY key — `y` / Enter confirm the wipe, anything else —
+            // Esc and even global shortcuts like Ctrl+C included — cancels it.
+            // This must run before the global-binding registry below, whose
+            // `Gate::Always` entries (Ctrl+C → copy/clear) would otherwise
+            // fire and let a stray keystroke escape the question.
+            if context.history_clear_confirm {
+                return match key.code {
+                    KeyCode::Char('y') => InputAction::HistoryClearConfirm,
+                    KeyCode::Enter => InputAction::HistoryClearConfirm,
+                    _ => InputAction::HistoryClearCancel,
+                };
+            }
+
             // Global shortcuts are resolved through the unified keybinding
             // registry (`tui::keymap`), the single source of truth shared with
             // the Help modal. Anything resolved here wins over the contextual
@@ -1146,6 +1178,18 @@ pub fn process_event(
                     // open (the gate blocks it at the top level), so it is a
                     // no-op here.
                     InputAction::None
+                }
+                // Ctrl+X inside the Ctrl+R panel arms the clear-history
+                // confirmation (next `y` wipes the whole history; any other
+                // key cancels). Nowhere else does Ctrl+X mean anything, so it
+                // stays a no-op at the top level and inside other modals —
+                // a stray Ctrl+X while composing can never wipe history.
+                KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if context.active_modal == super::Modal::HistorySearch {
+                        InputAction::HistoryClearAll
+                    } else {
+                        InputAction::None
+                    }
                 }
                 // F1 is a declared global binding (registry → OpenHelp) and
                 // only reaches this arm inside a modal, where it is a no-op.
@@ -1300,6 +1344,12 @@ pub fn process_event(
                     if context.active_modal == super::Modal::None
                         && context.completion_kind != super::CompletionKind::None
                         && context.suggestion_count > 0
+                        // A fully-typed command is resolved: its completion popup
+                        // is hidden and its keys return to their ordinary roles, so
+                        // Tab must not invisibly cycle sibling candidates (e.g.
+                        // `/session` → `/sessions`). Type the target command to
+                        // reach a sibling.
+                        && !context.has_exact_suggestion
                     {
                         // A slash/path suggestion menu is open: accept the
                         // next entry.
@@ -2026,6 +2076,15 @@ pub fn process_event(
                                 InputAction::FocusPrevTarget
                             } else if context.completion_kind != super::CompletionKind::None
                                 && context.suggestion_count > 0
+                                // A fully-typed known `/command` is a *resolved*
+                                // state — the composer paints it in bold + accent
+                                // and the completion popup has nothing left to
+                                // navigate (its exact match is the text already in
+                                // the box). In that state ↑ keeps its ordinary
+                                // history role instead of being captured as a
+                                // no-op suggestion move, so switching to a command
+                                // never deadens the arrow keys.
+                                && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestPrev
                             } else if context.has_queued && input.is_empty() {
@@ -2093,6 +2152,10 @@ pub fn process_event(
                                 InputAction::FocusNextTarget
                             } else if context.completion_kind != super::CompletionKind::None
                                 && context.suggestion_count > 0
+                                // Mirror of the ↑ arm: an exact-match command is
+                                // resolved, so ↓ walks history forward rather than
+                                // cycling a single-candidate popup that cannot move.
+                                && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestNext
                             } else if cursor_line_down(input, cursor_position) {
@@ -2247,6 +2310,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -2295,6 +2359,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -2420,6 +2485,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2463,6 +2529,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2505,6 +2572,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2544,6 +2612,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2583,6 +2652,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2593,12 +2663,12 @@ mod tests {
 
     #[test]
     fn backspace_atomically_deletes_an_image_chip() {
-        // Pasting an image inserts `[Image #1] ` (chip + trailing space).
-        // A single Backspace right after the space must erase both the
-        // space and the chip — mirroring codex / claude-code / opencode's
+        // Pasting an image inserts `[Image #1 · size] ` (chip + trailing
+        // space). A single Backspace right after the space must erase both
+        // the space and the chip — mirroring codex / claude-code / opencode's
         // atomic chip backspace. The reconcile pass in the event loop
         // drops the orphaned `pending_images` entry.
-        let chip = crate::tui::composer_attachments::image_chip(1);
+        let chip = crate::tui::composer_attachments::image_chip(1, 0);
         let mut input = format!("look {chip} ");
         let mut cursor = input.chars().count();
         let mut drag = SelectionDrag::default();
@@ -2626,6 +2696,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2639,7 +2710,7 @@ mod tests {
         // When the cursor lands right after `]` (no trailing space), a
         // single Backspace still removes the whole chip rather than
         // chipping away at the `]`.
-        let chip = crate::tui::composer_attachments::paste_chip(1, 5);
+        let chip = crate::tui::composer_attachments::paste_chip(1, 5, 0);
         let mut input = format!("see {chip}!");
         // Cursor right after `]`, before `!`.
         let prefix_chars = "see ".chars().count() + chip.chars().count();
@@ -2669,6 +2740,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2707,6 +2779,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2786,6 +2859,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -2825,6 +2899,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2860,6 +2935,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2898,6 +2974,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2934,6 +3011,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -2972,6 +3050,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3009,6 +3088,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3045,6 +3125,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3083,6 +3164,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3121,6 +3203,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3155,6 +3238,7 @@ mod tests {
             editor_field: None,
             custom_provider_field: None,
             question_other_highlighted: false,
+            history_clear_confirm: false,
         };
         let letter = process_event(
             Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
@@ -3211,6 +3295,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3242,6 +3327,7 @@ mod tests {
             editor_field: None,
             custom_provider_field: None,
             question_other_highlighted: false,
+            history_clear_confirm: false,
         };
         let action = process_event(
             Event::Key(crossterm::event::KeyEvent::new(
@@ -3284,6 +3370,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3317,6 +3404,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -3350,6 +3438,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -3413,6 +3502,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -3613,6 +3703,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -3770,7 +3861,14 @@ mod tests {
             let mut input = String::new();
             let mut cursor = 0;
             assert_eq!(
-                run_key(&mut input, &mut cursor, KeyCode::PageUp, KeyModifiers::NONE, modal, false),
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::PageUp,
+                    KeyModifiers::NONE,
+                    modal,
+                    false
+                ),
                 InputAction::ScrollPageUp,
                 "PageUp should page-scroll the {modal:?} modal body"
             );
@@ -3874,11 +3972,21 @@ mod tests {
     /// (no-op), not a stray page-scroll or transcript focus gesture.
     #[test]
     fn page_keys_are_inert_in_caret_editors() {
-        for modal in [crate::tui::Modal::ModelEditor, crate::tui::Modal::InputInjection] {
+        for modal in [
+            crate::tui::Modal::ModelEditor,
+            crate::tui::Modal::InputInjection,
+        ] {
             let mut input = String::new();
             let mut cursor = 0;
             assert_eq!(
-                run_key(&mut input, &mut cursor, KeyCode::PageUp, KeyModifiers::NONE, modal, false),
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::PageUp,
+                    KeyModifiers::NONE,
+                    modal,
+                    false
+                ),
                 InputAction::None,
                 "PageUp should be a no-op in {modal:?}"
             );
@@ -3895,7 +4003,14 @@ mod tests {
                 "PageDown should be a no-op in {modal:?}"
             );
             assert_eq!(
-                run_key(&mut input, &mut cursor, KeyCode::Up, KeyModifiers::CONTROL, modal, false),
+                run_key(
+                    &mut input,
+                    &mut cursor,
+                    KeyCode::Up,
+                    KeyModifiers::CONTROL,
+                    modal,
+                    false
+                ),
                 InputAction::None,
                 "Ctrl+Up should be a no-op in {modal:?}"
             );
@@ -3937,6 +4052,7 @@ mod tests {
                     editor_field: None,
                     custom_provider_field: None,
                     question_other_highlighted: false,
+                    history_clear_confirm: false,
                 },
                 &mut drag,
             )
@@ -4246,6 +4362,7 @@ mod tests {
                 active_modal: crate::tui::Modal::Question,
                 session_info_detail: false,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
                 ..Default::default()
             },
             &mut drag,
@@ -4629,6 +4746,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -4769,6 +4887,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -4803,6 +4922,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -4841,6 +4961,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -4861,6 +4982,110 @@ mod tests {
         // Once the queue drains (or was never populated), ↑ resumes its
         // normal role of walking the input history.
         assert_eq!(up_with_queued(false), InputAction::HistoryPrev);
+    }
+
+    /// Helper: dispatch a bare `code` in the compose zone against a completion
+    /// menu that reports `suggestion_count` candidates and `exact` = whether
+    /// the composer text exactly matches one of them. `suggestion_index` is
+    /// pinned to 0 so Tab-cycling assertions have a deterministic "next"
+    /// candidate.
+    fn compose_key_with_completion(
+        code: KeyCode,
+        completion_kind: crate::tui::CompletionKind,
+        suggestion_count: usize,
+        exact: bool,
+    ) -> InputAction {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        process_event(
+            Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::tui::Modal::None,
+                is_responding: false,
+                completion_kind,
+                suggestion_count,
+                has_exact_suggestion: exact,
+                suggestion_index: Some(0),
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                ..Default::default()
+            },
+            &mut drag,
+        )
+    }
+
+    #[test]
+    fn arrows_navigate_completion_menu_while_command_is_partial() {
+        // A partially-typed `/` command keeps the completion menu interactive:
+        // ↑/↓ cycle its candidates (SuggestPrev/SuggestNext) rather than
+        // walking history, so the user can keep switching toward the command
+        // they want.
+        let kind = crate::tui::CompletionKind::Slash;
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Down, kind, 5, false),
+            InputAction::SuggestNext
+        );
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Up, kind, 5, false),
+            InputAction::SuggestPrev
+        );
+    }
+
+    #[test]
+    fn arrows_walk_history_once_command_is_fully_typed() {
+        // Regression for the reported bug: once ↑/↓ has switched the composer
+        // to a fully-typed `/command`, the exact-match completion row used to
+        // pin the arrows — every press was consumed as a no-op suggestion
+        // cycle and history navigation became unreachable. A resolved command
+        // must hand ↑/↓ back to their ordinary history role.
+        let kind = crate::tui::CompletionKind::Slash;
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Down, kind, 1, true),
+            InputAction::HistoryNext,
+            "↓ on an exact-match command should keep walking history"
+        );
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Up, kind, 1, true),
+            InputAction::HistoryPrev,
+            "↑ on an exact-match command should keep walking history"
+        );
+        // Even with several candidates, an exact match (e.g. `/session`
+        // alongside the prefix-sibling `/sessions`) is resolved: arrows keep
+        // their history role instead of being captured by the popup.
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Down, kind, 2, true),
+            InputAction::HistoryNext
+        );
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Up, kind, 2, true),
+            InputAction::HistoryPrev
+        );
+    }
+
+    #[test]
+    fn tab_does_not_cycle_completions_on_exact_command() {
+        // A fully-typed command is resolved: its popup is hidden, so Tab must
+        // not invisibly cycle sibling candidates (e.g. `/session` →
+        // `/sessions`).
+        let kind = crate::tui::CompletionKind::Slash;
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Tab, kind, 2, true),
+            InputAction::None
+        );
+
+        // A partial command still accepts the next suggestion on Tab.
+        assert_eq!(
+            compose_key_with_completion(KeyCode::Tab, kind, 2, false),
+            InputAction::AcceptSuggestion("1".to_string())
+        );
     }
 
     /// Helper: send a printable char inside the Queue modal. The queue modal
@@ -4897,6 +5122,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -4932,6 +5158,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -4942,7 +5169,10 @@ mod tests {
         // Enter in the Queue modal re-edits the *selected* item (the ↑/↓
         // highlight), so it routes to the dedicated RecallQueuedSelected
         // action rather than the top-level RecallQueued (newest) one.
-        assert_eq!(queue_modal_key(KeyCode::Enter), InputAction::RecallQueuedSelected);
+        assert_eq!(
+            queue_modal_key(KeyCode::Enter),
+            InputAction::RecallQueuedSelected
+        );
     }
 
     #[test]
@@ -4971,7 +5201,10 @@ mod tests {
         // F3 is NoModal-gated in the registry, so inside the modal it falls
         // through to the contextual arm — which honors it only in the Queue
         // modal so the user can resume without closing the list.
-        assert_eq!(queue_modal_key(KeyCode::F(3)), InputAction::QueueToggleBlock);
+        assert_eq!(
+            queue_modal_key(KeyCode::F(3)),
+            InputAction::QueueToggleBlock
+        );
     }
 
     #[test]
@@ -5009,6 +5242,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -5054,6 +5288,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )
@@ -5185,6 +5420,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         );
@@ -5466,6 +5702,7 @@ mod tests {
                 editor_field: None,
                 custom_provider_field: None,
                 question_other_highlighted: false,
+                history_clear_confirm: false,
             },
             &mut drag,
         )

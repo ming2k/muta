@@ -463,6 +463,22 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.hovered_step == Some(mi),
                 self.focused_target == Some(InteractiveTarget::thinking(mi)),
             );
+        } else if msg.is_command_result() {
+            super::disclosure::draw_command_result(
+                self.frame,
+                self.band,
+                msg,
+                mi,
+                self.selection,
+                self.cell_selection,
+                self.theme,
+                self.layout_map,
+                &mut self.skip_rows,
+                &mut self.current_y,
+                &mut self.content_lines,
+                self.hovered_step == Some(mi),
+                self.focused_target == Some(InteractiveTarget::command_result(mi)),
+            );
         } else {
             super::draw_message_body(
                 self.frame,

@@ -299,7 +299,8 @@ async fn start_resolved_turn(
     .await;
 }
 
-/// No-provider gate shared by [`start_active_turn`] and [`start_session_turn`].
+/// No-provider gate shared by [`start_active_turn`], [`start_session_turn`],
+/// and the plain-chat entry (`handlers_chat::chat`).
 ///
 /// When the resolved agent is parked on the `NoProvider` sentinel, emit the
 /// session-scoped events the TUI needs to roll back the optimistic
@@ -315,7 +316,7 @@ async fn start_resolved_turn(
 ///
 /// Returns `true` when the refusal fired (caller returns early without
 /// starting a round); `false` when the round should proceed normally.
-fn refuse_if_no_provider(
+pub(super) fn refuse_if_no_provider(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     agent: &Agent,
     session_id: &str,

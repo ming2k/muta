@@ -69,7 +69,7 @@ use super::Theme;
 mod renderers;
 mod state;
 pub use renderers::{
-    StickyStep, draw_envoy_inline_step, draw_provider_retry, draw_reasoning_trace,
-    draw_sticky_summary_if_needed, draw_tool_step,
+    StickyStep, draw_command_result, draw_envoy_inline_step, draw_provider_retry,
+    draw_reasoning_trace, draw_sticky_summary_if_needed, draw_tool_step,
 };
 pub use state::{Disclosure, Interaction, summary_text_color};

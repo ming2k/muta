@@ -15,7 +15,9 @@ use unicode_width::UnicodeWidthStr;
 use super::{Disclosure, Interaction, summary_text_color};
 
 use crate::tui::model::document::{Block, Inline, MessageKind, TranscriptMessage};
-use crate::tui::model::layout::{BlockRegion, LayoutMap, PROVIDER_RETRY_BLOCK_IDX};
+use crate::tui::model::layout::{
+    BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, PROVIDER_RETRY_BLOCK_IDX, THINKING_BLOCK_IDX,
+};
 use crate::tui::model::selection::{CellDragInfo, SelectionState};
 
 use crate::tui::message_body::draw_message_body;
@@ -1993,6 +1995,7 @@ fn draw_reasoning_summary(
     summary: &str,
     hovered: bool,
     focused: bool,
+    block_idx: usize,
 ) -> usize {
     let marker = marker_override.unwrap_or(if expanded { "-" } else { "+" });
     let summary_line_idx = *ctx.content_lines;
@@ -2025,7 +2028,7 @@ fn draw_reasoning_summary(
     if let Some(rect) = ctx.paint(line) {
         ctx.layout_map.push(BlockRegion {
             message_idx: mi,
-            block_idx: usize::MAX - 1,
+            block_idx,
             start_byte: 0,
             end_byte: 0,
             text: String::new(),
@@ -2094,7 +2097,9 @@ pub fn draw_reasoning_trace(
             content_lines,
         );
         draw_reasoning_summary(
-            &mut ctx, mi, expanded,
+            &mut ctx,
+            mi,
+            expanded,
             // Always use the disclosure marker (`+`/`-`), never a streaming
             // `●`. With the activity bar as the single breathing anchor
             // (ADR 0008), nothing about the marker needs to change between
@@ -2103,7 +2108,11 @@ pub fn draw_reasoning_trace(
             // alone. The marker color now follows the disclosure ×
             // interaction weight, so it tracks the highlight like the
             // summary text and like tool-step markers (no fixed hue).
-            None, &summary, hovered, focused,
+            None,
+            &summary,
+            hovered,
+            focused,
+            THINKING_BLOCK_IDX,
         )
     };
 
@@ -2207,6 +2216,105 @@ pub fn draw_reasoning_trace(
             summary_line: summary_line_idx,
             body_end_line: *content_lines,
         });
+    }
+}
+
+/// Render a slash-command invocation as a compact, dimmed, non-conversational
+/// command block (ADR-0091): a one-line disclosure header (`+ ⚙ /search foo`)
+/// that expands to the typed result body. The result body renders through the
+/// shared block renderer so lists/code/tables all survive. Commands are never
+/// assistant prose — the header uses the reasoning summary's disclosure ×
+/// interaction tone (muted when collapsed+idle), and no sticky summary is
+/// produced (command bodies are short).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_command_result(
+    frame: &mut Frame,
+    transcript_area: Rect,
+    msg: &TranscriptMessage,
+    mi: usize,
+    selection: &SelectionState,
+    cell_selection: Option<&CellDragInfo>,
+    theme: &Theme,
+    layout_map: &mut LayoutMap,
+    skip_rows: &mut usize,
+    current_y: &mut u16,
+    content_lines: &mut usize,
+    hovered: bool,
+    focused: bool,
+) {
+    let Some(summary) = msg.command_result_summary() else {
+        return;
+    };
+    let expanded = msg.command_result_expanded() == Some(true);
+    let full_width = transcript_area.width as usize;
+
+    if full_width < (TRANSCRIPT_BODY_LEADING_INDENT as usize + 1) {
+        draw_message_body(
+            frame,
+            transcript_area,
+            msg,
+            mi,
+            selection,
+            cell_selection,
+            theme,
+            layout_map,
+            skip_rows,
+            current_y,
+            content_lines,
+            true,
+        );
+        return;
+    }
+
+    let summary_line = format!("⚙ {summary}");
+    let _summary_line_idx = {
+        let mut ctx = RenderCtx::from_cursor(
+            frame,
+            transcript_area,
+            full_width,
+            theme,
+            layout_map,
+            skip_rows,
+            current_y,
+            content_lines,
+        );
+        draw_reasoning_summary(
+            &mut ctx,
+            mi,
+            expanded,
+            None,
+            &summary_line,
+            hovered,
+            focused,
+            COMMAND_RESULT_BLOCK_IDX,
+        )
+    };
+
+    if expanded && msg.command_result_text().is_some() {
+        advance_plain_blank_rows(
+            transcript_area,
+            REASONING_TRACE_BODY_TOP_GAP_ROWS,
+            skip_rows,
+            current_y,
+            content_lines,
+        );
+        // `blocks` holds the parsed result text (`CommandResult::to_text`),
+        // empty when the record carried no result — then there is nothing to
+        // expand into, and `draw_message_body` advances zero rows.
+        draw_message_body(
+            frame,
+            transcript_area,
+            msg,
+            mi,
+            selection,
+            cell_selection,
+            theme,
+            layout_map,
+            skip_rows,
+            current_y,
+            content_lines,
+            true,
+        );
     }
 }
 

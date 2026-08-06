@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interrupted envoys keep their work.** When you stop a turn (Esc) while a
+  research/coding envoy (`envoy` / `envoy_code`) is mid-flight, the partial
+  transcript is no longer discarded with the dropped future. The envoy is
+  cancelled *cooperatively*: it stops at its next safe boundary, returns the
+  half-finished transcript, and the parent records it as an **Interrupted**
+  tool step — with its partial `children` persisted, a `↳ Interrupted · N tool
+  calls` status line, and a model-visible `Interrupted: …` summary that
+  preserves the findings so far. On resume the step rebuilds with its nested
+  transcript and true classification, and a follow-up like "pls go on" lets
+  the model continue from where the envoy stopped (or re-delegate) instead of
+  cold-restarting. Failure classification is untouched — an envoy that errors
+  on its own still reads `Failed`. (Cooperative cancel: `Tool::
+  supports_cooperative_cancel` / `Tool::request_cancel`; executor drain with
+  a bounded grace; `ToolOutput::Envoy.interrupted` /
+  `EnvoyMeta.interrupted`; `ToolStepStatus::Interrupted`.)
+
+- **Colored attachment chips in the composer.** Pasted text blocks and images
+  now render as distinct tinted "pills" inside the input box instead of plain
+  prose: a large-text paste chip (`[Pasted text #N +M lines · size]`) paints
+  calm blue, an image chip (`[Image #N · size]`) paints warm amber, each bold
+  on a tinted band derived from the theme. The chip label is now a real
+  identifier — it reports the hidden payload's line count **and** byte size
+  (`[Image #1 · 24.1 KB]`), the composer recolors the pill when a chip wraps
+  across rows, and selection keeps the identity color so you can always tell
+  which block is selected. Sizes are re-derived from the staged payload on
+  every reconcile, so a relabeled chip never reports a stale byte count.
+  (`Theme::chip_paste_fg/bg`, `Theme::chip_image_fg/bg`.)
+
+- **Chips are only colored when a payload is really staged.** The pill is
+  applied per the actual staged state (`pending_images` / `pending_text_pastes`),
+  not the label text alone: an image or paste chip whose `#N` has no backing
+  payload — typed by hand, or left over after the paste was undone — renders
+  as ordinary text, so a literal `[Image #1]` never reads as an attachment
+  that isn't there. This mirrors the submit path, which already drops unbacked
+  chips before the model sees them.
+
+### Changed
+
+- **Todo and queue bars de-cluttered.** The one-row todo summary no longer
+  leads with a `📌` pin glyph, and the two-row queue bar no longer leads with a
+  `📤` tray glyph or a next-item send time (`HH:MM`); neither sits on a raised
+  tint anymore. Both render as quiet metadata on the plain frame surface —
+  brand-colored `TODOS` / `QUEUE` tags, counts, and content previews (the
+  per-item send time still lives in the Queue modal). Their right-pinned keycap
+  legends (`Ctrl+T expand`, `F3 block  F2 expand`) now keep a guaranteed
+  `BAR_LEGEND_GAP_MIN` (6 cols) of breathing room from the content, so a
+  truncated item's `…` never butts against a keycap. (`draw_todo_bar`,
+  `draw_queue_bar`.)
+
+- **A join ladder now governs relationship spacing.** The `·` middle dot was
+  drifting into a universal separator — joining same-rank peers, different
+  levels, and different granularities with the same glyph, so it carried no
+  information. The new [visual-language](docs/reference/tui/visual-language.md)
+  reference defines one rule — *the tighter the relationship, the quieter the
+  join* — with a four-rung ladder: R0 atomic values (`1.5 KB`, `F3 block`),
+  R1 attribute joins (`Thinking · 120 chars`, `[Image #1 · 24.1 KB]` — the one
+  sanctioned use of `·`), R2 same-rank peers (2 columns of whitespace: modal
+  footer hints, empty-state suggestions, queue-bar legend), and R3 cross-group
+  segments (`BAR_LEGEND_GAP_MIN`). Different *levels* use the ` › ` breadcrumb
+  (`round 3 › turn 2`, `Connections › keybindings`) instead of `·`. The ladder
+  is a single source of truth in `design.rs` (`JOIN_MODIFY`,
+  `JOIN_ENUMERATE_COLS`, `JOIN_BREADCRUMB`), and all migrated surfaces now
+  render through it.
+
+- **Input history is now configurable and de-cluttered.** A new `[input_history]`
+  table in `config.toml` controls the Ctrl+R prompt picker and the persisted
+  `history.json`:
+  - `dedup` (default `true`) — the same prompt text collapses to a single
+    entry **across sessions and workspaces**; re-sending bumps it to the top
+    of the newest-first list instead of adding a duplicate row. Set `false`
+    to keep per-session entries as before.
+  - `record_commands` (default `false`) — `/slash` command invocations
+    (`/model`, `/clear`, …) are no longer recorded, and any legacy ones stop
+    showing in the picker; they are UI gestures already visible in the
+    transcript. Set `true` to make them recallable again.
+  - The picker's footer no longer trails the selected row's `~/project ·
+    #session… · time` origin strip — redundant noise when the row number and
+    prompt text already anchor selection (the workspace/session stamp is still
+    stored per entry and still drives the per-session ↑/↓ recall).
+  - `Ctrl+X` inside the picker clears the **entire** history: it arms a
+    one-key confirmation (`y` wipes, any other key cancels) so a stray
+    keystroke can never wipe it. (`InputHistoryConfig`,
+    `neenee_core::merge_history` dedup identity, `App::clear_input_history`.)
+
+### Fixed
+
+- **↑/↓ and Ctrl+R recall now restore a message's image and large-paste
+  attachments.** Previously a message sent with pasted images was recorded to
+  input history as text-only, so interrupting it and re-sending via history
+  recall shipped the bare `[Image #N]` chip label with no payload — the model
+  received a phantom label it could not see. History entries now cache their
+  staged attachments in memory (keyed by the entry's `(text, session_id)`
+  identity, capped FIFO, never persisted — `history.json` stays rebuildable
+  cosmetic telemetry), the ↑/↓ walk and the Ctrl+R insert restore them into
+  the composer, the first-↑ draft stash keeps them for the ↓-past-newest
+  round-trip, and an orphaned chip with no staged payload is stripped from the
+  text at dispatch instead of leaking to the model as a literal placeholder.
+
+- **↑/↓ keep working once the composer holds a fully-typed `/command`.**
+  Previously, a completed slash command pinned the arrow keys: the completion
+  menu (whose only exact-match row was the text already in the box) captured
+  every ↑/↓ as a no-op suggestion move, so input-history navigation became
+  unreachable right after switching to a command. A fully-typed command is now
+  treated as a *resolved* state — its popup is hidden, Tab stops invisibly
+  cycling sibling candidates, and ↑/↓ resume their ordinary history role. A
+  partially-typed command keeps the interactive menu unchanged.
+
+- **Inline ↑/↓ now walk input history in the correct direction.** The two
+  directions were swapped: the first ↑ stashed the draft and loaded the newest
+  entry, but a second ↑ clamped at position 0 instead of moving to the older
+  entry ("只能往上翻一个"), while ↓ walked *older* rather than back toward the
+  newest. ↑ now advances oldest-ward (clamping at the oldest entry) and ↓
+  walks back toward the newest, restoring the stashed draft — text and any
+  staged image / paste attachments together — once it passes the newest entry.
+  Navigation logic moved into `App::history_prev` / `App::history_next` so the
+  two keys can never drift, and history stamps are now strictly-increasing so
+  a same-millisecond send burst still sorts newest-first instead of degrading
+  to oldest-first on a timestamp tie.
+
+- **Input-history recall now follows an explicit pointer model.** The composer
+  is a pointer over two slot kinds: the **draft** — the newest position, the
+  input that has *not* been successfully sent (still being composed, restored
+  by a Phase-1 unsend, inserted from Ctrl+R, or recalled from the queue) —
+  which is editable and remembered; and the **history rows**, which are
+  read-only snapshots (edits on a row are temporary and discarded when the
+  pointer moves). The draft slot is now correctly cleared when a send succeeds
+  (the input is historicised, so a later ↓ never resurrects an already-sent
+  prompt) and correctly **replaced** whenever new input is adopted as the
+  newest unsent slot — a Phase-1 unsend restore, a Ctrl+R insert, or a queue
+  recall re-seeds the draft, so ↓ past the newest history row restores the
+  current input, never a stale earlier draft. (`App::adopt_as_draft`,
+  `App::clear_history_draft`, `App::restore_dispatch`.)
+
 ## [0.22.1] - 2026-08-01
 
 ### Added

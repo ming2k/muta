@@ -144,17 +144,20 @@ pub fn draw_activity_modal(
                 // helper can pre-wrap it as a unit — a long model name or
                 // locale-dependent elapsed string would otherwise overflow the
                 // body's right edge (render_body no longer soft-wraps here).
+                // `round › turn` is a container → member breadcrumb (R1 would
+                // wrongly join two different levels with `·`); model and
+                // elapsed are properties of the round (JOIN_MODIFY).
                 let mut detail = format!("round {}", round_count);
                 if current_turn >= 1 {
-                    detail.push_str(" · ");
+                    detail.push_str(crate::tui::design::JOIN_BREADCRUMB);
                     detail.push_str(&format!("turn {}", current_turn));
                 }
                 if !current_model.is_empty() {
-                    detail.push_str(" · ");
+                    detail.push_str(crate::tui::design::JOIN_MODIFY);
                     detail.push_str(&crate::tui::providers::model_display_name(current_model));
                 }
                 if let Some(started) = round_started_at {
-                    detail.push_str(" · ");
+                    detail.push_str(crate::tui::design::JOIN_MODIFY);
                     detail.push_str(&crate::tui::chrome::format_elapsed(started.elapsed()));
                 }
                 lines.extend(indented_wrapped_lines(

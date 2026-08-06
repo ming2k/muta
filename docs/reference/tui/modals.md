@@ -273,8 +273,24 @@ them, so the live status surface stays visible even while browsing history.
 | `↑` / `↓` | Move selection |
 | `Tab` | Toggle a full-text **preview** of the selected entry |
 | `Enter` | Insert the focused entry into the composer (browse or search) |
+| `Ctrl+X` | **Clear the entire history** — arms a confirmation (`y` wipes, any other key cancels) |
 | `Esc` (search) | Leave search → back to browse |
 | `Esc` (browse) | Close the modal |
+
+The list is the **prompt text itself** — there is no origin status strip
+(`~/project · #session… · time`) under the selected row anymore; the
+workspace/session stamp is still stored on each entry (it drives the inline
+↑/↓ per-session recall) but is no longer displayed, since the row numbers and
+text already anchor selection.
+
+By default the history is **deduplicated on the prompt text** (`[input_history]
+dedup = true`): sending the same prompt twice — even in different sessions —
+keeps one row, and re-sending bumps it to the top of the newest-first list.
+Set `dedup = false` to keep per-session entries instead. `/command`
+invocations (`/model`, `/clear`, …) are **not recorded** by default
+(`[input_history] record_commands = false`): they are UI gestures, already
+visible in the transcript, and only clutter the prompt picker. Set it to
+`true` to make commands recallable from `Ctrl+R` again.
 
 Characters whose char-index is in `FuzzyMatch.positions` are styled
 differently (brand + bold when unselected, contrast + underlined when

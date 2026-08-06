@@ -37,7 +37,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use neenee_core::ToolAccesses;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -163,7 +163,9 @@ impl<R: Send + 'static> ToolScheduler<R> {
             drained = std::mem::take(&mut inner.queued);
         }
         for qt in drained {
-            let _ = qt.completion.send(Err("cancelled before start".to_string()));
+            let _ = qt
+                .completion
+                .send(Err("cancelled before start".to_string()));
         }
         self.cancel.cancel();
     }
@@ -172,7 +174,12 @@ impl<R: Send + 'static> ToolScheduler<R> {
     /// remove the finished task, re-scan the queue and promote unblocked
     /// tasks (each promotion calls `spawn` recursively, so the chain
     /// continues until the queue empties).
-    fn spawn(id: u64, run: RunClosure<R>, inner: Arc<Mutex<SchedulerInner<R>>>, token: CancellationToken) {
+    fn spawn(
+        id: u64,
+        run: RunClosure<R>,
+        inner: Arc<Mutex<SchedulerInner<R>>>,
+        token: CancellationToken,
+    ) {
         tokio::spawn(async move {
             let result = run(token).await;
             Self::finish(id, result, inner).await;
@@ -326,14 +333,16 @@ mod tests {
     async fn queued_task_starts_after_conflict_finishes() {
         let scheduler: ToolScheduler<String> = ToolScheduler::default();
         let rx1 = scheduler
-            .add(ToolCallTask::new(ToolAccesses::write_file("c.txt"), |_| async {
-                Ok("first".to_string())
-            }))
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("c.txt"),
+                |_| async { Ok("first".to_string()) },
+            ))
             .await;
         let rx2 = scheduler
-            .add(ToolCallTask::new(ToolAccesses::write_file("c.txt"), |_| async {
-                Ok("second".to_string())
-            }))
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("c.txt"),
+                |_| async { Ok("second".to_string()) },
+            ))
             .await;
         let r1 = rx1.await.unwrap().unwrap();
         let r2 = rx2.await.unwrap().unwrap();
@@ -391,7 +400,11 @@ mod tests {
         ];
         tokio::time::sleep(Duration::from_millis(60)).await;
         assert_eq!(e_ra1.load(Ordering::SeqCst), 1, "R(a) #1 started");
-        assert_eq!(e_rb.load(Ordering::SeqCst), 1, "R(b) started (parallel, no conflict)");
+        assert_eq!(
+            e_rb.load(Ordering::SeqCst),
+            1,
+            "R(b) started (parallel, no conflict)"
+        );
         scheduler.cancel_all().await;
         for rx in rxs {
             let _ = rx.await;
@@ -411,8 +424,16 @@ mod tests {
         let _rx_ra = scheduler.add(t_ra).await;
         let _rx_wb = scheduler.add(t_wb).await;
         tokio::time::sleep(Duration::from_millis(60)).await;
-        assert_eq!(e_wb.load(Ordering::SeqCst), 1, "W(b) can start (no conflict with W(a))");
-        assert_eq!(e_ra.load(Ordering::SeqCst), 0, "R(a) stays queued behind W(a)");
+        assert_eq!(
+            e_wb.load(Ordering::SeqCst),
+            1,
+            "W(b) can start (no conflict with W(a))"
+        );
+        assert_eq!(
+            e_ra.load(Ordering::SeqCst),
+            0,
+            "R(a) stays queued behind W(a)"
+        );
         scheduler.cancel_all().await;
     }
 }

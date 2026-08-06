@@ -223,7 +223,12 @@ fn access_conflict(left: &ToolAccess, right: &ToolAccess) -> bool {
 ///
 /// A *non-recursive* access never claims its parent directory, so
 /// `dir/file` vs `dir/` (neither recursive) do **not** overlap.
-fn file_accesses_overlap(left_path: &str, left_recursive: bool, right_path: &str, right_recursive: bool) -> bool {
+fn file_accesses_overlap(
+    left_path: &str,
+    left_recursive: bool,
+    right_path: &str,
+    right_recursive: bool,
+) -> bool {
     if left_path == right_path {
         return true;
     }

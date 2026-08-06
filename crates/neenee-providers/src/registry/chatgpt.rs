@@ -23,7 +23,6 @@ pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     Model {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
@@ -36,8 +35,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     Model {
         id: "gpt-5.6-terra",
         name: "GPT-5.6 Terra",
@@ -50,8 +47,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     Model {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
@@ -64,8 +59,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
     },
-
-
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
     // API. All reason (surfaced via the `reasoning_content` stream) and take
@@ -83,8 +76,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -97,8 +88,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
     },
-
-
     Model {
         id: "gpt-5.4-mini",
         name: "GPT-5.4 Mini",

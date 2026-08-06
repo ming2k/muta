@@ -96,7 +96,7 @@ pub fn run() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " question modal · fixture {}/{} · Tab=next fixture · q/Ctrl+C=quit",
+                " question modal · fixture {}/{}  Tab=next fixture  q/Ctrl+C=quit",
                 s.idx + 1,
                 s.fx.len(),
             );
@@ -105,9 +105,9 @@ pub fn run() -> io::Result<()> {
             // production footer so the showcase matches real behavior.
             let multi = s.model.active_multi_select();
             let mut hint = if multi {
-                " ↑↓ navigate · wheel/Pg scroll · Space select · Enter submit · 1-9 jump · Esc cancel "
+                " ↑↓ navigate  wheel/Pg scroll  Space select  Enter submit  1-9 jump  Esc cancel "
             } else {
-                " ↑↓ navigate · wheel/Pg scroll · Enter submit · 1-9 jump · Esc cancel "
+                " ↑↓ navigate  wheel/Pg scroll  Enter submit  1-9 jump  Esc cancel "
             }
             .to_string();
             if let Some(r) = &s.last_result {

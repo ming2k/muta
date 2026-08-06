@@ -69,12 +69,12 @@ pub use neenee_core::{
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
     McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
     PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
-    ProviderStreamEvent, PruneOutcome, RetryableError, Role, SessionOverview,
-    ShellTermination, SkillsConfig, StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput,
-    ToolPolicy, ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption,
-    UserQuestionReply, UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens,
-    is_context_overflow, parse_retryable_error, prune_tool_results, public_error_message,
-    retryable_error, truncate_utf8,
+    ProviderStreamEvent, PruneOutcome, RetryableError, Role, SessionOverview, ShellTermination,
+    SkillsConfig, StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy,
+    ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
+    UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
+    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
+    truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -108,6 +108,16 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// the caller surfaces a retryable / fallback error instead of hanging.
 const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// How long the tool executors wait for a cooperatively-cancelled in-flight
+/// call (an envoy) to drain after the user interrupts a turn, before falling
+/// back to dropping its future. The envoy observes its token at the next safe
+/// boundary (the current provider stream or tool call, both bounded by their
+/// own timeouts) and returns its partial transcript — normally in well under
+/// a second. This is the backstop for pathological cases (a child parked on a
+/// human answer it will never get because the same human just pressed Esc).
+/// Bounded so an interrupt never hangs the UI.
+const ENVOY_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
@@ -120,34 +130,34 @@ pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
+#[allow(dead_code)] // machinery: the four-stage pipeline types await the full dispatch rewrite.
+mod dispatch_pipeline;
 pub mod envoy_tool;
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;
 pub mod no_provider;
 pub mod orchestration;
-mod permission_store;
 #[allow(dead_code)] // machinery: permission policies are wired; the async-gate policy types
-                    // (HookPolicy/BashPolicy/AskUserPolicy) stay as documented placeholders.
+// (HookPolicy/BashPolicy/AskUserPolicy) stay as documented placeholders.
 mod permission_policy;
-#[allow(dead_code)] // machinery: the four-stage pipeline types await the full dispatch rewrite.
-mod dispatch_pipeline;
+mod permission_store;
 pub mod round_lifecycle;
 pub use round_lifecycle::{RoundBegin, RoundLifecycle};
 pub mod session_review;
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;
+/// MCP connector (formerly the standalone neenee-mcp crate).
+pub mod mcp;
 mod tool_call;
 mod tool_integration;
 #[allow(dead_code)] // machinery: ToolManager logic is reused via Agent methods; the standalone
-                    // struct stays as a tested unit pending the resolved_tools field restructure.
+// struct stays as a tested unit pending the resolved_tools field restructure.
 mod tool_manager;
 #[allow(dead_code)] // machinery: ToolScheduler is tested but not yet the dispatch driver
-                    // (execute_tools_concurrent uses group_by_conflict batching instead).
+// (execute_tools_concurrent uses group_by_conflict batching instead).
 mod tool_scheduler;
-/// MCP connector (formerly the standalone neenee-mcp crate).
-pub mod mcp;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;

@@ -79,7 +79,8 @@ pub fn draw_skills_modal(
                     )));
                 }
 
-                // Metadata line: version + source + tags.
+                // Metadata line: version + source + tags — same-rank peers
+                // (R2), so they join with plain whitespace, no dot.
                 let mut meta_parts: Vec<String> = Vec::new();
                 if let Some(v) = &skill.version {
                     meta_parts.push(format!("v{}", v));
@@ -89,7 +90,11 @@ pub fn draw_skills_modal(
                     meta_parts.push(format!("#{}", skill.tags.join(" #")));
                 }
                 body.push(Line::from(Span::styled(
-                    format!("{}{}", detail_indent, meta_parts.join(" · ")),
+                    format!(
+                        "{}{}",
+                        detail_indent,
+                        meta_parts.join(&" ".repeat(crate::tui::design::JOIN_ENUMERATE_COLS))
+                    ),
                     muted,
                 )));
 

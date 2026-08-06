@@ -176,9 +176,11 @@ fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'st
             Line::from(vec![
                 Span::styled("Try ", muted),
                 Span::styled("/skills", info),
-                Span::styled(" · ", muted),
+                // R2: the command suggestions are same-rank peers — plain
+                // whitespace, no dot.
+                Span::styled(" ".repeat(crate::tui::design::JOIN_ENUMERATE_COLS), muted),
                 Span::styled("/repeat", info),
-                Span::styled(" · ", muted),
+                Span::styled(" ".repeat(crate::tui::design::JOIN_ENUMERATE_COLS), muted),
                 Span::styled("/help", info),
             ]),
         ],

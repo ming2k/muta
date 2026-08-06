@@ -395,12 +395,12 @@ fn backspace_in_compose_returns_backspace_action() {
 
 #[test]
 fn backspace_atomically_deletes_an_image_chip() {
-    // Pasting an image inserts `[Image #1] ` (chip + trailing space).
+    // Pasting an image inserts `[Image #1 · size] ` (chip + trailing space).
     // A single Backspace right after the space must erase both the
     // space and the chip — mirroring codex / claude-code / opencode's
     // atomic chip backspace. The reconcile pass in the event loop
     // drops the orphaned `pending_images` entry.
-    let chip = crate::tui::composer_attachments::image_chip(1);
+    let chip = crate::tui::composer_attachments::image_chip(1, 0);
     let mut input = format!("look {chip} ");
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
@@ -436,7 +436,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
     // When the cursor lands right after `]` (no trailing space), a
     // single Backspace still removes the whole chip rather than
     // chipping away at the `]`.
-    let chip = crate::tui::composer_attachments::paste_chip(1, 5);
+    let chip = crate::tui::composer_attachments::paste_chip(1, 5, 0);
     let mut input = format!("see {chip}!");
     // Cursor right after `]`, before `!`.
     let prefix_chars = "see ".chars().count() + chip.chars().count();
@@ -1830,6 +1830,130 @@ fn enter_in_history_modal_emits_history_insert() {
 }
 
 #[test]
+fn ctrl_x_in_history_modal_arms_clear() {
+    // Ctrl+X inside the Ctrl+R panel arms the clear-history confirmation.
+    // It must never type an `x` into the filter.
+    let mut input = "git".to_string();
+    let mut cursor = 3;
+    let action = run_history_key(&mut input, &mut cursor, KeyCode::Char('x'), KeyModifiers::CONTROL);
+    assert_eq!(action, InputAction::HistoryClearAll);
+    assert_eq!(input, "git", "Ctrl+X must not type into the filter");
+    assert_eq!(cursor, 3);
+}
+
+#[test]
+fn ctrl_x_outside_history_modal_is_a_noop() {
+    // Nowhere else does Ctrl+X mean anything: at the top level (no modal) it
+    // must not arm the clear — a stray Ctrl+X while composing can never wipe
+    // history.
+    let mut input = "draft".to_string();
+    let mut cursor = 5;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::None,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "draft");
+}
+
+/// Drive the history modal with the clear-confirmation already armed (what
+/// the app loop passes after a `HistoryClearAll`), returning the action and
+/// the (unmodified) filter text — the armed question must own every key.
+fn run_history_clear_key(
+    input: &mut String,
+    cursor: &mut usize,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> InputAction {
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        input,
+        cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::HistorySearch,
+            history_clear_confirm: true,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn armed_clear_confirm_resolves_on_y_or_enter() {
+    let mut input = "filter".to_string();
+    let mut cursor = 6;
+    assert_eq!(
+        run_history_clear_key(&mut input, &mut cursor, KeyCode::Char('y'), KeyModifiers::NONE),
+        InputAction::HistoryClearConfirm,
+        "y confirms the wipe"
+    );
+    assert_eq!(
+        run_history_clear_key(&mut input, &mut cursor, KeyCode::Enter, KeyModifiers::NONE),
+        InputAction::HistoryClearConfirm,
+        "Enter confirms the wipe"
+    );
+    assert_eq!(input, "filter", "armed confirm must not edit the filter");
+}
+
+#[test]
+fn armed_clear_confirm_cancels_on_any_other_key() {
+    let mut input = "filter".to_string();
+    let mut cursor = 6;
+    // Esc, `n`, and a plain filter letter all cancel — and none of them may
+    // type into the (soon-to-be-wiped) history.
+    for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('g')] {
+        assert_eq!(
+            run_history_clear_key(&mut input, &mut cursor, code, KeyModifiers::NONE),
+            InputAction::HistoryClearCancel,
+            "{code:?} cancels the armed clear"
+        );
+    }
+    assert_eq!(input, "filter", "cancelling must not edit the filter");
+}
+
+#[test]
 fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
     // With no modal open, Ctrl+R routes through OpenHistory so the app
     // loop can stash the in-progress draft and show the fuzzy picker.
@@ -2207,3 +2331,4 @@ fn sessions_modal_n_key_triggers_create_new_session() {
     );
     assert_eq!(action_big_n, InputAction::CreateNewSession);
 }
+

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 
 use neenee_core::{EnvoyProfile, Tool};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::{Agent, EnvoyHandle};
 
@@ -134,6 +135,17 @@ pub struct EnvoyTool {
     /// tool (and drives the harness) can hand the same `Arc` to the harness.
     registry: Arc<EnvoyRegistry>,
     accounting: std::sync::Mutex<Option<EnvoyAccountingContext>>,
+    /// Live child cancellation tokens keyed by the parent tool-call id — the
+    /// cooperative-cancel arm of interruption (the counterpoint to dropping
+    /// the child future). `call_structured_with_events` stores the token each
+    /// spawned envoy runs under; the harness's executor calls
+    /// [`Tool::request_cancel`] when the user interrupts the turn, which
+    /// cancels the stored token. The child's round loop observes it at its
+    /// next safe boundary, returns its partial transcript through
+    /// `run_envoy_outcome`, and the parent records it instead of losing it.
+    /// Entries are removed when the child's run ends, so a late
+    /// `request_cancel` for a finished call degrades to a no-op.
+    active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
 }
 
 #[derive(Clone)]
@@ -155,7 +167,12 @@ impl EnvoyTool {
     ) -> Self {
         Self::named(provider, toolset, profile, "envoy", ENVOY_TOOL_DESCRIPTION)
     }
-
+    /// of creating a fresh one. Used when a second dispatch tool (e.g. a
+    /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
+    /// children reachable from the *same* harness reply path: the driver holds
+    /// one `Arc<EnvoyRegistry>`, and tool-call ids are globally unique, so two
+    /// dispatch tools lodging their children into one table never collide. See
+    /// ADR-0029.
     /// Like [`new`](Self::new) but shares an existing [`EnvoyRegistry`] instead
     /// of creating a fresh one. Used when a second dispatch tool (e.g. a
     /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
@@ -201,6 +218,7 @@ impl EnvoyTool {
             parent_variants: std::sync::Mutex::new(None),
             registry: Arc::new(EnvoyRegistry::default()),
             accounting: std::sync::Mutex::new(None),
+            active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -224,6 +242,7 @@ impl EnvoyTool {
             parent_variants: std::sync::Mutex::new(None),
             registry,
             accounting: std::sync::Mutex::new(None),
+            active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -303,6 +322,35 @@ impl Tool for EnvoyTool {
     fn spawns_envoy(&self) -> bool {
         true
     }
+
+    /// The envoy's in-flight call owns a partial transcript worth preserving,
+    /// so the harness routes turn cancellation through
+    /// [`Tool::request_cancel`] instead of dropping the future: the child
+    /// stops at its next safe boundary, returns its partial work, and the
+    /// parent records it as an interrupted result.
+    fn supports_cooperative_cancel(&self) -> bool {
+        true
+    }
+
+    /// Cancel the live child spawned by the `call_id` call. The child's round
+    /// loop observes its token at the next safe boundary and returns its
+    /// partial transcript through `run_envoy_outcome`, so the parent executor
+    /// can drain it instead of dropping it. Returns `false` for an unknown or
+    /// already-finished call — the harness then falls back to the drop path.
+    fn request_cancel(&self, call_id: &str) -> bool {
+        let Some(token) = self
+            .active_cancels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(call_id)
+            .cloned()
+        else {
+            return false;
+        };
+        token.cancel();
+        true
+    }
+
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.run_envoy(None, arguments, Box::new(|_| {})).await
     }
@@ -361,6 +409,7 @@ impl Tool for EnvoyTool {
             usage: outcome.token_usage,
             generation_ms: outcome.generation_ms,
             failed: outcome.failed,
+            interrupted: outcome.interrupted,
         })
     }
 }
@@ -378,6 +427,11 @@ struct EnvoyOutcome {
     /// `failed` flag on the returned [`neenee_core::ToolOutput::Envoy`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
     failed: bool,
+    /// Whether the envoy was stopped by the parent before finishing (the turn
+    /// was cancelled). Distinct from `failed`: the partial transcript is
+    /// preserved either way, but interruption is a user-initiated stop that
+    /// the model should treat as resumable work, not a sub-task error.
+    interrupted: bool,
     /// The envoy's own generation time (summed across its completed provider
     /// requests). Folded into the parent round's `generation_ms` so the
     /// throughput denominator matches its numerator scope (envoy output
@@ -510,32 +564,39 @@ impl EnvoyTool {
             neenee_core::InjectionKind::EnvoyTask,
             prompt,
         )];
-        // The envoy runs with its own (never-cancelled) token. When the
-        // parent turn is interrupted, the parent's dispatch drops this future
-        // and emits a `ToolCancelled` for the `task` call id; the TUI then
-        // recursively cancels the nested tool steps, so the envoy does not
-        // need a token linked to the parent.
-        //
-        // On failure we surface the partial transcript anyway — both so the
-        // parent's tool-result message carries the envoy's work-in-progress
-        // `children` and so the real token cost (which can be substantial for a
-        // 32-turn burnout) reaches the parent round's accounting. The
-        // `final_content` is prefixed `Error: …` so the existing failure
-        // classifier (`starts_with("Error")`) and the TUI's red Failed badge
-        // both trigger.
+        // The envoy runs under its own cancellation token. When the parent
+        // turn is interrupted, the harness's executor calls
+        // [`Tool::request_cancel`] on this tool with the parent tool-call id,
+        // which cancels the stored token below; the child's round loop
+        // observes it at its next safe boundary and returns its partial
+        // transcript through the error arm of this function — so the parent
+        // records the half-finished work instead of dropping it. A `None`
+        // call_id (the bare `call` path, no harness involvement) means nothing
+        // can cancel the child, so it keeps a fresh never-cancelled token.
+        let child_cancel = CancellationToken::new();
+        if let Some(id) = call_id {
+            self.active_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.to_string(), child_cancel.clone());
+        }
         let result = envoy
-            .run_streaming_with_events(
-                &mut messages,
-                &tokio_util::sync::CancellationToken::new(),
-                |event| Self::forward_event(event, &mut on_event),
-            )
+            .run_streaming_with_events(&mut messages, &child_cancel, |event| {
+                Self::forward_event(event, &mut on_event)
+            })
             .await;
         // Drop the registry entry for this call regardless of outcome so it
         // never holds a dead handle. The child `Arc` is also dropped here
         // (the last strong ref besides the registry's `Weak`), so any late
-        // reply via the handle degrades to a no-op.
+        // reply via the handle degrades to a no-op. The cancellation entry is
+        // dropped alongside, so a late `request_cancel` finds nothing to
+        // cancel and the harness falls back to dropping a finished call.
         if let Some(id) = call_id {
             self.registry.remove(id);
+            self.active_cancels
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
         }
         match result {
             Ok(result) => {
@@ -545,10 +606,54 @@ impl EnvoyTool {
                     token_usage: result.token_usage,
                     final_content,
                     failed: false,
+                    interrupted: false,
                     generation_ms: result.generation_ms,
                 })
             }
             Err(error) => {
+                // Interruption (the parent cancelled the turn): preserve the
+                // partial transcript as an *interrupted* outcome — not an
+                // error. The model must understand the sub-task was stopped by
+                // the user (resumable work), not that it failed. On a genuine
+                // failure we surface the partial transcript too — both so the
+                // parent's tool-result message carries the envoy's
+                // work-in-progress `children` and so the real token cost
+                // reaches the parent round's accounting; the `final_content`
+                // is prefixed `Error: …` so the failure classifier and the
+                // TUI's Failed badge both trigger.
+                if matches!(error, neenee_core::HarnessError::Interrupted) {
+                    let tool_calls = messages
+                        .iter()
+                        .filter(|m| m.role == neenee_core::Role::Tool)
+                        .count();
+                    let partial = messages.iter().rev().find_map(|m| {
+                        (m.role == neenee_core::Role::Assistant && !m.content.trim().is_empty())
+                            .then(|| m.content.trim().to_string())
+                    });
+                    let final_content = match partial {
+                        Some(text) => format!(
+                            "Interrupted: the envoy was stopped by the user before completing. \
+                             It ran {tool_calls} tool call(s) and produced the following partial \
+                             findings:\n{text}"
+                        ),
+                        None => format!(
+                            "Interrupted: the envoy was stopped by the user before producing any \
+                             findings (it ran {tool_calls} tool call(s))."
+                        ),
+                    };
+                    tracing::info!(
+                        tool_calls,
+                        "envoy interrupted by parent; preserving partial transcript"
+                    );
+                    return Ok(EnvoyOutcome {
+                        messages,
+                        token_usage: neenee_core::TokenUsage::default(),
+                        final_content,
+                        failed: false,
+                        interrupted: true,
+                        generation_ms: 0,
+                    });
+                }
                 let error_string = error.to_string();
                 tracing::warn!(error = %error_string, "envoy failed; preserving partial transcript");
                 Ok(EnvoyOutcome {
@@ -556,6 +661,7 @@ impl EnvoyTool {
                     token_usage: neenee_core::TokenUsage::default(),
                     final_content: format!("Error: {error_string}"),
                     failed: true,
+                    interrupted: false,
                     generation_ms: 0,
                 })
             }
@@ -660,7 +766,7 @@ impl EnvoyTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use neenee_core::{EXPLORE, Message, Provider, Role};
+    use neenee_core::{EXPLORE, Message, Provider, ProviderStreamEvent, Role};
 
     struct CannedProvider;
 
@@ -795,6 +901,122 @@ mod tests {
             .unwrap();
 
         assert_eq!(output, "found 3 relevant files");
+    }
+
+    /// A provider that lets the test control when the *second* model request
+    /// is in flight: the first request returns a `read_text` tool call (which
+    /// the envoy executes), the second flips `second_request_started` and
+    /// then never produces a stream event — so the envoy is parked mid-flight
+    /// until its cancellation token fires.
+    struct GatedProvider {
+        requests: std::sync::atomic::AtomicUsize,
+        second_request_started: tokio::sync::watch::Sender<bool>,
+    }
+
+    #[async_trait]
+    impl Provider for GatedProvider {
+        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+            Ok(Message::new(Role::Assistant, "gated"))
+        }
+        async fn stream_chat(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::empty()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _request: neenee_core::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            if self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                // First request: ask the envoy to run its `read_text` tool.
+                Ok(Box::pin(stream::iter(vec![
+                    Ok(ProviderStreamEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("envoy_inner_1".to_string()),
+                        name: Some("read_text".to_string()),
+                        arguments: "{}".to_string(),
+                    }),
+                ])))
+            } else {
+                // Second request: tell the test the envoy is mid-flight, then
+                // stall forever. The envoy's streaming loop races its
+                // cancellation token against `stream.next()`, so cancelling
+                // the child token resolves this immediately.
+                let _ = self.second_request_started.send(true);
+                Ok(Box::pin(stream::pending()))
+            }
+        }
+    }
+
+    /// Regression for cooperative interruption: when the parent cancels a
+    /// running envoy, the partial transcript is preserved as an *interrupted*
+    /// outcome (not dropped, not a failure). The child's completed tool call,
+    /// the task message, and a model-facing "Interrupted:" summary all survive
+    /// so the parent can record them and the user can resume.
+    #[tokio::test]
+    async fn interrupting_envoy_preserves_partial_transcript() {
+        let (started_tx, started_rx) = tokio::sync::watch::channel(false);
+        let provider = std::sync::Arc::new(GatedProvider {
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            second_request_started: started_tx,
+        });
+        let tool = std::sync::Arc::new(EnvoyTool::new(
+            provider,
+            neenee_core::ToolSet::from_tools([
+                std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
+            ]),
+            &EXPLORE,
+        ));
+
+        let tool_for_run = tool.clone();
+        let run = tokio::spawn(async move {
+            tool_for_run
+                .run_envoy_outcome(
+                    Some("call_interrupt"),
+                    r#"{"description":"interrupt me","prompt":"find the handlers"}"#,
+                    Box::new(|_event: neenee_core::EnvoyEvent| {}),
+                )
+                .await
+        });
+
+        // Wait until the envoy is genuinely mid-flight (its second model
+        // request is in the air), then interrupt it the way the harness's
+        // executor does: via `Tool::request_cancel` keyed by the call id.
+        let mut started_rx = started_rx;
+        started_rx
+            .changed()
+            .await
+            .expect("envoy reached its second request");
+        assert!(
+            tool.request_cancel("call_interrupt"),
+            "an in-flight envoy must accept the cancel request"
+        );
+
+        let outcome = run.await.expect("envoy run task").expect("outcome");
+        assert!(outcome.interrupted, "interruption must be flagged");
+        assert!(!outcome.failed, "interruption is not a failure");
+        assert!(
+            outcome.final_content.starts_with("Interrupted:"),
+            "model-facing summary should say Interrupted, got: {}",
+            outcome.final_content
+        );
+        // The partial transcript must contain the completed read_text round.
+        let tool_result_msgs = outcome
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .count();
+        assert_eq!(
+            tool_result_msgs, 1,
+            "the completed child tool call must survive in the partial transcript"
+        );
+        assert!(outcome.messages[0].role == Role::User);
+        // A late cancel for a finished call degrades to a no-op, not an error.
+        assert!(
+            !tool.request_cancel("call_interrupt"),
+            "a finished call must reject a late cancel"
+        );
     }
 
     /// The envoy persona belongs to the immutable provider request, not its
@@ -972,8 +1194,7 @@ mod tests {
         let model = neenee_core::resolve_model(&CannedProvider.model());
         let model_sel = neenee_core::ToolSelection::unrestricted();
         let selected = neenee_core::CODE.resolve_tools(&toolset, &model, &model_sel);
-        let names: std::collections::HashSet<&str> =
-            selected.iter().map(|t| t.name()).collect();
+        let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
         assert!(names.contains("bash"));
         assert!(names.contains("write_file"));
@@ -993,11 +1214,7 @@ mod tests {
     #[test]
     fn named_with_registry_shares_the_registry_across_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let explore = EnvoyTool::new(
-            provider.clone(),
-            neenee_core::ToolSet::default(),
-            &EXPLORE,
-        );
+        let explore = EnvoyTool::new(provider.clone(), neenee_core::ToolSet::default(), &EXPLORE);
         let shared = explore.registry();
         let code = EnvoyTool::named_with_registry(
             provider,

@@ -53,6 +53,11 @@ pub enum ToolStatus {
     Denied,
     /// The call was aborted before producing a result (e.g. user interrupt).
     Cancelled,
+    /// The user interrupted the turn while the call was in flight, but the
+    /// call drained and its partial result was preserved (an interrupted
+    /// envoy). More alive than `Cancelled`: there is recovered work to
+    /// inspect and possibly resume.
+    Interrupted,
 }
 
 impl ToolStatus {
@@ -65,6 +70,7 @@ impl ToolStatus {
             ToolStepStatus::Failed => ToolStatus::Failed,
             ToolStepStatus::Denied => ToolStatus::Denied,
             ToolStepStatus::Cancelled => ToolStatus::Cancelled,
+            ToolStepStatus::Interrupted => ToolStatus::Interrupted,
         }
     }
 
@@ -85,6 +91,10 @@ impl ToolStatus {
             // Cancelled steps one rung dimmer than Running: the call was
             // aborted, so it reads as fully inert rather than merely idle.
             ToolStatus::Cancelled => theme.dim(),
+            // Interrupted carries the same user-intervention tone as Denied,
+            // but on a brighter accent: unlike a dropped call, an interrupted
+            // envoy preserved partial work worth noticing.
+            ToolStatus::Interrupted => theme.warn(),
         }
     }
 }

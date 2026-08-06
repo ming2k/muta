@@ -105,11 +105,11 @@ pub fn run() -> io::Result<()> {
                 "normal"
             };
             let title = format!(
-                " permission sheet · fixture {}/{} ({mode}) · Tab=next · q/Ctrl+C=quit",
+                " permission sheet · fixture {}/{} ({mode})  Tab=next  q/Ctrl+C=quit",
                 s.idx + 1,
                 s.fx.len(),
             );
-            let hint = " ←→ select · Enter activate · ↑↓ scroll details · Esc back/quit";
+            let hint = " ←→ select  Enter activate  ↑↓ scroll details  Esc back/quit";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 // The sheet renders inline into the composer slot (bottom of
                 // the screen), not centered. Give it the bottom ~40% as the

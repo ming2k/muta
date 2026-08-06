@@ -4,11 +4,11 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
-pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::tui::chrome::{
     HintBarView, QueueBarView, QueueItemView, StatusBarView, draw_completion_menu, draw_hint_bar,
     draw_queue_bar, draw_status_bar,
 };
+pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::tui::composer::{
     INPUT_MSG_IDX, cursor_screen_pos, draw_composer, draw_composer_highlighted,
 };
@@ -20,7 +20,7 @@ pub(crate) use crate::tui::design::{
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
     FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS,
     PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS, TODO_BAR_ROWS, STEP_MIN_WIDTH,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS, STEP_MIN_WIDTH, TODO_BAR_ROWS,
     TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
     TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
@@ -483,7 +483,7 @@ pub fn draw_transcript(
     };
 
     // The todo bar leads the footer stack and surfaces the live task list —
-    // a `📌 TODOS d/t` identity and a preview of the current item. It is
+    // a `TODOS d/t` identity and a preview of the current item. It is
     // hidden only while an overlay owns the chrome, inside an envoy zoom, or
     // when the list is empty.
     let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
@@ -530,7 +530,11 @@ pub fn draw_transcript(
     // above it stays focused on the next input action. Always present whenever
     // the footer chrome is visible (it never conditionally hides), keeping the
     // workspace always glanceable.
-    let status_height: u16 = if chrome_hidden || in_envoy { 0 } else { STATUS_BAR_ROWS };
+    let status_height: u16 = if chrome_hidden || in_envoy {
+        0
+    } else {
+        STATUS_BAR_ROWS
+    };
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
@@ -541,7 +545,11 @@ pub fn draw_transcript(
         // bar carries the next input action + model/context; the status bar
         // caps the footer with session-level state (workspace path + flags such
         // as `autopilot`, which used to have its own row above the input).
-        FOOTER_TOP_GAP_ROWS + activity_height + todo_height + queue_height + input_box_height
+        FOOTER_TOP_GAP_ROWS
+            + activity_height
+            + todo_height
+            + queue_height
+            + input_box_height
             + hint_height
             + status_height
     };
@@ -701,7 +709,7 @@ pub fn draw_transcript(
     let status_y = chunks[1].y + FOOTER_TOP_GAP_ROWS;
 
     // The persistent todo bar leads the footer stack. It surfaces the live task
-    // list — the `📌 TODOS d/t` identity and a preview of the current item — and
+    // list — the `TODOS d/t` identity and a preview of the current item — and
     // is the click target that opens the Activity modal on the Todos section.
     // Returns its rect for the event loop to hit-test.
     let todos_rect = if todo_row_needed {
@@ -785,7 +793,11 @@ pub fn draw_transcript(
     let status_rect = if status_height > 0 {
         Rect::new(
             footer_x,
-            status_y + todo_height + queue_height + activity_height + input_box_height
+            status_y
+                + todo_height
+                + queue_height
+                + activity_height
+                + input_box_height
                 + hint_height,
             footer_w,
             status_height,
@@ -886,6 +898,8 @@ mod tests {
                     true,
                     &mut 0,
                     &SelectionState::None,
+                    0,
+                    0,
                 );
                 draw_completion_menu(
                     f,
@@ -939,15 +953,14 @@ mod tests {
                 false,
                 &theme,
             );
-            let history_roster: Vec<neenee_core::HistoryEntry> =
-                [neenee_core::HistoryEntry::new(
-                    "a".to_string(),
-                    None,
-                    None,
-                    0,
-                )]
-                .into_iter()
-                .collect();
+            let history_roster: Vec<neenee_core::HistoryEntry> = [neenee_core::HistoryEntry::new(
+                "a".to_string(),
+                None,
+                None,
+                0,
+            )]
+            .into_iter()
+            .collect();
             let ranked: Vec<(usize, crate::tui::fuzzy::FuzzyMatch)> =
                 crate::tui::fuzzy::rank(&["a"], "");
             let input_rect = neenee_tui_engine::Rect::new(0, 20, 80, 3);
@@ -1150,7 +1163,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "running envoy",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -1189,7 +1203,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -1273,7 +1288,8 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        awaiting_permission: false,                        spinner_phase: 0,
+                        awaiting_permission: false,
+                        spinner_phase: 0,
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
@@ -1377,7 +1393,8 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        awaiting_permission: false,                        spinner_phase: 0,
+                        awaiting_permission: false,
+                        spinner_phase: 0,
                         input: "",
                         byte_cursor: 0,
                         chrome_hidden: false,
@@ -1594,7 +1611,8 @@ mod tests {
                         selection: &SelectionState::None,
                         cell_selection: None,
                         activity: "",
-                        awaiting_permission: false,                        spinner_phase: 0,
+                        awaiting_permission: false,
+                        spinner_phase: 0,
                         input,
                         byte_cursor: input.len(),
                         chrome_hidden: false,
@@ -1739,7 +1757,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -1807,6 +1826,8 @@ mod tests {
                 true,
                 &mut 0,
                 &SelectionState::None,
+                0,
+                0,
             );
         });
 
@@ -1843,6 +1864,8 @@ mod tests {
                 true,
                 &mut 0,
                 &SelectionState::None,
+                0,
+                0,
             );
         });
     }
@@ -1876,6 +1899,8 @@ mod tests {
                     false,
                     &mut 0,
                     &SelectionState::None,
+                    0,
+                    0,
                 );
             });
             let cursor = match terminal.cursor() {
@@ -1917,6 +1942,8 @@ mod tests {
                 &mut 0,
                 &SelectionState::None,
                 "/repeat".len(),
+                0,
+                0,
             );
         });
         let buf = terminal.buffer();
@@ -1963,6 +1990,8 @@ mod tests {
                 &mut 0,
                 &SelectionState::None,
                 "/session".len(),
+                0,
+                0,
             );
         });
         let buf = terminal.buffer();
@@ -1978,6 +2007,332 @@ mod tests {
             theme.fg(),
             "accent must not bleed onto the wrapped argument row"
         );
+    }
+
+    /// Attachment chips render as distinct colored "pills": a pasted-text
+    /// chip in the calm text-block blue and an image chip in the warm amber,
+    /// each bold on a tinted band, while the surrounding prose keeps the
+    /// normal text color. The color is the identifier's second channel —
+    /// kind at a glance, payload size in the label.
+    #[test]
+    fn draw_composer_paints_paste_and_image_chips_distinctly() {
+        let theme = Theme::default();
+        let paste_chip = crate::tui::composer_attachments::paste_chip(1, 3, 2048);
+        let image_chip = crate::tui::composer_attachments::image_chip(1, 1536);
+        let input = format!("see {paste_chip} plus {image_chip} end");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(120, 5);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 120, 3),
+                &input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                1,
+                1,
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        let panel_bg = theme.input_surface();
+
+        // Chip labels are ASCII plus a multi-byte `·` badge; display columns
+        // come from `str_len`, never from the raw byte length.
+        let paste_width = neenee_tui_engine::text::str_len(&paste_chip);
+        let paste_start = text_x + "see ".len() as u16;
+        let paste_end = paste_start + paste_width as u16;
+        for col in paste_start..paste_end {
+            let cell = buf.get(col, text_y).expect("paste chip cell");
+            assert_eq!(
+                cell.fg,
+                theme.chip_paste_fg(),
+                "paste chip glyph lost its blue"
+            );
+            assert_eq!(
+                cell.bg,
+                theme.chip_paste_bg(panel_bg),
+                "paste chip lost its pill band"
+            );
+            assert!(
+                cell.style.add.contains(neenee_tui_engine::Modifier::BOLD),
+                "paste chip glyph lost bold"
+            );
+        }
+
+        let image_width = neenee_tui_engine::text::str_len(&image_chip);
+        let image_start = text_x + ("see ".len() + paste_width + " plus ".len()) as u16;
+        let image_end = image_start + image_width as u16;
+        for col in image_start..image_end {
+            let cell = buf.get(col, text_y).expect("image chip cell");
+            assert_eq!(
+                cell.fg,
+                theme.chip_image_fg(),
+                "image chip glyph lost its amber"
+            );
+            assert_eq!(
+                cell.bg,
+                theme.chip_image_bg(panel_bg),
+                "image chip lost its pill band"
+            );
+            assert!(
+                cell.style.add.contains(neenee_tui_engine::Modifier::BOLD),
+                "image chip glyph lost bold"
+            );
+        }
+
+        // The prose around the chips keeps the normal text color on the panel.
+        for col in [
+            text_x,
+            text_x + 2,
+            text_x + ("see ".len() + paste_width) as u16,
+        ] {
+            let cell = buf.get(col, text_y).expect("prose cell");
+            assert_eq!(cell.fg, theme.fg(), "prose next to a chip must stay plain");
+            assert_eq!(cell.bg, panel_bg, "prose must not pick up a chip band");
+        }
+    }
+
+    /// A chip label with **no staged payload** — typed by hand, or left over
+    /// after the paste was undone — must render as ordinary text, never as a
+    /// colored pill. The color marks a real attachment; a literal
+    /// `[Image #1]` that the user merely typed must not pretend one exists.
+    #[test]
+    fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
+        let theme = Theme::default();
+        // No payload staged at all: `image_count = 0`, `paste_count = 0`.
+        let orphan_image = "[Image #1]".to_string();
+        let orphan_paste = "[Pasted text #1 +5 lines]".to_string();
+        let input = format!("typed {orphan_image} and {orphan_paste} here");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(100, 5);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 100, 3),
+                &input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                0,
+                0,
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        let panel_bg = theme.input_surface();
+
+        // Every glyph of both orphan labels keeps the plain text color on the
+        // plain panel background — no pill band, no kind color, no bold.
+        for (offset, label) in [
+            ("typed ".len(), &orphan_image),
+            ("typed [Image #1] and ".len(), &orphan_paste),
+        ] {
+            let start = text_x + offset as u16;
+            let end = start + neenee_tui_engine::text::str_len(label) as u16;
+            for col in start..end {
+                let cell = buf.get(col, text_y).expect("orphan chip cell");
+                assert_eq!(
+                    cell.fg,
+                    theme.fg(),
+                    "orphan label {label:?} must keep plain text color at col {col}"
+                );
+                assert_eq!(
+                    cell.bg, panel_bg,
+                    "orphan label {label:?} must not get a pill band at col {col}"
+                );
+                assert!(
+                    !cell.style.add.contains(neenee_tui_engine::Modifier::BOLD),
+                    "orphan label {label:?} must not be bold at col {col}"
+                );
+            }
+        }
+    }
+
+    /// A real chip (payload staged) is colored while an orphan label typed
+    /// next to it stays plain — the pill reflects the actual staged state of
+    /// each block, so one never masks the other.
+    #[test]
+    fn draw_composer_colors_only_backed_chips_when_mixed() {
+        let theme = Theme::default();
+        let real_paste = crate::tui::composer_attachments::paste_chip(1, 3, 2048);
+        let orphan_image = "[Image #1]".to_string();
+        // One paste payload staged; the image chip is a typed orphan.
+        let input = format!("{real_paste} then {orphan_image} end");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(100, 5);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 100, 3),
+                &input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                0, // image_count: no image payload staged
+                1, // paste_count: one paste payload staged
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        let panel_bg = theme.input_surface();
+
+        // The backed paste chip gets the blue pill.
+        let paste_width = neenee_tui_engine::text::str_len(&real_paste);
+        let paste_end = text_x + paste_width as u16;
+        for col in text_x..paste_end {
+            let cell = buf.get(col, text_y).expect("backed paste cell");
+            assert_eq!(
+                cell.fg,
+                theme.chip_paste_fg(),
+                "backed paste chip lost its blue"
+            );
+            assert_eq!(
+                cell.bg,
+                theme.chip_paste_bg(panel_bg),
+                "backed paste chip lost its band"
+            );
+        }
+
+        // The orphan image label stays plain text.
+        let orphan_start = text_x + ("".len() + paste_width + " then ".len()) as u16;
+        let orphan_end = orphan_start + neenee_tui_engine::text::str_len(&orphan_image) as u16;
+        for col in orphan_start..orphan_end {
+            let cell = buf.get(col, text_y).expect("orphan image cell");
+            assert_eq!(
+                cell.fg,
+                theme.fg(),
+                "orphan image label must stay plain text"
+            );
+            assert_eq!(
+                cell.bg, panel_bg,
+                "orphan image label must not get a pill band"
+            );
+        }
+    }
+
+    /// Selecting a chip keeps its identity color (so the user can still tell
+    /// which pasted block is selected) but the selection wins on background —
+    /// the highlighted slice stays a uniform `selected_bg`.
+    #[test]
+    fn draw_composer_chip_keeps_identity_color_under_selection() {
+        let theme = Theme::default();
+        let paste_chip = crate::tui::composer_attachments::paste_chip(1, 3, 2048);
+        let input = format!("see {paste_chip} end");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 5);
+        // Select exactly the chip bytes (absolute offsets into `input`).
+        let sel_lo = "see ".len();
+        let sel_hi = sel_lo + paste_chip.len();
+        use crate::tui::model::layout::SemanticCursor;
+        let selection = SelectionState::Range {
+            anchor: SemanticCursor::new(crate::tui::composer::INPUT_MSG_IDX, 0, sel_lo),
+            head: SemanticCursor::new(crate::tui::composer::INPUT_MSG_IDX, 0, sel_hi),
+        };
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 80, 3),
+                &input,
+                input.len(),
+                true,
+                false,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &selection,
+                0,
+                1,
+            );
+        });
+        let buf = terminal.buffer();
+        let text_y = crate::tui::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
+        let chip_start = text_x + sel_lo as u16;
+        let chip_end = chip_start + neenee_tui_engine::text::str_len(&paste_chip) as u16;
+        for col in chip_start..chip_end {
+            let cell = buf.get(col, text_y).expect("selected chip cell");
+            assert_eq!(
+                cell.fg,
+                theme.chip_paste_fg(),
+                "selected chip must keep its identity color"
+            );
+            assert_eq!(
+                cell.bg,
+                theme.selected(),
+                "selection must win the background"
+            );
+        }
+    }
+
+    /// A chip split across a wrap boundary paints both fragments with the
+    /// same pill, so a pasted block stays visually contiguous as it wraps
+    /// inside the input box.
+    #[test]
+    fn draw_composer_chip_pill_continues_across_wrap() {
+        let theme = Theme::default();
+        let image_chip = crate::tui::composer_attachments::image_chip(1, 1536);
+        // Narrow text area (16 - 2 prefix - 2 pad = 12 cols) forces the
+        // `[Image #1 · 1.5 KB]` label onto its own wrapped fragment.
+        let input = format!("xx {image_chip} yy");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(16, 6);
+        terminal.draw(|f| {
+            draw_composer(
+                f,
+                Rect::new(0, 0, 16, 5),
+                &input,
+                input.len(),
+                true,
+                true,
+                &theme,
+                &mut LayoutMap::new(),
+                false,
+                &mut 0,
+                &SelectionState::None,
+                1,
+                0,
+            );
+        });
+        let buf = terminal.buffer();
+        let panel_bg = theme.input_surface();
+        // Scan every rendered row: every glyph that belongs to the chip label
+        // (ignoring spaces, which also appear in the prompt indent and the
+        // panel padding) must carry the chip band, proving the pill survives
+        // the wrap instead of reverting to plain text on the continuation row.
+        let chip_glyphs: Vec<char> = image_chip.chars().filter(|c| *c != ' ').collect();
+        for row in 0..5u16 {
+            for col in 0..16u16 {
+                let cell = buf.get(col, row).expect("row cell");
+                if chip_glyphs.contains(&cell.symbol().chars().next().unwrap_or('\0')) {
+                    assert_eq!(
+                        cell.bg,
+                        theme.chip_image_bg(panel_bg),
+                        "wrapped chip fragment at ({col},{row}) lost its band"
+                    );
+                    assert_eq!(
+                        cell.fg,
+                        theme.chip_image_fg(),
+                        "wrapped chip fragment at ({col},{row}) lost its amber"
+                    );
+                }
+            }
+        }
     }
 
     /// Regression for the IME cursor-lag fix: the input-driven immediate flush
@@ -2027,6 +2382,8 @@ mod tests {
                     false,
                     &mut 0,
                     &SelectionState::None,
+                    0,
+                    0,
                 );
             });
             let drawn = match terminal.cursor() {
@@ -2110,6 +2467,8 @@ mod tests {
                 false,
                 &mut 0,
                 &sel,
+                0,
+                0,
             );
         });
         let g = terminal.buffer();
@@ -2169,6 +2528,8 @@ mod tests {
                 false,
                 &mut 0,
                 &sel,
+                0,
+                0,
             );
         });
 
@@ -2239,6 +2600,8 @@ mod tests {
                 true,
                 &mut 0,
                 &SelectionState::None,
+                0,
+                0,
             );
         });
         let anchor = layout_map.cursor_at(rect.x + 2, rect.y + text_row).unwrap();
@@ -2265,6 +2628,8 @@ mod tests {
                     false,
                     &mut 0,
                     sel,
+                    0,
+                    0,
                 );
             });
             (0..10u16)
@@ -2345,7 +2710,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: &long_input,
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2381,6 +2747,8 @@ mod tests {
                 false,
                 &mut input_scroll,
                 &SelectionState::None,
+                0,
+                0,
             );
         });
 
@@ -2493,7 +2861,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2575,7 +2944,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -2872,17 +3242,7 @@ mod tests {
             );
             terminal.draw(|f| {
                 let _ = draw_history_panel(
-                    f,
-                    &history,
-                    &ranked,
-                    0,
-                    &mut 0,
-                    true,
-                    false,
-                    false,
-                    input_rect,
-                    0,
-                    &theme,
+                    f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
                 );
             });
         }
@@ -2895,17 +3255,7 @@ mod tests {
             crate::tui::fuzzy::rank::<&str>(&[], "");
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f,
-                &empty,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false,
-                input_rect,
-                0,
-                &theme,
+                f, &empty, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
             );
         });
     }
@@ -2917,21 +3267,14 @@ mod tests {
     #[test]
     fn history_panel_folds_multiline_and_previews_full_text() {
         let theme = Theme::default();
-        let history: Vec<neenee_core::HistoryEntry> = [
-            "first line\nsecond line\nthird line",
-            "single line",
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(i, text)| {
-            neenee_core::HistoryEntry::new(
-                text.to_string(),
-                Some(format!("s{i}")),
-                None,
-                0,
-            )
-        })
-        .collect();
+        let history: Vec<neenee_core::HistoryEntry> =
+            ["first line\nsecond line\nthird line", "single line"]
+                .into_iter()
+                .enumerate()
+                .map(|(i, text)| {
+                    neenee_core::HistoryEntry::new(text.to_string(), Some(format!("s{i}")), None, 0)
+                })
+                .collect();
         let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
 
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
@@ -2941,17 +3284,7 @@ mod tests {
         // List mode: the multi-line entry must render as one row.
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f,
-                &history,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false,
-                input_rect,
-                0,
-                &theme,
+                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
             );
         });
         let buf = terminal.buffer();
@@ -2961,17 +3294,7 @@ mod tests {
         // Preview mode: the full multi-line text renders without panic.
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f,
-                &history,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                true,
-                false,
-                input_rect,
-                0,
-                &theme,
+                f, &history, &ranked, 0, &mut 0, true, true, false, input_rect, 0, &theme,
             );
         });
     }
@@ -3004,17 +3327,7 @@ mod tests {
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
             panel = draw_history_panel(
-                f,
-                &history,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false,
-                input_rect,
-                0,
-                &theme,
+                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
             )
         });
         let panel = panel.expect("panel should render with ample room above");
@@ -3054,17 +3367,7 @@ mod tests {
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
             panel = draw_history_panel(
-                f,
-                &history,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false,
-                input_rect,
-                0,
-                &theme,
+                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
             )
         });
         let panel = panel.expect("panel should render");
@@ -3092,9 +3395,7 @@ mod tests {
         // color. A brand column would paint every left-edge cell, including the
         // header's, with brand as its background. The header sits one row below
         // the top transition edge.
-        let header_left = buf
-            .get(panel.x, panel.y + 1)
-            .expect("header left cell");
+        let header_left = buf.get(panel.x, panel.y + 1).expect("header left cell");
         assert_ne!(
             header_left.bg,
             theme.brand(),
@@ -3111,12 +3412,7 @@ mod tests {
         // grow tall and run past the activity bar.
         let history: Vec<neenee_core::HistoryEntry> = (0..25)
             .map(|i| {
-                neenee_core::HistoryEntry::new(
-                    format!("entry {i}"),
-                    Some(format!("s{i}")),
-                    None,
-                    i,
-                )
+                neenee_core::HistoryEntry::new(format!("entry {i}"), Some(format!("s{i}")), None, i)
             })
             .collect();
         let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
@@ -3128,17 +3424,7 @@ mod tests {
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
             panel = draw_history_panel(
-                f,
-                &history,
-                &ranked,
-                0,
-                &mut 0,
-                true,
-                false,
-                false,
-                input_rect,
-                1,
-                &theme,
+                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 1, &theme,
             )
         });
         let panel = panel.expect("panel should render");
@@ -3174,7 +3460,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3233,7 +3520,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3301,7 +3589,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "idle",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3356,7 +3645,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3436,7 +3726,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3512,7 +3803,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,
@@ -3590,7 +3882,8 @@ mod tests {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     activity: "",
-                    awaiting_permission: false,                    spinner_phase: 0,
+                    awaiting_permission: false,
+                    spinner_phase: 0,
                     input: "",
                     byte_cursor: 0,
                     chrome_hidden: false,

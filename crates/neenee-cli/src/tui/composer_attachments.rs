@@ -1,22 +1,30 @@
 //! Attachment "chips" staged behind short placeholders inside the live input
 //! box, mirroring the paste UX in codex / claude-code / opencode:
 //!
-//! - Pasting an image inserts `[Image #N]` into the input text and stages the
-//!   base64 payload in `pending_images`. The chip is the user's visible
-//!   affordance that an attachment will ship with the next message.
-//! - Pasting a large block of text inserts `[Pasted text #N +M lines]` and
-//!   stages the full text in `pending_text_pastes`, so the input box stays
+//! - Pasting an image inserts `[Image #N · size]` into the input text and
+//!   stages the base64 payload in `pending_images`. The chip is the user's
+//!   visible affordance that an attachment will ship with the next message.
+//! - Pasting a large block of text inserts `[Pasted text #N +M lines · size]`
+//!   and stages the full text in `pending_text_pastes`, so the input box stays
 //!   compact instead of being flooded by thousands of lines.
 //! - A single `Backspace` against either chip removes the whole chip (plus
 //!   any one trailing space inserted alongside it) in one keystroke, and the
 //!   matching staged entry is dropped on the next reconcile pass.
+//!
+//! The chip label is the attachment's **identifier and carries real
+//! information**: its `#N` keys into the staged payload vector, `+M lines`
+//! and the byte-size badge report how much content is hidden behind it, and
+//! the composer renders the two kinds in distinct colors (text block vs.
+//! image block) so pasted material reads as a typed object, not prose.
 //!
 //! The chip text lives inline in `App::input` (codex / claude-code style
 //! rather than codex's separate element list) so that ordinary cursor
 //! movement, selection, and copy keep working without a custom text buffer.
 //! A small scan pass (`reconcile`) runs after each input mutation to prune
 //! orphaned staged entries and relabel surviving chips so their `#N` always
-//! matches their 1-based position in the staged vectors.
+//! matches their 1-based position in the staged vectors — re-deriving the
+//! size badge from the surviving payload each time so a relabeled chip never
+//! reports a stale byte count.
 
 use neenee_core::ImagePart;
 
@@ -53,17 +61,56 @@ pub struct ChipMatch {
     pub end_byte: usize,
 }
 
-/// Build the `[Image #N]` label staged behind a pasted image attachment.
-pub fn image_chip(number_one_based: usize) -> String {
-    format!("[Image #{number_one_based}]")
+/// Human-readable byte size for chip badges: `900 B`, `1.2 KB`, `3.4 MB`.
+/// Sub-1024 sizes stay exact byte counts; scaled values keep one decimal
+/// until they reach 100 (`120 KB`) so the badge stays short on screen.
+pub fn human_size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if value >= 100.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
-/// Build the `[Pasted text #N +M lines]` label staged behind a large pasted
-/// text block. `line_count` is the number of logical lines (`\n`-separated)
-/// in the original paste, shown so the user can tell at a glance how big the
-/// hidden payload is.
-pub fn paste_chip(number_one_based: usize, line_count: usize) -> String {
-    format!("[Pasted text #{number_one_based} +{line_count} lines]")
+/// Recover the original byte length of a base64-encoded payload (e.g. an
+/// image's `ImagePart::data`), used to re-derive chip size badges after a
+/// [`reconcile`] pass. Exact for standard base64 with or without `=` padding.
+pub fn base64_byte_size(b64: &str) -> usize {
+    let padding = b64.bytes().rev().take_while(|&b| b == b'=').count();
+    b64.len().saturating_sub(padding) * 3 / 4
+}
+
+/// Build the `[Image #N · size]` label staged behind a pasted image
+/// attachment. `size_bytes` is the raw (unencoded) byte length of the image,
+/// so the identifier reports the attachment's real weight; the composer
+/// paints image chips in a distinct color (see [`Theme::chip_image_fg`](crate::tui::theme::Theme::chip_image_fg))
+/// so they read as image blocks at a glance.
+pub fn image_chip(number_one_based: usize, size_bytes: usize) -> String {
+    format!("[Image #{number_one_based} · {}]", human_size(size_bytes))
+}
+
+/// Build the `[Pasted text #N +M lines · size]` label staged behind a large
+/// pasted text block. `line_count` is the number of logical lines
+/// (`\n`-separated) and `size_bytes` the byte length of the original paste,
+/// so the chip's identifier reports exactly how much text is hidden behind
+/// it; the composer paints paste chips in a distinct color (see
+/// [`Theme::chip_paste_fg`](crate::tui::theme::Theme::chip_paste_fg)) so they
+/// read as text blocks.
+pub fn paste_chip(number_one_based: usize, line_count: usize, size_bytes: usize) -> String {
+    format!(
+        "[Pasted text #{number_one_based} +{line_count} lines · {}]",
+        human_size(size_bytes)
+    )
 }
 
 /// Decide whether a pasted text block should be staged behind a chip rather
@@ -86,18 +133,25 @@ pub fn paste_line_count(text: &str) -> usize {
 }
 
 /// Parse the inside of a `[...]` chip (without the surrounding brackets).
-/// Returns `(kind, number, line_count_opt)` on a syntactic match.
+/// Returns `(kind, number, line_count_opt)` on a syntactic match. Both the
+/// bare legacy forms (`[Image #1]`, `[Pasted text #1 +5 lines]`) and the
+/// size-badged forms (`[Image #1 · 24.1 KB]`, `[Pasted text #1 +5 lines ·
+/// 24.1 KB]`) are recognized; the size badge itself is not parsed here —
+/// [`reconcile`] recomputes sizes from the staged payloads, so a stale badge
+/// is corrected rather than trusted.
 fn parse_chip_body(body: &str) -> Option<(ChipKind, usize, Option<usize>)> {
     if let Some(rest) = body.strip_prefix("Image #") {
-        let n = rest.parse::<usize>().ok()?;
+        // Optional ` · size` suffix; the number is everything up to it.
+        let num_part = rest.split(" · ").next().unwrap_or(rest);
+        let n = num_part.parse::<usize>().ok()?;
         if n == 0 {
             return None;
         }
         return Some((ChipKind::Image, n, None));
     }
     if let Some(rest) = body.strip_prefix("Pasted text #") {
-        // Optional ` +M lines` suffix. The number itself is everything up to
-        // the first space or end-of-string.
+        // Optional ` +M lines[ · size]` suffix. The number itself is
+        // everything up to the first space or end-of-string.
         let (num_part, tail) = match rest.find(' ') {
             Some(idx) => (&rest[..idx], &rest[idx..]),
             None => (rest, ""),
@@ -109,8 +163,12 @@ fn parse_chip_body(body: &str) -> Option<(ChipKind, usize, Option<usize>)> {
         let line_count = if tail.is_empty() {
             None
         } else if let Some(rest2) = tail.strip_prefix(" +") {
-            let digits = rest2.trim_end_matches(" lines");
-            digits.parse::<usize>().ok()
+            let digits: String = rest2.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                None
+            } else {
+                digits.parse::<usize>().ok()
+            }
         } else {
             None
         };
@@ -273,15 +331,25 @@ pub fn reconcile(
     }
 
     // Second pass: rebuild the input, relabeling recognized chips and
-    // leaving orphan chips as-is so the user sees what they typed.
+    // leaving orphan chips as-is so the user sees what they typed. The size
+    // badge on each relabeled chip is re-derived from the surviving payload,
+    // so a chip that kept its label through editing never reports a stale
+    // byte count.
     let mut out = String::with_capacity(input.len());
     let mut last_end = 0;
     for (chip, payload) in chips.iter().zip(chip_payload.iter()) {
         out.push_str(&input[last_end..chip.start_byte]);
         match payload {
-            Some((ChipKind::Image, n)) => out.push_str(&image_chip(*n)),
+            Some((ChipKind::Image, n)) => {
+                let size = new_images
+                    .get(*n - 1)
+                    .map(|img| base64_byte_size(&img.data))
+                    .unwrap_or(0);
+                out.push_str(&image_chip(*n, size));
+            }
             Some((ChipKind::Paste, n)) => {
-                out.push_str(&paste_chip(*n, chip.line_count.unwrap_or(0)))
+                let size = new_pastes.get(*n - 1).map_or(0, |text| text.len());
+                out.push_str(&paste_chip(*n, chip.line_count.unwrap_or(0), size));
             }
             None => out.push_str(&input[chip.start_byte..chip.end_byte]),
         }
@@ -299,6 +367,11 @@ pub fn reconcile(
 /// alongside the text, so the model needs the chip's positional label to
 /// know where the image belongs in the message). Used at submit time so the
 /// model receives the real text rather than the chip label.
+///
+/// A paste chip whose `#N` has no staged payload — e.g. recalled from a
+/// history entry recorded before attachment staging, or hand-typed — is
+/// **dropped** rather than shipped to the model as a literal placeholder:
+/// a bare `[Pasted text #1 …]` label means nothing without its hidden text.
 pub fn expand_paste_chips(input: &str, pending_text_pastes: &[String]) -> String {
     let chips = iter_chips(input);
     if chips.is_empty() {
@@ -308,7 +381,7 @@ pub fn expand_paste_chips(input: &str, pending_text_pastes: &[String]) -> String
         input.len() + pending_text_pastes.iter().map(|s| s.len()).sum::<usize>(),
     );
     let mut last_end = 0;
-    let mut paste_index = 0;
+    let mut dropped_orphan = false;
     for chip in &chips {
         if chip.kind != ChipKind::Paste {
             continue;
@@ -319,14 +392,69 @@ pub fn expand_paste_chips(input: &str, pending_text_pastes: &[String]) -> String
         let slot = chip.number.saturating_sub(1);
         if let Some(text) = pending_text_pastes.get(slot) {
             out.push_str(text);
+            last_end = chip.end_byte;
         } else {
-            out.push_str(&input[chip.start_byte..chip.end_byte]);
+            // Orphaned paste chip: drop the label plus one following space
+            // (the paste convention is `chip + " "`). The space that
+            // preceded the chip stays as the separator, so "pre [chip] mid"
+            // collapses to "pre mid" instead of shipping a literal
+            // placeholder to the model.
+            dropped_orphan = true;
+            let mut end = chip.end_byte;
+            if input.as_bytes().get(end) == Some(&b' ') {
+                end += 1;
+            }
+            last_end = end;
         }
-        paste_index += 1;
-        last_end = chip.end_byte;
     }
     out.push_str(&input[last_end..]);
-    let _ = paste_index;
+    // An orphan dropped at the very end leaves the space that preceded it
+    // dangling ("pre [chip]" → "pre "); trim it so the message ends cleanly.
+    if dropped_orphan {
+        let trimmed = out.trim_end().len();
+        out.truncate(trimmed);
+    }
+    out
+}
+
+/// Remove every `[Image #N …]` chip from `input` whose payload is **not**
+/// staged in `images` (i.e. `N > image_count`). Image chips are positional
+/// labels the model uses to locate the attached pixels; an orphaned label —
+/// recalled from a history entry recorded before attachment staging, or
+/// hand-typed — has no payload behind it and must not ship to the model as
+/// literal text (which reads as a fake "image" the model cannot see).
+///
+/// Chips with a backing payload are left untouched (the submit path pairs
+/// them with `AgentRequest::Chat::images`). A dropped chip takes one
+/// immediately-following space with it (the paste convention is `chip + " "`),
+/// so consecutive orphans collapse to a single space.
+pub fn strip_orphan_image_chips(input: &str, image_count: usize) -> String {
+    let chips = iter_chips(input);
+    if chips.is_empty() {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut last_end = 0;
+    let mut dropped_orphan = false;
+    for chip in &chips {
+        if chip.kind != ChipKind::Image || chip.number <= image_count {
+            continue;
+        }
+        out.push_str(&input[last_end..chip.start_byte]);
+        let mut end = chip.end_byte;
+        if input.as_bytes().get(end) == Some(&b' ') {
+            end += 1;
+        }
+        last_end = end;
+        dropped_orphan = true;
+    }
+    out.push_str(&input[last_end..]);
+    // An orphan dropped at the very end leaves the space that preceded it
+    // dangling; trim it so the message ends cleanly.
+    if dropped_orphan {
+        let trimmed = out.trim_end().len();
+        out.truncate(trimmed);
+    }
     out
 }
 
@@ -356,20 +484,45 @@ mod tests {
     }
 
     #[test]
+    fn human_size_formatting() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(900), "900 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(120 * 1024), "120 KB");
+        assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
+    }
+
+    #[test]
+    fn base64_byte_size_recovers_raw_length() {
+        // Standard base64 of 1, 2, 3 and 4 raw bytes (padding included).
+        assert_eq!(base64_byte_size("YQ=="), 1); // "a"
+        assert_eq!(base64_byte_size("YWI="), 2); // "ab"
+        assert_eq!(base64_byte_size("YWJj"), 3); // "abc"
+        assert_eq!(base64_byte_size("YWJjZA=="), 4); // "abcd"
+        assert_eq!(base64_byte_size(""), 0);
+    }
+
+    #[test]
     fn image_chip_format() {
-        assert_eq!(image_chip(1), "[Image #1]");
-        assert_eq!(image_chip(7), "[Image #7]");
+        assert_eq!(image_chip(1, 0), "[Image #1 · 0 B]");
+        assert_eq!(image_chip(7, 1536), "[Image #7 · 1.5 KB]");
     }
 
     #[test]
     fn paste_chip_format() {
-        assert_eq!(paste_chip(1, 5), "[Pasted text #1 +5 lines]");
-        assert_eq!(paste_chip(3, 0), "[Pasted text #3 +0 lines]");
+        assert_eq!(paste_chip(1, 5, 0), "[Pasted text #1 +5 lines · 0 B]");
+        assert_eq!(paste_chip(3, 0, 1024), "[Pasted text #3 +0 lines · 1.0 KB]");
     }
 
     #[test]
     fn iter_chips_finds_image_and_paste() {
-        let input = format!("pre {} mid {} end", image_chip(1), paste_chip(2, 10));
+        let input = format!(
+            "pre {} mid {} end",
+            image_chip(1, 2048),
+            paste_chip(2, 10, 5120)
+        );
         let chips = iter_chips(&input);
         assert_eq!(chips.len(), 2);
         assert_eq!(chips[0].kind, ChipKind::Image);
@@ -379,22 +532,50 @@ mod tests {
         assert_eq!(chips[1].number, 2);
         assert_eq!(chips[1].line_count, Some(10));
         // Byte ranges point at the actual chip substrings.
-        assert_eq!(&input[chips[0].start_byte..chips[0].end_byte], "[Image #1]");
+        assert_eq!(
+            &input[chips[0].start_byte..chips[0].end_byte],
+            "[Image #1 · 2.0 KB]"
+        );
         assert_eq!(
             &input[chips[1].start_byte..chips[1].end_byte],
-            "[Pasted text #2 +10 lines]"
+            "[Pasted text #2 +10 lines · 5.0 KB]"
         );
     }
 
     #[test]
+    fn parse_chip_body_accepts_legacy_and_size_badged_forms() {
+        // Legacy bare forms still parse (input edited by hand, old drafts).
+        assert_eq!(
+            parse_chip_body("Image #1"),
+            Some((ChipKind::Image, 1, None))
+        );
+        assert_eq!(
+            parse_chip_body("Pasted text #1 +5 lines"),
+            Some((ChipKind::Paste, 1, Some(5)))
+        );
+        // The new size-badged forms parse too; the badge is not trusted.
+        assert_eq!(
+            parse_chip_body("Image #3 · 24.1 KB"),
+            Some((ChipKind::Image, 3, None))
+        );
+        assert_eq!(
+            parse_chip_body("Pasted text #2 +12 lines · 5.0 KB"),
+            Some((ChipKind::Paste, 2, Some(12)))
+        );
+        // Zero and non-numeric numbers are rejected.
+        assert_eq!(parse_chip_body("Image #0 · 1 KB"), None);
+        assert_eq!(parse_chip_body("Pasted text #x"), None);
+    }
+
+    #[test]
     fn iter_chips_ignores_unrelated_brackets() {
-        let chips = iter_chips("hello [not a chip] world [1]");
+        let chips = iter_chips("hello [not a chip] world [1] [Image]");
         assert!(chips.is_empty());
     }
 
     #[test]
     fn chip_range_ending_at_detects_trailing_chip() {
-        let input = format!("hello {}", image_chip(1));
+        let input = format!("hello {}", image_chip(1, 42));
         let cursor = input.len();
         assert_eq!(chip_range_ending_at(&input, cursor), Some((6, cursor)));
         // Cursor one byte inside the chip: no match.
@@ -405,7 +586,7 @@ mod tests {
 
     #[test]
     fn chip_range_for_backspace_handles_trailing_space() {
-        let input = format!("hello {} ", image_chip(1));
+        let input = format!("hello {} ", image_chip(1, 42));
         let cursor = input.len();
         // Cursor sits after the space; backspace should remove both the
         // space and the chip in one keystroke.
@@ -418,7 +599,7 @@ mod tests {
 
     #[test]
     fn chip_range_for_backspace_handles_no_trailing_space() {
-        let input = format!("hello{}", image_chip(1));
+        let input = format!("hello{}", image_chip(1, 42));
         let cursor = input.len();
         let chip_start = "hello".len();
         assert_eq!(
@@ -442,7 +623,7 @@ mod tests {
             },
         ];
         let mut pastes = Vec::<String>::new();
-        let input = format!("look at {}", image_chip(1));
+        let input = format!("look at {}", image_chip(1, base64_byte_size("a")));
         let out = reconcile(&input, &mut images, &mut pastes);
         assert_eq!(out, input);
         assert_eq!(images.len(), 1);
@@ -472,9 +653,20 @@ mod tests {
         let mut pastes = Vec::<String>::new();
         // Original: "x [Image #1] y [Image #2] z [Image #3]" — but #2 was
         // removed, leaving #1 and #3 out of order.
-        let input = format!("x {} y {} z", image_chip(1), image_chip(3));
+        let input = format!(
+            "x {} y {} z",
+            image_chip(1, base64_byte_size("a")),
+            image_chip(3, base64_byte_size("c")),
+        );
         let out = reconcile(&input, &mut images, &mut pastes);
-        assert_eq!(out, format!("x {} y {} z", image_chip(1), image_chip(2)));
+        assert_eq!(
+            out,
+            format!(
+                "x {} y {} z",
+                image_chip(1, base64_byte_size("a")),
+                image_chip(2, base64_byte_size("c")),
+            )
+        );
         assert_eq!(images.len(), 2);
         // The first surviving chip pulls pending_images[0] = "a", the
         // second pulls pending_images[2] = "c".
@@ -483,10 +675,37 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_resizes_badges_from_surviving_payloads() {
+        // A relabeled chip must re-report the payload it actually carries,
+        // not whatever badge the hand-edited input happened to show. Here
+        // both chips claim 9999 bytes but the surviving payloads are tiny,
+        // so reconcile rewrites the badges to the real counts.
+        let mut images = vec![ImagePart {
+            mime: "image/png".to_string(),
+            data: "YQ==".to_string(), // base64 of the single byte "a"
+        }];
+        let mut pastes = vec!["hello".to_string()];
+        let input = format!("{} {}", image_chip(1, 9999), paste_chip(1, 2, 9999));
+        let out = reconcile(&input, &mut images, &mut pastes);
+        assert_eq!(
+            out,
+            format!(
+                "{} {}",
+                image_chip(1, base64_byte_size(&images[0].data)),
+                paste_chip(1, 2, pastes[0].len()),
+            )
+        );
+    }
+
+    #[test]
     fn reconcile_preserves_paste_line_counts() {
         let mut images = Vec::<ImagePart>::new();
         let mut pastes = vec!["first\npaste".to_string(), "second\npaste".to_string()];
-        let input = format!("{} {}", paste_chip(1, 2), paste_chip(2, 2));
+        let input = format!(
+            "{} {}",
+            paste_chip(1, 2, pastes[0].len()),
+            paste_chip(2, 2, pastes[1].len()),
+        );
         let out = reconcile(&input, &mut images, &mut pastes);
         assert_eq!(out, input);
         assert_eq!(pastes.len(), 2);
@@ -509,7 +728,11 @@ mod tests {
     #[test]
     fn expand_paste_chips_inlines_text_in_order() {
         let pastes = vec!["AAA".to_string(), "BBB".to_string()];
-        let input = format!("pre {} mid {} post", paste_chip(1, 1), paste_chip(2, 1));
+        let input = format!(
+            "pre {} mid {} post",
+            paste_chip(1, 1, pastes[0].len()),
+            paste_chip(2, 1, pastes[1].len()),
+        );
         let out = expand_paste_chips(&input, &pastes);
         assert_eq!(out, "pre AAA mid BBB post");
     }
@@ -519,9 +742,17 @@ mod tests {
         // Image chips are positional labels for the model, not paste
         // payloads — they must survive expansion unchanged.
         let pastes = vec!["AAA".to_string()];
-        let input = format!("{} {} {}", image_chip(1), paste_chip(1, 1), image_chip(2));
+        let input = format!(
+            "{} {} {}",
+            image_chip(1, 2048),
+            paste_chip(1, 1, pastes[0].len()),
+            image_chip(2, 1024),
+        );
         let out = expand_paste_chips(&input, &pastes);
-        assert_eq!(out, format!("{} AAA {}", image_chip(1), image_chip(2)));
+        assert_eq!(
+            out,
+            format!("{} AAA {}", image_chip(1, 2048), image_chip(2, 1024))
+        );
     }
 
     #[test]
@@ -529,5 +760,63 @@ mod tests {
         let pastes: Vec<String> = Vec::new();
         let out = expand_paste_chips("plain text only", &pastes);
         assert_eq!(out, "plain text only");
+    }
+
+    #[test]
+    fn expand_paste_chips_drops_orphaned_paste_chips() {
+        // A paste chip with no staged payload (e.g. recalled from a history
+        // entry recorded before attachment staging) must not ship to the
+        // model as a literal placeholder. The chip and its surrounding paste
+        // spaces are collapsed so the remaining words stay single-spaced.
+        let pastes: Vec<String> = Vec::new();
+        let input = format!(
+            "pre {} mid {}",
+            paste_chip(1, 5, 5120),
+            paste_chip(2, 3, 2048)
+        );
+        let out = expand_paste_chips(&input, &pastes);
+        assert_eq!(out, "pre mid");
+
+        // A backed chip inlines while a later orphan drops.
+        let pastes = vec!["AAA".to_string()];
+        let input = format!("x {} y {}", paste_chip(1, 1, 3), paste_chip(2, 1, 9999));
+        assert_eq!(expand_paste_chips(&input, &pastes), "x AAA y");
+    }
+
+    #[test]
+    fn strip_orphan_image_chips_keeps_backed_chips() {
+        // With the payload staged (the normal submit path), every chip whose
+        // `#N` is within `images` survives as a positional label.
+        let input = format!(
+            "look at {} and {}",
+            image_chip(1, 2048),
+            image_chip(2, 1024)
+        );
+        let out = strip_orphan_image_chips(&input, 2);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn strip_orphan_image_chips_drops_unbacked_chips() {
+        // No payload staged (recalled from history recorded before
+        // attachment staging, or hand-typed): every image chip is orphaned
+        // and dropped, together with one following space.
+        let input = format!("look at {} here", image_chip(1, 2048));
+        assert_eq!(strip_orphan_image_chips(&input, 0), "look at here");
+
+        // A mid-list orphan drops while its backed siblings survive.
+        let input = format!("x {} y {} z", image_chip(1, 2048), image_chip(2, 1024));
+        assert_eq!(
+            strip_orphan_image_chips(&input, 1),
+            format!("x {} y z", image_chip(1, 2048))
+        );
+    }
+
+    #[test]
+    fn strip_orphan_image_chips_passthrough_without_chips() {
+        assert_eq!(
+            strip_orphan_image_chips("plain text only", 0),
+            "plain text only"
+        );
     }
 }

@@ -14,7 +14,6 @@ pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
     Model {
         id: "grok-4.5",
@@ -28,8 +27,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
     },
-
-
     Model {
         id: "grok-4.20",
         name: "Grok 4.20",
@@ -42,8 +39,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
     },
-
-
     Model {
         id: "grok-4.3",
         name: "Grok 4.3",
@@ -56,8 +51,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
     },
-
-
     Model {
         id: "grok-build-0.1",
         name: "Grok Build 0.1",

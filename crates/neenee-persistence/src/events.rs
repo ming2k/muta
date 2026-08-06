@@ -72,6 +72,12 @@ pub enum SessionEvent {
     ScheduledJobsSet {
         jobs: Vec<neenee_core::ScheduledJob>,
     },
+    /// The durable command ledger changed (ADR-0091). Snapshot semantics: the
+    /// full list is stored on every change so resume restores every command
+    /// invocation and its typed result.
+    CommandsReplaced {
+        commands: Vec<neenee_core::CommandRecord>,
+    },
     /// The session title changed (ADR-0022). `title = None` clears it. `manual`
     /// marks a user-set title (`/title <text>`) that AI generation must not
     /// overwrite; automatic and on-demand generation always set `manual = false`.

@@ -277,6 +277,12 @@ pub struct EnvoyMeta {
     /// explicitly so consumers do not have to string-sniff.
     #[serde(default)]
     pub failed: bool,
+    /// Whether the envoy was stopped by the parent (the turn was interrupted)
+    /// before completing. The partial transcript in [`Message::children`] is
+    /// preserved either way; this flag lets the TUI classify the restored
+    /// step as `Interrupted` rather than `Failed` or `Ok`.
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 /// An inline image attached to a message.

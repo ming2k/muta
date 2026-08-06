@@ -60,7 +60,9 @@ pub async fn request_device_code(
         .json(&serde_json::json!({ "client_id": cfg.client_id }))
         .send()
         .await
-        .map_err(|e| crate::oauth::AuthError::Transport(format!("device code request failed: {e}")))?;
+        .map_err(|e| {
+            crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
+        })?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -69,8 +71,9 @@ pub async fn request_device_code(
             body: text,
         });
     }
-    let json: ChatGptDeviceCode = serde_json::from_str(&text)
-        .map_err(|e| crate::oauth::AuthError::Decode(format!("device code response parse failed: {e}")))?;
+    let json: ChatGptDeviceCode = serde_json::from_str(&text).map_err(|e| {
+        crate::oauth::AuthError::Decode(format!("device code response parse failed: {e}"))
+    })?;
     if json.device_auth_id.is_empty() || json.user_code.is_empty() {
         return Err(crate::oauth::AuthError::Decode(
             "device code response missing device_auth_id / user_code".to_string(),
@@ -121,7 +124,9 @@ where
             }))
             .send()
             .await
-            .map_err(|e| crate::oauth::AuthError::Transport(format!("device token poll failed: {e}")))?;
+            .map_err(|e| {
+                crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
+            })?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if status.is_success() {

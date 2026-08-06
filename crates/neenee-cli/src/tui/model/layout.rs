@@ -10,6 +10,9 @@ use unicode_width::UnicodeWidthStr;
 pub const TOOL_STEP_BLOCK_IDX: usize = usize::MAX;
 pub const THINKING_BLOCK_IDX: usize = usize::MAX - 1;
 pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
+/// ADR-0091 command-result header rows: same disclosure interaction as tool
+/// steps, own block index so focus/click resolution routes to the command.
+pub const COMMAND_RESULT_BLOCK_IDX: usize = usize::MAX - 3;
 
 /// Identifies a specific position inside the document model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,6 +51,7 @@ pub enum InteractiveTargetKind {
     ToolStep,
     Thinking,
     ProviderRetry,
+    CommandResult,
 }
 
 impl InteractiveTarget {
@@ -72,6 +76,14 @@ impl InteractiveTarget {
             message_idx,
             block_idx: PROVIDER_RETRY_BLOCK_IDX,
             kind: InteractiveTargetKind::ProviderRetry,
+        }
+    }
+
+    pub fn command_result(message_idx: usize) -> Self {
+        Self {
+            message_idx,
+            block_idx: COMMAND_RESULT_BLOCK_IDX,
+            kind: InteractiveTargetKind::CommandResult,
         }
     }
 }
@@ -349,7 +361,10 @@ impl LayoutMap {
             .filter(|region| {
                 matches!(
                     region.block_idx,
-                    TOOL_STEP_BLOCK_IDX | THINKING_BLOCK_IDX | PROVIDER_RETRY_BLOCK_IDX
+                    TOOL_STEP_BLOCK_IDX
+                        | THINKING_BLOCK_IDX
+                        | PROVIDER_RETRY_BLOCK_IDX
+                        | COMMAND_RESULT_BLOCK_IDX
                 )
             })
             .collect();
@@ -361,6 +376,7 @@ impl LayoutMap {
                 TOOL_STEP_BLOCK_IDX => InteractiveTarget::tool_step(region.message_idx),
                 THINKING_BLOCK_IDX => InteractiveTarget::thinking(region.message_idx),
                 PROVIDER_RETRY_BLOCK_IDX => InteractiveTarget::provider_retry(region.message_idx),
+                COMMAND_RESULT_BLOCK_IDX => InteractiveTarget::command_result(region.message_idx),
                 _ => continue,
             };
             if !targets.contains(&target) {

@@ -4,9 +4,10 @@
 
 use neenee_tui_engine::text::{cursor_column, str_len};
 use neenee_tui_engine::{
-    Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
+    Color, Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
 };
 
+use crate::tui::composer_attachments::{ChipKind, iter_chips};
 use crate::tui::model::layout::{BlockRegion, LayoutMap};
 use crate::tui::model::selection::SelectionState;
 
@@ -167,6 +168,13 @@ pub fn cursor_screen_pos(
 /// navigated into the transcript with Ctrl+↑/↓ — the dimmer "read-only"
 /// palette signals that the next keypress targets the step, not the input box.
 ///
+/// `image_count` / `paste_count` are the numbers of attachments actually
+/// staged behind the input's chips (`pending_images.len()` /
+/// `pending_text_pastes.len()`). Only a chip whose `#N` has a real payload
+/// (`N <= count`) is painted as a colored pill; an orphan label — typed by
+/// hand, or left over after the paste was undone — renders as ordinary text
+/// so it never reads as an attachment that isn't there.
+///
 /// The elevated autopilot state is no longer signalled here; it lives on the
 /// state bar directly below the input, separate from composer state.
 #[allow(clippy::too_many_arguments)]
@@ -182,6 +190,8 @@ pub fn draw_composer(
     record: bool,
     input_scroll: &mut usize,
     selection: &SelectionState,
+    image_count: usize,
+    paste_count: usize,
 ) {
     draw_composer_impl(
         frame,
@@ -196,6 +206,8 @@ pub fn draw_composer(
         input_scroll,
         selection,
         None,
+        image_count,
+        paste_count,
     )
 }
 
@@ -219,6 +231,8 @@ pub fn draw_composer_highlighted(
     input_scroll: &mut usize,
     selection: &SelectionState,
     highlight_len: usize,
+    image_count: usize,
+    paste_count: usize,
 ) {
     draw_composer_impl(
         frame,
@@ -233,6 +247,8 @@ pub fn draw_composer_highlighted(
         input_scroll,
         selection,
         Some(highlight_len),
+        image_count,
+        paste_count,
     )
 }
 
@@ -250,6 +266,8 @@ fn draw_composer_impl(
     input_scroll: &mut usize,
     selection: &SelectionState,
     highlight_len: Option<usize>,
+    image_count: usize,
+    paste_count: usize,
 ) {
     // The input box is a flat panel: each text row carries panel_bg and is
     // prefixed with `› ` on the first wrapped line / a two-space indent on
@@ -340,6 +358,23 @@ fn draw_composer_impl(
             .bg(panel_bg)
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD);
+        // Attachment chips (`[Image #N · size]` / `[Pasted text #N +M lines
+        // · size]`) render as tinted "pills" so a pasted block reads as a
+        // distinct object inside the live input instead of ordinary prose.
+        // Paste chips take the calm blue, image chips the warm amber; each is
+        // a bold colored label on a tinted band derived from the current
+        // panel, so the identifier is both informative and identifiable.
+        let chips = iter_chips(input);
+        let chip_paste_fg = theme.chip_paste_fg();
+        let chip_image_fg = theme.chip_image_fg();
+        let chip_paste_style = Style::default()
+            .bg(theme.chip_paste_bg(panel_bg))
+            .fg(chip_paste_fg)
+            .add_modifier(Modifier::BOLD);
+        let chip_image_style = Style::default()
+            .bg(theme.chip_image_bg(panel_bg))
+            .fg(chip_image_fg)
+            .add_modifier(Modifier::BOLD);
         for (i, wl) in wrapped[start..end].iter().enumerate() {
             let used = COMPOSER_PROMPT_PREFIX_COLS + str_len(&wl.text);
             let mut spans = if start + i == 0 {
@@ -354,47 +389,43 @@ fn draw_composer_impl(
             let hl_end = highlight_len
                 .filter(|_| start + i == 0)
                 .map(|len| len.min(wl.text.len()));
-            match (selected, hl_end) {
-                (None, hl) => push_accented(&mut spans, &wl.text, hl, base_text, accent_text),
-                (Some((lo, hi)), None) => {
-                    if lo > 0 {
-                        spans.push(Span::styled(wl.text[..lo].to_string(), base_text));
-                    }
-                    spans.push(Span::styled(
-                        wl.text[lo..hi].to_string(),
-                        base_text.bg(selected_bg),
-                    ));
-                    if hi < wl.text.len() {
-                        spans.push(Span::styled(wl.text[hi..].to_string(), base_text));
-                    }
+            // Clamp each chip to this wrapped row, but only when the chip has
+            // a payload really staged behind it (`N <= count` for its kind).
+            // A chip split across a wrap boundary paints both fragments with
+            // the same pill, so a pasted block stays visually contiguous as
+            // it wraps. An orphan label — typed by hand, or left over after
+            // the paste was undone — has no backing payload and renders as
+            // plain text, so the colored pill never lies about an attachment
+            // that isn't there.
+            let mut chip_ranges: Vec<(usize, usize, ChipKind)> = Vec::new();
+            for chip in &chips {
+                let backed = match chip.kind {
+                    ChipKind::Image => chip.number <= image_count,
+                    ChipKind::Paste => chip.number <= paste_count,
+                };
+                if !backed || chip.end_byte <= wl.start_byte || chip.start_byte >= wl.end_byte {
+                    continue;
                 }
-                // Selection wins over the command accent inside its range so
-                // the highlighted slice stays uniformly selected.
-                (Some((lo, hi)), Some(end)) => {
-                    if lo > 0 {
-                        push_accented(
-                            &mut spans,
-                            &wl.text[..lo],
-                            Some(end.min(lo)),
-                            base_text,
-                            accent_text,
-                        );
-                    }
-                    spans.push(Span::styled(
-                        wl.text[lo..hi].to_string(),
-                        base_text.bg(selected_bg),
-                    ));
-                    if hi < wl.text.len() {
-                        push_accented(
-                            &mut spans,
-                            &wl.text[hi..],
-                            Some(end.saturating_sub(hi)).filter(|e| *e > 0),
-                            base_text,
-                            accent_text,
-                        );
-                    }
+                let lo = chip.start_byte.saturating_sub(wl.start_byte);
+                let hi = (chip.end_byte - wl.start_byte).min(wl.text.len());
+                if lo < hi {
+                    chip_ranges.push((lo, hi, chip.kind));
                 }
             }
+            push_styled_runs(
+                &mut spans,
+                &wl.text,
+                hl_end,
+                &chip_ranges,
+                selected,
+                base_text,
+                accent_text,
+                chip_paste_style,
+                chip_image_style,
+                selected_bg,
+                chip_paste_fg,
+                chip_image_fg,
+            );
             spans.push(Span::styled(
                 padded_tail(full_w, used),
                 Style::default().bg(panel_bg),
@@ -441,25 +472,89 @@ fn draw_composer_impl(
     }
 }
 
-/// Push `text` onto `spans`, styling the first `accent_len` bytes with
-/// `accent` and the remainder with `base`. `None` (or a zero length) renders
-/// the whole slice in `base`. The length is expected to land on a char
-/// boundary — the composer clamps it against wrapped-line text, which always
-/// breaks on grapheme boundaries.
-fn push_accented(
+/// Push `text` onto `spans`, splitting it at every style boundary so each
+/// emitted run is uniform. Boundaries come from the optional leading
+/// `/command` accent (`accent_len` bytes, relative to `text`), the selection
+/// range (`selected`, relative to `text`), and the attachment-chip ranges
+/// (`chip_ranges`, `(lo, hi, kind)` relative to `text`). Precedence:
+///
+/// 1. **Selection** wins on background — the highlighted slice stays a
+///    uniform `selected_bg` — but a chip keeps its identity color, so the
+///    user can still see which pasted block is selected.
+/// 2. **Chip pills** paint their tinted band + bold label (`chip_paste` /
+///    `chip_image`), so paste chips and image chips read as distinct blocks.
+/// 3. The **command accent** (bold + brand color).
+/// 4. Plain base text.
+#[allow(clippy::too_many_arguments)]
+fn push_styled_runs(
     spans: &mut Vec<Span<'static>>,
     text: &str,
     accent_len: Option<usize>,
+    chip_ranges: &[(usize, usize, ChipKind)],
+    selected: Option<(usize, usize)>,
     base: Style,
     accent: Style,
+    chip_paste: Style,
+    chip_image: Style,
+    selected_bg: Color,
+    chip_paste_fg: Color,
+    chip_image_fg: Color,
 ) {
-    match accent_len.filter(|len| *len > 0 && *len <= text.len()) {
-        None => spans.push(Span::styled(text.to_string(), base)),
-        Some(len) => {
-            spans.push(Span::styled(text[..len].to_string(), accent));
-            if len < text.len() {
-                spans.push(Span::styled(text[len..].to_string(), base));
-            }
+    if text.is_empty() {
+        return;
+    }
+    // Every byte offset where the run style can change: the text edges, the
+    // accent boundary, the selection edges, and each chip's edges.
+    let mut points: Vec<usize> = Vec::with_capacity(6 + chip_ranges.len() * 2);
+    points.push(0);
+    points.push(text.len());
+    if let Some(len) = accent_len {
+        points.push(len);
+    }
+    if let Some((lo, hi)) = selected {
+        points.push(lo);
+        points.push(hi);
+    }
+    for &(lo, hi, _) in chip_ranges {
+        points.push(lo);
+        points.push(hi);
+    }
+    points.sort_unstable();
+    points.dedup();
+
+    let is_selected = |p: usize| matches!(selected, Some((lo, hi)) if p >= lo && p < hi);
+    let chip_of = |p: usize| {
+        chip_ranges
+            .iter()
+            .find(|&&(lo, hi, _)| p >= lo && p < hi)
+            .map(|&(_, _, kind)| kind)
+    };
+    let in_accent = |p: usize| accent_len.map(|len| p < len).unwrap_or(false);
+
+    let mut i = 0;
+    while i + 1 < points.len() {
+        let lo = points[i];
+        let hi = points[i + 1];
+        i += 1;
+        if lo >= hi {
+            continue;
         }
+        let style = if is_selected(lo) {
+            match chip_of(lo) {
+                Some(ChipKind::Paste) => Style::default().fg(chip_paste_fg).bg(selected_bg),
+                Some(ChipKind::Image) => Style::default().fg(chip_image_fg).bg(selected_bg),
+                None => base.bg(selected_bg),
+            }
+        } else if let Some(kind) = chip_of(lo) {
+            match kind {
+                ChipKind::Paste => chip_paste,
+                ChipKind::Image => chip_image,
+            }
+        } else if in_accent(lo) {
+            accent
+        } else {
+            base
+        };
+        spans.push(Span::styled(text[lo..hi].to_string(), style));
     }
 }

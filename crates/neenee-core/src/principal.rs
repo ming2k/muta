@@ -251,19 +251,17 @@ impl PrincipalProfile {
                     "a meticulous code reviewer — reports findings and proposed \
                      diffs without applying changes",
                 );
-                Self::with_identity("reviewer", identity).with_selection(
-                    ToolSelection::only([
-                        "read_text",
-                        "grep",
-                        "glob",
-                        "list_dir",
-                        "read_image",
-                        "webfetch",
-                        "websearch",
-                        "todo",
-                        "ask_user",
-                    ]),
-                )
+                Self::with_identity("reviewer", identity).with_selection(ToolSelection::only([
+                    "read_text",
+                    "grep",
+                    "glob",
+                    "list_dir",
+                    "read_image",
+                    "webfetch",
+                    "websearch",
+                    "todo",
+                    "ask_user",
+                ]))
             }
             PrincipalRole::Security => {
                 // Read-only, plus a confined command allowlist for audit-style
@@ -355,8 +353,14 @@ mod tests {
         }
         // Aliases.
         assert_eq!(PrincipalRole::parse("Coder"), Some(PrincipalRole::Code));
-        assert_eq!(PrincipalRole::parse("REVIEW"), Some(PrincipalRole::Reviewer));
-        assert_eq!(PrincipalRole::parse("auditor"), Some(PrincipalRole::Security));
+        assert_eq!(
+            PrincipalRole::parse("REVIEW"),
+            Some(PrincipalRole::Reviewer)
+        );
+        assert_eq!(
+            PrincipalRole::parse("auditor"),
+            Some(PrincipalRole::Security)
+        );
         // Unknown.
         assert!(PrincipalRole::parse("wizard").is_none());
     }

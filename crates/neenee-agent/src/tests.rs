@@ -446,7 +446,10 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     let agent = agent();
     // The `agent()` helper ships an empty identity; give it one so the
     // preamble section is active and exercises the full layout.
-    agent.set_identity(crate::AgentIdentity::new("neenee", "an expert AI coding assistant"));
+    agent.set_identity(crate::AgentIdentity::new(
+        "neenee",
+        "an expert AI coding assistant",
+    ));
 
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
@@ -1106,7 +1109,15 @@ async fn write_tool_waits_for_permission_and_always_is_cached() {
     assert_eq!(request.description, "test write tool");
     assert!(!task.is_finished());
     assert!(agent.reply_permission(&request.id, PermissionDecision::Always));
-    assert_eq!(task.await.unwrap().unwrap().to_text(), "should not run");
+    assert_eq!(
+        task.await
+            .unwrap()
+            .unwrap()
+            .result
+            .expect("non-interrupted outcome carries a result")
+            .to_text(),
+        "should not run"
+    );
     assert_eq!(
         agent.allowed_tools(),
         vec!["write_test /tmp/test".to_string()]
@@ -1120,7 +1131,9 @@ async fn write_tool_waits_for_permission_and_always_is_cached() {
             }
         })
         .await
-        .unwrap();
+        .unwrap()
+        .result
+        .expect("non-interrupted outcome carries a result");
     assert_eq!(output.to_text(), "should not run");
     assert!(!prompted_again);
 }
@@ -1156,9 +1169,131 @@ async fn rejected_permission_does_not_execute_tool() {
         task.await
             .unwrap()
             .unwrap()
+            .result
+            .expect("non-interrupted outcome carries a result")
             .to_text()
             .contains("Permission denied")
     );
+}
+
+/// A read-only tool for the envoy child in the drain test.
+struct EnvoyReadTool;
+
+#[async_trait]
+impl Tool for EnvoyReadTool {
+    fn name(&self) -> &str {
+        "read_text"
+    }
+    fn description(&self) -> &str {
+        "test read tool"
+    }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    async fn call(&self, _arguments: &str) -> Result<String, String> {
+        Ok("file contents".to_string())
+    }
+}
+
+/// A provider whose first request returns a `read_text` tool call and whose
+/// second request flips the gate and then stalls forever — so the envoy is
+/// parked mid-flight and can only stop when its cancellation token fires.
+struct GatedEnvoyProvider {
+    requests: AtomicUsize,
+    gate: tokio::sync::watch::Sender<bool>,
+}
+
+#[async_trait]
+impl Provider for GatedEnvoyProvider {
+    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        Ok(Message::new(Role::Assistant, "gated"))
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_core::ModelRequest,
+    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(stream::empty()))
+    }
+    async fn stream_chat_events(
+        &self,
+        _request: neenee_core::ModelRequest,
+    ) -> Result<BoxStream<'static, Result<neenee_core::ProviderStreamEvent, String>>, String> {
+        if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                neenee_core::ProviderStreamEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some("inner_1".to_string()),
+                    name: Some("read_text".to_string()),
+                    arguments: "{}".to_string(),
+                },
+            )])))
+        } else {
+            let _ = self.gate.send(true);
+            Ok(Box::pin(stream::pending()))
+        }
+    }
+}
+
+/// The executor's cooperative drain: when the user cancels a turn while an
+/// envoy is in flight, `execute_tool_evented` signals the envoy, waits for it
+/// to return its partial transcript, and reports the recovered result with
+/// `interrupted: true` — instead of dropping the future and losing the work.
+#[tokio::test]
+async fn execute_tool_evented_drains_interrupted_envoy() {
+    let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
+    let envoy: Arc<crate::EnvoyTool> = Arc::new(crate::EnvoyTool::new(
+        Arc::new(GatedEnvoyProvider {
+            requests: AtomicUsize::new(0),
+            gate: gate_tx,
+        }),
+        neenee_core::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
+        &neenee_core::EXPLORE,
+    ));
+    let agent = Arc::new(Agent::new(
+        Arc::new(TestProvider),
+        vec![envoy.clone() as Arc<dyn Tool>],
+        crate::AgentIdentity::default(),
+    ));
+
+    let cancel = CancellationToken::new();
+    let call = ToolCall {
+        id: "call_envoy".to_string(),
+        name: "envoy".to_string(),
+        arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
+    };
+    let agent_for_run = agent.clone();
+    let cancel_for_run = cancel.clone();
+    let task = tokio::spawn(async move {
+        agent_for_run
+            .execute_tool_evented(&call, "call_envoy", &cancel_for_run, &mut |_event| {})
+            .await
+    });
+
+    // Wait until the envoy is genuinely mid-flight, then interrupt the turn.
+    let mut gate_rx = gate_rx;
+    gate_rx.changed().await.expect("envoy reached second request");
+    cancel.cancel();
+
+    let outcome = task.await.expect("executor task").expect("no harness error");
+    assert!(outcome.interrupted, "interruption must be reported");
+    let result = outcome.result.expect("drained result must be recovered");
+    match result {
+        ToolOutput::Envoy {
+            interrupted,
+            failed,
+            messages,
+            ..
+        } => {
+            assert!(interrupted, "recovered envoy must be flagged interrupted");
+            assert!(!failed, "interruption is not a failure");
+            assert_eq!(
+                messages.iter().filter(|m| m.role == Role::Tool).count(),
+                1,
+                "the child's completed tool call must survive the drain"
+            );
+        }
+        other => panic!("expected a drained Envoy output, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1235,6 +1370,8 @@ async fn schema_violating_call_never_reaches_the_tool() {
             )
             .await
             .expect("dispatch should not fail")
+            .result
+            .expect("non-interrupted outcome carries a result")
     }
 
     let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));

@@ -411,10 +411,7 @@ pub(crate) const BREADCRUMB_SEP: &str = " › ";
 ///
 /// Pass the returned slice to `modal_header_parts`. All three segments borrow
 /// their input `&str`s (the separator is a `'static` const), so no allocation.
-pub(crate) fn breadcrumb_parts<'a>(
-    parent: &'a str,
-    child: &'a str,
-) -> [HeaderPart<'a>; 3] {
+pub(crate) fn breadcrumb_parts<'a>(parent: &'a str, child: &'a str) -> [HeaderPart<'a>; 3] {
     [
         HeaderPart::Text {
             text: parent,
@@ -560,8 +557,7 @@ pub(crate) fn render_body(
     theme: &Theme,
 ) {
     let visible = body_rect.height as usize;
-    let (_, max_scroll) =
-        resolve_scroll(scroll, visible, lines.len(), follow, edge_margin);
+    let (_, max_scroll) = resolve_scroll(scroll, visible, lines.len(), follow, edge_margin);
 
     let mut para = Paragraph::new(lines).scroll(*scroll as u16, 0);
     if wrap {
@@ -588,7 +584,13 @@ pub(crate) const SCROLL_EDGE_MARGIN: usize = 3;
 /// `scroll / max_scroll` ratio, plus `▲` / `▼` caps when more content lies
 /// above / below. The thumb uses `theme.muted()`; the caps use `theme.dim()`
 /// so the bar reads as a subtle affordance, not a focal element.
-pub(crate) fn draw_scrollbar(frame: &mut Frame, body: Rect, scroll: usize, max_scroll: usize, theme: &Theme) {
+pub(crate) fn draw_scrollbar(
+    frame: &mut Frame,
+    body: Rect,
+    scroll: usize,
+    max_scroll: usize,
+    theme: &Theme,
+) {
     if max_scroll == 0 || body.width == 0 || body.height < 2 {
         return;
     }
@@ -777,9 +779,10 @@ mod tests {
         ];
 
         // Full width: every label kept, no `?` chip (show_more = false).
+        // R2: peer affordances join with plain whitespace, not `·`.
         assert_eq!(
             modal_footer_text(&hints, 80),
-            "type filter · ↑↓ navigate · Enter activate · * favorite · Esc close"
+            "type filter  ↑↓ navigate  Enter activate  * favorite  Esc close"
         );
         // Narrow widths drop lower-priority items. Assert invariants rather
         // than brittle full strings (the ladder depends on the budget).
@@ -882,11 +885,17 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert!(matches!(
             parts[0],
-            HeaderPart::Text { text: "Sessions", accent: false }
+            HeaderPart::Text {
+                text: "Sessions",
+                accent: false
+            }
         ));
         assert!(matches!(
             parts[1],
-            HeaderPart::Text { text: " › ", accent: false }
+            HeaderPart::Text {
+                text: " › ",
+                accent: false
+            }
         ));
         assert!(matches!(parts[2], HeaderPart::Title("Info")));
     }

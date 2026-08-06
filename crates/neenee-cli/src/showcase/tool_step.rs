@@ -120,7 +120,7 @@ pub fn run() -> io::Result<()> {
             // Title bar: scenario index + label, so the active fixture is
             // obvious without reading the whole transcript.
             let title = format!(
-                " tool-step · [{}/{}] {} · Tab=next · Ctrl+T=toggle · q/Esc=quit",
+                " tool-step · [{}/{}] {}  Tab=next  Ctrl+T=toggle  q/Esc=quit",
                 s.scenario + 1,
                 SCENARIO_COUNT,
                 SCENARIO_LABELS[s.scenario]

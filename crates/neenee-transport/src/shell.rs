@@ -8,7 +8,7 @@ use neenee_agent::Agent;
 use neenee_agent::orchestration::{round_response, send_harness_state};
 use neenee_agent::tools::BashTool;
 use neenee_agent::{RoundBegin, RoundLifecycle};
-use neenee_core::{AgentResponse, LoopStatus, Message, RoundEvent, Tool, ToolOutput, ToolStream};
+use neenee_core::{AgentResponse, LoopStatus, RoundEvent, Tool, ToolOutput, ToolStream};
 use neenee_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,17 +31,22 @@ pub async fn run_shell_command(
     agent: Arc<Agent>,
     session: Arc<SessionStore>,
 ) {
-    // Record the shell invocation as a durable, non-driving echo so it
-    // survives resume/export/audit (ADR-0050). Persist the literal `!command`
-    // (matching the TUI's live display), never sent to the model. The tool
-    // result stays ephemeral — it surfaces live via the ToolResult event and
-    // mirroring it durably would duplicate the model-driven bash path.
+    // Record the shell invocation in the durable command ledger so it
+    // survives resume/export/audit (ADR-0091, revising ADR-0050's echo-in-
+    // message-stream mechanism). Persist the literal `!command` (matching the
+    // TUI's live display) as a `CommandRecord` under the `"shell"` name with
+    // `result: None` — the invocation is durable, the reply is not persisted.
+    // The tool result stays ephemeral: it surfaces live via the ToolResult
+    // event and mirroring it durably would duplicate the model-driven bash
+    // path (ADR-0050's boundary, retained).
     let echo_text = format!("!{}", command);
     if let Err(error) = session
-        .mutate_messages(|w| w.push(Message::command_echo(&echo_text)))
+        .mutate_commands(|records| {
+            records.push(neenee_core::CommandRecord::new("shell", echo_text.clone()));
+        })
         .await
     {
-        tracing::warn!(?error, command = %echo_text, "could not persist shell echo");
+        tracing::warn!(?error, command = %echo_text, "could not persist shell command record");
     }
     let call_id = format!("shell_{}", uuid::Uuid::new_v4());
     let arguments = serde_json::json!({ "command": command }).to_string();

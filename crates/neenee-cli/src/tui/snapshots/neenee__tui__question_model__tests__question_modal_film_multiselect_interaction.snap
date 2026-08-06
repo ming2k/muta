@@ -1,6 +1,6 @@
 ---
 source: crates/neenee-cli/src/tui/question_model.rs
-assertion_line: 1114
+assertion_line: 1171
 expression: film
 ---
 === open ===
@@ -24,7 +24,7 @@ expression: film
 
 
 
-           ↑↓ navigate · Enter submit · Esc cancel
+           ↑↓ navigate  Enter submit  Esc cancel
 
 === down → highlight 'b' ===
 
@@ -47,7 +47,7 @@ expression: film
 
 
 
-           ↑↓ navigate · Enter submit · Esc cancel
+           ↑↓ navigate  Enter submit  Esc cancel
 
 === space → toggle 'b' selected ===
 
@@ -70,7 +70,7 @@ expression: film
 
 
 
-           ↑↓ navigate · Enter submit · Esc cancel
+           ↑↓ navigate  Enter submit  Esc cancel
 
 === '1' → select 'a' ===
 
@@ -93,7 +93,7 @@ expression: film
 
 
 
-           ↑↓ navigate · Enter submit · Esc cancel
+           ↑↓ navigate  Enter submit  Esc cancel
 
 === '4' + 'custom' → focus 'Other', type ===
 
@@ -116,4 +116,4 @@ expression: film
 
 
 
-           ↑↓ navigate · Enter submit · Esc cancel
+           ↑↓ navigate  Enter submit  Esc cancel

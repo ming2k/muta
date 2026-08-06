@@ -544,7 +544,12 @@ mod tests {
     #[test]
     fn recursive_rm_denies_home_and_system_dirs() {
         let policy = BashPolicy::default();
-        for cmd in ["rm -rf ~", "rm -rf $HOME", "rm -rf /etc", "rm -rf /usr/local"] {
+        for cmd in [
+            "rm -rf ~",
+            "rm -rf $HOME",
+            "rm -rf /etc",
+            "rm -rf /usr/local",
+        ] {
             let decision = policy.evaluate(cmd).unwrap();
             assert_eq!(
                 decision.action,
@@ -559,12 +564,12 @@ mod tests {
         // Regression: a quoted "rm -rf" inside an unrelated command (e.g. an
         // `rg` pattern or a heredoc body) must not be treated as an `rm`.
         let policy = BashPolicy::default();
-        assert!(policy
-            .evaluate(r#"rg -n "rm -rf|recursive force remove" --glob '!target'"#)
-            .is_none());
-        assert!(policy
-            .evaluate("echo 'rm -rf /' >> notes.md")
-            .is_none());
+        assert!(
+            policy
+                .evaluate(r#"rg -n "rm -rf|recursive force remove" --glob '!target'"#)
+                .is_none()
+        );
+        assert!(policy.evaluate("echo 'rm -rf /' >> notes.md").is_none());
     }
 
     #[test]

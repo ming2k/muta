@@ -466,13 +466,19 @@ fn try_subset(
 /// Join hints in stable display order (`order`) for a given label mode into a
 /// segment list. Keys are tagged `FooterSeg::Key` so the renderer can apply the
 /// keycap style; separators and labels are `Text`.
+///
+/// Each hint is a same-rank peer affordance (R2), so hints are separated by
+/// plain whitespace — no `·` (which the join ladder reserves for the
+/// keycap → label modification inside each hint).
 fn join_hints(hints: &[&RankedHint], mode: FooterLabelMode) -> Vec<FooterSeg> {
     let mut ordered: Vec<&&RankedHint> = hints.iter().collect();
     ordered.sort_by_key(|r| r.order);
     let mut segs: Vec<FooterSeg> = Vec::new();
     for (idx, hint) in ordered.iter().enumerate() {
         if idx > 0 {
-            segs.push(FooterSeg::Text(" · ".to_string()));
+            segs.push(FooterSeg::Text(
+                " ".repeat(super::super::design::JOIN_ENUMERATE_COLS),
+            ));
         }
         segs.push(FooterSeg::Key(hint.key.to_string()));
         if let FooterLabelMode::Full = mode
@@ -489,7 +495,11 @@ fn append_more(base: &[FooterSeg], chip: &str) -> Vec<FooterSeg> {
     if out.is_empty() {
         out.push(FooterSeg::Text(chip.to_string()));
     } else {
-        out.push(FooterSeg::Text(format!(" · {chip}")));
+        // R2: `? help` is another peer affordance.
+        out.push(FooterSeg::Text(format!(
+            "{}{chip}",
+            " ".repeat(super::super::design::JOIN_ENUMERATE_COLS)
+        )));
     }
     out
 }
@@ -536,10 +546,13 @@ mod tests {
     fn full_width_keeps_every_label() {
         let hints = sample_hints();
         let text = modal_footer_text_with_more(&hints, &[], 80);
+        // R2: same-rank peer affordances are separated by plain whitespace
+        // (JOIN_ENUMERATE_COLS), not the `·` reserved for key→label joins.
         assert_eq!(
             text,
-            "type filter · ↑↓ navigate · Enter activate · * favorite · Esc close"
+            "type filter  ↑↓ navigate  Enter activate  * favorite  Esc close"
         );
+        assert!(!text.contains('·'));
         assert!(!text.contains('?'));
     }
 

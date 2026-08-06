@@ -13,7 +13,9 @@ struct ReadArgs {
     path: String,
     #[tool(desc = "1-based line to start reading from (default 1)")]
     offset: Option<i64>,
-    #[tool(desc = "Maximum number of lines to read (default: to EOF / until the byte budget is hit)")]
+    #[tool(
+        desc = "Maximum number of lines to read (default: to EOF / until the byte budget is hit)"
+    )]
     limit: Option<i64>,
 }
 

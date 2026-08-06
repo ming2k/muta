@@ -35,7 +35,6 @@ use crate::tui::{ActivityTab, Modal};
 
 use std::collections::{HashMap, VecDeque};
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedDispatchState {
     Waiting,
@@ -61,6 +60,23 @@ pub struct QueuedDispatch {
     /// Large pasted text blocks staged behind `[Pasted text #N +M lines]`
     /// chips inside `text`. Empty for plain-text drafts. Order matches the
     /// chip numbering, so the Nth chip expands to `pending_text_pastes[N-1]`.
+    pub text_pastes: Vec<String>,
+}
+
+/// The attachments staged behind a recorded history entry, retained **in
+/// memory** so ↑/↓ and Ctrl+R recall can restore a just-sent / interrupted
+/// message's images and large pastes. Keyed by the same `(text, session_id)`
+/// identity [`neenee_core::merge_history`] uses, so a recall finds the
+/// payloads that shipped with the exact prompt text.
+///
+/// Deliberately **not** persisted: `history.json` is rebuildable cosmetic
+/// telemetry (ADR-0018), and base64 image blobs would balloon the file and
+/// duplicate conversation data. The cache lives for the process lifetime
+/// (capped, newest-first) and is re-seeded on every send, which is exactly
+/// the window the interrupt → ↑/↓ → resend flow needs.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryAttachments {
+    pub images: Vec<ImagePart>,
     pub text_pastes: Vec<String>,
 }
 
@@ -459,12 +475,59 @@ pub struct App {
     pub permission_scroll: usize,
     pub permission_max_scroll: usize,
     pub input_history: Vec<neenee_core::HistoryEntry>,
+    /// Whether identical prompt text collapses to one history entry across
+    /// sessions (`[input_history] dedup`, default `true`). Read by
+    /// [`Self::record_input_history`] and threaded into the persisted merge.
+    pub input_history_dedup: bool,
+    /// Whether `/slash` command invocations are recorded into the input
+    /// history (`[input_history] record_commands`, default `false`).
+    pub input_history_record_commands: bool,
+    /// When true, the Ctrl+R history modal is awaiting an explicit clear
+    /// confirmation (`y` confirms, any other key / Esc cancels). Armed by the
+    /// `Ctrl+X` clear shortcut so a stray keystroke can never wipe history.
+    pub history_clear_confirm: bool,
+    /// The inline ↑/↓ history **pointer**. Together with [`Self::history_draft`]
+    /// this forms the input-history pointer model:
+    ///
+    /// - `None` — the composer shows the **draft** (the live, editable, remembered
+    ///   input slot). This is the "newest" position: the input that has **not
+    ///   been successfully sent** (still being composed, restored by a Phase-1
+    ///   unsend, inserted from Ctrl+R, or recalled from the queue).
+    /// - `Some(p)` — the composer shows history row `p` of the current session's
+    ///   newest-first slice ([`Self::current_session_history`]), as a **read-only
+    ///   snapshot**: edits made on a history row are temporary and are discarded
+    ///   when the pointer moves away — coming back to the row reloads the
+    ///   original text.
+    ///
+    /// ↑ moves the pointer toward older rows (and stashes the draft into
+    /// [`Self::history_draft`] on the first press); ↓ moves it back toward the
+    /// newest row and, past it, back to `None` (restoring the draft). A
+    /// successful send clears the draft, because the input has been historicised
+    /// and is no longer "unsent".
     pub history_index: Option<usize>,
-    /// The in-progress draft the user was composing when they first pressed
-    /// ↑ to walk history. Restored when they press ↓ past the newest history
-    /// entry, so a stray ↑ no longer loses what they were typing. Cleared on
-    /// send. Distinct from `stashed_input`, which is borrowed by modal flows.
+    /// The live, editable, remembered input slot — the content of the **draft**
+    /// mode (when [`Self::history_index`] is `None`). It is stashed here when ↑
+    /// leaves the draft for a history row, and restored when ↓ walks back past
+    /// the newest row, so an accidental ↑/↓ never loses what the user was
+    /// composing. It is **cleared on send** (the input has been historicised)
+    /// and replaced whenever a new input is adopted as the draft (Phase-1
+    /// unsend restore, Ctrl+R insert, queue recall). Distinct from
+    /// `stashed_input`, which is borrowed by modal flows.
     pub history_draft: String,
+    /// Attachments staged behind [`Self::history_draft`] (the images and
+    /// large pastes that were in the composer when the first ↑ stashed it),
+    /// so ↓ past the newest entry restores them together with the text.
+    pub history_draft_images: Vec<ImagePart>,
+    pub history_draft_text_pastes: Vec<String>,
+    /// In-memory attachment cache for recorded history entries, keyed by
+    /// `(text, session_id)` — see [`HistoryAttachments`]. Seeded by
+    /// [`Self::record_input_history`], consumed by the ↑/↓ and Ctrl+R recall
+    /// paths so re-sending an interrupted or completed message restores its
+    /// images and large pastes instead of shipping a bare chip label.
+    pub history_attachments: HashMap<(String, Option<String>), HistoryAttachments>,
+    /// FIFO insertion order of [`Self::history_attachments`] keys, so the
+    /// cache can be pruned oldest-first when it outgrows its cap.
+    pub history_attachments_order: VecDeque<(String, Option<String>)>,
     /// Images pasted (Ctrl+V) and waiting to be sent with the next message.
     /// Each entry is paired 1-to-1 with an `[Image #N]` chip inside
     /// [`App::input`]; the chip's `#N` is `index + 1` after
@@ -841,44 +904,41 @@ impl App {
     /// per-modal behaviour. Returns `None` for modals that don't scroll their
     /// own body (the inline permission sheet drives `permission_scroll` via a
     /// separate action, and the caret-owning text editors have no body scroll).
-    pub(crate) fn modal_scroll_field(
-        &mut self,
-    ) -> Option<(&mut usize, Option<&mut bool>)> {
+    pub(crate) fn modal_scroll_field(&mut self) -> Option<(&mut usize, Option<&mut bool>)> {
         let modal = self.active_modal;
         match modal {
             Modal::Help => Some((&mut self.help_scroll, None)),
             Modal::Activity => Some((&mut self.activity_scroll, None)),
             Modal::Permissions => Some((&mut self.permissions_scroll, None)),
-            Modal::Config
-            | Modal::ConfigTheme
-            | Modal::ConfigThemeCustom
-            | Modal::ConfigLayout => Some((&mut self.config_scroll, None)),
+            Modal::Config | Modal::ConfigTheme | Modal::ConfigThemeCustom | Modal::ConfigLayout => {
+                Some((&mut self.config_scroll, None))
+            }
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
             Modal::ProviderTemplate => Some((&mut self.template_scroll, None)),
             Modal::CustomProvider => Some((&mut self.custom_scroll, None)),
             // List-style modals: clear the follow flag so manual scroll wins.
-            Modal::Tools | Modal::Mcp | Modal::Skills | Modal::Sessions => {
-                Some((&mut self.session_scroll, Some(&mut self.session_modal_follow)))
-            }
+            Modal::Tools | Modal::Mcp | Modal::Skills | Modal::Sessions => Some((
+                &mut self.session_scroll,
+                Some(&mut self.session_modal_follow),
+            )),
             Modal::Queue => Some((&mut self.queue_scroll, Some(&mut self.queue_modal_follow))),
-            Modal::HistorySearch => {
-                Some((&mut self.history_scroll, Some(&mut self.history_modal_follow)))
-            }
+            Modal::HistorySearch => Some((
+                &mut self.history_scroll,
+                Some(&mut self.history_modal_follow),
+            )),
             Modal::Connections | Modal::Models => {
                 Some((&mut self.model_scroll, Some(&mut self.model_modal_follow)))
             }
-            Modal::Question => {
-                Some((&mut self.question_scroll, Some(&mut self.question_modal_follow)))
-            }
+            Modal::Question => Some((
+                &mut self.question_scroll,
+                Some(&mut self.question_modal_follow),
+            )),
             // Permission drives its own body via PermissionDetailsUp/Down (and
             // the transcript behind it scrolls when no step is focused); the
             // caret-owning text editors have no body scroll. None => the
             // Scroll* action falls through to the transcript fallback.
-            Modal::None
-            | Modal::Permission
-            | Modal::ModelEditor
-            | Modal::InputInjection => None,
+            Modal::None | Modal::Permission | Modal::ModelEditor | Modal::InputInjection => None,
         }
     }
 
@@ -961,11 +1021,7 @@ impl App {
     /// Remove the viewed session's outbox item at display index `idx`. Used by
     /// the queue modal's `D` delete. Returns the removed dispatch (mostly for
     /// tests).
-    pub fn remove_queued_at(
-        &mut self,
-        session_id: &str,
-        idx: usize,
-    ) -> Option<QueuedDispatch> {
+    pub fn remove_queued_at(&mut self, session_id: &str, idx: usize) -> Option<QueuedDispatch> {
         let position = self
             .pending_dispatch
             .iter()
@@ -996,8 +1052,7 @@ impl App {
             return;
         }
         let clamped_idx = idx.min(count - 1);
-        let new_idx = (clamped_idx as i32 + delta)
-            .clamp(0, count as i32 - 1) as usize;
+        let new_idx = (clamped_idx as i32 + delta).clamp(0, count as i32 - 1) as usize;
         if new_idx == clamped_idx {
             return;
         }
@@ -1059,18 +1114,13 @@ impl App {
     /// selection rather than always targeting the newest — so a mid-queue item
     /// can be pulled back to the composer too. The item is removed from the
     /// outbox, exactly like [`Self::recall_queued`].
-    pub fn recall_queued_at(
-        &mut self,
-        session_id: &str,
-        idx: usize,
-    ) -> Option<RecallQueued> {
+    pub fn recall_queued_at(&mut self, session_id: &str, idx: usize) -> Option<RecallQueued> {
         let position = self
             .pending_dispatch
             .iter()
             .enumerate()
             .filter(|(_, item)| {
-                item.session_id == session_id
-                    && item.state == QueuedDispatchState::Waiting
+                item.session_id == session_id && item.state == QueuedDispatchState::Waiting
             })
             .nth(idx)
             .map(|(pos, _)| pos)?;
@@ -1080,22 +1130,53 @@ impl App {
     }
 
     pub fn restore_dispatch(&mut self, dispatch: QueuedDispatch) {
-        self.input = dispatch.text;
-        self.set_cursor_end();
-        if !dispatch.images.is_empty() {
-            self.pending_images = dispatch.images;
-        }
-        if !dispatch.text_pastes.is_empty() {
-            self.pending_text_pastes = dispatch.text_pastes;
-        }
-        // Clear the history cursor so a subsequent ↓ returns to an empty
-        // input rather than to the now-stale history entry.
+        self.adopt_as_draft(dispatch.text, dispatch.images, dispatch.text_pastes);
+    }
+
+    /// Adopt `text` (plus its staged attachments) as the new **draft** — the
+    /// live, editable, remembered input slot — entering draft mode
+    /// (`history_index = None`). This is the single entry point for every
+    /// path that places input into the composer as "the newest unsent input":
+    /// the Phase-1 unsend restore, the Ctrl+R history insert, and the queue
+    /// recall. Whatever the draft held before is replaced (that content was
+    /// either sent or superseded), so ↓ past the newest history row later
+    /// restores *this* input, never a stale one.
+    ///
+    /// The staged attachments are stored both in `pending_*` (what ships on
+    /// send) and mirrored into the `history_draft_*` slots (what ↓ restores).
+    pub fn adopt_as_draft(
+        &mut self,
+        text: String,
+        images: Vec<ImagePart>,
+        text_pastes: Vec<String>,
+    ) {
         self.history_index = None;
-        // Programmatic input replacement, like history navigation: latch the
-        // completion dismissal so a recalled slash command doesn't re-open its
-        // popup until the next real edit (InsertChar/Backspace clears it).
+        self.input = text;
+        self.set_cursor_end();
+        if !images.is_empty() {
+            self.pending_images = images;
+        }
+        if !text_pastes.is_empty() {
+            self.pending_text_pastes = text_pastes;
+        }
+        self.history_draft = self.input.clone();
+        self.history_draft_images = self.pending_images.clone();
+        self.history_draft_text_pastes = self.pending_text_pastes.clone();
+        // Programmatic input replacement: latch the completion dismissal so
+        // the popup doesn't flash until the next real edit.
         self.suggestion_index = None;
         self.completion_dismissed = true;
+    }
+
+    /// Clear the remembered draft (text + attachments). Called when the
+    /// draft's content is successfully sent: the input has been historicised
+    /// (`record_input_history` already recorded it), so it is no longer the
+    /// "unsent" slot and must not come back on a later ↓. A Phase-1 unsend
+    /// re-adopts it via [`Self::adopt_as_draft`].
+    pub fn clear_history_draft(&mut self) {
+        self.history_draft.clear();
+        self.history_draft_images.clear();
+        self.history_draft_text_pastes.clear();
     }
 
     /// Splice the `idx`-th live completion's label into [`App::input`] over
@@ -1217,6 +1298,9 @@ impl App {
             .map(|message| {
                 if let Some(expanded) = message.tool_step_expanded() {
                     message.pin_tool_step_expanded(!expanded);
+                    true
+                } else if let Some(expanded) = message.command_result_expanded() {
+                    message.pin_command_result_expanded(!expanded);
                     true
                 } else if let Some(expanded) = message.thinking_expanded() {
                     message.pin_thinking_expanded(!expanded);
@@ -1457,7 +1541,12 @@ impl App {
         let order: Vec<usize> = self.history_order();
         let texts: Vec<&str> = order
             .iter()
-            .map(|&i| self.input_history.get(i).map(|e| e.text.as_str()).unwrap_or(""))
+            .map(|&i| {
+                self.input_history
+                    .get(i)
+                    .map(|e| e.text.as_str())
+                    .unwrap_or("")
+            })
             .collect();
         if self.input.is_empty() {
             // Empty query → show everything newest-first, unhighlighted.
@@ -1479,10 +1568,7 @@ impl App {
         // indices into the entry text itself, so they need no remap.
         let mut ranked = fuzzy::rank(&texts, &self.input);
         fuzzy::sort_by_score(&mut ranked);
-        ranked
-            .into_iter()
-            .map(|(ti, m)| (order[ti], m))
-            .collect()
+        ranked.into_iter().map(|(ti, m)| (order[ti], m)).collect()
     }
 
     /// The newest-first ordering of [`App::input_history`] by `created_at_ms`,
@@ -1492,7 +1578,16 @@ impl App {
     /// on what "newest" means.
     pub fn history_order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.input_history.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(self.input_history[i].created_at_ms));
+        // Newest-first by `created_at_ms`; entries stamped within the same
+        // millisecond (a fast send burst) break ties by insertion order — the
+        // later index is the newer prompt — so "newest-first" stays
+        // well-defined instead of degrading to oldest-first on a tie.
+        order.sort_by(|&a, &b| {
+            self.input_history[b]
+                .created_at_ms
+                .cmp(&self.input_history[a].created_at_ms)
+                .then_with(|| b.cmp(&a))
+        });
         order
     }
 
@@ -1521,18 +1616,52 @@ impl App {
     /// it survives an unclean exit and is visible to concurrent sessions
     /// right away rather than only on exit.
     ///
+    /// `images` / `text_pastes` are the attachments staged behind the chips
+    /// in `entry` at send time. They are **not** persisted (history.json is
+    /// rebuildable cosmetic telemetry, never conversation data — ADR-0018)
+    /// but are cached in memory keyed by the entry's `(text, session_id)`
+    /// identity, so the ↑/↓ and Ctrl+R recall paths can restore a just-sent
+    /// or interrupted message's attachments instead of shipping a bare chip
+    /// label the model would read as literal text.
+    ///
     /// The origin (session/workspace) is what separates Ctrl+R (searches the
     /// whole history) from inline ↑/↓ (walks only this session's entries).
-    pub fn record_input_history(&mut self, entry: String) {
+    pub fn record_input_history(
+        &mut self,
+        entry: String,
+        images: Vec<ImagePart>,
+        text_pastes: Vec<String>,
+    ) {
         self.history_index = None;
-        if entry.is_empty() {
+        if entry.is_empty() && images.is_empty() && text_pastes.is_empty() {
             return;
         }
-        // Dedup against the newest same-text entry in *this* session: typing
-        // the same prompt twice in a row should not produce two adjacent
-        // rows, but the same words typed in a different session legitimately
-        // are a distinct history entry (each keeps its own origin).
+        // Slash-command invocations (`/model`, `/clear`, …) are UI gestures,
+        // not prompts: they are already visible in the transcript, and most
+        // users don't want `/model` noise cluttering the Ctrl+R picker. Skip
+        // them unless `[input_history] record_commands` opts them back in.
+        if entry.starts_with('/') && !self.input_history_record_commands {
+            return;
+        }
         let now = crate::tui::event_loop::now_epoch_ms();
+        // Ensure strictly-increasing timestamps. `now_epoch_ms()` can return
+        // the same millisecond for a rapid burst of sends, and the history
+        // order's stable sort would then keep input order — putting the
+        // older prompt ahead of the newer one and breaking the newest-first
+        // contract (the inline ↑ would land on the stale entry first). The
+        // wall clock stays the baseline; when it has not advanced past the
+        // newest recorded entry, nudge the stamp forward by one.
+        let latest_ts = self
+            .input_history
+            .iter()
+            .map(|e| e.created_at_ms)
+            .max()
+            .unwrap_or(0);
+        let now = if now > latest_ts {
+            now
+        } else {
+            latest_ts.saturating_add(1)
+        };
         let session_id = if self.current_session_id.is_empty() {
             None
         } else {
@@ -1543,6 +1672,62 @@ impl App {
         } else {
             Some(self.current_workspace.clone())
         };
+        // Cache the attachments first (before the dedup early-return) so a
+        // repeat send of the same prompt refreshes the payloads a recall
+        // will restore, even though no new history row is pushed.
+        if !images.is_empty() || !text_pastes.is_empty() {
+            let identity = (entry.clone(), session_id.clone());
+            if !self.history_attachments.contains_key(&identity) {
+                self.history_attachments_order.push_back(identity.clone());
+            }
+            self.history_attachments.insert(
+                identity,
+                HistoryAttachments {
+                    images,
+                    text_pastes,
+                },
+            );
+            self.prune_history_attachments();
+        }
+        // With `[input_history] dedup` (default on) the prompt text alone is
+        // the identity: the same prompt sent twice — even in a different
+        // session — stays one row. Re-sending refreshes the timestamp (so the
+        // entry bubbles to the top of the newest-first picker) and adopts the
+        // newest known origin (so ↑/↓ in the session that last sent it still
+        // finds it), then persists the refreshed entry.
+        if self.input_history_dedup {
+            if let Some(existing) = self.input_history.iter_mut().find(|e| e.text == entry) {
+                existing.created_at_ms = now;
+                if session_id.is_some() {
+                    existing.session_id = session_id;
+                }
+                if workspace.is_some() {
+                    existing.workspace = workspace;
+                }
+                let refreshed = existing.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = neenee_persistence::config::Config::save_history(
+                        std::slice::from_ref(&refreshed),
+                        true,
+                    );
+                });
+                return;
+            }
+            let recorded = neenee_core::HistoryEntry::new(entry, session_id, workspace, now);
+            self.input_history.push(recorded.clone());
+            tokio::task::spawn_blocking(move || {
+                let _ = neenee_persistence::config::Config::save_history(
+                    std::slice::from_ref(&recorded),
+                    true,
+                );
+            });
+            return;
+        }
+        // Dedup disabled: dedup against the newest same-text entry in *this*
+        // session — typing the same prompt twice in a row should not produce
+        // two adjacent rows, but the same words typed in a different session
+        // legitimately are a distinct history entry (each keeps its own
+        // origin).
         let already_latest_in_session = self
             .current_session_history()
             .first()
@@ -1557,8 +1742,158 @@ impl App {
         // the new entry is enough and cheap. Off-thread: the write takes a file
         // lock and must not block the event loop.
         tokio::task::spawn_blocking(move || {
-            let _ = neenee_persistence::config::Config::save_history(std::slice::from_ref(&recorded));
+            let _ = neenee_persistence::config::Config::save_history(
+                std::slice::from_ref(&recorded),
+                false,
+            );
         });
+    }
+
+    /// Wipe the entire input history — the Ctrl+R picker's "clear" action.
+    /// Clears the in-memory list, the attachment cache, and truncates the
+    /// on-disk history file so the change survives an unclean exit. The caller
+    /// is responsible for confirming first (see [`Self::history_clear_confirm`]).
+    pub fn clear_input_history(&mut self) {
+        self.input_history.clear();
+        self.history_attachments.clear();
+        self.history_attachments_order.clear();
+        self.history_index = None;
+        self.history_clear_confirm = false;
+        // The modal stays open after a clear; reset its selection/preview so
+        // it re-anchors to the (now empty) list instead of a stale index.
+        self.modal_index = 0;
+        self.history_scroll = 0;
+        self.history_preview = false;
+        tokio::task::spawn_blocking(|| {
+            let _ = neenee_persistence::config::Config::clear_history();
+        });
+    }
+
+    /// Cap on [`App::history_attachments`] — an in-memory cache, so it only
+    /// needs to cover the recall window a user can actually walk (a handful
+    /// of ↑/↓ presses), not the full 10k-entry disk history. Each entry may
+    /// hold multi-megabyte base64 image payloads, so the bound also keeps
+    /// the process's memory footprint predictable.
+    pub(crate) const HISTORY_ATTACHMENTS_CAP: usize = 32;
+
+    /// Drop the oldest cached attachment entries (FIFO) once the cache
+    /// exceeds [`Self::HISTORY_ATTACHMENTS_CAP`]. `history_attachments_order`
+    /// records first-seen order; a re-sent identity keeps its original slot.
+    fn prune_history_attachments(&mut self) {
+        while self.history_attachments.len() > Self::HISTORY_ATTACHMENTS_CAP {
+            let Some(key) = self.history_attachments_order.pop_front() else {
+                break;
+            };
+            self.history_attachments.remove(&key);
+        }
+    }
+
+    /// Restore the attachments cached behind the history entry at
+    /// `orig_idx` (an index into [`App::input_history`], as returned by
+    /// `current_session_history` / `history_rows`) into the composer's
+    /// `pending_images` / `pending_text_pastes`, or clear them when the
+    /// entry has no cache (e.g. loaded from disk before this process
+    /// recorded it). The recalled input text already carries the matching
+    /// `[Image #N …]` / `[Pasted text #N …]` chips, so staging the payloads
+    /// is all that is needed to re-arm a resend.
+    pub fn restore_history_attachments(&mut self, orig_idx: usize) {
+        let Some(entry) = self.input_history.get(orig_idx) else {
+            return;
+        };
+        let identity = (entry.text.clone(), entry.session_id.clone());
+        match self.history_attachments.get(&identity) {
+            Some(attachments) => {
+                self.pending_images = attachments.images.clone();
+                self.pending_text_pastes = attachments.text_pastes.clone();
+            }
+            None => {
+                // No cached payloads: a fresh send must not inherit
+                // attachments staged for some other entry, so clear them.
+                self.pending_images.clear();
+                self.pending_text_pastes.clear();
+            }
+        }
+    }
+
+    /// Load the history entry at `orig_idx` (an index into
+    /// [`App::input_history`]) into the composer: its text, its cached
+    /// attachments, cursor at the end, completion popup latched closed.
+    /// Shared by the ↑/↓ walk and Ctrl+R insert so every recall path stays
+    /// identical on the details.
+    fn load_history_row(&mut self, orig_idx: usize) {
+        self.input = self.input_history[orig_idx].text.clone();
+        self.set_cursor_end();
+        self.restore_history_attachments(orig_idx);
+        // History navigation is a programmatic input replacement, not an
+        // edit — so it latches `completion_dismissed` like a slash-command
+        // accept rather than re-enabling the popup the way InsertChar /
+        // Backspace do. This keeps a recalled slash command from flashing
+        // its completion menu until the next real keystroke clears the latch.
+        self.suggestion_index = None;
+        self.completion_dismissed = true;
+    }
+
+    /// Advance the inline ↑/↓ history cursor one step toward **older**
+    /// entries (the ↑ key). `session_rows` is the newest-first index slice
+    /// from [`App::current_session_history`], so position 0 is the newest
+    /// entry and larger positions are older.
+    ///
+    /// The first ↑ stashes the in-progress draft — text and any staged
+    /// attachments together — so a later ↓ past the newest entry restores
+    /// it instead of leaving the composer empty. Subsequent ↑ walk further
+    /// back and clamp at the oldest entry. Returns `true` when a row was
+    /// loaded; `false` when the slice is empty.
+    pub fn history_prev(&mut self, session_rows: &[usize]) -> bool {
+        if session_rows.is_empty() {
+            return false;
+        }
+        let new_pos = match self.history_index {
+            Some(p) => (p + 1).min(session_rows.len() - 1),
+            None => {
+                // First ↑: stash the in-progress draft (and its staged
+                // attachments) so a later ↓ past the newest entry restores
+                // it instead of leaving the composer empty.
+                self.history_draft = std::mem::take(&mut self.input);
+                self.history_draft_images = std::mem::take(&mut self.pending_images);
+                self.history_draft_text_pastes = std::mem::take(&mut self.pending_text_pastes);
+                0
+            }
+        };
+        self.history_index = Some(new_pos);
+        self.load_history_row(session_rows[new_pos]);
+        true
+    }
+
+    /// Move the inline history cursor one step toward **newer** entries
+    /// (the ↓ key), mirroring [`App::history_prev`]. Walking past the
+    /// newest entry (position 0) restores the draft stashed on the first ↑
+    /// — text and attachments together. Returns `true` when a row was
+    /// loaded; `false` when the cursor is already at the newest edge (or
+    /// was never armed), in which case the draft has been restored.
+    pub fn history_next(&mut self, session_rows: &[usize]) -> bool {
+        let Some(pos) = self.history_index else {
+            return false;
+        };
+        if pos == 0 {
+            // Walked back to the newest entry: restore the draft the user
+            // was composing before the first ↑ — text and any staged
+            // attachments together — rather than blanking the composer.
+            self.history_index = None;
+            self.input = std::mem::take(&mut self.history_draft);
+            self.pending_images = std::mem::take(&mut self.history_draft_images);
+            self.pending_text_pastes = std::mem::take(&mut self.history_draft_text_pastes);
+            self.set_cursor_end();
+            // The restored draft may be a partial slash/path the user was
+            // mid-edit on, but it still arrived via navigation rather than
+            // a keystroke, so hold the latch until the next edit.
+            self.suggestion_index = None;
+            self.completion_dismissed = true;
+            return false;
+        }
+        let new_pos = pos - 1;
+        self.history_index = Some(new_pos);
+        self.load_history_row(session_rows[new_pos]);
+        true
     }
 
     /// Tear down the history modal's borrowed state: hand the parked composer

@@ -227,6 +227,14 @@ impl SessionDriver {
                 .total_tokens;
             let pre_provider = agent.provider.provider_id();
             let pre_model = agent.provider.model();
+            // Requests that own the round lifecycle close their own activity
+            // resolution: the round task (or the shell-command round) always
+            // emits a terminal `HarnessState(Idle)` on exit. Every other
+            // request is a control-plane op that does not, so the TUI's
+            // optimistic "queued" state (set at dispatch time) would stick
+            // forever unless the driver reconciles it. See the reconcile
+            // below the match and ADR-0091.
+            let reconcile_activity = needs_activity_reconcile(&req, &lifecycle).await;
             match req {
                 AgentRequest::Interrupt => {
                     crate::handlers_permission::interrupt(&agent, &session, &resp_tx, &lifecycle)
@@ -623,6 +631,25 @@ impl SessionDriver {
                 }
             }
 
+            // ── Activity-state reconcile (ADR-0091) ──────────────────────
+            // The TUI optimistically marks a dispatch "queued" (is_responding
+            // + activity_status) at send time. Round-owned requests resolve
+            // themselves via the round task's terminal `HarnessState(Idle)`.
+            // Control-plane requests must be resolved here instead: re-publish
+            // the authoritative harness state now that the handler has run.
+            // When a round is live the reconcile is a no-op (the round's own
+            // events own the display — and re-emitting a running snapshot
+            // would reset the TUI's round timer/turn counters); when idle it
+            // is `HarnessState(Idle)`, which the TUI maps to "collapse the
+            // activity bar". This makes "every dispatched request lands the
+            // harness back in its authoritative state" a structural invariant
+            // rather than a per-handler courtesy (the previous design left a
+            // handler that emitted no terminal event — e.g. `/autopilot`'s
+            // toast-only reply — with the bar stuck on "● queued").
+            if reconcile_activity {
+                send_harness_state(&resp_tx, &session.id().await, &agent, LoopStatus::Idle);
+            }
+
             // Compare against the post-dispatch projection and only re-publish
             // when the AI-visible context changed.
             let post_session_id = session.id().await;
@@ -658,5 +685,191 @@ impl SessionDriver {
                 ));
             }
         }
+    }
+}
+
+/// Whether `req` owns the round lifecycle and therefore resolves the TUI's
+/// optimistic "queued" activity state on its own, via the round task's
+/// terminal `HarnessState(Idle)`.
+///
+/// - Chat-family requests start (or feed) a round; the round task emits the
+///   closing idle snapshot when it finishes, errors, or is interrupted.
+/// - `ShellCommand` mirrors `start_interactive_round`: it begins its own
+///   round and emits the terminal idle snapshot on exit.
+///
+/// Everything else is a control-plane operation (slash command, provider/
+/// session/tool/mcp toggle, query, layout update, …) that runs inline in the
+/// driver loop and emits no lifecycle event of its own. The driver
+/// reconciles those after dispatch (see [`SessionDriver::run`]) by
+/// re-publishing the authoritative harness state.
+fn round_owned_request(req: &AgentRequest) -> bool {
+    matches!(
+        req,
+        AgentRequest::Chat { .. }
+            | AgentRequest::ChatToSession { .. }
+            | AgentRequest::InsertUserInput { .. }
+            | AgentRequest::CancelInsertedInput { .. }
+            | AgentRequest::ShellCommand { .. }
+    )
+}
+
+/// Whether the driver must reconcile the TUI's optimistic activity state after
+/// dispatching `req`: true for every control-plane (non-round) request when no
+/// round is live. When a round is running the reconcile is deliberately a
+/// no-op — the round's own events own the display, and re-emitting a running
+/// snapshot would reset the TUI's round timer/turn counters (ADR-0091).
+async fn needs_activity_reconcile(req: &AgentRequest, lifecycle: &RoundLifecycle) -> bool {
+    !round_owned_request(req) && !lifecycle.is_running().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neenee_agent::RoundLifecycle;
+    use std::sync::Arc;
+
+    fn image() -> neenee_core::ImagePart {
+        neenee_core::ImagePart {
+            mime: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }
+    }
+
+    #[test]
+    fn round_owned_requests_close_their_own_activity_lifecycle() {
+        assert!(round_owned_request(&AgentRequest::Chat {
+            text: "hi".to_string(),
+            images: vec![image()],
+            sent_at_ms: Some(1),
+        }));
+        assert!(round_owned_request(&AgentRequest::ChatToSession {
+            session_id: "s".to_string(),
+            input: neenee_core::QueuedUserInput {
+                id: "i".to_string(),
+                text: "hi".to_string(),
+                display_text: None,
+                images: Vec::new(),
+                sent_at_ms: None,
+            },
+        }));
+        assert!(round_owned_request(&AgentRequest::InsertUserInput {
+            session_id: "s".to_string(),
+            input: neenee_core::QueuedUserInput {
+                id: "i".to_string(),
+                text: "hi".to_string(),
+                display_text: None,
+                images: Vec::new(),
+                sent_at_ms: None,
+            },
+        }));
+        assert!(round_owned_request(&AgentRequest::CancelInsertedInput {
+            session_id: "s".to_string(),
+            input_id: "i".to_string(),
+        }));
+        assert!(round_owned_request(&AgentRequest::ShellCommand {
+            command: "git status".to_string(),
+        }));
+    }
+
+    #[test]
+    fn control_plane_requests_need_the_driver_reconcile() {
+        // The TUI optimistically paints "queued" for these; none of them emit
+        // a terminal lifecycle event of their own, so the driver must.
+        assert!(!round_owned_request(&AgentRequest::SlashCommand(
+            "/autopilot on".to_string()
+        )));
+        assert!(!round_owned_request(&AgentRequest::Interrupt));
+        assert!(!round_owned_request(&AgentRequest::SwitchProvider {
+            provider_type: "openai".to_string(),
+            model: "gpt".to_string(),
+            api_key: None,
+            base_url: None,
+        }));
+        assert!(!round_owned_request(&AgentRequest::ToggleTool {
+            name: "bash".to_string(),
+            enabled: false,
+        }));
+        assert!(!round_owned_request(&AgentRequest::ToggleMcpServer {
+            name: "github".to_string(),
+            enabled: true,
+        }));
+        assert!(!round_owned_request(&AgentRequest::QuerySessionContext));
+        assert!(!round_owned_request(&AgentRequest::PermissionReply {
+            request_id: "r".to_string(),
+            decision: neenee_core::PermissionDecision::Always,
+            parent_call_id: None,
+        }));
+        assert!(!round_owned_request(&AgentRequest::UserQuestionReply {
+            request_id: "r".to_string(),
+            answers: Vec::new(),
+            parent_call_id: None,
+        }));
+        assert!(!round_owned_request(&AgentRequest::InputReply {
+            request_id: "r".to_string(),
+            text: "y".to_string(),
+            parent_call_id: None,
+        }));
+        assert!(!round_owned_request(&AgentRequest::ExitSideView));
+        assert!(!round_owned_request(&AgentRequest::UpdateTuiLayout(
+            "default".to_string()
+        )));
+        assert!(!round_owned_request(&AgentRequest::DeleteSession {
+            id: "s".to_string(),
+        }));
+        assert!(!round_owned_request(&AgentRequest::QuerySessionDetail {
+            id: "s".to_string(),
+        }));
+    }
+
+    #[tokio::test]
+    async fn activity_reconcile_fires_only_for_control_plane_requests_with_no_live_round() {
+        let lifecycle = Arc::new(RoundLifecycle::new());
+        let autopilot = AgentRequest::SlashCommand("/autopilot on".to_string());
+
+        // Idle harness + control-plane request → the driver must reconcile.
+        assert!(
+            needs_activity_reconcile(&autopilot, &lifecycle).await,
+            "idle + slash command needs the reconcile"
+        );
+
+        // Round-owned requests never need the reconcile — the round task emits
+        // its own terminal idle snapshot.
+        assert!(
+            !needs_activity_reconcile(
+                &AgentRequest::Chat {
+                    text: "hi".to_string(),
+                    images: Vec::new(),
+                    sent_at_ms: None,
+                },
+                &lifecycle,
+            )
+            .await,
+            "chat closes its own lifecycle"
+        );
+        assert!(
+            !needs_activity_reconcile(
+                &AgentRequest::ShellCommand {
+                    command: "git status".to_string(),
+                },
+                &lifecycle,
+            )
+            .await,
+            "shell closes its own lifecycle"
+        );
+
+        // A live round owns the display: even a control-plane request is left
+        // alone so the round's timer/turn counters are not reset.
+        let begin = lifecycle.begin().await;
+        assert!(
+            !needs_activity_reconcile(&autopilot, &lifecycle).await,
+            "live round suppresses the reconcile"
+        );
+        assert!(lifecycle.finish(begin.generation).await);
+
+        // Back to idle → the reconcile is armed again.
+        assert!(
+            needs_activity_reconcile(&autopilot, &lifecycle).await,
+            "idle again → reconcile re-arms"
+        );
     }
 }

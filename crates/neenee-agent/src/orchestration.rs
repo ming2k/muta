@@ -39,9 +39,7 @@ use neenee_core::{
 };
 use neenee_persistence::{
     config::Config,
-    session::{
-        ContextProjectionCheckpoint, ContextProjectionResult, SessionStore, run_compaction,
-    },
+    session::{ContextProjectionCheckpoint, ContextProjectionResult, SessionStore, run_compaction},
 };
 
 /// Wrap a session-scoped [`RoundEvent`] in the [`AgentResponse::Round`]

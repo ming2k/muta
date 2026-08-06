@@ -171,6 +171,46 @@ impl Default for TuiConfig {
     }
 }
 
+/// Input-history behaviour (`[input_history]` table): how the persisted
+/// prompt history (`history.json`) and the Ctrl+R picker treat repeated
+/// prompts and slash-command invocations.
+///
+/// ```toml
+/// [input_history]
+/// dedup = true              # one row per prompt text, across sessions
+/// record_commands = false   # don't persist `/model`, `/clear`, …
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputHistoryConfig {
+    /// Collapse repeated identical prompts into a single history entry, keyed
+    /// on the prompt **text alone** (across sessions and workspaces).
+    ///
+    /// With the default `true`, sending the same prompt twice — even in
+    /// different sessions — shows one row; re-sending refreshes the entry's
+    /// timestamp so it bubbles to the top of the newest-first picker. With
+    /// `false`, identity is `(text, session_id)`: the same words typed in two
+    /// sessions stay as two entries, each with its own origin.
+    pub dedup: bool,
+    /// Record `/slash` command invocations (`/model`, `/clear`, `/repeat`, …)
+    /// into the input history.
+    ///
+    /// Default `false`: commands are UI gestures, not prompts — they are
+    /// already visible in the transcript, and most users don't want `/model`
+    /// noise cluttering the prompt picker. Set `true` to make them recallable
+    /// from Ctrl+R again.
+    pub record_commands: bool,
+}
+
+impl Default for InputHistoryConfig {
+    fn default() -> Self {
+        Self {
+            dedup: true,
+            record_commands: false,
+        }
+    }
+}
+
 /// Declarative permission configuration — the `[permissions]` table. Lets users
 /// pre-declare "always allow" rules in `config.toml` so default policies are
 /// data-driven, not purely interactive:
@@ -864,6 +904,10 @@ pub struct Config {
     /// TUI presentation (`[tui]` table): per-step-kind default expand state.
     #[serde(default)]
     pub tui: TuiConfig,
+    /// Input-history behaviour (`[input_history]` table): prompt dedup and
+    /// slash-command recording. See [`InputHistoryConfig`].
+    #[serde(default)]
+    pub input_history: InputHistoryConfig,
     /// Principal behaviour (`[principal]` table): opt-in hard-stop budget and the
     /// doom-loop guard toggle. See [`PrincipalConfig`] for the per-field
     /// semantics and TOML examples.
@@ -1044,6 +1088,7 @@ impl Default for Config {
             bash_policy: BashPolicyConfig::default(),
             websearch: WebSearchConfig::default(),
             tui: TuiConfig::default(),
+            input_history: InputHistoryConfig::default(),
             principal: PrincipalConfig::default(),
             hooks: Vec::new(),
             tool_variants: ToolVariantsConfig::default(),
@@ -1362,23 +1407,47 @@ impl Config {
         }
     }
 
+    /// Persist `history` into the global history file, locking and merging
+    /// against what is already on disk so a concurrent process's recent
+    /// prompts survive this write (ADR-0018).
+    ///
+    /// `dedup` selects the merge identity (see
+    /// [`neenee_core::merge_history`]): `true` collapses identical prompt
+    /// text into one entry across sessions, `false` keeps `(text, session_id)`
+    /// entries distinct. Callers pass the live `[input_history] dedup` value
+    /// rather than having this method re-read `config.toml` on every send.
     pub fn save_history(
         history: &[neenee_core::HistoryEntry],
+        dedup: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::history_file_path();
         // Serialise against other `neenee` instances and merge so a concurrent
         // process's recent commands survive this write (ADR-0018). Without the
         // lock + reload the last writer would erase the other's history; the
-        // merge takes the union by `(text, session_id)`, keeping the newest
-        // recorded timestamp for each survivor and re-ordering newest-first.
+        // merge keeps the newest recorded timestamp for each survivor and
+        // re-orders newest-first.
         let _lock = fsutil::FileLock::acquire(&path)
             .map_err(|e| format!("could not lock history file: {e}"))?;
         let existing: Vec<neenee_core::HistoryEntry> = fs::read_to_string(&path)
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default();
-        let merged = neenee_core::merge_history(&existing, history);
+        let merged = neenee_core::merge_history(&existing, history, dedup);
         fsutil::atomic_write_json(&path, &merged).map_err(Box::<dyn std::error::Error>::from)?;
+        Ok(())
+    }
+
+    /// Truncate the global history file (the Ctrl+R picker's "clear history"
+    /// action). Locked like [`Self::save_history`] so a concurrent write does
+    /// not race the truncation; a concurrent *record* can still append a new
+    /// entry immediately after — clearing is inherently last-writer-wins for
+    /// the on-disk union, exactly like the rest of the history writes.
+    pub fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::history_file_path();
+        let _lock = fsutil::FileLock::acquire(&path)
+            .map_err(|e| format!("could not lock history file: {e}"))?;
+        fsutil::atomic_write_json(&path, &Vec::<neenee_core::HistoryEntry>::new())
+            .map_err(Box::<dyn std::error::Error>::from)?;
         Ok(())
     }
 }
@@ -1966,6 +2035,34 @@ openai = "creds-key"
         "#;
         let cfg: Config = toml::from_str(toml).unwrap();
         assert!(!cfg.tui.click_outside_dismiss);
+    }
+
+    #[test]
+    fn input_history_defaults_dedup_on_and_commands_off() {
+        // A config with no `[input_history]` table gets the sensible defaults:
+        // dedup on (one row per prompt text) and slash-command recording off.
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.input_history.dedup, "dedup defaults to true");
+        assert!(
+            !cfg.input_history.record_commands,
+            "record_commands defaults to false"
+        );
+
+        // Both keys parse and round-trip.
+        let toml = r#"
+            [input_history]
+            dedup = false
+            record_commands = true
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert!(!cfg.input_history.dedup);
+        assert!(cfg.input_history.record_commands);
+
+        // Serialising back keeps the explicit table.
+        let out = toml::to_string(&cfg).unwrap();
+        assert!(out.contains("[input_history]"));
+        assert!(out.contains("dedup = false"));
+        assert!(out.contains("record_commands = true"));
     }
 
     // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------

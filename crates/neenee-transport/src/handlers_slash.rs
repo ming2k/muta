@@ -29,9 +29,9 @@ use neenee_agent::orchestration::{
     send_harness_state,
 };
 use neenee_core::{
-    AgentNotice, AgentRequest, AgentResponse, CronExpr, LoopStatus, Message, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent, Schedule, ScheduledJob,
-    Tool, estimate_bytes, estimate_tokens, repeat::parse_schedule_arg,
+    AgentNotice, AgentRequest, AgentResponse, CommandRecord, CommandResult, CronExpr, LoopStatus,
+    Message, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent,
+    Schedule, ScheduledJob, Tool, estimate_bytes, estimate_tokens, repeat::parse_schedule_arg,
 };
 use neenee_persistence::{
     config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
@@ -47,7 +47,6 @@ use std::sync::{
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
-use crate::review::format_review_report;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
 use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
@@ -109,6 +108,83 @@ async fn restore_session_runtime(
     }
 }
 
+// ── Command-ledger helpers (ADR-0091) ──────────────────────────────────────
+//
+// Slash commands are operations on the session, not conversation turns: each
+// invocation + its typed result are recorded in the durable command ledger and
+// surfaced as a `RoundEvent::CommandResult` command block — never as
+// `RoundEvent::Text` assistant prose. These helpers are the single seam;
+// `record_command` is best-effort (a failed persist logs but does not abort the
+// command's primary effect).
+
+/// Record a successful slash-command invocation in the ledger and surface its
+/// typed result as a command block (the ADR-0091 replacement for a
+/// `RoundEvent::Text` command reply).
+async fn record_command(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
+    result: CommandResult,
+) {
+    let record = CommandRecord::new(name, args).with_result(result.clone());
+    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
+        tracing::warn!(?error, name, "could not persist command record");
+    }
+    let _ = resp_tx.send(round_response(
+        &session.id().await,
+        RoundEvent::CommandResult {
+            name: name.to_string(),
+            args: args.to_string(),
+            result,
+        },
+    ));
+}
+
+/// Record a slash-command invocation whose reply is a special response type
+/// (a picker like `/sessions`, a side view like `/btw`, a compaction
+/// checkpoint, `ConversationCleared`/`Replaced`, exit) rather than a command
+/// block. The invocation is durable; there is no `CommandResult` to display.
+async fn record_invocation(session: &Arc<SessionStore>, name: &str, args: &str) {
+    if let Err(error) = session
+        .mutate_commands(|c| c.push(CommandRecord::new(name, args)))
+        .await
+    {
+        tracing::warn!(?error, name, "could not persist command invocation");
+    }
+}
+
+/// Record an acknowledgment — the durable twin of an ADR-0088 `CommandAck`
+/// toast. The live surface stays the toast; the ledger keeps the confirmation
+/// for resume/export/audit. No `CommandResult` event is emitted, so a command
+/// block never double-renders the toast.
+async fn record_ack(session: &Arc<SessionStore>, name: &str, args: &str, title: impl Into<String>) {
+    let record = CommandRecord::new(name, args).with_result(CommandResult::Ack {
+        title: title.into(),
+    });
+    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
+        tracing::warn!(?error, name, "could not persist command ack");
+    }
+}
+
+/// Record a failed slash-command invocation and surface the error. The error
+/// keeps its existing `AgentResponse::Error` surface; the ledger records the
+/// failure (status `Error`) for audit.
+async fn record_error(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+    let record = CommandRecord::new(name, args).with_error(message.clone(), None);
+    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
+        tracing::warn!(?error, name, "could not persist command error record");
+    }
+    let _ = resp_tx.send(AgentResponse::Error(message));
+}
+
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
 #[allow(clippy::too_many_arguments)]
@@ -140,21 +216,10 @@ pub async fn dispatch(
     if parts.is_empty() {
         return;
     }
-    // Record the slash invocation as a durable, non-driving echo so it
-    // survives resume/export/audit (ADR-0050). This happens for EVERY command
-    // uniformly — the literal `/cmd` text is persisted, never sent to the
-    // model (projected out during model-request assembly), and on resume is
-    // reconstructed with `UserMessageOrigin::Slash`. Commands whose effects
-    // mutate state or stream a reply still do so independently; the echo is
-    // purely the invocation record. Best-effort: a failed persist logs but
-    // does not abort dispatch, since the command's primary effect is more
-    // important than the echo.
-    if let Err(error) = session
-        .mutate_messages(|w| w.push(Message::command_echo(&cmd)))
-        .await
-    {
-        tracing::warn!(?error, cmd = %cmd, "could not persist command echo");
-    }
+    // The ledger identity of this invocation (ADR-0091): command word without
+    // the leading slash, plus the raw argument remainder.
+    let name = parts[0].trim_start_matches('/');
+    let args = cmd.strip_prefix(parts[0]).unwrap_or("").trim();
     match BuiltinCmd::from_slash(parts[0]) {
         Some(BuiltinCmd::Models) | Some(BuiltinCmd::Connections) => {
             // Handled in TUI
@@ -179,54 +244,56 @@ pub async fn dispatch(
         Some(BuiltinCmd::Permissions) => {
             if parts.get(1) == Some(&"clear") {
                 agent.clear_allowed_tools();
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text("Always-allowed tool rules cleared.".to_string()),
-                ));
+                record_ack(session, name, args, "Always-allowed tool rules cleared.").await;
             } else {
                 let allowed = agent.allowed_tools();
-                let message = if allowed.is_empty() {
-                    "No tools are always allowed for this process.".to_string()
-                } else {
-                    format!("Always-allowed tools:\n- {}", allowed.join("\n- "))
-                };
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(message),
-                ));
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::PermissionList { allowed },
+                )
+                .await;
             }
         }
         Some(BuiltinCmd::Autopilot) => {
-            let next = match parts.get(1).map(|s| s.to_lowercase()).as_deref() {
-                Some("on") | Some("true") | Some("1") => Some(true),
-                Some("off") | Some("false") | Some("0") => Some(false),
-                Some(other) => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Unknown value '{}'. Use `/autopilot on|off`.",
-                        other
-                    )));
+            let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
+            let next = match arg.as_str() {
+                "on" | "true" | "1" => Some(true),
+                "off" | "false" | "0" => Some(false),
+                _ => {
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!("Unknown value '{arg}'. Use `/autopilot on|off`."),
+                    )
+                    .await;
                     return;
                 }
-                None => None,
             };
             let enabled = next.unwrap_or_else(|| !agent.get_autopilot());
             agent.set_autopilot(enabled);
             // The autopilot toggle's confirmation is a command acknowledgment,
             // not model output: surface it as a transient toast rather than
-            // appending a same-color line to the transcript (ADR-0050 keeps the
-            // `/autopilot on` invocation itself durable; this reply is
-            // ephemeral). The `AutopilotChanged` event below still refreshes
+            // appending a same-color line to the transcript (ADR-0088). The
+            // ledger still records the `Ack` so the confirmation is durable
+            // (ADR-0091). The `AutopilotChanged` event below still refreshes
             // the badge so the new state stays visible long after the toast
             // fades.
+            let ack = format!(
+                "Autopilot {}: the agent {} run without human intervention — the question \
+                     tool is reclaimed, tool permissions auto-approve, and no prompts or \
+                     questions can pause the session.",
+                if enabled { "ON" } else { "OFF" },
+                if enabled { "will" } else { "won't" },
+            );
+            record_ack(session, name, args, ack.clone()).await;
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::Notice(AgentNotice::command_ack(format!(
-                    "Autopilot {}: the agent {} run without human intervention — the question \
-                         tool is reclaimed, tool permissions auto-approve, and no prompts or \
-                         questions can pause the session.",
-                    if enabled { "ON" } else { "OFF" },
-                    if enabled { "will" } else { "won't" },
-                ))),
+                RoundEvent::Notice(AgentNotice::command_ack(ack)),
             ));
             let _ = resp_tx.send(round_response(
                 &session.id().await,
@@ -251,37 +318,52 @@ pub async fn dispatch(
                         .iter()
                         .map(|r| r.as_str())
                         .collect();
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Available principal roles: {}. Usage: `/principal <role>` or \
                              mention `@principal:<role>` in a message.",
                             roles.join(", ")
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Some(role) => match agent.apply_principal_role(role) {
                     Some(resolved) => {
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!(
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text(format!(
                                 "Principal role switched to `{}` — {}. The next response will \
                                  speak with this role's perspective and capability scope.",
                                 resolved.as_str(),
                                 resolved.description()
                             )),
-                        ));
+                        )
+                        .await;
                     }
                     None => {
-                        let roles: Vec<&'static str> = neenee_core::PrincipalRole::ALL
-                            .iter()
-                            .map(|r| r.as_str())
-                            .collect();
-                        let _ = resp_tx.send(AgentResponse::Error(format!(
-                            "Unknown principal role `{}`. Available roles: {}.",
-                            role,
-                            roles.join(", ")
-                        )));
+                        record_error(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            format!(
+                                "Unknown principal role `{}`. Available roles: {}.",
+                                role,
+                                neenee_core::PrincipalRole::ALL
+                                    .iter()
+                                    .map(|r| r.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        )
+                        .await;
                     }
                 },
             }
@@ -295,24 +377,32 @@ pub async fn dispatch(
             // schedule; it only runs when asked. Takes no
             // arguments.
             if parts.iter().skip(1).any(|t| !t.trim().is_empty()) {
-                let _ = resp_tx.send(AgentResponse::Error(
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
                     "`/review` takes no arguments. Usage: `/review` runs an \
-                                     on-demand diagnostic of the current round."
-                        .to_string(),
-                ));
+                                     on-demand diagnostic of the current round.",
+                )
+                .await;
                 return;
             }
             let transcript = session.full_transcript().await;
             let turns = Agent::estimate_completed_turns(&transcript);
             if turns == 0 {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
                         "Nothing to review yet — no ReAct turns in the current \
                          round."
                             .to_string(),
                     ),
-                ));
+                )
+                .await;
                 return;
             }
             let _ = resp_tx.send(round_response(
@@ -342,25 +432,39 @@ pub async fn dispatch(
                 &session.id().await,
                 RoundEvent::SessionReview { alert },
             ));
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format_review_report(&verdicts, turns)),
-            ));
+            // The typed review result is both the durable record and the
+            // command-block reply (ADR-0091); the verdicts render through
+            // `CommandResult::to_text`, which mirrors `format_review_report`.
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Review {
+                    verdicts,
+                    turns: turns as u64,
+                },
+            )
+            .await;
         }
         Some(BuiltinCmd::Search) => {
             let query = cmd.strip_prefix("/search").unwrap_or("").trim();
             if query.is_empty() {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text("Usage: /search <query>".to_string()),
-                ));
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text("Usage: /search <query>".to_string()),
+                )
+                .await;
             } else {
                 let messages = session.full_transcript().await;
                 {
                     let mut store = embedding_store_for_commands.write().await;
                     let session_id = session.id().await;
                     if let Err(error) = store.index(&messages, &session_id).await {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                         return;
                     }
                 }
@@ -371,25 +475,24 @@ pub async fn dispatch(
                     .await
                 {
                     Ok(results) => {
-                        if results.is_empty() {
-                            let _ = resp_tx.send(round_response(
-                                &session.id().await,
-                                RoundEvent::Text("No relevant history found.".to_string()),
-                            ));
-                        } else {
-                            let mut lines =
-                                vec!["Relevant history (most similar first):".to_string()];
-                            for (i, (text, score)) in results.iter().enumerate() {
-                                lines.push(format!("{}. [score={:.3}]\n{}", i + 1, score, text));
-                            }
-                            let _ = resp_tx.send(round_response(
-                                &session.id().await,
-                                RoundEvent::Text(lines.join("\n\n")),
-                            ));
-                        }
+                        let hits = results
+                            .into_iter()
+                            .map(|(text, score)| neenee_core::SearchHit { text, score })
+                            .collect::<Vec<_>>();
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Search {
+                                query: query.to_string(),
+                                hits,
+                            },
+                        )
+                        .await;
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
@@ -407,44 +510,51 @@ pub async fn dispatch(
                         neenee_core::SessionSource::Resume,
                     )
                     .await;
-                    let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!("Resumed session {}.", short_session_id(&id))),
-                    ));
+                    let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                        messages: transcript,
+                        commands: session.commands().await,
+                    });
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!("Resumed session {}.", short_session_id(&id))),
+                    )
+                    .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                 }
             }
         }
         Some(BuiltinCmd::Session) => match parts.get(1).copied().unwrap_or("status") {
             "status" => {
                 let id = session.id().await;
-                let parent_id = session
-                    .parent_id()
-                    .await
-                    .unwrap_or_else(|| "none".to_string());
+                let parent_id = session.parent_id().await;
                 let message_count = session.model_window().await.len();
                 let archived_count = session.archived_transcript_count().await;
                 let last_projection = session.last_projection().await;
-                let _ = resp_tx.send(round_response(
-                                        &session.id().await,
-                                        RoundEvent::Text(format!(
-                                    "Session: {}\nForked from: {}\nModel-window messages: {}\nArchived transcript messages: {}\nLast context projection: {}",
-                                    id,
-                                    parent_id,
-                                    message_count,
-                                    archived_count,
-                                    last_projection
-                                        .map(|item| format!(
-                                            "{:?}: {} -> {} chars",
-                                            item.operation, item.before_chars, item.after_chars
-                                        ))
-                                        .unwrap_or_else(|| "none".to_string())
-                                )),
-                                    ));
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::SessionStatus {
+                        id,
+                        parent_id,
+                        message_count,
+                        archived_count,
+                        last_projection: last_projection.map(|item| {
+                            format!(
+                                "{:?}: {} -> {} chars",
+                                item.operation, item.before_chars, item.after_chars
+                            )
+                        }),
+                    },
+                )
+                .await;
             }
             "list" => match session.list().await {
                 Ok(sessions) => {
@@ -462,13 +572,17 @@ pub async fn dispatch(
                             )
                         })
                         .collect::<Vec<_>>();
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!("Sessions:\n{}", lines.join("\n"))),
-                    ));
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!("Sessions:\n{}", lines.join("\n"))),
+                    )
+                    .await;
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                 }
             },
             "fork" => {
@@ -476,22 +590,34 @@ pub async fn dispatch(
                 match session.fork().await {
                     Ok((id, parent_id)) => {
                         agent.restore_round_count(session.round_counter().await);
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("Forked session {} from {}.", id, parent_id)),
-                        ));
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text(format!(
+                                "Forked session {} from {}.",
+                                id, parent_id
+                            )),
+                        )
+                        .await;
                         send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
             "open" => {
                 let Some(id) = parts.get(2) else {
-                    let _ = resp_tx.send(AgentResponse::Error(
-                        "Usage: /session open <session-id>".to_string(),
-                    ));
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        "Usage: /session open <session-id>",
+                    )
+                    .await;
                     return;
                 };
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
@@ -509,7 +635,10 @@ pub async fn dispatch(
                         )
                         .await;
                         let transcript = session.full_transcript().await;
-                        let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
+                        let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                            messages: transcript,
+                            commands: session.commands().await,
+                        });
                         // C6: the live provider tracks the opened session's own
                         // provider pin (or the global default if it has none).
                         crate::handlers_provider::reapply_session_selection(
@@ -521,14 +650,18 @@ pub async fn dispatch(
                             provider_usage,
                         )
                         .await;
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("Opened session {}.", id)),
-                        ));
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text(format!("Opened session {}.", id)),
+                        )
+                        .await;
                         send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
@@ -545,7 +678,10 @@ pub async fn dispatch(
                             neenee_core::SessionSource::Resume,
                         )
                         .await;
-                        let _ = resp_tx.send(AgentResponse::ConversationReplaced(transcript));
+                        let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                            messages: transcript,
+                            commands: session.commands().await,
+                        });
                         // C6: the live provider tracks the resumed session's own
                         // provider pin (or the global default if it has none).
                         crate::handlers_provider::reapply_session_selection(
@@ -557,14 +693,21 @@ pub async fn dispatch(
                             provider_usage,
                         )
                         .await;
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("Resumed session {}.", short_session_id(&id))),
-                        ));
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text(format!(
+                                "Resumed session {}.",
+                                short_session_id(&id)
+                            )),
+                        )
+                        .await;
                         send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
@@ -590,24 +733,36 @@ pub async fn dispatch(
                             RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
                         ));
                         let _ = resp_tx.send(AgentResponse::ConversationCleared);
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(format!("Started new session: {}", id)),
-                        ));
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text(format!("Started new session: {}", id)),
+                        )
+                        .await;
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
             other => {
-                let _ = resp_tx.send(AgentResponse::Error(format!(
-                    "Unknown session command '{}'. Use status, list, resume, fork, open, or new.",
-                    other
-                )));
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    format!(
+                        "Unknown session command '{}'. Use status, list, resume, fork, open, or new.",
+                        other
+                    ),
+                )
+                .await;
             }
         },
         Some(BuiltinCmd::Sessions) => {
+            record_invocation(session, name, args).await;
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(session).await,
             ));
@@ -623,11 +778,15 @@ pub async fn dispatch(
             // or cancel the primary token.
             let prompt = cmd.strip_prefix("/btw").unwrap_or("").trim();
             if side.read().await.is_some() {
-                let _ = resp_tx.send(AgentResponse::Error(
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
                     "A side conversation is already open. \
-                                     Leave it with Esc first."
-                        .to_string(),
-                ));
+                                     Leave it with Esc first.",
+                )
+                .await;
                 return;
             }
             let primary_id = session.id().await;
@@ -643,7 +802,7 @@ pub async fn dispatch(
             {
                 Ok(s) => s,
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                     return;
                 }
             };
@@ -672,6 +831,7 @@ pub async fn dispatch(
                 side_id: side_id.clone(),
                 primary_id,
             });
+            record_invocation(session, name, args).await;
             // Stream coarse primary-status updates to the
             // side banner while the side is live. Emits an
             // immediate baseline so the banner is never
@@ -717,16 +877,21 @@ pub async fn dispatch(
             .await
             {
                 Ok(Some(checkpoint)) => {
+                    record_invocation(session, name, args).await;
                     send_compaction(resp_tx, &session.id().await, &checkpoint);
                 }
                 Ok(None) => {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text("Not enough complete rounds to compact.".to_string()),
-                    ));
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text("Not enough complete rounds to compact.".to_string()),
+                    )
+                    .await;
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                 }
             }
             agent.fire_post_compact().await;
@@ -738,9 +903,12 @@ pub async fn dispatch(
             // `/schedule`. `list` / `cancel` / `help` are shared verbatim.
             let rest = cmd.strip_prefix("/repeat").unwrap_or("").trim();
             if rest.is_empty() || rest == "help" {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
                         "Usage: /repeat <cron> <prompt>  (cron-only alias for /schedule)\n\
                          cron is five fields: minute hour day month weekday \
                          (e.g. `*/5 * * * *` = every 5 min, `0 9 * * 1-5` = 09:00 weekdays).\n\
@@ -748,37 +916,58 @@ pub async fn dispatch(
                          Also: /repeat list, /repeat cancel <id>."
                             .to_string(),
                     ),
-                ));
+                )
+                .await;
                 return;
             }
             if rest == "list" {
-                list_scheduled_jobs(session, resp_tx).await;
+                list_scheduled_jobs(session, resp_tx, name, args).await;
                 return;
             }
             if let Some(id) = rest.strip_prefix("cancel ") {
-                cancel_scheduled_job(session, id.trim(), resp_tx).await;
+                cancel_scheduled_job(session, id.trim(), resp_tx, name, args).await;
                 return;
             }
             // `/repeat <5-field cron> <prompt>` — enforce cron shape.
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() < 6 {
-                let _ = resp_tx.send(AgentResponse::Error(
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
                     "Usage: /repeat <5-field cron> <prompt>. \
-                      Example: /repeat */5 * * * * check the deploy"
-                        .to_string(),
-                ));
+                      Example: /repeat */5 * * * * check the deploy",
+                )
+                .await;
                 return;
             }
             let cron = tokens[0..5].join(" ");
             let prompt = tokens[5..].join(" ");
             if let Err(error) = CronExpr::parse(&cron) {
-                let _ = resp_tx.send(AgentResponse::Error(format!(
-                    "/repeat takes a cron expression; got '{cron}': {error}. \
-                     Use /schedule for countdown / absolute-time one-shots."
-                )));
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    format!(
+                        "/repeat takes a cron expression; got '{cron}': {error}. \
+                         Use /schedule for countdown / absolute-time one-shots."
+                    ),
+                )
+                .await;
                 return;
             }
-            add_scheduled_job(session, &cron, &prompt, resp_tx, req_tx_for_commands).await;
+            add_scheduled_job(
+                session,
+                &cron,
+                &prompt,
+                resp_tx,
+                req_tx_for_commands,
+                name,
+                args,
+            )
+            .await;
         }
         Some(BuiltinCmd::Schedule) => {
             // `/schedule` is the unified scheduled-prompt command. Its time
@@ -791,9 +980,12 @@ pub async fn dispatch(
             // are shared with `/repeat`.
             let rest = cmd.strip_prefix("/schedule").unwrap_or("").trim();
             if rest.is_empty() || rest == "help" {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
                         "Usage: /schedule <when> <prompt>\n\
                          <when> is one of:\n\
                          • a cron: `*/5 * * * *`, `0 9 * * 1-5`\n\
@@ -803,15 +995,16 @@ pub async fn dispatch(
                          Also: /schedule list, /schedule cancel <id>."
                             .to_string(),
                     ),
-                ));
+                )
+                .await;
                 return;
             }
             if rest == "list" {
-                list_scheduled_jobs(session, resp_tx).await;
+                list_scheduled_jobs(session, resp_tx, name, args).await;
                 return;
             }
             if let Some(id) = rest.strip_prefix("cancel ") {
-                cancel_scheduled_job(session, id.trim(), resp_tx).await;
+                cancel_scheduled_job(session, id.trim(), resp_tx, name, args).await;
                 return;
             }
             // Split the time spec from the prompt. The time spec is either:
@@ -826,40 +1019,60 @@ pub async fn dispatch(
             let (time_spec, prompt) = match split_schedule_spec(rest) {
                 Some(pair) => pair,
                 None => {
-                    let _ = resp_tx.send(AgentResponse::Error(
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
                         "Usage: /schedule <when> <prompt>. \
-                         Example: /schedule 10m re-run the tests"
-                            .to_string(),
-                    ));
+                         Example: /schedule 10m re-run the tests",
+                    )
+                    .await;
                     return;
                 }
             };
             let prompt = prompt.trim();
             if prompt.is_empty() {
-                let _ = resp_tx.send(AgentResponse::Error(
-                    "Usage: /schedule <when> <prompt>. The prompt is required.".to_string(),
-                ));
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    "Usage: /schedule <when> <prompt>. The prompt is required.",
+                )
+                .await;
                 return;
             }
             let when = match parse_schedule_arg(&time_spec, now) {
                 Some(w) => w,
                 None => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Could not parse `{time_spec}` as a cron, countdown, or absolute time.\n\
-                         Try `*/5 * * * *`, `10m`, `in 2 hours`, `14:00`, `tomorrow 09:00`, \
-                         or `2026-03-15 14:00`."
-                    )));
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!(
+                            "Could not parse `{time_spec}` as a cron, countdown, or absolute time.\n\
+                             Try `*/5 * * * *`, `10m`, `in 2 hours`, `14:00`, `tomorrow 09:00`, \
+                             or `2026-03-15 14:00`."
+                        ),
+                    )
+                    .await;
                     return;
                 }
             };
             let (trigger, next) = match when.resolve(now) {
                 Some(pair) => pair,
                 None => {
-                    let _ = resp_tx.send(AgentResponse::Error(
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
                         "That schedule never fires (the time already passed or the cron is \
-                         impossible)."
-                            .to_string(),
-                    ));
+                         impossible).",
+                    )
+                    .await;
                     return;
                 }
             };
@@ -878,19 +1091,27 @@ pub async fn dispatch(
             match session.set_scheduled_jobs(jobs).await {
                 Ok(()) => {
                     let kind = trigger.kind_label();
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
-                            "Scheduled {kind} job {short_id} ({}), next {}.{}",
-                            trigger.display(),
-                            next.format("%Y-%m-%d %H:%M"),
-                            if trigger.is_once() {
-                                String::new()
-                            } else {
-                                " Running now.".to_string()
-                            }
-                        )),
-                    ));
+                    let next_str = format!("{}", next.format("%Y-%m-%d %H:%M"));
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Scheduled {
+                            kind: kind.to_string(),
+                            id: short_id,
+                            trigger: trigger.display(),
+                            next: format!(
+                                "{next_str}{}",
+                                if trigger.is_once() {
+                                    String::new()
+                                } else {
+                                    " Running now.".to_string()
+                                }
+                            ),
+                        },
+                    )
+                    .await;
                     // Recurring cron jobs fire the first run immediately (the
                     // scheduler handles the rest); one-shot jobs wait for their
                     // scheduled fire time and are NOT run now.
@@ -903,7 +1124,7 @@ pub async fn dispatch(
                     }
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                 }
             }
         }
@@ -911,18 +1132,25 @@ pub async fn dispatch(
             let target = parts.get(1).copied().unwrap_or(".");
             match init_neenee_config(std::path::Path::new(target)) {
                 Ok(created) if created.is_empty() => {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "neenee is already configured in '{}'. Nothing to do.",
                             target
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Ok(created) => {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Initialized neenee configuration in '{}'.\nCreated:\n{}",
                             target,
                             created
@@ -931,10 +1159,11 @@ pub async fn dispatch(
                                 .collect::<Vec<_>>()
                                 .join("\n")
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(error));
+                    record_error(session, resp_tx, name, args, error).await;
                 }
             }
         }
@@ -1020,10 +1249,14 @@ pub async fn dispatch(
                 }
             }
             lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format!("Config reloaded.\n{}", lines.join("\n"))),
-            ));
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!("Config reloaded.\n{}", lines.join("\n"))),
+            )
+            .await;
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Trust) => {
@@ -1035,13 +1268,17 @@ pub async fn dispatch(
             let project_mcp = Config::load_project_mcp(project_root_for_side);
             let project_hooks = Config::load_project_hooks(project_root_for_side);
             if project_mcp.is_empty() && project_hooks.is_empty() {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Text(
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
                         "No MCP servers or hooks declared in .neenee/config.toml. Nothing to trust."
                             .to_string(),
                     ),
-                ));
+                )
+                .await;
             } else {
                 let newly = trust_gate.trust(project_root_for_side);
                 // Build the effective config = global + now-trusted project MCP
@@ -1073,7 +1310,7 @@ pub async fn dispatch(
                 } else {
                     "Project already trusted; reloaded its MCP servers and hooks.".to_string()
                 };
-                let _ = resp_tx.send(round_response(&session.id().await, RoundEvent::Text(msg)));
+                record_command(session, resp_tx, name, args, CommandResult::Text(msg)).await;
             }
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
@@ -1104,7 +1341,7 @@ pub async fn dispatch(
             } else {
                 "Project was not trusted; nothing to revoke.".to_string()
             };
-            let _ = resp_tx.send(round_response(&session.id().await, RoundEvent::Text(msg)));
+            record_command(session, resp_tx, name, args, CommandResult::Text(msg)).await;
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Skills) => {
@@ -1116,50 +1353,66 @@ pub async fn dispatch(
                     };
                     match tool.call("{}").await {
                         Ok(output) => {
-                            let _ = resp_tx.send(round_response(
-                                &session.id().await,
-                                RoundEvent::Text(output),
-                            ));
+                            record_command(
+                                session,
+                                resp_tx,
+                                name,
+                                args,
+                                CommandResult::Text(output),
+                            )
+                            .await;
                         }
                         Err(error) => {
-                            let _ = resp_tx.send(AgentResponse::Error(error));
+                            record_error(session, resp_tx, name, args, error).await;
                         }
                     }
                 }
                 "reload" => {
                     skills_registry_for_commands.reload().await;
                     let count = skills_registry_for_commands.lock().list().len();
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!("Skills reloaded. {} skill(s) available.", count)),
-                    ));
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
+                            "Skills reloaded. {} skill(s) available.",
+                            count
+                        )),
+                    )
+                    .await;
                 }
                 other => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Unknown skills command '{}'. Use 'list' or 'reload'.",
-                        other
-                    )));
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!(
+                            "Unknown skills command '{}'. Use 'list' or 'reload'.",
+                            other
+                        ),
+                    )
+                    .await;
                 }
             }
         }
         Some(BuiltinCmd::Skill) => {
-            let name = cmd.strip_prefix("/skill").unwrap_or("").trim();
-            if name.is_empty() {
-                let _ = resp_tx.send(AgentResponse::Error("Usage: /skill <name>".to_string()));
+            let skill_name = cmd.strip_prefix("/skill").unwrap_or("").trim();
+            if skill_name.is_empty() {
+                record_error(session, resp_tx, name, args, "Usage: /skill <name>").await;
             } else {
-                let args = serde_json::json!({ "name": name }).to_string();
+                let args_json = serde_json::json!({ "name": skill_name }).to_string();
                 let tool = UseSkillTool {
                     registry: skills_registry_for_commands.clone(),
                 };
-                match tool.call(&args).await {
+                match tool.call(&args_json).await {
                     Ok(output) => {
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::Text(output),
-                        ));
+                        record_command(session, resp_tx, name, args, CommandResult::Text(output))
+                            .await;
                     }
                     Err(error) => {
-                        let _ = resp_tx.send(AgentResponse::Error(error));
+                        record_error(session, resp_tx, name, args, error).await;
                     }
                 }
             }
@@ -1173,10 +1426,14 @@ pub async fn dispatch(
                 &session.id().await,
                 RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
             ));
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text("Conversation history cleared.".to_string()),
-            ));
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text("Conversation history cleared.".to_string()),
+            )
+            .await;
             // `/clear` removes transcript content but deliberately preserves
             // the session's monotonic round counter. Re-publish it after the
             // generic ConversationCleared reset so the frontend does not
@@ -1185,6 +1442,7 @@ pub async fn dispatch(
         }
         Some(BuiltinCmd::Export) => {
             let messages = session.model_window().await;
+            let commands = session.commands().await;
             let session_id = session.id().await;
             let provider_id = agent.provider.provider_id();
             let model_name = agent.provider.model();
@@ -1195,37 +1453,53 @@ pub async fn dispatch(
                     model: &model_name,
                 },
                 &messages,
+                &commands,
             );
             let char_count = markdown.chars().count();
             match ui.copy_to_clipboard(&markdown).await {
                 Ok(crate::CopyOutcome::Native) => {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Session exported to clipboard ({} messages, {} chars). \
                                              Paste it into another agent to continue this work.",
                             messages.len(),
                             char_count
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Ok(crate::CopyOutcome::Osc52) => {
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Session exported via OSC52 ({} messages, {} chars). \
                                              If your terminal did not capture it, run neenee in a \
                                              clipboard-capable environment.",
                             messages.len(),
                             char_count
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Err(error) => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Export built ({} chars) but clipboard copy failed: {}",
-                        char_count, error
-                    )));
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!(
+                            "Export built ({} chars) but clipboard copy failed: {}",
+                            char_count, error
+                        ),
+                    )
+                    .await;
                 }
             }
         }
@@ -1242,9 +1516,14 @@ pub async fn dispatch(
                         Some("on") | Some("true") | Some("1") => Some(true),
                         Some("off") | Some("false") | Some("0") => Some(false),
                         Some(other) => {
-                            let _ = resp_tx.send(AgentResponse::Error(format!(
-                                "Unknown value '{other}'. Use `/debug trace on|off`."
-                            )));
+                            record_error(
+                                session,
+                                resp_tx,
+                                name,
+                                args,
+                                format!("Unknown value '{other}'. Use `/debug trace on|off`."),
+                            )
+                            .await;
                             return;
                         }
                         None => None,
@@ -1253,15 +1532,19 @@ pub async fn dispatch(
                     let dir =
                         neenee_persistence::paths::get().project_network_dir(project_root_for_side);
                     agent.provider.set_debug_capture(enabled, dir.clone());
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Trace {}: each provider round-trip {} written to\n  {}",
                             if enabled { "ON" } else { "OFF" },
                             if enabled { "is" } else { "will no longer be" },
                             dir.display(),
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Some("preview") => {
                     // /debug preview — dev-only dry run. Projects the *wire*
@@ -1333,16 +1616,26 @@ pub async fn dispatch(
                             if let Err(error) =
                                 neenee_persistence::fsutil::atomic_write_bytes(&file, &bytes)
                             {
-                                let _ = resp_tx.send(AgentResponse::Error(format!(
-                                    "Preview write failed: {error}"
-                                )));
+                                record_error(
+                                    session,
+                                    resp_tx,
+                                    name,
+                                    args,
+                                    format!("Preview write failed: {error}"),
+                                )
+                                .await;
                                 return;
                             }
                         }
                         Err(error) => {
-                            let _ = resp_tx.send(AgentResponse::Error(format!(
-                                "Preview serialize failed: {error}"
-                            )));
+                            record_error(
+                                session,
+                                resp_tx,
+                                name,
+                                args,
+                                format!("Preview serialize failed: {error}"),
+                            )
+                            .await;
                             return;
                         }
                     }
@@ -1352,33 +1645,48 @@ pub async fn dispatch(
                     } else {
                         "of unknown window".to_string()
                     };
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Preview (dry run, wire body, probe \"This is a test.\") — \
                              {provider_id}/{model_name}: ~{tokens} tokens {window_str}, {} \
                              message(s), {n_tools} tool(s). Full JSON: {file_path}",
                             messages.len(),
                         )),
-                    ));
+                    )
+                    .await;
                 }
                 Some(other) => {
-                    let _ = resp_tx.send(AgentResponse::Error(format!(
-                        "Unknown debug target '{other}'. Available: trace, preview. \
-                         Usage: `/debug trace on|off` or `/debug preview`."
-                    )));
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!(
+                            "Unknown debug target '{other}'. Available: trace, preview. \
+                             Usage: `/debug trace on|off` or `/debug preview`."
+                        ),
+                    )
+                    .await;
                 }
                 None => {
                     let trace_on = agent.provider.debug_capture_enabled();
-                    let _ = resp_tx.send(round_response(
-                        &session.id().await,
-                        RoundEvent::Text(format!(
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
                             "Debug status:\n- trace: {}\n\nUsage:\n\
                              - `/debug trace on|off` — trace each provider round-trip\n\
                              - `/debug preview` — dry-run the next request to disk",
                             if trace_on { "ON" } else { "OFF" },
                         )),
-                    ));
+                    )
+                    .await;
                 }
             }
         }
@@ -1421,19 +1729,17 @@ pub async fn dispatch(
             for (name, desc) in BuiltinCmd::ALL {
                 lines.push(format!("{name:<13} — {desc}"));
             }
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format!(
-                    "{}
-{custom_help}{extra_help}",
-                    lines.join(
-                        "
-"
-                    )
-                )),
-            ));
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!("{}\n{custom_help}{extra_help}", lines.join("\n\n"))),
+            )
+            .await;
         }
         Some(BuiltinCmd::Exit) => {
+            record_invocation(session, name, args).await;
             let _ = resp_tx.send(AgentResponse::Exit);
         }
         None => {
@@ -1468,14 +1774,19 @@ pub async fn dispatch(
                     return;
                 }
             }
-            let (name, arguments) = split_custom_command(&cmd);
-            let Some(command) = commands_for_task.get(name) else {
-                let _ = resp_tx.send(AgentResponse::Error(format!(
-                    "Unknown command: {}",
-                    parts[0]
-                )));
+            let (command_name, arguments) = split_custom_command(&cmd);
+            let Some(command) = commands_for_task.get(command_name) else {
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    format!("Unknown command: {}", parts[0]),
+                )
+                .await;
                 return;
             };
+            record_invocation(session, name, args).await;
             start_active_turn(
                 active_view_side,
                 side,
@@ -1508,13 +1819,19 @@ pub async fn dispatch(
 async fn list_scheduled_jobs(
     session: &Arc<SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
 ) {
     let mut jobs = session.scheduled_jobs().await;
     if jobs.is_empty() {
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Text("No scheduled jobs.".to_string()),
-        ));
+        record_command(
+            session,
+            resp_tx,
+            name,
+            args,
+            CommandResult::Text("No scheduled jobs.".to_string()),
+        )
+        .await;
         return;
     }
     jobs.sort_by_key(|j| j.next_fire);
@@ -1529,10 +1846,14 @@ async fn list_scheduled_jobs(
             j.prompt,
         ));
     }
-    let _ = resp_tx.send(round_response(
-        &session.id().await,
-        RoundEvent::Text(lines.join("\n")),
-    ));
+    record_command(
+        session,
+        resp_tx,
+        name,
+        args,
+        CommandResult::Text(lines.join("\n")),
+    )
+    .await;
 }
 
 /// `/schedule cancel <id>` / `/repeat cancel <id>`: drop the job with that id.
@@ -1540,26 +1861,36 @@ async fn cancel_scheduled_job(
     session: &Arc<SessionStore>,
     id: &str,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
 ) {
     let mut jobs = session.scheduled_jobs().await;
     let before = jobs.len();
     jobs.retain(|j| j.id != id);
     if before == jobs.len() {
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Text(format!("No scheduled job with id {id}.")),
-        ));
+        record_command(
+            session,
+            resp_tx,
+            name,
+            args,
+            CommandResult::Text(format!("No scheduled job with id {id}.")),
+        )
+        .await;
         return;
     }
     match session.set_scheduled_jobs(jobs).await {
         Ok(()) => {
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format!("Cancelled scheduled job {id}.")),
-            ));
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!("Cancelled scheduled job {id}.")),
+            )
+            .await;
         }
         Err(error) => {
-            let _ = resp_tx.send(AgentResponse::Error(error));
+            record_error(session, resp_tx, name, args, error).await;
         }
     }
 }
@@ -1573,6 +1904,8 @@ async fn add_scheduled_job(
     prompt: &str,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     req_tx: &mpsc::UnboundedSender<AgentRequest>,
+    name: &str,
+    args: &str,
 ) {
     let now = chrono::Utc::now();
     let next = match CronExpr::parse(cron)
@@ -1580,9 +1913,14 @@ async fn add_scheduled_job(
     {
         Ok(n) => n,
         Err(error) => {
-            let _ = resp_tx.send(AgentResponse::Error(format!(
-                "Invalid cron `{cron}`: {error}"
-            )));
+            record_error(
+                session,
+                resp_tx,
+                name,
+                args,
+                format!("Invalid cron `{cron}`: {error}"),
+            )
+            .await;
             return;
         }
     };
@@ -1602,13 +1940,19 @@ async fn add_scheduled_job(
     jobs.push(job);
     match session.set_scheduled_jobs(jobs).await {
         Ok(()) => {
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Text(format!(
-                    "Scheduled cron job {short_id} (`{cron}`), next {}. Running now.",
-                    next.format("%Y-%m-%d %H:%M"),
-                )),
-            ));
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Scheduled {
+                    kind: "cron".to_string(),
+                    id: short_id,
+                    trigger: format!("`{cron}`"),
+                    next: format!("{} Running now.", next.format("%Y-%m-%d %H:%M")),
+                },
+            )
+            .await;
             // Fire the first run immediately (the scheduler handles the rest).
             let _ = req_tx.send(AgentRequest::Chat {
                 text: prompt.to_string(),
@@ -1617,7 +1961,7 @@ async fn add_scheduled_job(
             });
         }
         Err(error) => {
-            let _ = resp_tx.send(AgentResponse::Error(error));
+            record_error(session, resp_tx, name, args, error).await;
         }
     }
 }

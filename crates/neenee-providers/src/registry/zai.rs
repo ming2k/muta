@@ -42,8 +42,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "glm-5.1",
         name: "GLM-5.1",
@@ -56,8 +54,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "glm-5",
         name: "GLM-5",
@@ -70,8 +66,6 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
-
-
     Model {
         id: "glm-4.7",
         name: "GLM-4.7",

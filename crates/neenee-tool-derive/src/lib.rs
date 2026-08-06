@@ -18,7 +18,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
+use syn::{Data, DeriveInput, Fields, Type, parse_macro_input};
 
 #[proc_macro_derive(ToolSchema, attributes(tool))]
 pub fn tool_schema_derive(input: TokenStream) -> TokenStream {
@@ -49,16 +49,13 @@ pub fn tool_schema_derive(input: TokenStream) -> TokenStream {
         let ident = f.ident.as_ref().unwrap();
         let field_name = ident.to_string();
         let (json_type, optional) = rust_type_to_json(&f.ty);
-        let desc = f
-            .attrs
-            .iter()
-            .find_map(|a| {
-                if a.path().is_ident("tool") {
-                    a.parse_args::<syn::LitStr>().ok().map(|s| s.value())
-                } else {
-                    None
-                }
-            });
+        let desc = f.attrs.iter().find_map(|a| {
+            if a.path().is_ident("tool") {
+                a.parse_args::<syn::LitStr>().ok().map(|s| s.value())
+            } else {
+                None
+            }
+        });
         field_entries.push((field_name, json_type, desc, optional, ident));
     }
 
@@ -81,8 +78,11 @@ pub fn tool_schema_derive(input: TokenStream) -> TokenStream {
             },
         }
     });
-    let required_names: Vec<&String> =
-        field_entries.iter().filter(|(_, _, _, opt, _)| !opt).map(|(n, _, _, _, _)| n).collect();
+    let required_names: Vec<&String> = field_entries
+        .iter()
+        .filter(|(_, _, _, opt, _)| !opt)
+        .map(|(n, _, _, _, _)| n)
+        .collect();
 
     let expanded = quote! {
         impl #name {

@@ -155,7 +155,12 @@ impl McpRuntime {
             statuses: RwLock::new(statuses),
             sink,
         };
-        for name in runtime.configs.read().unwrap_or_else(|e| e.into_inner()).keys() {
+        for name in runtime
+            .configs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+        {
             runtime.sink.replace(&source_id(name), Vec::new());
         }
         runtime
@@ -258,9 +263,16 @@ impl McpRuntime {
     /// `configs` map is swapped under one write lock); the per-server
     /// connect/disconnect I/O runs afterward without holding the config lock,
     /// mirroring `refresh_all`'s lock-then-release-for-I/O pattern.
-    pub async fn reconfigure(&self, new_configs: HashMap<String, McpServerConfig>) -> ReconfigureReport {
+    pub async fn reconfigure(
+        &self,
+        new_configs: HashMap<String, McpServerConfig>,
+    ) -> ReconfigureReport {
         // 1. Compute the diff against the current configs.
-        let (removed, added_or_changed, unchanged): (Vec<String>, Vec<(String, McpServerConfig)>, Vec<String>) = {
+        let (removed, added_or_changed, unchanged): (
+            Vec<String>,
+            Vec<(String, McpServerConfig)>,
+            Vec<String>,
+        ) = {
             let current = self.configs.read().unwrap_or_else(|e| e.into_inner());
             let current_names: std::collections::HashSet<&String> = current.keys().collect();
             let new_names: std::collections::HashSet<&String> = new_configs.keys().collect();
@@ -292,16 +304,17 @@ impl McpRuntime {
         //    list; added/changed names get a fresh entry. Run the new
         //    connections concurrently (independent I/O), then splice results
         //    back. This mirrors refresh_all: minimal lock time, parallel I/O.
-        let to_disconnect: std::collections::HashSet<&str> = removed
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let to_disconnect: std::collections::HashSet<&str> =
+            removed.iter().map(String::as_str).collect();
 
         // Existing entries we keep verbatim (unchanged names only).
         let entries = self.entries.lock().await;
         let kept: Vec<McpEntry> = entries
             .iter()
-            .filter(|e| !to_disconnect.contains(e.name.as_str()) && !added_or_changed.iter().any(|(n, _)| n == &e.name))
+            .filter(|e| {
+                !to_disconnect.contains(e.name.as_str())
+                    && !added_or_changed.iter().any(|(n, _)| n == &e.name)
+            })
             .cloned()
             .collect();
         // Disconnect signal: remove dropped sources from the sink now so their
@@ -317,25 +330,32 @@ impl McpRuntime {
         drop(entries);
 
         // 4. Connect every added/changed server concurrently.
-        let connect_futures = added_or_changed.into_iter().map(|(name, config)| async move {
-            if !config.enabled {
-                McpEntry {
-                    name,
-                    server: None,
-                    tools: Vec::new(),
-                    status: McpConnectionStatus::Disabled,
+        let connect_futures = added_or_changed
+            .into_iter()
+            .map(|(name, config)| async move {
+                if !config.enabled {
+                    McpEntry {
+                        name,
+                        server: None,
+                        tools: Vec::new(),
+                        status: McpConnectionStatus::Disabled,
+                    }
+                } else {
+                    connect_entry(name, &config).await
                 }
-            } else {
-                connect_entry(name, &config).await
-            }
-        });
+            });
         let connected: Vec<McpEntry> = futures::future::join_all(connect_futures).await;
 
         // Extract the per-server success report before `connected` is consumed
         // by the splice below.
         let report_connected: Vec<(String, bool)> = connected
             .iter()
-            .map(|e| (e.name.clone(), matches!(e.status, McpConnectionStatus::Connected { .. })))
+            .map(|e| {
+                (
+                    e.name.clone(),
+                    matches!(e.status, McpConnectionStatus::Connected { .. }),
+                )
+            })
             .collect();
 
         // 5. Splice: kept + connected, name-sorted, then publish.
@@ -440,7 +460,10 @@ impl McpRuntime {
     /// Whether any server is configured at all (the catalog skips its loop when
     /// none are).
     pub fn is_empty(&self) -> bool {
-        self.configs.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+        self.configs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Publish complete per-server tool snapshots and rebuild the synchronous
@@ -462,7 +485,12 @@ impl McpRuntime {
 
 impl Drop for McpRuntime {
     fn drop(&mut self) {
-        for name in self.configs.get_mut().unwrap_or_else(|e| e.into_inner()).keys() {
+        for name in self
+            .configs
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+        {
             self.sink.remove(&source_id(name));
         }
     }
@@ -600,7 +628,10 @@ mod tests {
 
         let report = runtime.reconfigure(HashMap::new()).await;
         assert_eq!(report.removed, vec!["gone"]);
-        assert!(sink.sources.read().unwrap().is_empty(), "removed server's source cleared");
+        assert!(
+            sink.sources.read().unwrap().is_empty(),
+            "removed server's source cleared"
+        );
         assert!(runtime.statuses_snapshot().is_empty());
     }
 
@@ -648,15 +679,12 @@ mod tests {
 
         assert_eq!(report.connected.len(), 1, "changed server re-added");
         assert!(report.removed.is_empty(), "name still present, not removed");
-        assert!(report.unchanged.is_empty(), "config differed, not unchanged");
+        assert!(
+            report.unchanged.is_empty(),
+            "config differed, not unchanged"
+        );
         // The new config is now the source of truth for re-enable.
-        let stored = runtime
-            .configs
-            .read()
-            .unwrap()
-            .get("svc")
-            .cloned()
-            .unwrap();
+        let stored = runtime.configs.read().unwrap().get("svc").cloned().unwrap();
         assert_eq!(stored.command, vec!["new".to_string()]);
     }
 }

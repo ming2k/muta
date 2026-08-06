@@ -78,7 +78,13 @@ pub fn draw_sessions_modal(
     ];
 
     if keymap_open {
-        modal_header(frame, f.header, "Sessions · keybindings", theme);
+        // Breadcrumb: `Sessions` modal › its keybindings sub-page.
+        modal_header(
+            frame,
+            f.header,
+            &format!("Sessions{}keybindings", crate::tui::design::JOIN_BREADCRUMB),
+            theme,
+        );
         let body = keymap_body_lines(&list_footer_hints, &list_extra, theme);
         render_body(
             frame,
@@ -293,7 +299,10 @@ fn detail_body(detail: &neenee_core::SessionDetail, theme: &Theme) -> Vec<Line<'
                 lines.push(Line::from(Span::styled(flat, value)));
             }
             if prompt.trim().is_empty() {
-                lines.push(Line::from(Span::styled("(empty)", Style::default().fg(theme.muted()))));
+                lines.push(Line::from(Span::styled(
+                    "(empty)",
+                    Style::default().fg(theme.muted()),
+                )));
             }
         }
         None => lines.push(Line::from(Span::styled(

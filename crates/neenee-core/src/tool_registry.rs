@@ -604,8 +604,8 @@ macro_rules! register_tool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::{ScopeTarget, ToolAccesses};
+    use async_trait::async_trait;
     use std::path::PathBuf;
 
     struct PingTool;
@@ -678,9 +678,7 @@ mod tests {
         // declared when there is a real path to write — the realistic shape.
         fn accesses(&self, arguments: &str) -> ToolAccesses {
             match self.scope_target(arguments) {
-                ScopeTarget::Path(p) => {
-                    ToolAccesses::write_file(p.to_string_lossy().into_owned())
-                }
+                ScopeTarget::Path(p) => ToolAccesses::write_file(p.to_string_lossy().into_owned()),
                 _ => ToolAccesses::none(),
             }
         }

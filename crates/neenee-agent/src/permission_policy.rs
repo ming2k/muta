@@ -556,11 +556,7 @@ mod tests {
     }
     #[async_trait]
     impl PermissionContext for StubCtx {
-        async fn check_pre_tool_use(
-            &self,
-            _n: &str,
-            _i: &serde_json::Value,
-        ) -> PreToolUseVerdict {
+        async fn check_pre_tool_use(&self, _n: &str, _i: &serde_json::Value) -> PreToolUseVerdict {
             PreToolUseVerdict::default()
         }
         fn apply_scoped_disables(&self, _d: &[(String, RestorePoint)]) {}
@@ -609,7 +605,17 @@ mod tests {
             autopilot: false,
             perms: PermissionStore::new(),
         };
-        let c = pctx(&tool, "bash", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
+        let c = pctx(
+            &tool,
+            "bash",
+            "{}",
+            ScopeTarget::Unspecified,
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
         assert!(matches!(
             DisabledPolicy.evaluate(&c).await,
             PolicyDecision::Deny { .. }
@@ -742,7 +748,10 @@ mod tests {
             scoped.clone(),
             &ctxr,
         );
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Approve));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::Approve
+        ));
     }
 
     #[tokio::test]
@@ -769,7 +778,10 @@ mod tests {
             scoped.clone(),
             &ctxr,
         );
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Ask { .. }));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::Ask { .. }
+        ));
     }
 
     #[tokio::test]
@@ -886,7 +898,17 @@ mod tests {
             autopilot: false,
             perms: PermissionStore::new(),
         };
-        let c = pctx(&tool, "read_text", "{}", ScopeTarget::Unspecified, false, op.clone(), disabled.clone(), scoped.clone(), &ctxr);
+        let c = pctx(
+            &tool,
+            "read_text",
+            "{}",
+            ScopeTarget::Unspecified,
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(ScopeGatePolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }

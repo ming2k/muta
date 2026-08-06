@@ -73,30 +73,57 @@ impl HistoryEntry {
 /// `Vec<String>` constant so the on-disk footprint stays bounded.
 pub const HISTORY_CAP: usize = 10_000;
 
-/// Merge `incoming` into `existing`, taking the union by
-/// `(text, session_id)` identity and keeping the **newest** `created_at_ms`
-/// for each survivor, then sorting newest-first and capping to
-/// [`HISTORY_CAP`].
+/// Merge `incoming` into `existing`, taking the union and keeping the
+/// **newest** `created_at_ms` for each survivor, then sorting newest-first and
+/// capping to [`HISTORY_CAP`].
+///
+/// The merge identity is chosen by `dedup`:
+/// - `dedup == true` keys on the **prompt text alone**, so the same prompt
+///   sent twice — even in different sessions or workspaces — collapses into a
+///   single entry. This is the default (`[input_history] dedup = true`):
+///   users usually want the picker to show one row per prompt, not one per
+///   repetition.
+/// - `dedup == false` keys on `(text, session_id)`, so the same words typed
+///   in two sessions stay as two entries, each with its own origin and
+///   timestamp.
 ///
 /// This is the cross-process merge used by `Config::save_history`: every
 /// live process appends only its own new entries, and the write takes a file
 /// lock, reloads the on-disk list, and unions the two so a concurrent
-/// process's recent commands survive (ADR-0018). Because two processes can
-/// record the same prompt in different sessions, identity is keyed on
-/// `(text, session_id)` rather than text alone — the same words typed in two
-/// sessions stay as two entries, each with its own origin and timestamp.
-pub fn merge_history(existing: &[HistoryEntry], incoming: &[HistoryEntry]) -> Vec<HistoryEntry> {
+/// process's recent commands survive (ADR-0018).
+pub fn merge_history(
+    existing: &[HistoryEntry],
+    incoming: &[HistoryEntry],
+    dedup: bool,
+) -> Vec<HistoryEntry> {
     // Preserve first-seen order from `existing`, then append `incoming`
-    // entries whose (text, session_id) is not already present, updating the
-    // timestamp to the newer of the two when an identity collides.
+    // entries whose identity is not already present, updating the timestamp
+    // (and, under text-only identity, the origin) to the newer of the two
+    // when an identity collides.
     let mut merged: Vec<HistoryEntry> = existing.to_vec();
     for entry in incoming {
-        if let Some(slot) = merged
-            .iter_mut()
-            .find(|e| e.text == entry.text && e.session_id == entry.session_id)
-        {
+        let slot = if dedup {
+            merged.iter_mut().find(|e| e.text == entry.text)
+        } else {
+            merged
+                .iter_mut()
+                .find(|e| e.text == entry.text && e.session_id == entry.session_id)
+        };
+        if let Some(slot) = slot {
             if entry.created_at_ms > slot.created_at_ms {
                 slot.created_at_ms = entry.created_at_ms;
+                // Under text-only identity the newer entry's origin is the one
+                // the recall surfaces under — refresh it so ↑/↓ in the session
+                // that last sent the prompt still finds it. Only overwrite with
+                // a known origin; a legacy `None` never wipes a real one.
+                if dedup {
+                    if entry.session_id.is_some() {
+                        slot.session_id = entry.session_id.clone();
+                    }
+                    if entry.workspace.is_some() {
+                        slot.workspace = entry.workspace.clone();
+                    }
+                }
             }
             continue;
         }
@@ -137,7 +164,7 @@ mod tests {
             entry("rollback", "s2", "ws-c", 250),
         ];
 
-        let merged = merge_history(&existing, &incoming);
+        let merged = merge_history(&existing, &incoming, false);
 
         // Newest-first: hello(300), rollback(250), deploy(200).
         assert_eq!(merged.len(), 3);
@@ -147,40 +174,89 @@ mod tests {
         assert_eq!(merged[2].text, "deploy");
 
         // The colliding entry's origin is not overwritten when it already
-        // had one (ws-a stays, ws-b ignored).
+        // had one (ws-a stays, ws-b ignored) in the non-dedup identity.
         assert_eq!(merged[0].workspace.as_deref(), Some("ws-a"));
     }
 
     #[test]
-    fn same_text_in_two_sessions_is_two_entries() {
+    fn same_text_in_two_sessions_is_two_entries_without_dedup() {
         let existing = vec![entry("hello", "s1", "ws-a", 100)];
         let incoming = vec![entry("hello", "s2", "ws-b", 200)];
 
-        let merged = merge_history(&existing, &incoming);
+        let merged = merge_history(&existing, &incoming, false);
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].session_id.as_deref(), Some("s2")); // newer first
         assert_eq!(merged[1].session_id.as_deref(), Some("s1"));
     }
 
     #[test]
-    fn merge_treats_unknown_origin_as_distinct_identity() {
-        // Identity is `(text, session_id)`. A legacy entry with no known
-        // session id does NOT collide with a real entry that names a
-        // session — the two are genuinely different provenances, so both
-        // survive the union. This matches the migration stance: the global
-        // history file is reset on upgrade, so legacy `None`-origin
-        // entries never coexist with attributed ones in practice.
+    fn dedup_collapses_same_text_across_sessions() {
+        // With dedup on, identity is the prompt text alone: the same words in
+        // two sessions collapse to one entry, keeping the newest timestamp and
+        // adopting the newest known origin.
+        let existing = vec![entry("hello", "s1", "ws-a", 100)];
+        let incoming = vec![entry("hello", "s2", "ws-b", 200)];
+
+        let merged = merge_history(&existing, &incoming, true);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].text, "hello");
+        assert_eq!(merged[0].created_at_ms, 200);
+        assert_eq!(merged[0].session_id.as_deref(), Some("s2"));
+        assert_eq!(merged[0].workspace.as_deref(), Some("ws-b"));
+    }
+
+    #[test]
+    fn dedup_reorders_the_collapsed_entry_newest_first() {
+        let existing = vec![
+            entry("hello", "s1", "ws-a", 100),
+            entry("deploy", "s1", "ws-a", 90),
+        ];
+        let incoming = vec![entry("deploy", "s1", "ws-a", 300)];
+
+        let merged = merge_history(&existing, &incoming, true);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].text, "deploy"); // bumped to the top by its new ts
+        assert_eq!(merged[0].created_at_ms, 300);
+        assert_eq!(merged[1].text, "hello");
+    }
+
+    #[test]
+    fn dedup_keeps_existing_origin_when_incoming_is_unknown() {
+        // A legacy `None`-origin incoming must not wipe a known origin, even
+        // though it is newer — unknown provenance is never more informative.
         let existing = vec![HistoryEntry::new(
             "hello".to_string(),
-            None,
-            None,
+            Some("s1".to_string()),
+            Some("ws-a".to_string()),
             100,
         )];
+        let incoming = vec![HistoryEntry::new("hello".to_string(), None, None, 300)];
+
+        let merged = merge_history(&existing, &incoming, true);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].created_at_ms, 300);
+        assert_eq!(merged[0].session_id.as_deref(), Some("s1"));
+        assert_eq!(merged[0].workspace.as_deref(), Some("ws-a"));
+    }
+
+    #[test]
+    fn merge_treats_unknown_origin_as_distinct_identity() {
+        // Identity is `(text, session_id)` when dedup is off. A legacy entry
+        // with no known session id does NOT collide with a real entry that
+        // names a session — the two are genuinely different provenances, so
+        // both survive the union. This matches the migration stance: the
+        // global history file is reset on upgrade, so legacy `None`-origin
+        // entries never coexist with attributed ones in practice.
+        let existing = vec![HistoryEntry::new("hello".to_string(), None, None, 100)];
         let incoming = vec![entry("hello", "s1", "ws-a", 100)];
 
-        let merged = merge_history(&existing, &incoming);
+        let merged = merge_history(&existing, &incoming, false);
         assert_eq!(merged.len(), 2);
-        assert!(merged.iter().any(|e| e.session_id == Some("s1".to_string())));
+        assert!(
+            merged
+                .iter()
+                .any(|e| e.session_id == Some("s1".to_string()))
+        );
         assert!(merged.iter().any(|e| e.session_id.is_none()));
     }
 
@@ -189,10 +265,13 @@ mod tests {
         let big: Vec<HistoryEntry> = (0..(HISTORY_CAP + 50))
             .map(|i| entry(&format!("e{i}"), "s", "ws", i as u64))
             .collect();
-        let merged = merge_history(&[], &big);
+        let merged = merge_history(&[], &big, true);
         assert_eq!(merged.len(), HISTORY_CAP);
         // The newest HISTORY_CAP survive (oldest 50 dropped).
-        assert_eq!(merged.first().unwrap().text, format!("e{}", HISTORY_CAP + 49));
+        assert_eq!(
+            merged.first().unwrap().text,
+            format!("e{}", HISTORY_CAP + 49)
+        );
         assert_eq!(merged.last().unwrap().text, format!("e{}", 50));
     }
 

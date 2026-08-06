@@ -260,7 +260,9 @@ inventory::collect!(BaselineModels);
 /// registration (link) order. Callers that need deterministic order-independent
 /// results should match by `id` rather than position.
 pub fn baseline_models() -> impl Iterator<Item = &'static Model> {
-    inventory::iter::<BaselineModels>.into_iter().flat_map(|batch| batch.0.iter())
+    inventory::iter::<BaselineModels>
+        .into_iter()
+        .flat_map(|batch| batch.0.iter())
 }
 
 /// Look up a known model by its wire id. Returns `None` for user-defined or

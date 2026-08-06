@@ -1514,8 +1514,7 @@ mod tests {
         assert!(openai.contains(&"gpt-5.6"));
         assert!(!openai.contains(&"claude-opus-4-8"));
 
-        let anthropic =
-            supported_models_for_template(provider_template_spec("anthropic").unwrap());
+        let anthropic = supported_models_for_template(provider_template_spec("anthropic").unwrap());
         assert!(anthropic.contains(&"claude-opus-4-8"));
         assert!(!anthropic.contains(&"gpt-4o"));
     }
@@ -1623,7 +1622,8 @@ mod tests {
 
     #[test]
     fn reconcile_api_instance_keeps_last_discovered_supported_subset() {
-        let known = supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
+        let known =
+            supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
         let subset = [known[1], known[3]];
         let mut instance = template_instance("openai-sub2api", &subset);
         instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -1639,7 +1639,8 @@ mod tests {
 
     #[test]
     fn reconcile_api_instance_drops_unsupported_without_expanding_subset() {
-        let known = supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
+        let known =
+            supported_models_for_template(provider_template_spec("openai-sub2api").unwrap());
         let kept = known[2];
         let mut instance = template_instance("openai-sub2api", &[kept, "removed-or-unknown-model"]);
         instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -2660,13 +2661,11 @@ mod tests {
             known_outside_seed.to_string(),
             kept_a.to_string(),
         ];
-        let expected = supported_model_intersection(
-            &supported_models_for_template(spec),
-            &advertised,
-        )
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+        let expected =
+            supported_model_intersection(&supported_models_for_template(spec), &advertised)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
         let mut server = mockito::Server::new_async().await;
         let body = format!(
             r#"{{"data":[{{"id":"cloud-only-model"}},{{"id":"{kept_b}"}},{{"id":"{known_outside_seed}"}},{{"id":"{kept_a}"}}]}}"#

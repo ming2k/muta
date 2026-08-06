@@ -9,26 +9,33 @@ always glanceable while it is non-empty — even while the harness is idle.
 ## Appearance
 
 ```text
- 📌 TODOS 2/5 · write the documentation      Ctrl+T expand
+ TODOS 2/5 · write the documentation              Ctrl+T expand
 ```
 
-The bar surfaces three things at a glance: a `📌`-led **`TODOS`** label, the
+The bar surfaces three things at a glance: a brand-colored **`TODOS`** tag, the
 **done/total progress**, and a one-line **preview of the current item** — the
 `InProgress` item, or the first `Pending` item when nothing is mid-flight (it
 then reads as "next up"). A right-pinned **`Ctrl+T expand`** legend is the
-keyboard affordance for the full list.
+keyboard affordance for the full list. The bar sits on the **plain surface**
+(no raised tint, no pin glyph), so it reads as quiet metadata rather than
+another pinned panel. (The ` · ` between progress and preview is an R1
+attribute join; the wide gap before the legend is R3 — see the
+[join ladder](visual-language.md).)
 
 | Segment | Content | Style |
 |---------|---------|-------|
-| Tag | `todo` | `theme.fg()` + BOLD |
+| Tag | `TODOS` | `theme.brand()` + BOLD |
 | Separator | ` · ` | `theme.muted()` |
 | Progress | `done/total` | `theme.fg()` + BOLD |
 | Current item preview | `InProgress` item content, else first `Pending`; truncated with `…` | `theme.fg()` |
 | Legend | `Ctrl+T` + ` expand` | keycap (`theme.brand()` + BOLD) + `theme.muted()` |
 
-Under width pressure the legend drops the `expand` label (keeping just the
-`Ctrl+T` keycap), then drops entirely, so the tag, progress, and preview on
-the left always survive. The preview truncates to the remaining width.
+The legend keeps a guaranteed `BAR_LEGEND_GAP_MIN` columns of breathing
+room from the preview — wider than the hint/status bars' 2-col gap — so a
+truncated item never butts its `…` against the keycap. Under width pressure the
+legend drops the `expand` label (keeping just the `Ctrl+T` keycap), then drops
+entirely, so the tag, progress, and preview on the left always survive. The
+preview truncates to the remaining width.
 
 ## Visibility
 

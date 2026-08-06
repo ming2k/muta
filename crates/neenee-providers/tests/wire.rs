@@ -105,7 +105,8 @@ async fn openai_chat_completions_strips_tool_call_echo_when_native_calls_present
         .create_async()
         .await;
 
-    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider =
+        OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -133,7 +134,8 @@ async fn openai_chat_completions_classifies_server_error_as_retryable() {
         .create_async()
         .await;
 
-    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider =
+        OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -163,8 +165,12 @@ async fn openai_chat_completions_omits_auth_header_when_api_key_is_empty() {
         .create_async()
         .await;
 
-    let provider =
-        OpenAiChatCompletionsProvider::with_base_url_and_user_agent(String::new(), "m".to_string(), &url, "ua");
+    let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
+        String::new(),
+        "m".to_string(),
+        &url,
+        "ua",
+    );
     let message = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -187,7 +193,8 @@ async fn openai_chat_completions_decode_failure_embeds_raw_body() {
         .create_async()
         .await;
 
-    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider =
+        OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let error = provider
         .chat(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -224,7 +231,8 @@ async fn openai_stream_parses_text_reasoning_and_tool_call_deltas() {
         .create_async()
         .await;
 
-    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider =
+        OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
         .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await
@@ -274,7 +282,8 @@ async fn openai_stream_strips_echo_text_when_native_tool_calls_stream_in() {
         .create_async()
         .await;
 
-    let provider = OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
+    let provider =
+        OpenAiChatCompletionsProvider::with_base_url("k".to_string(), "m".to_string(), &url);
     let stream = provider
         .stream_chat_events(vec![Message::new(Role::User, "hi")].into())
         .await

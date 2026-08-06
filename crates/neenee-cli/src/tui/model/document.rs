@@ -24,6 +24,12 @@ pub enum ToolStepStatus {
     /// Aborted mid-flight (e.g. the user interrupted the turn). Terminal, just
     /// like `Ok`/`Failed`: a later result or cancel event is ignored.
     Cancelled,
+    /// Stopped by the user (the turn was interrupted) *after* producing real
+    /// work: the envoy's partial transcript was preserved. Distinct from
+    /// [`ToolStepStatus::Cancelled`] (nothing recovered) and
+    /// [`ToolStepStatus::Failed`] (the sub-task errored on its own): this is
+    /// resumable work the user deliberately cut short.
+    Interrupted,
 }
 
 impl ToolStepStatus {
@@ -113,6 +119,22 @@ pub enum MessageKind {
     /// severity→color/icon mapping and lets callers stop string-sniffing.
     Notice {
         severity: NoticeSeverity,
+    },
+    /// A slash-command invocation with its typed result (ADR-0091). Rendered
+    /// as a compact dimmed header row (the invocation) with an expandable
+    /// result body — never as assistant prose. `raw` holds the invocation
+    /// text (`/search foo`, `!ls -la`); `blocks` hold the parsed result text
+    /// (`CommandResult::to_text()`), empty when the record carried no result
+    /// (legacy folds and shell passthroughs).
+    CommandResult {
+        /// The typed result (ADR-0091). `None` when the invocation was
+        /// recorded but the reply was never persisted (legacy echo folds,
+        /// `!command` passthroughs). Boxed to keep this enum variant small
+        /// (`CommandResult` carries `Vec<SearchHit>` / `Vec<ReviewVerdict>`).
+        result: Option<Box<neenee_core::CommandResult>>,
+        expanded: bool,
+        /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
+        user_pinned: bool,
     },
 }
 
@@ -519,6 +541,52 @@ impl TranscriptMessage {
         message
     }
 
+    /// A slash-command invocation with its typed result (ADR-0091). `name` is
+    /// the command word without the leading slash (`"search"`), `"shell"` for
+    /// a `!command` passthrough. The collapsed row shows the invocation; the
+    /// expandable body shows `result.to_text()`.
+    pub fn command_result(
+        name: impl Into<String>,
+        args: impl Into<String>,
+        result: Option<neenee_core::CommandResult>,
+    ) -> Self {
+        let name = name.into();
+        let args = args.into();
+        // The invocation as displayed: `!cmd` for shell passthroughs (their
+        // args carry the literal `!cmd` text), `/name args` for slash
+        // commands.
+        let invocation = if name == "shell" {
+            args.clone()
+        } else {
+            let full = format!("/{} {}", name, args);
+            full.trim_end().to_string()
+        };
+        let result_text = result
+            .as_ref()
+            .map(|result| result.to_text())
+            .unwrap_or_default();
+        Self {
+            id: next_message_id(),
+            // A harness artifact, not user or model prose — the renderer gives
+            // it its own dimmed command-row treatment.
+            role: Role::Tool,
+            blocks: parse_blocks(&result_text),
+            raw: sanitize_text(&invocation).into_owned(),
+            kind: MessageKind::CommandResult {
+                result: result.map(Box::new),
+                expanded: false,
+                user_pinned: false,
+            },
+            delivery: DeliveryStatus::default(),
+            origin: UserMessageOrigin::Chat,
+            provider: None,
+            model: None,
+            round: None,
+            turn: None,
+            sent_at_ms: None,
+        }
+    }
+
     pub fn finish_tool_step(
         &mut self,
         id: &str,
@@ -550,6 +618,17 @@ impl TranscriptMessage {
         // from a runtime error.
         *status = if matches!(structured, neenee_core::ToolOutput::PermissionDenied { .. }) {
             ToolStepStatus::Denied
+        } else if matches!(
+            &structured,
+            neenee_core::ToolOutput::Envoy {
+                interrupted: true,
+                ..
+            }
+        ) {
+            // A cooperatively-drained envoy: the user interrupted the turn,
+            // but the partial transcript was preserved. Classified before
+            // `is_error()` because interruption is not a failure.
+            ToolStepStatus::Interrupted
         } else if structured.is_error() {
             ToolStepStatus::Failed
         } else {
@@ -822,6 +901,53 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::ToolStep { .. })
     }
 
+    pub fn is_command_result(&self) -> bool {
+        matches!(self.kind, MessageKind::CommandResult { .. })
+    }
+
+    pub fn command_result_expanded(&self) -> Option<bool> {
+        match &self.kind {
+            MessageKind::CommandResult { expanded, .. } => Some(*expanded),
+            _ => None,
+        }
+    }
+
+    /// User-driven disclosure change: force `expanded` and mark it pinned so
+    /// later transitions leave it alone.
+    pub fn pin_command_result_expanded(&mut self, expanded: bool) {
+        if let MessageKind::CommandResult {
+            expanded: current,
+            user_pinned,
+            ..
+        } = &mut self.kind
+        {
+            *current = expanded;
+            *user_pinned = true;
+        }
+    }
+
+    /// The invocation text shown on the collapsed command row (`/search foo`,
+    /// `!ls -la`), from the message `raw`.
+    pub fn command_result_summary(&self) -> Option<String> {
+        if self.is_command_result() {
+            Some(self.raw.clone())
+        } else {
+            None
+        }
+    }
+
+    /// The typed result body text (ADR-0091 `to_text`), when the record
+    /// carries a result.
+    pub fn command_result_text(&self) -> Option<String> {
+        match &self.kind {
+            MessageKind::CommandResult {
+                result: Some(result),
+                ..
+            } => Some(result.to_text()),
+            _ => None,
+        }
+    }
+
     pub fn tool_step_expanded(&self) -> Option<bool> {
         match &self.kind {
             MessageKind::ToolStep { expanded, .. } => Some(*expanded),
@@ -949,6 +1075,9 @@ impl TranscriptMessage {
             ToolStepStatus::Failed => format!("↳ Failed · {} tool calls", tool_calls),
             ToolStepStatus::Denied => format!("↳ Denied · {} tool calls", tool_calls),
             ToolStepStatus::Cancelled => format!("↳ Cancelled · {} tool calls", tool_calls),
+            ToolStepStatus::Interrupted => {
+                format!("↳ Interrupted · {} tool calls", tool_calls)
+            }
             ToolStepStatus::Ok => format!(
                 "↳ Completed · {} tool calls · {}",
                 tool_calls,
@@ -1237,6 +1366,9 @@ impl TranscriptMessage {
             ToolStepStatus::Cancelled => {
                 format!("{} · cancelled {}", summary, duration_text(*duration_ms))
             }
+            ToolStepStatus::Interrupted => {
+                format!("{} · interrupted {}", summary, duration_text(*duration_ms))
+            }
         })
     }
 
@@ -1286,6 +1418,9 @@ impl TranscriptMessage {
                 ToolStepStatus::Denied => format!(" · denied {}", duration_text(*duration_ms)),
                 ToolStepStatus::Cancelled => {
                     format!(" · cancelled {}", duration_text(*duration_ms))
+                }
+                ToolStepStatus::Interrupted => {
+                    format!(" · interrupted {}", duration_text(*duration_ms))
                 }
             };
             self.raw = format!("{}{}", summary, suffix);
@@ -2624,10 +2759,49 @@ mod tests {
             usage: neenee_core::TokenUsage::default(),
             generation_ms: 0,
             failed: true,
+            interrupted: false,
         };
         assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
         let status = task.envoy_status_line().unwrap();
         assert!(status.starts_with("↳ Failed"), "got: {status}");
+    }
+
+    #[test]
+    fn interrupted_envoy_status_reports_interrupted_not_failed() {
+        let mut task =
+            TranscriptMessage::tool_step("c", "envoy", r#"{"description":"d","prompt":"p"}"#);
+        task.push_envoy_event(&EnvoyEvent::ToolCall {
+            id: "i".into(),
+            name: "read_text".into(),
+            arguments: "{}".into(),
+        });
+        task.push_envoy_event(&EnvoyEvent::ToolResult {
+            id: "i".into(),
+            name: "read_text".into(),
+            output: "found 1 of 3 handlers".into(),
+            duration_ms: 5,
+        });
+        // An interrupted envoy carries `interrupted: true, failed: false`:
+        // the partial work was preserved, so it must classify as Interrupted
+        // — never as Failed (it did not error) and never as Ok (it did not
+        // finish).
+        let structured = neenee_core::ToolOutput::Envoy {
+            summary: "Interrupted: stopped by the user".into(),
+            messages: Vec::new(),
+            usage: neenee_core::TokenUsage::default(),
+            generation_ms: 0,
+            failed: false,
+            interrupted: true,
+        };
+        assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
+        assert_eq!(
+            task.tool_step_status(),
+            Some(ToolStepStatus::Interrupted),
+            "an interrupted envoy classifies as Interrupted"
+        );
+        let line = task.envoy_status_line().unwrap();
+        assert!(line.starts_with("↳ Interrupted"), "got: {line}");
+        assert!(line.contains("1 tool calls"), "got: {line}");
     }
 
     #[test]

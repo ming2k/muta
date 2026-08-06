@@ -2,9 +2,9 @@
 //! ([`Provider`]) and to tools ([`Tool`]), the stream events a provider emits
 //! ([`ProviderStreamEvent`]).
 
-use crate::usage::TokenUsage;
-use crate::tool_output::StdinPolicy;
 use crate::tool_access::ToolAccesses;
+use crate::tool_output::StdinPolicy;
+use crate::usage::TokenUsage;
 use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
@@ -94,7 +94,10 @@ impl ModelRequest {
     pub fn with_tools(messages: Vec<Message>, tools: &[Arc<dyn Tool>]) -> Self {
         Self {
             messages,
-            tool_specs: tools.iter().map(|t| ToolSpec::from_tool(t.as_ref())).collect(),
+            tool_specs: tools
+                .iter()
+                .map(|t| ToolSpec::from_tool(t.as_ref()))
+                .collect(),
         }
     }
 
@@ -296,6 +299,34 @@ pub trait Tool: Send + Sync {
     /// outermost dispatch tool (`task`) and wrappers around it
     /// (`verify_plan_execution`) override to `true`. See ADR-0011.
     fn spawns_envoy(&self) -> bool {
+        false
+    }
+
+    /// Whether this tool cooperates with the harness's turn cancellation by
+    /// observing [`Tool::request_cancel`] and draining its in-flight call to a
+    /// terminal result instead of requiring the harness to drop the future.
+    ///
+    /// The default is `false`: most tools (bash, file I/O, web) cannot stop
+    /// mid-call, so the harness keeps its fast drop-based cancellation for
+    /// them. A tool that runs a nested agent (e.g. `task`) opts in because its
+    /// in-flight call *owns a partial transcript* worth preserving — dropping
+    /// it would discard real work the user may want to resume.
+    fn supports_cooperative_cancel(&self) -> bool {
+        false
+    }
+
+    /// Best-effort cooperative cancellation of an in-flight call identified by
+    /// the harness-assigned `call_id`. The harness calls this when the user
+    /// interrupts a turn, *then* waits a bounded grace period for the call to
+    /// return a terminal result. Returns `true` if the tool accepted the
+    /// request (it will stop at its next safe boundary); `false` if the call
+    /// is unknown or already finished — the harness then falls back to
+    /// dropping the future.
+    ///
+    /// Only consulted when [`Tool::supports_cooperative_cancel`] is `true`.
+    /// The default rejects every request so non-cooperative tools keep their
+    /// unchanged drop semantics.
+    fn request_cancel(&self, _call_id: &str) -> bool {
         false
     }
 
@@ -711,30 +742,38 @@ mod tests {
         // scope (both axes None) is "unrestricted". Pinning either axis makes a
         // sandboxed scope that keeps the scope-gate as a safety floor.
         assert!(OperationScope::unrestricted().is_unrestricted());
-        assert!(OperationScope {
-            paths: None,
-            commands: None,
-        }
-        .is_unrestricted());
+        assert!(
+            OperationScope {
+                paths: None,
+                commands: None,
+            }
+            .is_unrestricted()
+        );
         // Pinning paths alone is enough to be sandboxed.
-        assert!(!OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
-            commands: None,
-        }
-        .is_unrestricted());
+        assert!(
+            !OperationScope {
+                paths: Some(vec![PathBuf::from("/home/user")]),
+                commands: None,
+            }
+            .is_unrestricted()
+        );
         // Pinning commands alone is enough.
-        assert!(!OperationScope {
-            paths: None,
-            commands: Some(CommandScope::none()),
-        }
-        .is_unrestricted());
+        assert!(
+            !OperationScope {
+                paths: None,
+                commands: Some(CommandScope::none()),
+            }
+            .is_unrestricted()
+        );
         // An empty-Some on paths is still a constraint (permits nothing) — not
         // unrestricted, which is the safer classification.
-        assert!(!OperationScope {
-            paths: Some(vec![]),
-            commands: Some(CommandScope::none()),
-        }
-        .is_unrestricted());
+        assert!(
+            !OperationScope {
+                paths: Some(vec![]),
+                commands: Some(CommandScope::none()),
+            }
+            .is_unrestricted()
+        );
     }
 
     #[test]

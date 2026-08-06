@@ -250,6 +250,69 @@ fn restored_command_echo_origin_from_durable_provenance() {
 }
 
 #[test]
+fn command_ledger_restores_as_non_conversational_command_rows() {
+    // ADR-0091: the command ledger is the durable source of truth for
+    // commands on resume — the message stream is pure dialogue. Each record
+    // restores as a distinct, non-conversational command row carrying the
+    // typed result as its expandable body.
+    let commands = vec![
+        neenee_core::CommandRecord::new("search", "foo").with_result(
+            neenee_core::CommandResult::Search {
+                query: "foo".to_string(),
+                hits: vec![],
+            },
+        ),
+        // A result-less record (legacy fold / shell passthrough): the
+        // invocation still restores, with an empty expandable body.
+        neenee_core::CommandRecord::new("shell", "!ls -la"),
+    ];
+    let restored = transcript_commands_from_ledger(commands);
+    assert_eq!(restored.len(), 2);
+    let search = &restored[0];
+    assert!(search.is_command_result(), "command rows carry the CommandResult kind");
+    assert_eq!(search.command_result_summary().as_deref(), Some("/search foo"));
+    assert_eq!(
+        search.command_result_text().as_deref(),
+        Some("No relevant history found.")
+    );
+    assert_eq!(search.round, None, "a command is not a conversation turn");
+    assert_ne!(search.role, neenee_core::Role::Assistant, "never assistant prose");
+
+    let shell = &restored[1];
+    assert!(shell.is_command_result());
+    assert_eq!(shell.command_result_summary().as_deref(), Some("!ls -la"));
+    assert_eq!(shell.command_result_text(), None);
+}
+
+#[test]
+fn command_result_message_expands_and_round_trips_display() {
+    // The command block's collapsed header is the invocation; expansion
+    // reveals the typed result body. Pinning is respected (user toggle wins).
+    use crate::tui::model::document::TranscriptMessage;
+    let mut message = TranscriptMessage::command_result(
+        "permissions",
+        "",
+        Some(neenee_core::CommandResult::PermissionList {
+            allowed: vec!["bash".to_string()],
+        }),
+    );
+    assert_eq!(message.command_result_expanded(), Some(false));
+    assert_eq!(
+        message.command_result_summary().as_deref(),
+        Some("/permissions")
+    );
+    assert_eq!(
+        message.command_result_text().as_deref(),
+        Some("Always-allowed tools:\n- bash")
+    );
+    // The result body is the message's parsed blocks (non-empty here).
+    assert!(!message.blocks.is_empty());
+
+    message.pin_command_result_expanded(true);
+    assert_eq!(message.command_result_expanded(), Some(true));
+}
+
+#[test]
 fn restored_assistant_carries_provider_and_model_attribution() {
     // A persisted assistant message stamped by the harness keeps its
     // provider/model so a resumed session that mixed models stays
@@ -1052,6 +1115,13 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         input_history: Vec::new(),
         history_index: None,
         history_draft: String::new(),
+        history_draft_images: Vec::new(),
+        history_draft_text_pastes: Vec::new(),
+        history_attachments: std::collections::HashMap::new(),
+        history_attachments_order: std::collections::VecDeque::new(),
+        history_clear_confirm: false,
+        input_history_dedup: true,
+        input_history_record_commands: false,
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
@@ -1824,6 +1894,476 @@ fn recall_queued_restores_staged_images() {
     assert_eq!(app.pending_images[0].data, image.data);
 }
 
+/// The interrupt → ↑/↓ → resend bug: a message sent with pasted images is
+/// recorded to input history as text-only, so recalling it via ↑/↓ (or
+/// Ctrl+R) and pressing Enter used to ship the bare `[Image #N]` chip label
+/// with no payload — the model never received the pixels. Recording must
+/// cache the staged attachments keyed by the entry's identity, and recall
+/// must restore them into `pending_images` / `pending_text_pastes`.
+#[tokio::test]
+async fn history_recall_restores_staged_images_and_pastes() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    };
+    let chip = crate::tui::composer_attachments::image_chip(1, 3);
+    let paste = crate::tui::composer_attachments::paste_chip(1, 2, 11);
+    let text = format!("describe this {chip} then {paste}");
+    app.record_input_history(text.clone(), vec![image.clone()], vec!["big paste".into()]);
+
+    // ↑ recall: the entry is the newest row of the current session; the
+    // event loop loads its text and calls restore_history_attachments.
+    let session_rows = app.current_session_history();
+    assert_eq!(session_rows.len(), 1);
+    let orig_idx = session_rows[0];
+    app.input = app.input_history[orig_idx].text.clone();
+    app.restore_history_attachments(orig_idx);
+
+    assert_eq!(app.input, text, "recalled text keeps its chip labels");
+    assert_eq!(
+        app.pending_images.len(),
+        1,
+        "image payload restored for resend"
+    );
+    assert_eq!(app.pending_images[0].data, "abc");
+    assert_eq!(app.pending_text_pastes, vec!["big paste".to_string()]);
+
+    // The chips pair back up with the payloads after an edit reconcile, so
+    // a Backspace or typing never orphans them.
+    app.reconcile_attachments();
+    assert_eq!(app.pending_images.len(), 1);
+    assert_eq!(app.pending_text_pastes.len(), 1);
+}
+
+/// Recalling a text-only entry (no cached payloads) must clear the staged
+/// vectors so a resend never inherits an attachment that belonged to a
+/// different entry — e.g. one restored by a Phase-1 unsend that the user then
+/// navigated away from.
+#[tokio::test]
+async fn history_recall_clears_staged_attachments_for_plain_entries() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("plain prompt".to_string(), Vec::new(), Vec::new());
+
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    };
+    app.pending_images.push(image);
+
+    let orig_idx = app.current_session_history()[0];
+    app.input = app.input_history[orig_idx].text.clone();
+    app.restore_history_attachments(orig_idx);
+
+    assert!(
+        app.pending_images.is_empty(),
+        "no orphaned payloads on recall"
+    );
+    assert!(app.pending_text_pastes.is_empty());
+}
+
+/// The ↓-past-newest branch restores the draft the user was composing before
+/// the first ↑ — including any staged attachments — so an accidental ↑/↓
+/// round-trip never drops a pasted image.
+#[test]
+fn history_draft_round_trip_keeps_attachments() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let draft = "my in-progress draft".to_string();
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "draft-img".to_string(),
+    };
+    app.input = draft.clone();
+    app.pending_images = vec![image.clone()];
+
+    // First ↑: stash text + attachments (what the HistoryPrev handler does).
+    app.history_draft = std::mem::take(&mut app.input);
+    app.history_draft_images = std::mem::take(&mut app.pending_images);
+    app.history_draft_text_pastes = std::mem::take(&mut app.pending_text_pastes);
+
+    // ↓ past the newest entry: restore text + attachments together.
+    app.input = std::mem::take(&mut app.history_draft);
+    app.pending_images = std::mem::take(&mut app.history_draft_images);
+    app.pending_text_pastes = std::mem::take(&mut app.history_draft_text_pastes);
+
+    assert_eq!(app.input, draft);
+    assert_eq!(app.pending_images.len(), 1);
+    assert_eq!(app.pending_images[0].mime, "image/png");
+    assert_eq!(app.pending_images[0].data, "draft-img");
+    assert!(app.pending_text_pastes.is_empty());
+}
+
+/// The in-memory cache is bounded so a long session of image-heavy sends
+/// cannot balloon the process's memory with base64 payloads.
+#[tokio::test]
+async fn history_attachment_cache_is_capped() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    for i in 0..40 {
+        app.record_input_history(
+            format!("prompt {i}"),
+            vec![neenee_core::ImagePart {
+                mime: "image/png".to_string(),
+                data: format!("img-{i}"),
+            }],
+            Vec::new(),
+        );
+    }
+    assert!(
+        app.history_attachments.len() <= crate::tui::app::App::HISTORY_ATTACHMENTS_CAP,
+        "cache must stay bounded"
+    );
+    // A recent entry's payload survives the FIFO eviction…
+    let newest_idx = app
+        .input_history
+        .iter()
+        .position(|e| e.text == "prompt 39")
+        .expect("last prompt recorded");
+    app.restore_history_attachments(newest_idx);
+    assert_eq!(app.pending_images[0].data, "img-39");
+    // …while the oldest entries were evicted (their recall clears the
+    // staged vectors rather than restoring a stale payload).
+    let oldest_idx = app
+        .input_history
+        .iter()
+        .position(|e| e.text == "prompt 0")
+        .expect("first prompt recorded");
+    app.pending_images.clear();
+    app.restore_history_attachments(oldest_idx);
+    assert!(
+        app.pending_images.is_empty(),
+        "evicted entries must not restore attachments"
+    );
+}
+
+/// `[input_history] dedup` (default on): the same prompt text sent twice —
+/// even in a different session — stays a single entry, and re-sending bumps
+/// its timestamp so it bubbles to the top of the newest-first picker.
+#[tokio::test]
+async fn record_input_history_dedups_globally_by_text() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+
+    app.record_input_history("build the thing".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("different prompt".to_string(), Vec::new(), Vec::new());
+    assert_eq!(app.input_history.len(), 2);
+
+    // The same text in a *different* session still collapses to one entry,
+    // adopting the newest origin so ↑/↓ in the newer session finds it.
+    app.current_session_id = "session-b".to_string();
+    app.record_input_history("build the thing".to_string(), Vec::new(), Vec::new());
+
+    assert_eq!(
+        app.input_history.len(),
+        2,
+        "global dedup keeps one row per text"
+    );
+    let deduped = app
+        .input_history
+        .iter()
+        .find(|e| e.text == "build the thing")
+        .expect("entry survives dedup");
+    assert_eq!(deduped.session_id.as_deref(), Some("session-b"));
+    // The re-sent entry is newest → first in the history order.
+    let order = app.history_order();
+    assert_eq!(app.input_history[order[0]].text, "build the thing");
+}
+
+/// With dedup off (`[input_history] dedup = false`) the same words typed in
+/// two sessions stay two entries, each with its own origin.
+#[tokio::test]
+async fn record_input_history_without_dedup_keeps_per_session_entries() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input_history_dedup = false;
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history("hello".to_string(), Vec::new(), Vec::new());
+    app.current_session_id = "session-b".to_string();
+    app.record_input_history("hello".to_string(), Vec::new(), Vec::new());
+    assert_eq!(app.input_history.len(), 2);
+}
+
+/// `/command` invocations are not prompt history: by default they are skipped
+/// entirely (`[input_history] record_commands = false`).
+#[tokio::test]
+async fn record_input_history_skips_slash_commands_by_default() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history("/model".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("/clear".to_string(), Vec::new(), Vec::new());
+    assert!(
+        app.input_history.is_empty(),
+        "commands must not pollute the prompt history"
+    );
+
+    // Opting in restores them.
+    app.input_history_record_commands = true;
+    app.record_input_history("/model".to_string(), Vec::new(), Vec::new());
+    assert_eq!(app.input_history.len(), 1);
+    assert_eq!(app.input_history[0].text, "/model");
+}
+
+/// The clear-history action wipes the in-memory list and the attachment cache
+/// so a fresh recall starts empty.
+#[tokio::test]
+async fn clear_input_history_wipes_list_and_cache() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history(
+        "one".to_string(),
+        vec![neenee_core::ImagePart {
+            mime: "image/png".to_string(),
+            data: "img".to_string(),
+        }],
+        Vec::new(),
+    );
+    app.record_input_history("two".to_string(), Vec::new(), Vec::new());
+    assert_eq!(app.input_history.len(), 2);
+    assert_eq!(app.history_attachments.len(), 1);
+
+    app.clear_input_history();
+    assert!(app.input_history.is_empty());
+    assert!(app.history_attachments.is_empty());
+    assert!(!app.history_clear_confirm);
+}
+
+/// ↑ walks toward older entries and ↓ walks back toward the newest,
+/// restoring the stashed draft past the newest entry. Regression: the two
+/// directions were swapped and ↑ was pinned at the newest entry (its
+/// `saturating_sub(1)` clamped at 0), so a second ↑ never moved — exactly
+/// "只能往上翻一个，再继续按上没效果；按下有效果但不总是".
+#[tokio::test]
+async fn inline_history_arrows_walk_old_then_new() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    // Record oldest → newest so the newest row is also the latest stamped.
+    for text in ["first (oldest)", "second", "third (newest)"] {
+        app.record_input_history(text.to_string(), Vec::new(), Vec::new());
+    }
+    // Pre-seed a draft so the first-↑ stash has something to restore.
+    app.input = "in-progress draft".to_string();
+
+    let rows = app.current_session_history();
+    assert_eq!(rows.len(), 3);
+
+    // ↑ #1: the newest entry.
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "third (newest)");
+    assert_eq!(app.history_index, Some(0));
+
+    // ↑ #2: the second-newest (this used to stick at position 0).
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "second");
+    assert_eq!(app.history_index, Some(1));
+
+    // ↑ #3: the oldest.
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "first (oldest)");
+    assert_eq!(app.history_index, Some(2));
+
+    // ↑ #4: already at the oldest — clamps and stays put.
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "first (oldest)");
+    assert_eq!(app.history_index, Some(2));
+
+    // ↓ walks back toward the newest.
+    assert!(app.history_next(&rows));
+    assert_eq!(app.input, "second");
+    assert_eq!(app.history_index, Some(1));
+
+    assert!(app.history_next(&rows));
+    assert_eq!(app.input, "third (newest)");
+    assert_eq!(app.history_index, Some(0));
+
+    // ↓ past the newest restores the stashed draft (not a blank box).
+    assert!(!app.history_next(&rows));
+    assert_eq!(app.input, "in-progress draft");
+    assert_eq!(app.history_index, None);
+
+    // A bare ↓ without any prior ↑ is a no-op (cursor not armed).
+    assert!(!app.history_next(&rows));
+}
+
+/// The ↑/↓ round-trip preserves staged attachments end to end: they are
+/// stashed on the first ↑, and restored when ↓ walks back past the newest
+/// entry — so an accidental ↑/↓ never drops a pasted image.
+#[tokio::test]
+async fn inline_history_round_trip_keeps_staged_attachments() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history("sent prompt".to_string(), Vec::new(), Vec::new());
+
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    };
+    app.input = "my draft".to_string();
+    app.pending_images = vec![image.clone()];
+
+    let rows = app.current_session_history();
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "sent prompt");
+    assert!(
+        app.pending_images.is_empty(),
+        "recalled entry has no cached attachments → vectors cleared"
+    );
+
+    // ↓ back past the newest restores the draft AND its attachments.
+    assert!(!app.history_next(&rows));
+    assert_eq!(app.input, "my draft");
+    assert_eq!(app.pending_images.len(), 1);
+    assert_eq!(app.pending_images[0].data, "abc");
+}
+
+/// The pointer model's "newest slot = unsent input" invariant: once a draft
+/// is successfully sent it is historicised, so the remembered draft slot is
+/// cleared and a later ↑→↓ round-trip must NOT bring the old draft back —
+/// it returns to an empty composer (the fresh unsent slot).
+#[tokio::test]
+async fn sending_clears_the_remembered_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("older prompt".to_string(), Vec::new(), Vec::new());
+
+    // Compose a draft, walk ↑ into history and back ↓ — the draft is stashed
+    // in the remembered slot and restored into the composer.
+    app.input = "my draft".to_string();
+    let rows = app.current_session_history();
+    assert!(app.history_prev(&rows));
+    assert!(!app.history_next(&rows));
+    assert_eq!(
+        app.input, "my draft",
+        "draft content restored into the composer on ↓ past the newest row"
+    );
+    // The remembered slot is a *lazy* stash (shell-style): after a restore the
+    // content lives in the composer and the slot is re-stashed on the next ↑,
+    // so the slot may be empty here without losing anything.
+
+    // Send: the input is taken out of the composer, historicised (recorded),
+    // and the draft slot cleared — exactly the SendChat handler's sequence.
+    let sent = std::mem::take(&mut app.input);
+    app.record_input_history(sent, Vec::new(), Vec::new());
+    app.clear_history_draft();
+    assert!(app.history_draft.is_empty());
+    assert!(app.input.is_empty(), "composer is blank after a send");
+
+    // A later ↑→↓ round-trip restores an empty composer, not the sent text.
+    let rows = app.current_session_history();
+    assert!(app.history_prev(&rows));
+    assert!(!app.history_next(&rows));
+    assert_eq!(app.input, "", "no stale draft may return after a send");
+}
+
+/// The pointer model's "unsent restore = new draft" invariant: an input put
+/// back by a Phase-1 unsend (or Ctrl+R insert / queue recall) becomes the
+/// newest editable slot. It replaces any stale remembered draft, and a ↓ past
+/// the newest history row restores *this* input.
+#[tokio::test]
+async fn adopt_as_draft_replaces_stale_draft_and_is_restored() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("older".to_string(), Vec::new(), Vec::new());
+
+    // A stale remembered draft from an earlier session of editing.
+    app.history_draft = "stale draft".to_string();
+    app.input = "whatever".to_string();
+
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "img".to_string(),
+    };
+    app.adopt_as_draft(
+        "interrupted input".to_string(),
+        vec![image.clone()],
+        Vec::new(),
+    );
+
+    assert_eq!(app.input, "interrupted input");
+    assert_eq!(app.history_index, None, "adoption enters draft mode");
+    assert_eq!(
+        app.history_draft, "interrupted input",
+        "stale draft replaced"
+    );
+    assert_eq!(app.history_draft_images.len(), 1);
+    assert_eq!(app.pending_images.len(), 1);
+
+    // ↑ then ↓ past the newest restores the adopted input, not the stale one.
+    let rows = app.current_session_history();
+    assert!(app.history_prev(&rows));
+    assert!(!app.history_next(&rows));
+    assert_eq!(app.input, "interrupted input");
+    assert_eq!(app.pending_images.len(), 1);
+}
+
+/// History rows are read-only snapshots: editing one is temporary and is
+/// discarded the moment the pointer moves — coming back reloads the original
+/// text (the shell "other rows are readonly" behaviour).
+#[tokio::test]
+async fn history_rows_are_readonly_snapshots() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("older row".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("newest row".to_string(), Vec::new(), Vec::new());
+
+    let rows = app.current_session_history();
+    assert_eq!(rows.len(), 2);
+    // Newest-first: rows[0] = "newest row" (later stamp), rows[1] = "older row".
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "newest row");
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "older row");
+
+    // Edit the history row — the edit is temporary.
+    app.input = "EDITED".to_string();
+    // Move away (clamp at the oldest reloads its original text) and back.
+    assert!(app.history_prev(&rows));
+    assert_eq!(
+        app.input, "older row",
+        "history row reloads its original text"
+    );
+    assert!(app.history_next(&rows));
+    assert_eq!(app.input, "newest row");
+    assert!(!app.history_next(&rows));
+    // The adopted/empty draft comes back, never the temporary edit.
+    assert_eq!(app.input, app.history_draft);
+}
+
+/// Queue recall adopts the recalled content as the draft (text + attachments
+/// mirrored into both the pending slots and the remembered-draft stash).
+#[test]
+fn recall_queued_adopts_content_as_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let image = neenee_core::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    };
+    let mut dispatch = queued_dispatch("1", "session-a", "queued msg");
+    dispatch.images = vec![image];
+    app.pending_dispatch.push_back(dispatch);
+
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected local restore");
+    };
+    app.restore_dispatch(dispatch);
+    assert_eq!(app.input, "queued msg");
+    assert_eq!(app.history_index, None, "recall enters draft mode");
+    assert_eq!(
+        app.history_draft, "queued msg",
+        "recalled text becomes the draft"
+    );
+    assert_eq!(app.history_draft_images.len(), 1);
+    assert_eq!(app.pending_images.len(), 1);
+}
+
 #[test]
 fn recall_queued_always_restores_locally() {
     // With the insert/next-round distinction gone there is no agent-side
@@ -2270,7 +2810,7 @@ fn composer_image_paste_accepted_when_model_has_vision() {
         "vision-capable model should stage the image attachment"
     );
     assert!(
-        app.input.contains("[Image #1]"),
+        app.input.contains("Image #1"),
         "image chip should be inserted into the input, got: {}",
         app.input,
     );
@@ -2559,7 +3099,10 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         }
     }
     assert_eq!(app.queue_scroll, 5, "queue scroll mutated through helper");
-    assert!(!app.queue_modal_follow, "queue follow cleared through helper");
+    assert!(
+        !app.queue_modal_follow,
+        "queue follow cleared through helper"
+    );
 
     app.active_modal = Modal::Tools;
     {
@@ -2568,7 +3111,10 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
             *f = false;
         }
     }
-    assert!(!app.session_modal_follow, "tools reuses session follow flag");
+    assert!(
+        !app.session_modal_follow,
+        "tools reuses session follow flag"
+    );
 
     app.active_modal = Modal::Sessions;
     {
@@ -2577,7 +3123,12 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     }
 
     // Pure-content modals return a scroll ref but no follow flag.
-    for m in [Modal::Help, Modal::Activity, Modal::Permissions, Modal::Config] {
+    for m in [
+        Modal::Help,
+        Modal::Activity,
+        Modal::Permissions,
+        Modal::Config,
+    ] {
         app.active_modal = m;
         let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
         assert!(f.is_none(), "{m:?} has no selection-follow flag");
@@ -2601,7 +3152,10 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         Modal::InputInjection,
     ] {
         app.active_modal = m;
-        assert!(app.modal_scroll_field().is_none(), "{m:?} must not scroll its own body");
+        assert!(
+            app.modal_scroll_field().is_none(),
+            "{m:?} must not scroll its own body"
+        );
     }
 }
 
@@ -2625,7 +3179,11 @@ fn modal_page_step_tracks_body_height_and_floors_at_one() {
     // Once the modal body height is captured, it wins over view_height so a
     // page advance matches the actual modal, not the transcript behind it.
     app.modal_body_height = 10;
-    assert_eq!(modal_page_step(&app), 9, "modal body height takes precedence");
+    assert_eq!(
+        modal_page_step(&app),
+        9,
+        "modal body height takes precedence"
+    );
 
     // A 1-row modal body still yields a step of 1 (never 0).
     app.modal_body_height = 1;
@@ -2662,7 +3220,10 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     // modal behaves as a normal transient overlay.
     app.startup_picker = false;
     app.active_modal = Modal::None;
-    assert!(!app.startup_picker, "opening a session drops the startup gate");
+    assert!(
+        !app.startup_picker,
+        "opening a session drops the startup gate"
+    );
 }
 
 /// Helper: build a minimal picker row so a test list is readable.
@@ -2700,8 +3261,7 @@ fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
     app.modal_index = app.modal_index.min(app.sessions_overview.len() - 1);
     assert_eq!(app.modal_index, 2, "mid-list delete keeps the cursor put");
     assert_eq!(
-        app.sessions_overview[app.modal_index].id,
-        "s3",
+        app.sessions_overview[app.modal_index].id, "s3",
         "the next session slid into the removed slot"
     );
 
@@ -2776,8 +3336,7 @@ fn resolve_scroll_follows_selection_and_clamps_to_max_scroll() {
     // top-anchored scroll of 0 must pull the viewport down so row 50 is in
     // view (edge-margin follow), but never past max_scroll.
     let mut scroll = 0usize;
-    let (start, max_scroll) =
-        resolve_scroll(&mut scroll, 10, 100, Some(50), SCROLL_EDGE_MARGIN);
+    let (start, max_scroll) = resolve_scroll(&mut scroll, 10, 100, Some(50), SCROLL_EDGE_MARGIN);
     assert_eq!(max_scroll, 90, "max_scroll reflects the full list length");
     assert!(
         (start..start + 10).contains(&50),
@@ -2794,7 +3353,10 @@ fn resolve_scroll_follows_selection_and_clamps_to_max_scroll() {
     // Fewer rows than the viewport: max_scroll is 0 and scroll collapses to 0.
     let mut scroll = 5usize;
     let (start, max_scroll) = resolve_scroll(&mut scroll, 10, 3, Some(1), SCROLL_EDGE_MARGIN);
-    assert_eq!(max_scroll, 0, "content shorter than viewport has no scroll range");
+    assert_eq!(
+        max_scroll, 0,
+        "content shorter than viewport has no scroll range"
+    );
     assert_eq!(start, 0);
 
     // No follow: scroll is only clamped to max_scroll, never auto-scrolled.

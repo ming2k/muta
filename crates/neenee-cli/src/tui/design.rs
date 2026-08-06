@@ -99,21 +99,56 @@ pub(crate) const STATUS_BAR_INNER_PADDING: usize = 1;
 pub(crate) const STATUS_BAR_GAP_MIN: usize = 2;
 /// Todo bar: a one-line region that leads the footer stack (above the queue
 /// bar and the transient activity bar) and surfaces the live task list — a
-/// `📌 TODOS d/t` identity and a one-line preview of the current item (the
+/// `TODOS d/t` identity and a one-line preview of the current item (the
 /// `InProgress` one, or the first `Pending` when nothing is mid-flight). The
 /// whole bar is the click target that opens the Activity modal on the Todos
 /// section. Always one row tall when visible (hidden only while an overlay
 /// modal replaces the chrome, inside an envoy zoom, or when the task list is
 /// empty). It is the permanent home for todo affordances, so the activity bar
-/// no longer needs to embed the `todos d/t` badge.
+/// no longer needs to embed the `todos d/t` badge. Rendered on the plain
+/// surface (no raised tint, no glyph) so it reads as quiet metadata rather
+/// than another pinned panel.
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
+/// Minimum gap between a footer bar's left content and its right-pinned
+/// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
+/// `F3 block  F2 expand`). Deliberately wider than the 2-col inter-cluster
+/// gap used by the hint/status bars: a legend is a keyboard affordance, not
+/// prose, so it needs real visual distance from the content — especially when
+/// content truncates to fill the row, where a small gap would let a `…` butt
+/// directly against a keycap.
+pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
+
+// ── Join ladder: relationship spacing (see docs/reference/tui/visual-language.md) ──
+// Every adjacent pair of tokens on a row picks its join from one rung of the
+// ladder. The rung encodes the *semantic distance* between the two tokens:
+// the tighter the relationship, the quieter the join.
+//
+//   R0  Atomic   `Image #1`, `24.1 KB`, `3 tool calls`, `F3 block`
+//                Parts of one value — no symbol, 0–1 space.
+//   R1  Modify   `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`
+//                The trailing token is a state / measure / attribute of the
+//                leading one. THE one and only use of the middle dot.
+//   R2  Enumerate  `turn 2  sonnet`, `/skills  /repeat  /help`
+//                Same-rank peers — separated by plain whitespace, no glyph.
+//   R3  Segment  `TODOS 1/8 · …   Ctrl+T expand`
+//                Cross-group boundary (content vs keycap legend) — a wide
+//                whitespace budget, `BAR_LEGEND_GAP_MIN`.
+//   ↑ hierarchy  `round 3 › turn 2`   Container › member breadcrumb (`↳` for
+//                tree nesting). A *different level* is never joined with `·`.
+/// R1: the leading token's state / measure / attribute (` · `).
+pub(crate) const JOIN_MODIFY: &str = " · ";
+/// R2: same-rank peer enumeration — pure whitespace, no glyph (columns).
+pub(crate) const JOIN_ENUMERATE_COLS: usize = 2;
+/// Container › member breadcrumb for inline hierarchy (`round 3 › turn 2`).
+pub(crate) const JOIN_BREADCRUMB: &str = " › ";
 /// Queue bar: a two-line persistent region pinned directly below the todo bar
 /// (and above the transient activity bar) that always surfaces the pending
 /// outbox (a count, the send time of the next item to pop, key affordances,
 /// and a preview of that item's text). Always two rows tall when visible
 /// (hidden only while an overlay modal replaces the chrome, or inside an envoy
 /// zoom). It is the permanent home for queue affordances, so the hint bar no
-/// longer needs to embed outbox counts.
+/// longer needs to embed outbox counts. Rendered on the plain surface (no
+/// raised tint, no glyph) so it stays quiet, matching the todo bar above it.
 pub(crate) const QUEUE_BAR_ROWS: u16 = 2;
 /// Permanent breathing room between the transcript and footer chrome. Keeping
 /// this row even while the activity bar is idle prevents the latest response

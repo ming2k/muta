@@ -77,14 +77,27 @@ impl PreparedCall {
     /// A non-owning Debug representation (the embedded tool isn't Debug).
     pub fn debug_summary(&self) -> String {
         match self {
-            PreparedCall::Runnable { call_id, call, pending_ask, .. } => format!(
+            PreparedCall::Runnable {
+                call_id,
+                call,
+                pending_ask,
+                ..
+            } => format!(
                 "Runnable({}, {}, ask={})",
                 call_id,
                 call.name,
                 pending_ask.is_some()
             ),
-            PreparedCall::ShortCircuited { call_id, call, is_replay, .. } => {
-                format!("ShortCircuited({}, {}, replay={})", call_id, call.name, is_replay)
+            PreparedCall::ShortCircuited {
+                call_id,
+                call,
+                is_replay,
+                ..
+            } => {
+                format!(
+                    "ShortCircuited({}, {}, replay={})",
+                    call_id, call.name, is_replay
+                )
             }
             PreparedCall::Rejected { call_id, call, .. } => {
                 format!("Rejected({}, {})", call_id, call.name)
@@ -140,7 +153,10 @@ pub struct DispatchPipeline<'a> {
 
 impl<'a> DispatchPipeline<'a> {
     pub fn new(permission: &'a PermissionChain, scheduler: ToolScheduler<ExecutedCall>) -> Self {
-        Self { permission, scheduler }
+        Self {
+            permission,
+            scheduler,
+        }
     }
 
     // Stages are documented here as the contract the switchover must honor.
@@ -166,11 +182,7 @@ impl<'a> DispatchPipeline<'a> {
     ///
     /// Maps the old `execute_tool` gate sequence (now folded into
     /// [`PermissionChain`]) plus the doom-guard `is_blocked` short-circuit.
-    pub async fn prepare(
-        &self,
-        _call: ToolCall,
-        _ctx: &PolicyContext<'_>,
-    ) -> PreparedCall {
+    pub async fn prepare(&self, _call: ToolCall, _ctx: &PolicyContext<'_>) -> PreparedCall {
         // TODO(stage-3-switch): tool lookup, permission.evaluate(ctx),
         // short-circuit on Ask/Deny, build Runnable otherwise.
         unimplemented!("stage 3 switchover")
@@ -235,7 +247,11 @@ pub fn decision_to_prepare(
                 pending_ask: None,
             }
         }
-        PolicyDecision::Deny { output, .. } => PreparedCall::Rejected { call_id, call, output },
+        PolicyDecision::Deny { output, .. } => PreparedCall::Rejected {
+            call_id,
+            call,
+            output,
+        },
         PolicyDecision::Ask { request, rule } => {
             let accesses = tool.accesses(arguments);
             PreparedCall::Runnable {
@@ -305,8 +321,13 @@ mod tests {
             "{}",
         );
         match prepared {
-            PreparedCall::Runnable { pending_ask: None, .. } => {}
-            other => panic!("expected Runnable without ask, got {}", other.debug_summary()),
+            PreparedCall::Runnable {
+                pending_ask: None, ..
+            } => {}
+            other => panic!(
+                "expected Runnable without ask, got {}",
+                other.debug_summary()
+            ),
         }
     }
 
@@ -359,7 +380,10 @@ mod tests {
             "{}",
         );
         match prepared {
-            PreparedCall::Runnable { pending_ask: Some(_), .. } => {}
+            PreparedCall::Runnable {
+                pending_ask: Some(_),
+                ..
+            } => {}
             other => panic!("expected Runnable with ask, got {}", other.debug_summary()),
         }
     }

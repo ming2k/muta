@@ -74,7 +74,9 @@ pub async fn request_device_code_at(
         .body(body)
         .send()
         .await
-        .map_err(|e| crate::oauth::AuthError::Transport(format!("device code request failed: {e}")))?;
+        .map_err(|e| {
+            crate::oauth::AuthError::Transport(format!("device code request failed: {e}"))
+        })?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -83,8 +85,9 @@ pub async fn request_device_code_at(
             body: text,
         });
     }
-    let json: DeviceCodeResponse = serde_json::from_str(&text)
-        .map_err(|e| crate::oauth::AuthError::Decode(format!("device code response parse failed: {e}")))?;
+    let json: DeviceCodeResponse = serde_json::from_str(&text).map_err(|e| {
+        crate::oauth::AuthError::Decode(format!("device code response parse failed: {e}"))
+    })?;
     if json.device_code.is_empty() || json.user_code.is_empty() || json.verification_uri.is_empty()
     {
         return Err(crate::oauth::AuthError::Decode(
@@ -144,7 +147,9 @@ where
             .body(body)
             .send()
             .await
-            .map_err(|e| crate::oauth::AuthError::Transport(format!("device token poll failed: {e}")))?;
+            .map_err(|e| {
+                crate::oauth::AuthError::Transport(format!("device token poll failed: {e}"))
+            })?;
 
         let status = response.status();
         let text = response.text().await.unwrap_or_default();

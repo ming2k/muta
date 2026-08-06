@@ -755,10 +755,9 @@ const PRE_MIGRATION: &[Model] = &[
     },
 ];
 
-
 #[test]
 fn resolve_matches_the_pre_migration_registry_for_every_model() {
-    assert_eq!(PRE_MIGRATION.len(), 55, "snapshot covers every known model");
+    assert_eq!(PRE_MIGRATION.len(), 56, "snapshot covers every known model");
     for expected in PRE_MIGRATION {
         let m = resolve_model(expected.id);
         assert_eq!(m.id, expected.id, "id");
@@ -770,7 +769,11 @@ fn resolve_matches_the_pre_migration_registry_for_every_model() {
             expected.id
         );
         assert_eq!(m.thinking, expected.thinking, "{}: thinking", expected.id);
-        assert_eq!(m.tool_call, expected.tool_call, "{}: tool_call", expected.id);
+        assert_eq!(
+            m.tool_call, expected.tool_call,
+            "{}: tool_call",
+            expected.id
+        );
         assert_eq!(m.vision, expected.vision, "{}: vision", expected.id);
         assert_eq!(m.format, expected.format, "{}: format", expected.id);
         assert_eq!(

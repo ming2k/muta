@@ -183,7 +183,9 @@ impl Modal {
             // HistorySearch floats too — its dropdown panel sits above a fully
             // live composer (the composer IS the filter field), so dimming the
             // surface would only darken the very input the user is typing into.
-            Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => Recess::None,
+            Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => {
+                Recess::None
+            }
             // Context switch: the one modal that fully owns the screen.
             Modal::Sessions => Recess::Takeover,
             // Everything else recedes the surface for focus while keeping it

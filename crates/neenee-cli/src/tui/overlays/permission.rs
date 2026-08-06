@@ -370,7 +370,9 @@ pub fn draw_permission_sheet(
         header.push(Span::styled("  ", Style::default()));
         header.push(Span::styled(
             "⚠ out of scope",
-            Style::default().fg(theme.err()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.err())
+                .add_modifier(Modifier::BOLD),
         ));
     }
     if confirm_always {
@@ -657,7 +659,7 @@ pub fn draw_input_injection(
         ),
         Span::styled(display, Style::default().fg(theme.fg())),
         Span::styled(
-            "  Enter=submit · Esc=skip (runs non-interactively)",
+            "  Enter=submit  Esc=skip (runs non-interactively)",
             Style::default().fg(theme.dim()),
         ),
     ]);

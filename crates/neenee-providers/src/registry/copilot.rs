@@ -18,21 +18,18 @@ pub const COPILOT_SEED_MODELS: &[&str] = &["gpt-4o-mini"];
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
-pub const MODELS: &[Model] = &[
-
-    Model {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        family: "gpt",
-        context_window: 128_000,
-        thinking: ThinkingSupport::None,
-        tool_call: true,
-        vision: true,
-        format: WireFormat::OpenAi,
-        model_guidance: "",
-        effort_levels: &[],
-    },
-];
+pub const MODELS: &[Model] = &[Model {
+    id: "gpt-4o-mini",
+    name: "GPT-4o Mini",
+    family: "gpt",
+    context_window: 128_000,
+    thinking: ThinkingSupport::None,
+    tool_call: true,
+    vision: true,
+    format: WireFormat::OpenAi,
+    model_guidance: "",
+    effort_levels: &[],
+}];
 
 inventory::submit!(neenee_core::model::BaselineModels(MODELS));
 

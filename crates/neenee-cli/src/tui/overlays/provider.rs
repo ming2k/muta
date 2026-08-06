@@ -85,7 +85,17 @@ pub fn draw_connections_modal(
     };
 
     if keymap_open {
-        modal_header(frame, header_rect, "Connections · keybindings", theme);
+        // Breadcrumb: `Connections` modal › its keybindings sub-page (hierarchy
+        // is never joined with `·`, which is reserved for same-rank modifiers).
+        modal_header(
+            frame,
+            header_rect,
+            &format!(
+                "Connections{}keybindings",
+                crate::tui::design::JOIN_BREADCRUMB
+            ),
+            theme,
+        );
         let body = keymap_body_lines(hints, extra, theme);
         render_body(
             frame,
@@ -229,7 +239,13 @@ pub fn draw_models_modal(
     };
 
     if keymap_open {
-        modal_header(frame, header_rect, "Models · keybindings", theme);
+        // Breadcrumb: `Models` modal › its keybindings sub-page.
+        modal_header(
+            frame,
+            header_rect,
+            &format!("Models{}keybindings", crate::tui::design::JOIN_BREADCRUMB),
+            theme,
+        );
         let body = keymap_body_lines(hints, extra, theme);
         render_body(
             frame,

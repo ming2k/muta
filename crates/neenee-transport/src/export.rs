@@ -25,7 +25,16 @@ pub struct ExportContext<'a> {
 }
 
 /// Render the current conversation as a Markdown handoff document.
-pub fn format_export_markdown(ctx: ExportContext<'_>, messages: &[Message]) -> String {
+///
+/// `commands` is the ADR-0091 command ledger: slash commands (and `!cmd`
+/// passthroughs) are operations, not conversation, so they render as a
+/// distinct blockquote block after the dialogue instead of a `## User`
+/// heading, keeping the dialogue pure.
+pub fn format_export_markdown(
+    ctx: ExportContext<'_>,
+    messages: &[Message],
+    commands: &[neenee_core::CommandRecord],
+) -> String {
     let mut out = String::new();
     out.push_str("# neenee session export\n\n");
 
@@ -109,6 +118,35 @@ pub fn format_export_markdown(ctx: ExportContext<'_>, messages: &[Message]) -> S
                 // a hidden injection). Drop it to keep the transcript clean.
             }
             Role::System => {}
+        }
+    }
+
+    // Command ledger (ADR-0091): operations are not dialogue, so they render
+    // as a distinct blockquote block rather than a `## User` heading.
+    for record in commands {
+        emitted_any = true;
+        let invocation = if record.name == "shell" {
+            record.args.clone()
+        } else if record.args.is_empty() {
+            format!("/{}", record.name)
+        } else {
+            format!("/{} {}", record.name, record.args)
+        };
+        match &record.result {
+            Some(result) => {
+                out.push_str(&format!("> **`{}`**\n>\n", invocation));
+                for line in result.to_text().lines() {
+                    if line.is_empty() {
+                        out.push_str(">\n");
+                    } else {
+                        out.push_str(&format!("> {}\n", line));
+                    }
+                }
+                out.push_str("\n");
+            }
+            None => {
+                out.push_str(&format!("> `{}`\n\n", invocation));
+            }
         }
     }
 
@@ -269,6 +307,7 @@ mod tests {
                 model: "kimi-k2.7-code",
             },
             &[user("hello")],
+            &[],
         );
         assert!(out.contains("Session ID:** `abcd1234ef`"));
         assert!(out.contains("Provider / Model:** kimi-code / kimi-k2.7-code"));
@@ -289,6 +328,7 @@ mod tests {
                 model: "m",
             },
             &messages,
+            &[],
         );
         assert!(out.contains("visible"));
         assert!(!out.contains("hidden user prompt"));
@@ -314,6 +354,7 @@ mod tests {
                 model: "m",
             },
             &messages,
+            &[],
         );
         assert!(out.contains("### Tool call: `bash`"));
         assert!(out.contains(r#""command": "ls""#));
@@ -346,6 +387,7 @@ mod tests {
                 model: "m",
             },
             &messages,
+            &[],
         );
         // The first call must pair with "first", the second with "second".
         let first_call = out.find("echo a").unwrap();
@@ -372,6 +414,7 @@ mod tests {
                 model: "m",
             },
             &messages,
+            &[],
         );
         assert!(out.contains("no result recorded"));
     }
@@ -385,7 +428,57 @@ mod tests {
                 model: "m",
             },
             &[],
+            &[],
         );
         assert!(out.contains("No user-visible rounds"));
+    }
+
+    #[test]
+    fn renders_command_ledger_as_distinct_blockquotes() {
+        // ADR-0091: commands are operations, not dialogue — they export as a
+        // blockquote block (never a `## User` heading), and the invocation +
+        // typed result both survive.
+        let commands = vec![
+            neenee_core::CommandRecord::new("search", "foo").with_result(
+                neenee_core::CommandResult::Search {
+                    query: "foo".to_string(),
+                    hits: vec![neenee_core::SearchHit {
+                        text: "match".to_string(),
+                        score: 0.5,
+                    }],
+                },
+            ),
+            neenee_core::CommandRecord::new("shell", "!ls -la"),
+        ];
+        let out = format_export_markdown(
+            ExportContext {
+                session_id: "id",
+                provider: "p",
+                model: "m",
+            },
+            &[],
+            &commands,
+        );
+        assert!(
+            out.contains("> **`/search foo`**"),
+            "command invocation exports as a blockquote: {out}"
+        );
+        assert!(
+            out.contains("Relevant history (most similar first):"),
+            "typed result body exports: {out}"
+        );
+        assert!(
+            out.contains("> `!ls -la`"),
+            "result-less shell invocation exports: {out}"
+        );
+        // The command must not masquerade as a user message.
+        assert!(
+            !out.contains("## User"),
+            "commands never render as user headings: {out}"
+        );
+        assert!(
+            !out.contains("No user-visible rounds"),
+            "a command-only session still exports content: {out}"
+        );
     }
 }

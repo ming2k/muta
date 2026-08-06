@@ -51,9 +51,9 @@ pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
         .iter()
         .filter(|s| s.enabled && s.allows_implicit_invocation())
     {
-        let uri_hit = uris.iter().any(|uri| {
-            uri == &skill.name || uri == &skill.source.to_string_lossy().to_string()
-        });
+        let uri_hit = uris
+            .iter()
+            .any(|uri| uri == &skill.name || uri == &skill.source.to_string_lossy().to_string());
         let hit = names.contains(skill.name.as_str()) || uri_hit;
         if hit && seen.insert(skill.name.clone()) {
             matched.push(skill);
@@ -213,8 +213,7 @@ mod tests {
     #[test]
     fn resolves_multiple_distinct_skills_via_namespace() {
         let skills = vec![sample_skill("rust-expert"), sample_skill("pdf")];
-        let mentions =
-            resolve_mentions("use @skill:rust-expert and @skills:pdf here", &skills);
+        let mentions = resolve_mentions("use @skill:rust-expert and @skills:pdf here", &skills);
         assert_eq!(mentions.len(), 2);
     }
 }

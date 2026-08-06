@@ -10,6 +10,7 @@
 
 use crate::tui::view::tools::presenter_for;
 
+pub use neenee_persistence::config::InputHistoryConfig;
 pub use neenee_persistence::config::TuiConfig;
 
 /// Effective default-expand state for a tool step. An explicit config entry

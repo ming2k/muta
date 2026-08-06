@@ -60,7 +60,6 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[&str] = &[
 /// submitted to `neenee_core`'s registry at link time (see
 /// [`neenee_core::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
-
     // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
     // Served over the Anthropic Messages wire format. Relays forward to
     // Anthropic's own `/messages` surface, so these carry
@@ -78,8 +77,6 @@ pub const MODELS: &[Model] = &[
         // Opus 4.8 honors the full effort range including `xhigh`/`max`.
         effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
     },
-
-
     Model {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
@@ -93,8 +90,6 @@ pub const MODELS: &[Model] = &[
         // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
         effort_levels: neenee_core::effort::EFFORT_CLAUDE_NO_XHIGH,
     },
-
-
     Model {
         id: "claude-fable-5",
         name: "Claude Fable 5",
@@ -113,8 +108,6 @@ pub const MODELS: &[Model] = &[
         // Fable 5 honors the full effort range including `xhigh`/`max`.
         effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
     },
-
-
     Model {
         id: "claude-sonnet-5",
         name: "Claude Sonnet 5",
@@ -134,8 +127,6 @@ pub const MODELS: &[Model] = &[
         // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
         effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
     },
-
-
     Model {
         id: "claude-haiku-4-5-20251001",
         name: "Claude Haiku 4.5",

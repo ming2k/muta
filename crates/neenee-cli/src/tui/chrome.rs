@@ -17,8 +17,8 @@ use crate::tui::model::layout::LayoutMap;
 use super::Theme;
 use super::components::keycap::{keycap_span, keycap_style};
 use super::design::{
-    HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_SEGMENT_GAP, STATUS_BAR_GAP_MIN,
-    STATUS_BAR_INNER_PADDING,
+    BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_SEGMENT_GAP,
+    JOIN_ENUMERATE_COLS, JOIN_MODIFY, STATUS_BAR_GAP_MIN, STATUS_BAR_INNER_PADDING,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
@@ -172,19 +172,17 @@ pub fn draw_activity_bar(
     let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
     let full_hint_width = elapsed
         .as_ref()
-        .map(|value| {
-            UnicodeWidthStr::width(format!(" ({value} · Esc Esc to interrupt)").as_str())
-        })
+        .map(|value| UnicodeWidthStr::width(format!(" ({value} · Esc Esc to interrupt)").as_str()))
         .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc to interrupt)"));
     let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc to interrupt)");
     let tiny_interrupt_hint_width = UnicodeWidthStr::width(" Esc Esc");
     let prefix_width = UnicodeWidthStr::width(" ● ");
     const MIN_STATUS_WIDTH: usize = 4;
     const MIN_TINY_STATUS_WIDTH: usize = 1;
-    let show_elapsed = elapsed.is_some()
-        && available_width >= prefix_width + full_hint_width + MIN_STATUS_WIDTH;
-    let show_interrupt_words = show_elapsed
-        || available_width >= prefix_width + interrupt_hint_width + MIN_STATUS_WIDTH;
+    let show_elapsed =
+        elapsed.is_some() && available_width >= prefix_width + full_hint_width + MIN_STATUS_WIDTH;
+    let show_interrupt_words =
+        show_elapsed || available_width >= prefix_width + interrupt_hint_width + MIN_STATUS_WIDTH;
     let show_interrupt_keys = show_interrupt_words
         || available_width >= prefix_width + tiny_interrupt_hint_width + MIN_TINY_STATUS_WIDTH;
     let hint_width = if show_elapsed {
@@ -241,7 +239,8 @@ pub fn draw_activity_bar(
         spans.push(Span::styled(" (", dim));
         if show_elapsed {
             spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
-            spans.push(Span::styled(" · ", dim));
+            // R1: the elapsed time is a property of the running state.
+            spans.push(Span::styled(JOIN_MODIFY, dim));
         }
         spans.push(keycap_span(theme, Key::ESC.display()));
         spans.push(Span::styled(" ", dim));
@@ -288,29 +287,25 @@ pub fn draw_activity_bar(
     Some(rect)
 }
 
-/// The pin glyph that leads the todo bar — a visual marker that this row is
-/// the agent's live task list. Emoji presentation, measured at 2 display cells
-/// by `unicode-width` (which the span-width sum already accounts for), so the
-/// right-pinned legend stays flush regardless of terminal.
-const PIN_GLYPH: &str = "📌";
-
 /// The one-row todo summary that leads the footer stack (above the queue bar,
 /// and above the transient activity bar). It is the permanent home for
-/// task-list affordances: a `📌` pin glyph leading a brand-colored `TODOS`
-/// label, the done/total progress, and a one-line preview of the current item
-/// — the `InProgress` one, or the first `Pending` when nothing is mid-flight
-/// (so the bar always points at "what is happening / what is next").
+/// task-list affordances: a brand-colored `TODOS` tag, the done/total
+/// progress, and a one-line preview of the current item — the `InProgress`
+/// one, or the first `Pending` when nothing is mid-flight (so the bar always
+/// points at "what is happening / what is next").
 ///
-/// To read as a distinct pinned panel rather than another footer strip, the
-/// whole bar sits on a subtly raised surface (see [`Theme::raised`]) and the
-/// leading glyph + `TODOS` label share a brand-color "pin" treatment.
+/// The bar is deliberately quiet: it sits on the plain surface (no raised
+/// tint, no pin glyph), so it reads as metadata rather than another pinned
+/// panel.
 ///
 /// Layout:
 /// ```text
-/// 📌 TODOS d/t · {current item preview…}        Ctrl+T expand
+/// TODOS d/t · {current item preview…}                Ctrl+T expand
 /// ```
 /// The right-pinned `Ctrl+T expand` legend is the keyboard affordance that
-/// opens the Activity modal on the Todos section; it drops under width
+/// opens the Activity modal on the Todos section; it keeps a guaranteed
+/// [`BAR_LEGEND_GAP_MIN`] columns of breathing room from the preview so a
+/// truncated item never butts against the keycap. It drops under width
 /// pressure (the `expand` label first, then the whole legend) so the identity
 /// and preview on the left always survive. The whole bar is the click target
 /// for the same destination.
@@ -328,24 +323,18 @@ pub fn draw_todo_bar(
 ) -> Rect {
     use neenee_core::{TodoItem, TodoStatus};
 
-    // Distinct pinned surface: the raised tone reads as a panel rather than a
-    // plain footer strip. Every span carries this background so the tint covers
-    // the full row width (including the trailing fill).
-    let bg = theme.raised();
+    // Plain surface: every span drops the background entirely, so the row
+    // blends with the frame instead of reading as a raised band.
+    let dim = Style::default().fg(theme.muted());
+    let fg = Style::default().fg(theme.fg());
+    let bold = Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD);
+    // The `TODOS` tag wears the brand color so the left edge still reads as a
+    // deliberate section marker without needing a pin glyph or a tinted band.
+    let tag_style = Style::default()
+        .fg(theme.brand())
+        .add_modifier(Modifier::BOLD);
+    // Full row width in display columns, for the right-pinned legend math.
     let full_w = rect.width as usize;
-    let dim = Style::default().fg(theme.muted()).bg(bg);
-    let fg = Style::default().fg(theme.fg()).bg(bg);
-    let bold = Style::default()
-        .fg(theme.fg())
-        .bg(bg)
-        .add_modifier(Modifier::BOLD);
-    // The pin treatment — the glyph and the `TODOS` label — wears the brand
-    // color so the left edge reads as a distinct, deliberately pinned marker.
-    let pin_color = theme.brand();
-    let pin_style = Style::default()
-        .fg(pin_color)
-        .bg(bg)
-        .add_modifier(Modifier::BOLD);
 
     let done = todos.count(TodoStatus::Completed);
     let total = todos.items.len();
@@ -358,15 +347,11 @@ pub fn draw_todo_bar(
         .find(|i| i.status == TodoStatus::InProgress)
         .or_else(|| todos.items.iter().find(|i| i.status == TodoStatus::Pending));
 
-    // ── Gutter + left identity: `📌 TODOS d/t` ──
-    // The pin glyph leads a tight, label-like cluster: uppercase `TODOS`,
-    // single-space separators, no bullet. Uppercase reads as a pinned
-    // section tag rather than a lowercase token, and dropping the `·` keeps
-    // the identity compact so the count sits one space off the label.
+    // ── Left identity: `TODOS d/t` ──
+    // Uppercase reads as a section tag rather than a lowercase token; the
+    // count sits one space off the label.
     let left: Vec<Span<'static>> = vec![
-        Span::styled(PIN_GLYPH, pin_style),
-        Span::styled(" ", dim),
-        Span::styled("TODOS", pin_style),
+        Span::styled("TODOS", tag_style),
         Span::styled(" ", dim),
         Span::styled(progress, bold),
     ];
@@ -385,9 +370,11 @@ pub fn draw_todo_bar(
         |spans: &Vec<Span<'static>>| -> usize { spans.iter().map(|s| s.content.width()).sum() };
 
     // Columns reserved between the identity and the legend: the ` · ` that
-    // leads the preview (only when there is one) plus the inter-cluster gap.
-    let content_sep = UnicodeWidthStr::width(" · ");
-    let gap_for = |legend_w: usize| if legend_w > 0 { HINT_BAR_GAP_MIN } else { 0 };
+    // leads the preview (only when there is one) plus the legend's breathing
+    // room — deliberately wider than the hint/status bar gap so the keycap
+    // never reads as glued to the content.
+    let content_sep = UnicodeWidthStr::width(JOIN_MODIFY);
+    let gap_for = |legend_w: usize| if legend_w > 0 { BAR_LEGEND_GAP_MIN } else { 0 };
     const MIN_PREVIEW_WIDTH: usize = 4;
     let preview_budget = |legend_w: usize| {
         let sep = if current.is_some() { content_sep } else { 0 };
@@ -416,26 +403,24 @@ pub fn draw_todo_bar(
             one_line
         };
         let preview_w = preview.width();
-        row.push(Span::styled(" · ", dim));
+        row.push(Span::styled(JOIN_MODIFY, dim));
         row.push(Span::styled(preview, fg));
+        // Space before the legend: at least `gap` so the keycap keeps real
+        // distance from the content even when the preview truncates to fill;
+        // any leftover width flows into the same gap, pinning the legend flush
+        // right. The budget check above guarantees `gap` always fits here.
         let pad = full_w
-            .saturating_sub(left_w + content_sep + preview_w + gap + legend_w);
+            .saturating_sub(left_w + content_sep + preview_w + legend_w)
+            .max(gap);
         row.push(Span::styled(" ".repeat(pad), dim));
     } else {
         // No current item (e.g. everything terminal just before auto-clear):
-        // right-pin the legend directly.
-        let pad = full_w.saturating_sub(left_w + gap + legend_w);
+        // right-pin the legend directly, keeping the same minimum gap.
+        let pad = full_w.saturating_sub(left_w + legend_w).max(gap);
         row.push(Span::styled(" ".repeat(pad), dim));
     }
 
     row.extend(legend);
-
-    // Paint a trailing fill so the surface background covers the full width.
-    let used_total: usize = row.iter().map(|s| s.content.width()).sum();
-    row.push(Span::styled(
-        " ".repeat(full_w.saturating_sub(used_total)),
-        dim,
-    ));
 
     frame.render_widget(Paragraph::new(Line::from(row)), rect);
     rect
@@ -983,13 +968,11 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
 /// narrow terminals the path is truncated from the left (`…suffix`) so its
 /// most specific tail (the project dir) stays pinned to the right edge, and
 /// the flag drops before the path disappears.
-pub fn draw_status_bar(
-    frame: &mut Frame,
-    rect: Rect,
-    view: StatusBarView<'_>,
-    theme: &Theme,
-) {
-    let StatusBarView { workspace, autopilot } = view;
+pub fn draw_status_bar(frame: &mut Frame, rect: Rect, view: StatusBarView<'_>, theme: &Theme) {
+    let StatusBarView {
+        workspace,
+        autopilot,
+    } = view;
 
     let bg = theme.surface();
     let full_w = rect.width as usize;
@@ -1027,7 +1010,14 @@ pub fn draw_status_bar(
     let workspace_style = Style::default().fg(theme.muted()).bg(bg);
     let workspace_full_width = workspace.width();
     let fits = |left_width: usize, right_width: usize| {
-        inner + left_width + if right_width > 0 { STATUS_BAR_GAP_MIN } else { 0 } + right_width
+        inner
+            + left_width
+            + if right_width > 0 {
+                STATUS_BAR_GAP_MIN
+            } else {
+                0
+            }
+            + right_width
             <= full_w
     };
 
@@ -1056,7 +1046,11 @@ pub fn draw_status_bar(
         // trailing chars of the path as fit.
         let budget = full_w
             .saturating_sub(inner)
-            .saturating_sub(if left_width > 0 { STATUS_BAR_GAP_MIN } else { 0 })
+            .saturating_sub(if left_width > 0 {
+                STATUS_BAR_GAP_MIN
+            } else {
+                0
+            })
             .saturating_sub(left_width);
         if budget >= 2 {
             let ellipsis = '…';
@@ -1089,9 +1083,13 @@ pub fn draw_status_bar(
     let right_width: usize = workspace_spans.iter().map(|s| s.content.width()).sum();
     // The minimum gap only applies when both clusters are present; a lone
     // workspace (flag dropped or absent) starts right after the indent.
-    let gap = full_w
-        .saturating_sub(inner + left_width + right_width)
-        .max(if left_width > 0 && right_width > 0 { STATUS_BAR_GAP_MIN } else { 0 });
+    let gap = full_w.saturating_sub(inner + left_width + right_width).max(
+        if left_width > 0 && right_width > 0 {
+            STATUS_BAR_GAP_MIN
+        } else {
+            0
+        },
+    );
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(4 + left_spans.len());
     spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
@@ -1116,7 +1114,8 @@ pub fn draw_status_bar(
 /// mutable state.
 #[derive(Clone)]
 pub struct QueueItemView {
-    /// When the item was queued (epoch ms), rendered as a local `HH:MM`.
+    /// When the item was queued (epoch ms); rendered as a local `HH:MM` in
+    /// the queue modal (the bar itself no longer shows a time).
     pub queued_at_ms: u64,
     /// The user's literal prompt text (the first run is previewed in the bar).
     pub text: String,
@@ -1141,22 +1140,23 @@ pub struct QueueBarView<'a> {
 
 /// The persistent two-row outbox summary pinned below the transcript gap.
 ///
-/// Parallels [`draw_todo_bar`] visually: a leading `📤` tray glyph + a
-/// brand-colored `QUEUE` label on a raised surface, so the bar reads as a
-/// distinct pinned panel rather than another footer strip. Every staged
+/// A brand-colored `QUEUE` label on the plain surface, quietly matching the
+/// todo bar above it. Every staged
 /// message waits for the running round to finish naturally before starting a
 /// new one (next-round only), so there is no insert/next badge.
 ///
 /// Layout:
 /// ```text
-/// 📤 QUEUE N · HH:MM           F3 block · F2 expand
+/// QUEUE N               F3 block  F2 expand
 /// {next item preview…}
 /// ```
-/// - Row 1 carries the identity (the tray glyph, the `QUEUE` label, the total
-///   count, the send time of the *next item to pop*) on the left and a compact
-///   keycap legend on the right (`F3` to block/resume the outbox, `F2` to
-///   expand the full list). The legend drops under width pressure (F2 first,
-///   then the labels, then F3) so the identity always survives.
+/// - Row 1 carries the identity (the `QUEUE` label and the total count) on
+///   the left and a compact keycap legend on the right (`F3` to block/resume
+///   the outbox, `F2` to expand the full list). The two keycap units are
+///   same-rank peers — separated by `JOIN_ENUMERATE_COLS` of whitespace, no
+///   dot. The legend keeps [`BAR_LEGEND_GAP_MIN`] columns of breathing room
+///   from the identity and drops under width pressure (F2 first, then the
+///   labels, then F3) so the identity always survives.
 /// - Row 2 previews the next item to pop: as many characters of its text as
 ///   the width allows (truncated with `…`). Empty queue → muted hint.
 ///
@@ -1179,10 +1179,8 @@ pub fn draw_queue_bar(
         blocked,
     } = view;
 
-    // Distinct pinned surface — mirrors the todo bar — so the row reads as a
-    // panel rather than a plain footer strip. Every span carries this bg so
-    // the tint covers the full row width (including trailing fill).
-    let bg = theme.raised();
+    // Plain surface: every span drops the background entirely, so the two rows
+    // blend with the frame instead of reading as a raised band.
     let full_w = rect.width as usize;
     // The bar spans two rows; reserve them up front.
     let row_height = 1u16;
@@ -1193,8 +1191,8 @@ pub fn draw_queue_bar(
     let next = items.first().cloned();
 
     let count = items.len();
-    let dim = Style::default().fg(theme.muted()).bg(bg);
-    let fg = Style::default().fg(theme.fg()).bg(bg);
+    let dim = Style::default().fg(theme.muted());
+    let fg = Style::default().fg(theme.fg());
     // Blocked outranks paused outranks normal: a user block is the strongest
     // "nothing sends" signal, so it wears the error color; a natural pause
     // (round not done) stays the gentler warning.
@@ -1207,53 +1205,41 @@ pub fn draw_queue_bar(
     };
     let count_style = Style::default()
         .fg(count_color)
-        .bg(bg)
         .add_modifier(Modifier::BOLD);
-    // The tray treatment — the glyph and the `QUEUE` label — wears the brand
-    // color so the left edge reads as a deliberately pinned marker, mirroring
-    // the todo bar's `📌 TODOS`.
-    let pin_color = theme.brand();
-    let pin_style = Style::default()
-        .fg(pin_color)
-        .bg(bg)
+    // The `QUEUE` label wears the brand color so the left edge still reads as
+    // a deliberate section marker without needing a glyph or a tinted band.
+    let tag_style = Style::default()
+        .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
 
-    // ── Row 1: `📤 QUEUE N · HH:MM`  …  `F3 block · F2 expand` ───────────
-    let mut left1: Vec<Span<'static>> = vec![
-        Span::styled(QUEUE_GLYPH, pin_style),
-        Span::styled(" ", dim),
-        Span::styled("QUEUE", pin_style),
-        Span::styled(" ", dim),
-    ];
+    // ── Row 1: `QUEUE N`  …  `F3 block  F2 expand` ─────────────────────
+    let mut left1: Vec<Span<'static>> =
+        vec![Span::styled("QUEUE", tag_style), Span::styled(" ", dim)];
     let count_label = if count > 99 {
         "99+".to_string()
     } else {
         count.to_string()
     };
     left1.push(Span::styled(count_label, count_style));
-    left1.push(Span::styled(" · ", dim));
-    let time_label = next
-        .as_ref()
-        .map(|item| crate::tui::time::sent_time_label(item.queued_at_ms))
-        .unwrap_or_else(|| "--:--".to_string());
-    left1.push(Span::styled(time_label, dim));
     // When blocked, append an explicit `· blocked` tag in the error color so
     // the held-back state never reads as an ordinary pause — the count is
-    // already error-colored, and this label spells out why.
+    // already error-colored, and this label spells out why. R1: `blocked` is
+    // a state of the queue (JOIN_MODIFY).
     if blocked {
-        left1.push(Span::styled(" · ", dim));
+        left1.push(Span::styled(JOIN_MODIFY, dim));
         left1.push(Span::styled("blocked", count_style));
     }
 
     // Right-side keycap legend. The keys explain the two outbox affordances:
     //   F3    — block / resume the outbox (toggles; label flips with state)
     //   F2    — expand the full queue list
-    // The right cluster drops under width pressure (F2 first, then the labels,
-    // then F3), so the identity on the left always survives.
+    // The two keycap units are same-rank peers (R2), so they are separated by
+    // plain whitespace — no dot. The right cluster drops under width pressure
+    // (F2 first, then the labels, then F3), so the identity always survives.
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let sep = |spans: &mut Vec<Span<'static>>| {
-            spans.push(Span::styled(" · ", dim));
+            spans.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
         };
         spans.push(keycap_span(theme, Key::F3.display()));
         if matches!(density, LegendDensity::Full | LegendDensity::Compact) {
@@ -1275,7 +1261,7 @@ pub fn draw_queue_bar(
     let left1_w: usize = left1.iter().map(|s| s.content.width()).sum();
     let fits = |left: usize, right: &[Span<'static>]| {
         let rw: usize = right.iter().map(|s| s.content.width()).sum();
-        left + if rw > 0 { HINT_BAR_GAP_MIN } else { 0 } + rw <= full_w
+        left + if rw > 0 { BAR_LEGEND_GAP_MIN } else { 0 } + rw <= full_w
     };
     let mut legend_density = LegendDensity::Full;
     let mut right1 = mk_right(legend_density);
@@ -1294,7 +1280,7 @@ pub fn draw_queue_bar(
     let right1_w: usize = right1.iter().map(|s| s.content.width()).sum();
     let gap1 = full_w
         .saturating_sub(left1_w + right1_w)
-        .max(if right1_w > 0 { HINT_BAR_GAP_MIN } else { 0 });
+        .max(if right1_w > 0 { BAR_LEGEND_GAP_MIN } else { 0 });
 
     let mut row1: Vec<Span<'static>> = Vec::with_capacity(2 + left1.len() + right1.len());
     row1.extend(left1);
@@ -1309,7 +1295,7 @@ pub fn draw_queue_bar(
     // ── Row 2: `{next item preview…}` ───────────────────────────────────────
     // With the insert/next distinction gone there is no target badge; the row
     // is just the one-line preview of the next message to pop, with the muted
-    // raised bg filling the rest. Empty queue → muted hint.
+    // style filling the rest. Empty queue → muted hint.
     let mut row2: Vec<Span<'static>> = Vec::new();
     if let Some(item) = next.as_ref() {
         // One-line, control-chars-collapsed preview; truncated to the width
@@ -1342,19 +1328,12 @@ pub fn draw_queue_bar(
     rect
 }
 
-/// The tray glyph that leads the queue bar — a visual marker that this row is
-/// the agent's staged outbox. Mirrors the todo bar's `📌` pin glyph: emoji
-/// presentation, measured at 2 display cells by `unicode-width` (which the
-/// span-width sum already accounts for), so the right-pinned legend stays
-/// flush regardless of terminal.
-const QUEUE_GLYPH: &str = "📤";
-
 /// How much of the row-1 keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `F3 block · F2 expand`.
+    /// Keys + labels: `F3 block  F2 expand`.
     Full,
-    /// Keys + first label: `F3 block · F2`.
+    /// Keys + first label: `F3 block  F2`.
     Compact,
     /// Only the block key: `F3`.
     Tiny,
@@ -1533,7 +1512,10 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains("~/projects/xx"), "workspace missing: {text:?}");
+        assert!(
+            text.contains("~/projects/xx"),
+            "workspace missing: {text:?}"
+        );
         assert!(text.contains("autopilot"), "flag missing: {text:?}");
         // The flag must lead (left) and the workspace trail (right), so the
         // workspace is never before the flag in the rendered row.
@@ -1561,7 +1543,10 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text2.contains("~/projects/xx"), "workspace missing: {text2:?}");
+        assert!(
+            text2.contains("~/projects/xx"),
+            "workspace missing: {text2:?}"
+        );
         assert!(!text2.contains("autopilot"), "flag leaked: {text2:?}");
     }
 
@@ -1588,7 +1573,10 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains('…'), "expected truncation marker, got {text:?}");
+        assert!(
+            text.contains('…'),
+            "expected truncation marker, got {text:?}"
+        );
         // The tail (project dir) is the meaningful part; keep it.
         assert!(text.contains("name"), "tail dropped: {text:?}");
         // The full un-truncated path must not have fit into the 24-col row.
@@ -1666,12 +1654,12 @@ mod tests {
     }
 
     #[test]
-    fn todo_bar_leads_with_pin_glyph_on_raised_tint_with_brand_pin() {
-        // The whole point of the pin treatment: the bar must render the 📌
-        // glyph at the left gutter, sit on a raised surface that is visibly
-        // distinct from the plain frame surface, and color the glyph + tag in
-        // the brand accent. We assert all three against the real buffer cells
-        // (the substring-only tests above can't see color or position).
+    fn todo_bar_leads_with_brand_tag_on_a_plain_surface() {
+        // The tag treatment: `TODOS` leads at the gutter in the brand accent
+        // on the plain frame surface — no pin glyph, no raised tint — so the
+        // row reads as quiet metadata rather than another pinned panel. We
+        // assert all of this against the real buffer cells (the substring-only
+        // tests can't see color or background).
         let theme = Theme::default();
         let todos = todo_list_with("write the docs", neenee_core::TodoStatus::InProgress);
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
@@ -1680,32 +1668,14 @@ mod tests {
         });
         let cells = terminal.buffer().content.clone();
 
-        // (1) Gutter glyph: the first cell is the pin glyph, rendered in the
-        // brand color on the raised surface. Emoji occupy 2 cells in the grid;
-        // the leading cell carries the glyph symbol and style, the next is the
-        // wide-glyph continuation cell.
-        assert_eq!(cells[0].symbol(), "📌", "gutter glyph missing at col 0");
-        assert_eq!(cells[0].fg(), theme.brand(), "pin glyph not brand-colored");
-        assert_eq!(cells[0].bg(), theme.raised(), "pin glyph not on raised surface");
+        // (1) The tag leads at the gutter, brand-colored.
+        assert_eq!(cells[0].symbol(), "T", "expected 'TODOS' tag at col 0");
+        assert_eq!(cells[0].fg(), theme.brand(), "TODOS tag not brand-colored");
 
-        // (2) The raised tint must differ from the plain frame surface, and it
-        // must cover the full row (sample the trailing fill cell too).
-        assert_ne!(
-            theme.raised(),
-            theme.surface(),
-            "raised and surface must be distinct for the panel to read"
-        );
-        assert_eq!(
-            cells[79].bg(),
-            theme.raised(),
-            "trailing fill must paint the raised tint across the full width"
-        );
-
-        // (3) The `TODOS` label (after the 2-cell glyph + 1-space gap) is also
-        // brand-colored, so the whole left edge reads as one pinned marker.
-        // Layout: [📌(2)] [gap(1)] [TODOS(5)] → 'T' lands at index 3.
-        assert_eq!(cells[3].symbol(), "T", "expected 'TODOS' label at col 3");
-        assert_eq!(cells[3].fg(), theme.brand(), "TODOS label not brand-colored");
+        // (2) The bar sits on the plain surface: no raised tint anywhere on
+        // the row (sample the trailing cell too).
+        assert_eq!(cells[0].bg(), Color::Reset, "tag must not sit on a tint");
+        assert_eq!(cells[79].bg(), Color::Reset, "row must stay plain");
     }
 
     #[test]
@@ -1734,6 +1704,34 @@ mod tests {
         let text = todo_row_text(&todos, 20);
         assert!(text.contains("TODOS 0/1"), "row was {text:?}");
         assert!(!text.contains("expand"), "legend leaked: {text:?}");
+    }
+
+    #[test]
+    fn todo_bar_keeps_real_gap_before_the_legend() {
+        // Long content truncates to the preview budget; the `Ctrl+T` keycap
+        // must still keep a real gap from the text instead of butting against
+        // the `…`. At 40 cols the preview is truncated *and* the full legend
+        // still fits, so this exercises exactly the cramped layout the gap is
+        // there to prevent.
+        let todos = todo_list_with(
+            "a very long todo item that must be truncated to leave the legend room",
+            neenee_core::TodoStatus::InProgress,
+        );
+        let text = todo_row_text(&todos, 40);
+        let ctrl = text.find("Ctrl").expect("legend should fit at 40 cols");
+        let dots = text[..ctrl]
+            .rfind('…')
+            .expect("preview should be truncated");
+        let between = &text[dots + '…'.len_utf8()..ctrl];
+        assert!(
+            between.chars().all(|c| c == ' '),
+            "legend must be separated from the preview by spaces: {text:?}"
+        );
+        assert!(
+            between.chars().count() >= BAR_LEGEND_GAP_MIN,
+            "legend too close to content ({} cols): {text:?}",
+            between.chars().count()
+        );
     }
 
     #[test]
@@ -1818,7 +1816,9 @@ mod tests {
         // Sanity: the normal row does carry some non-warning color from the
         // shimmer (so the comparison above is meaningful).
         assert!(
-            normal.iter().any(|&c| c != theme.muted() && c != Color::Reset),
+            normal
+                .iter()
+                .any(|&c| c != theme.muted() && c != Color::Reset),
             "normal row should carry shimmer colors"
         );
     }
@@ -1920,13 +1920,21 @@ mod tests {
         let cells = terminal.buffer().content.clone();
         // Layout: [indent(1)] [Enter(5)] [ send]. 'E' lands at index 1.
         assert_eq!(cells[1].symbol(), "E", "expected 'Enter' at col 1");
-        assert_eq!(cells[1].fg(), theme.brand(), "Enter keycap not brand-colored");
+        assert_eq!(
+            cells[1].fg(),
+            theme.brand(),
+            "Enter keycap not brand-colored"
+        );
         assert!(
             cells[1].style.add.contains(Modifier::BOLD),
             "Enter keycap not bold"
         );
         // The surface tint must cover the keycap cell.
-        assert_eq!(cells[1].bg(), theme.surface(), "Enter keycap not on surface");
+        assert_eq!(
+            cells[1].bg(),
+            theme.surface(),
+            "Enter keycap not on surface"
+        );
     }
 
     #[test]
@@ -2237,6 +2245,42 @@ mod tests {
     }
 
     #[test]
+    fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
+        // Matching the todo bar: the `QUEUE` tag leads at the gutter in the
+        // brand accent on the plain frame surface — no tray glyph, no raised
+        // tint — so the two bars read as one quiet family.
+        let theme = Theme::default();
+        let item = QueueItemView {
+            queued_at_ms: 1_700_000_000_000,
+            text: "fix the flaky test".to_string(),
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(70, 2);
+        terminal.draw(|f| {
+            draw_queue_bar(
+                f,
+                Rect::new(0, 0, 70, 2),
+                QueueBarView {
+                    items: &[item],
+                    paused: false,
+                    blocked: false,
+                },
+                &theme,
+            );
+        });
+        let cells = terminal.buffer().content.clone();
+
+        // (1) The tag leads at the gutter, brand-colored.
+        assert_eq!(cells[0].symbol(), "Q", "expected 'QUEUE' tag at col 0");
+        assert_eq!(cells[0].fg(), theme.brand(), "QUEUE tag not brand-colored");
+
+        // (2) The bar sits on the plain surface: no raised tint anywhere
+        // (sample row 1's trailing cell and row 2's first cell too).
+        assert_eq!(cells[0].bg(), Color::Reset, "tag must not sit on a tint");
+        assert_eq!(cells[69].bg(), Color::Reset, "row 1 must stay plain");
+        assert_eq!(cells[70].bg(), Color::Reset, "row 2 must stay plain");
+    }
+
+    #[test]
     fn queue_bar_empty_state_hints_how_to_stage() {
         let text = queue_row_text(
             QueueBarView {
@@ -2247,9 +2291,9 @@ mod tests {
             70,
             &Theme::default(),
         );
-        // Tray identity + zero count on row 1.
-        assert!(text.contains("📤"), "tray glyph missing: {text:?}");
-        assert!(text.contains("QUEUE 0 · --:--"), "row was {text:?}");
+        // Identity + zero count on row 1; no time label anymore.
+        assert!(text.contains("QUEUE 0"), "row was {text:?}");
+        assert!(!text.contains("--:--"), "time label leaked: {text:?}");
         // Empty hint on row 2.
         assert!(text.contains("queue empty"), "row was {text:?}");
     }
@@ -2269,9 +2313,17 @@ mod tests {
             70,
             &Theme::default(),
         );
-        // Tray identity + count reflects the one item.
-        assert!(text.contains("📤"), "tray glyph missing: {text:?}");
-        assert!(text.contains("QUEUE 1 ·"), "row was {text:?}");
+        // Identity + count reflects the one item; no time label anymore.
+        assert!(text.contains("QUEUE 1"), "row was {text:?}");
+        assert!(!text.contains(":"), "time label leaked: {text:?}");
+        // Legend: the two keycap units are same-rank peers (R2) — joined by
+        // plain whitespace, never a `·` (which would imply one modifies the
+        // other).
+        assert!(
+            text.contains("F3 block  F2 expand"),
+            "peer keycaps must use R2 whitespace: {text:?}"
+        );
+        assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");
         // Preview text on row 2; no insert/next badge (next-round only).
         assert!(!text.contains("insert"), "insert badge leaked: {text:?}");
         assert!(!text.contains(" next"), "next badge leaked: {text:?}");

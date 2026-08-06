@@ -328,7 +328,16 @@ pub enum AgentResponse {
     /// `ProviderKeys` is retained for the header key-readiness summary.
     ProviderPicker(ProviderPickerSnapshot),
     ConversationCleared,
-    ConversationReplaced(Vec<Message>),
+    /// Replace the visible transcript (dialogue messages) AND the command
+    /// ledger (ADR-0091) with another session's state, after `/session open`,
+    /// `/resume`, `/session resume`. The frontend rebuilds the whole document
+    /// from these two sources: pure dialogue from `messages`, command rows
+    /// from `commands`.
+    ConversationReplaced {
+        messages: Vec<Message>,
+        #[serde(default)]
+        commands: Vec<crate::command::CommandRecord>,
+    },
     /// Replace the sessions picker contents (and open the picker).
     SessionsOverview(Vec<SessionOverview>),
     /// Reply to [`AgentRequest::QuerySessionDetail`]: full detail for one
@@ -609,6 +618,24 @@ pub enum RoundEvent {
     /// spent parked on human decisions (permission prompts / ask_user).
     RoundCompleted(RoundSummary),
     Text(String),
+    /// A typed slash-command result (ADR-0091). Replaces the `Text` replies
+    /// commands used to emit: the TUI renders it as a distinct command block
+    /// (dimmed header + expandable result), never as assistant prose, and the
+    /// same value is recorded in the session's command ledger for resume/
+    /// export/audit.
+    /// A typed slash-command result (ADR-0091). Replaces the `Text` replies
+    /// commands used to emit: the TUI renders it as a distinct command block
+    /// (dimmed invocation header + expandable result), never as assistant
+    /// prose, and the same value is recorded in the session's command ledger
+    /// for resume/export/audit.
+    CommandResult {
+        /// Command word without the leading slash (e.g. `"search"`), or
+        /// `"shell"` for a `!command` passthrough.
+        name: String,
+        /// Raw argument remainder after the command word.
+        args: String,
+        result: crate::command::CommandResult,
+    },
     /// Turn-level error (e.g. a provider failure mid-turn). Distinct from the
     /// global [`AgentResponse::Error`] only in that it belongs to a specific
     /// session's transcript and is therefore carried under the [`Round`]
@@ -1281,7 +1308,11 @@ mod tests {
             generation_ms: 0,
         };
         assert_eq!(summary.active_ms(), 2_000);
-        assert!((summary.tps() - 250.0).abs() < 0.01, "got {}", summary.tps());
+        assert!(
+            (summary.tps() - 250.0).abs() < 0.01,
+            "got {}",
+            summary.tps()
+        );
     }
 
     #[test]
@@ -1298,7 +1329,11 @@ mod tests {
             generation_ms: 2_000,
         };
         assert_eq!(summary.active_ms(), 32_000);
-        assert!((summary.tps() - 250.0).abs() < 0.01, "got {}", summary.tps());
+        assert!(
+            (summary.tps() - 250.0).abs() < 0.01,
+            "got {}",
+            summary.tps()
+        );
     }
 
     #[test]

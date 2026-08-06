@@ -22,9 +22,9 @@ mod copilot;
 mod deepseek;
 mod google;
 mod kimi;
-mod opencode_go;
 mod openai;
 mod openai_sub2api;
+mod opencode_go;
 mod xai;
 mod zai;
 
@@ -35,9 +35,9 @@ pub use copilot::COPILOT_SEED_MODELS;
 pub use deepseek::DEEPSEEK_BUILTIN_MODELS;
 pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
-pub use opencode_go::{OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS};
 pub use openai::OPENAI_BUILTIN_MODELS;
 pub use openai_sub2api::OPENAI_SUB2API_MODELS;
+pub use opencode_go::{OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS};
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
 
@@ -198,8 +198,13 @@ impl OpenAiProviderSpec {
         let agent = user_agent
             .or_else(|| self.default_user_agent.map(str::to_string))
             .unwrap_or_else(|| NEENEE_USER_AGENT.to_string());
-        OpenAiChatCompletionsProvider::with_base_url_and_user_agent(api_key, model, self.base_url, &agent)
-            .with_id(self.id.to_string())
+        OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
+            api_key,
+            model,
+            self.base_url,
+            &agent,
+        )
+        .with_id(self.id.to_string())
     }
 }
 

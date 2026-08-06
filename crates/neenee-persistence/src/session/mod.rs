@@ -33,7 +33,7 @@ use tokio::sync::Mutex;
 /// `provider_selection`. A session that has run `/models` pins its own
 /// provider + model here so the live selection does not leak into the global
 /// `config.toml` or affect other concurrent sessions.
-const CURRENT_SCHEMA_VERSION: u32 = 9;
+const CURRENT_SCHEMA_VERSION: u32 = 10;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
@@ -159,6 +159,16 @@ struct SessionData {
     /// across `/session open` boundaries.
     #[serde(default)]
     request_usage_records: Vec<neenee_core::RequestUsageRecord>,
+    /// Durable command ledger (ADR-0091): every slash command (and `!cmd`
+    /// passthrough) invocation with its typed result. Commands are operations
+    /// on the session, not conversation turns, so they live here instead of in
+    /// `model_window` / `archived_transcript` — the message stream is pure
+    /// dialogue. Legacy `CommandEcho` messages fold into this list at schema
+    /// migration time (v10). `#[serde(default, skip_serializing_if =
+    /// "Vec::is_empty")]` keeps legacy canonical JSON byte-identical so
+    /// existing stored checksums stay valid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    commands: Vec<neenee_core::CommandRecord>,
 }
 
 impl Default for SessionData {
@@ -184,6 +194,7 @@ impl Default for SessionData {
             disabled_tools: std::collections::HashSet::new(),
             round_counter: 0,
             request_usage_records: Vec::new(),
+            commands: Vec::new(),
         }
     }
 }
@@ -237,8 +248,57 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
     if data.schema_version < 9 {
         data.schema_version = 9;
     }
+    // schema v10 (ADR-0091): command records moved out of the message stream
+    // into a dedicated ledger. Legacy sessions may still carry `CommandEcho`
+    // messages (ADR-0050) in `model_window` / `archived_transcript`; fold each
+    // into the ledger as a `CommandRecord` with `result: None` (invocation
+    // recorded, reply never persisted) and drop it from the message vectors so
+    // the stream is pure dialogue again. Guarded by the v10 bump, so repeated
+    // loads are idempotent.
+    if data.schema_version < 10 {
+        let mut records = Vec::new();
+        // Full-transcript order: archived first, then the live window.
+        for message in data
+            .archived_transcript
+            .iter()
+            .chain(data.model_window.iter())
+        {
+            if message.is_command_echo() {
+                records.push(command_record_from_echo(message));
+            }
+        }
+        data.archived_transcript.retain(|m| !m.is_command_echo());
+        data.model_window.retain(|m| !m.is_command_echo());
+        data.commands = records;
+        data.schema_version = 10;
+    }
     data.schema_version = CURRENT_SCHEMA_VERSION;
     data
+}
+
+/// Convert a legacy `CommandEcho` message (ADR-0050) into a ledger
+/// [`CommandRecord`](neenee_core::CommandRecord) with `result: None`. The echo
+/// text is the literal `/cmd args` or `!cmd args` the user typed; `!`-prefixed
+/// invocations fold under the `"shell"` name, everything else under its
+/// command word.
+fn command_record_from_echo(message: &Message) -> neenee_core::CommandRecord {
+    let text = message.content.trim();
+    let (name, args) = if let Some(rest) = text.strip_prefix('!') {
+        ("shell", rest.trim().to_string())
+    } else if let Some(rest) = text.strip_prefix('/') {
+        match rest.split_once(char::is_whitespace) {
+            Some((name, args)) => (name, args.trim().to_string()),
+            None => (rest, String::new()),
+        }
+    } else {
+        ("echo", text.to_string())
+    };
+    let mut record = neenee_core::CommandRecord::new(name, args);
+    record.timestamp = message
+        .timestamp
+        .map(|seconds| seconds.saturating_mul(1000))
+        .unwrap_or_else(|| neenee_core::todos::unix_now().saturating_mul(1000));
+    record
 }
 
 /// Compute the CRC32C checksum that should be stored for `data`. The checksum
@@ -397,6 +457,7 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::MessagesAppended { messages } => {
                 data.model_window.extend(messages.clone())
             }
+            SessionEvent::CommandsReplaced { commands } => data.commands = commands.clone(),
             SessionEvent::ContextProjectionCommitted {
                 archived_originals,
                 model_window,
@@ -513,6 +574,15 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             timestamp: data.updated_at,
             event: SessionEvent::ScheduledJobsSet {
                 jobs: data.scheduled_jobs.clone(),
+            },
+        });
+    }
+    if !data.commands.is_empty() {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::CommandsReplaced {
+                commands: data.commands.clone(),
             },
         });
     }
@@ -1066,6 +1136,49 @@ impl SessionStore {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::MessagesReplaced {
                     messages: state.data.model_window.clone(),
+                })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The durable command ledger (ADR-0091): every slash command and `!cmd`
+    /// invocation with its typed result, in invocation order. Commands live
+    /// here, not in the message stream, so resume/export/audit reconstruct
+    /// them without polluting the dialogue.
+    pub async fn commands(&self) -> Vec<neenee_core::CommandRecord> {
+        let state = self.state.lock().await;
+        state.data.commands.clone()
+    }
+
+    /// Atomically mutate the command ledger in place under the lock and
+    /// persist the result — the mirror of [`SessionStore::mutate_messages`]
+    /// (ADR-0091, ADR-0048 single-write-path). `f` may push, pop, edit, or
+    /// replace freely; the resulting list becomes the durable snapshot.
+    ///
+    /// The empty-session deferral mirrors `mutate_messages`: a brand-new
+    /// session that is still empty after the mutation stays in memory. A real
+    /// command record makes the session non-empty, so it DOES persist —
+    /// preserving the "first command persists the session" contract that
+    /// ADR-0050's command echo used to carry.
+    pub async fn mutate_commands<F>(&self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut Vec<neenee_core::CommandRecord>),
+    {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            f(&mut state.data.commands);
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = !state.path.exists() && state.data.commands.is_empty();
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::CommandsReplaced {
+                    commands: state.data.commands.clone(),
                 })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
@@ -3349,6 +3462,182 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn commands_round_trip_through_disk() {
+        // ADR-0091: the command ledger (invocation + typed result) must survive
+        // persist + reload so resume reconstructs every command and its reply.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-commands-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        assert!(store.commands().await.is_empty());
+
+        store
+            .mutate_commands(|commands| {
+                commands.push(
+                    neenee_core::CommandRecord::new("search", "foo bar").with_result(
+                        neenee_core::CommandResult::Search {
+                            query: "foo bar".to_string(),
+                            hits: vec![neenee_core::SearchHit {
+                                text: "match".to_string(),
+                                score: 0.9,
+                            }],
+                        },
+                    ),
+                );
+                commands.push(
+                    neenee_core::CommandRecord::new("permissions", "").with_result(
+                        neenee_core::CommandResult::PermissionList {
+                            allowed: vec!["bash".to_string()],
+                        },
+                    ),
+                );
+            })
+            .await
+            .unwrap();
+
+        let loaded = SessionStore::for_path(path.clone());
+        let commands = loaded.commands().await;
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].name, "search");
+        assert_eq!(commands[0].args, "foo bar");
+        assert_eq!(
+            commands[0].result.as_ref().unwrap().to_text(),
+            "Relevant history (most similar first):\n\n1. [score=0.900]\nmatch"
+        );
+        assert_eq!(
+            commands[1].result.as_ref().unwrap().to_text(),
+            "Always-allowed tools:\n- bash"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn mutate_commands_persists_first_command_in_empty_session() {
+        // ADR-0091: a command record is "real content" — a brand-new session
+        // whose first action is a command must persist (the contract ADR-0050's
+        // command echo used to carry), so the command survives restart.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-commands-first-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .mutate_commands(|commands| {
+                commands.push(neenee_core::CommandRecord::new("session", "status"));
+            })
+            .await
+            .unwrap();
+
+        assert!(path.exists(), "a first command must persist the session");
+
+        let loaded = SessionStore::for_path(path.clone());
+        assert_eq!(loaded.commands().await.len(), 1);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn legacy_echo_messages_fold_into_ledger_on_v10_migration() {
+        // ADR-0091 schema v10: a pre-v10 session whose message stream carries
+        // ADR-0050 `CommandEcho` messages (slash + shell) must fold each into
+        // the command ledger (`result: None`) and drop them from the window —
+        // the message stream becomes pure dialogue again.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-commands-legacy-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+        let legacy = serde_json::json!({
+            "id": "legacy-echo",
+            "parent_id": null,
+            "created_at": 0u64,
+            "project_root": ".",
+            "model_window": [
+                {"role": "User", "content": "/search foo", "hidden": false,
+                 "origin": {"kind": "command_echo"}},
+                {"role": "User", "content": "hello", "hidden": false},
+                {"role": "Assistant", "content": "hi", "hidden": false},
+                {"role": "User", "content": "!ls -la", "hidden": false,
+                 "origin": {"kind": "command_echo"}},
+            ],
+            "archived_transcript": [],
+            "todos": [],
+            "scheduled_jobs": [],
+            "schema_version": 9u32,
+            "checksum": null,
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let store = SessionStore::for_path(path.clone());
+        let commands = store.commands().await;
+        assert_eq!(
+            commands.len(),
+            2,
+            "both echoes fold into the ledger: {:?}",
+            commands
+        );
+        assert_eq!(commands[0].name, "search");
+        assert_eq!(commands[0].args, "foo");
+        assert!(
+            commands[0].result.is_none(),
+            "legacy echoes carry no result"
+        );
+        assert_eq!(commands[1].name, "shell");
+        assert_eq!(commands[1].args, "ls -la");
+
+        // The message stream keeps only the real dialogue.
+        let window = store.model_window().await;
+        let contents: Vec<&str> = window.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["hello", "hi"]);
+        assert!(
+            window.iter().all(|m| !m.is_command_echo()),
+            "no command echo remains in the message window"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn commands_survive_snapshot_to_events_full_replay() {
+        // ADR-0091: the ledger must survive a full event-log replay (log
+        // compaction and legacy import rebuild state from `snapshot_to_events`
+        // + `apply_events`, not from the snapshot JSON). The seed must emit a
+        // `CommandsReplaced` event and replay must restore it.
+        let mut data = SessionData::default();
+        data.commands = vec![
+            neenee_core::CommandRecord::new("search", "foo").with_result(
+                neenee_core::CommandResult::Search {
+                    query: "foo".to_string(),
+                    hits: vec![],
+                },
+            ),
+            neenee_core::CommandRecord::new("shell", "!ls -la"),
+        ];
+        let events = snapshot_to_events(&data);
+        assert!(
+            events
+                .iter()
+                .any(|envelope| matches!(&envelope.event, SessionEvent::CommandsReplaced { .. })),
+            "seed must emit CommandsReplaced"
+        );
+
+        let mut restored = SessionData::default();
+        apply_events(&mut restored, &events);
+        assert_eq!(restored.commands.len(), 2);
+        assert_eq!(restored.commands[0].name, "search");
+        assert_eq!(restored.commands[1].name, "shell");
+        // apply_events does not run schema migration; commands are untouched
+        // by the message-only replay paths.
+        assert_eq!(
+            restored.commands[0]
+                .result
+                .as_ref()
+                .unwrap()
+                .to_text(),
+            "No relevant history found."
+        );
     }
 
     #[tokio::test]
