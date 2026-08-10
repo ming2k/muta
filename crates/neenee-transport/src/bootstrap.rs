@@ -295,7 +295,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
         StartupMode::Doctor => unreachable!("doctor returns before this match"),
         StartupMode::Attach(_) => unreachable!("attach returns before this match"),
-        StartupMode::Daemon => unreachable!("daemon returns before this match"),
+        StartupMode::Serve { .. } => unreachable!("serve returns before this match"),
+        StartupMode::Status { .. } => unreachable!("status returns before this match"),
         #[cfg(debug_assertions)]
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };

@@ -1324,10 +1324,19 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             let effective = if model.effort_levels.is_empty() {
                 None
             } else {
+                // Fallback when the channel has no explicit effort override:
+                // GPT defaults to `medium` (its wire middle tier); every other
+                // model defaults to `high` clamped to its ladder — a ladder
+                // that tops out below `high` (e.g. EFFORT_COMMON relays)
+                // resolves to its deepest tier, and a ladder that omits
+                // `high`/`medium` (Kimi K3's `low`/`high`/`max`, or a single
+                // fixed rung) snaps up to the nearest supported tier, since
+                // the platform pins its own default. Never emits a tier the
+                // model does not support.
                 let default = if model.family == "gpt" {
                     Effort::Medium
                 } else {
-                    Effort::High
+                    Effort::High.clamp_to(model.effort_levels)
                 };
                 Some((*effort).unwrap_or(default).as_str().to_string())
             };

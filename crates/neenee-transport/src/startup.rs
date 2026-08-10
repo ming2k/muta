@@ -65,6 +65,7 @@ define_builtin_commands! {
     Search      = "/search"       : "Semantic search over the project's session history",
     Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
     Sessions    = "/sessions"     : "Browse past sessions",
+    Host        = "/host"         : "Daemon control panel — live session status and switching",
     Btw         = "/btw"          : "Open a side conversation that runs alongside the main session",
     Resume      = "/resume"       : "Resume the most recent or selected session",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
@@ -106,10 +107,25 @@ pub enum StartupMode {
     /// must intercept this variant BEFORE invoking `bootstrap::assemble` — no
     /// local harness is assembled in attach mode.
     Attach(Option<String>),
-    /// `neenee daemon` (ADR-0089): start the headless multi-session host in
-    /// the FOREGROUND (equivalent to the `neenee-server` binary). The caller
-    /// intercepts this before `assemble` and runs the daemon main instead.
-    Daemon,
+    /// `neenee serve [--port <n>] [--public]` (ADR-0094, renamed from the
+    /// never-released `neenee daemon` of ADR-0089): run the headless
+    /// multi-session host in the FOREGROUND (equivalent to the
+    /// `neenee-server` binary). The caller intercepts this before `assemble`
+    /// and runs the host main instead.
+    Serve {
+        port: u16,
+        public: bool,
+        detach: bool,
+    },
+    /// `neenee status [--watch] [--json] [--all]` (ADR-0093): observe the
+    /// project's session host — one snapshot and exit, a live table with `watch`,
+    /// JSON frames with `json`. Purely client-side: never spawns a host and
+    /// never assembles a local harness.
+    Status {
+        watch: bool,
+        json: bool,
+        include_idle: bool,
+    },
     /// Render a single UI component in isolation for interactive development
     /// (`neenee showcase <component>`). No agent, no session, no network —
     /// just the component's model + renderer wired to a real terminal so you
@@ -165,6 +181,79 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
         std::process::exit(2);
     }
 
+    // `status` is the only subcommand whose trailing flags are parsed here
+    // (`--watch`/`--json`/`--all` landed in `rest` because they follow the
+    // positional command).
+    if rest.first().map(String::as_str) == Some("status") {
+        let mut watch = false;
+        let mut json = false;
+        let mut include_idle = false;
+        for flag in &rest[1..] {
+            match flag.as_str() {
+                "--watch" => watch = true,
+                "--json" => json = true,
+                "--all" => include_idle = true,
+                other => {
+                    eprintln!(
+                        "Unknown status option '{other}'. Usage:\n  neenee status [--watch] [--json] [--all]\n\n  --watch   keep streaming live updates\n  --json    emit one JSON frame per update\n  --all     include idle sessions (default: only sessions needing attention)"
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+        return (
+            StartupMode::Status {
+                watch,
+                json,
+                include_idle,
+            },
+            project,
+            autopilot,
+            single_instance,
+        );
+    }
+
+    // `serve` (ADR-0094): the foreground multi-session host. `--port` /
+    // `--public` mirror the `neenee-server` binary's flags.
+    if rest.first().map(String::as_str) == Some("serve") {
+        let mut port: u16 = 0;
+        let mut public = false;
+        let mut detach = false;
+        let mut flags = rest[1..].iter().peekable();
+        while let Some(flag) = flags.next() {
+            match flag.as_str() {
+                "--port" => {
+                    let value = flags.next().unwrap_or_else(|| {
+                        eprintln!("--port requires a value");
+                        std::process::exit(2);
+                    });
+                    port = value.parse().unwrap_or_else(|_| {
+                        eprintln!("invalid --port value '{value}'");
+                        std::process::exit(2);
+                    });
+                }
+                "--public" => public = true,
+                "--detach" => detach = true,
+                other => {
+                    eprintln!(
+                        "Unknown serve option '{other}'. Usage:\n  neenee serve [--port <n>] [--public] [--detach]\n\n  --port <n>  listen on port <n> (default: OS-assigned)\n  --public    bind all interfaces and require a bearer token\n  --detach    fork into the background and return"
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+        return (
+            StartupMode::Serve {
+                port,
+                public,
+                detach,
+            },
+            project,
+            autopilot,
+            single_instance,
+        );
+    }
+
     let mode = match rest.as_slice() {
         [] => StartupMode::Fresh,
         [cmd] if cmd == "resume" => StartupMode::Picker,
@@ -181,7 +270,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee --attach [id]    attach to a session server (spawning one if none is running)\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee serve [--port <n>] [--public] [--detach]\n                          run the session daemon (foreground, or background with --detach)\n  neenee attach [id]      attach the TUI to a session the host serves (spawning one if none is running)\n  neenee status [--watch] [--json] [--all]\n                          show the host's sessions needing attention\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
                 cmd
             );
             std::process::exit(2);
@@ -311,5 +400,55 @@ mod tests {
         let (mode, project, ..) = parse_args(args(&["--project=/q"]));
         assert!(matches!(mode, StartupMode::Fresh));
         assert_eq!(project, Some(PathBuf::from("/q")));
+    }
+
+    #[test]
+    fn serve_subcommand_forms() {
+        let (mode, ..) = parse_args(args(&["serve"]));
+        assert!(matches!(
+            mode,
+            StartupMode::Serve {
+                port: 0,
+                public: false,
+                detach: false
+            }
+        ));
+        let (mode, ..) = parse_args(args(&["serve", "--port", "8765", "--public", "--detach"]));
+        assert!(matches!(
+            mode,
+            StartupMode::Serve {
+                port: 8765,
+                public: true,
+                detach: true
+            }
+        ));
+        let (mode, project, ..) = parse_args(args(&["--project", "/p", "serve"]));
+        assert!(matches!(mode, StartupMode::Serve { .. }));
+        assert_eq!(project, Some(PathBuf::from("/p")));
+    }
+
+    #[test]
+    fn status_subcommand_forms() {
+        let (mode, ..) = parse_args(args(&["status"]));
+        assert!(matches!(
+            mode,
+            StartupMode::Status {
+                watch: false,
+                json: false,
+                include_idle: false
+            }
+        ));
+        let (mode, ..) = parse_args(args(&["status", "--watch", "--json", "--all"]));
+        assert!(matches!(
+            mode,
+            StartupMode::Status {
+                watch: true,
+                json: true,
+                include_idle: true
+            }
+        ));
+        let (mode, project, ..) = parse_args(args(&["--project", "/p", "status", "--watch"]));
+        assert!(matches!(mode, StartupMode::Status { watch: true, .. }));
+        assert_eq!(project, Some(PathBuf::from("/p")));
     }
 }

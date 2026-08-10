@@ -537,7 +537,10 @@ fn request_display_order(record: &RequestUsageRecord) -> (u64, u8, u32, u32, &st
 }
 
 /// One row of the report: a single provider+model and its source split.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serialisable so an attached frontend can receive the daemon-side report
+/// over the wire ([`crate::AgentResponse::TokenUsageReport`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenSourceRow {
     pub provider: String,
     pub model: String,
@@ -549,7 +552,10 @@ pub struct TokenSourceRow {
 }
 
 /// A full snapshot of the ledger: per-row breakdown + a grand total.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Serialisable so an attached frontend can receive the daemon-side report
+/// over the wire ([`crate::AgentResponse::TokenUsageReport`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenSourceReport {
     pub rows: Vec<TokenSourceRow>,
     pub grand_total: TokenSourceTotals,

@@ -65,7 +65,11 @@ const PRE_MIGRATION: &[Model] = &[
         // inputs, and always-on thinking (`supports_thinking_type: "only"`,
         // single `max` effort tier) — over the OpenAI-compatible wire the
         // always-on reasoning simply streams back as `reasoning_content`, so
-        // there is no thinking switch to model.
+        // there is no thinking switch to model. NOTE: this entry intentionally
+        // diverges from the pre-migration table — `k3`'s single `max` effort
+        // tier (advertised by the platform's live `GET /models`) was added
+        // after the migration, so the effort pin flows onto the wire and the
+        // pickers/hint bar can show the effective level.
         id: "k3",
         name: "Kimi K3",
         family: "kimi",
@@ -75,7 +79,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_KIMI_K3,
     },
     Model {
         id: "kimi-k2.7-code",

@@ -379,6 +379,9 @@ pub enum InputAction {
     SessionActivate,
     /// Open the currently-selected session in the sessions picker.
     OpenSelectedSession,
+    /// `/host` panel Enter: switch the TUI to drive the selected daemon
+    /// session (ADR-0096). Handled by exiting to re-attach.
+    HostSwitchSelected,
     /// Drill into the selected turn's model-round usage. Bound to `Enter`.
     TokenReportActivate,
     /// Delete the currently-selected session in the sessions picker.
@@ -1259,6 +1262,7 @@ pub fn process_event(
                         super::Modal::HistorySearch => InputAction::HistoryInsert,
                         super::Modal::Sessions if context.session_info_detail => InputAction::None,
                         super::Modal::Sessions => InputAction::OpenSelectedSession,
+                        super::Modal::Host => InputAction::HostSwitchSelected,
                         super::Modal::Permission => InputAction::PermissionSubmit,
                         super::Modal::Question => InputAction::QuestionSubmit,
                         super::Modal::InputInjection => InputAction::InputSubmit,
@@ -2033,6 +2037,7 @@ pub fn process_event(
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalUp,
                         super::Modal::HistorySearch => InputAction::ModalUp,
                         super::Modal::Sessions => InputAction::ModalUp,
+                        super::Modal::Host => InputAction::ModalUp,
                         super::Modal::Question => InputAction::QuestionUp,
                         super::Modal::Permission => {
                             // Browse zone: walk transcript targets. Compose zone:
@@ -2113,6 +2118,7 @@ pub fn process_event(
                         super::Modal::Models | super::Modal::Connections => InputAction::ModalDown,
                         super::Modal::HistorySearch => InputAction::ModalDown,
                         super::Modal::Sessions => InputAction::ModalDown,
+                        super::Modal::Host => InputAction::ModalDown,
                         super::Modal::Question => InputAction::QuestionDown,
                         super::Modal::Permission => {
                             if context.has_focused_target {

@@ -104,12 +104,18 @@ session a frontend can drive." It owns:
 - **Handlers** — `handlers_chat` / `handlers_permission` / `handlers_provider`
   / `handlers_session` / `handlers_slash`: one per `AgentRequest` group.
 - **`/btw` side sessions** (`side`), **hooks**, **export**, **review**, **shell**.
-- **`serve`** — the hot-attach WebSocket transport (ADR-0037 §7).
+- **`serve`** — the control-plane transport (ADR-0037 §7, generalized by
+  ADR-0096): one WebSocket handshake serving the attach, monitor, and control
+  roles over both TCP and a Unix domain socket.
+- **`host`** — the unified daemon runtime (ADR-0096): one process owning every
+  session across every project, plus the global discovery record and UDS
+  listener.
 - **`bootstrap`** — the session-harness assembly factory (ADR-0037 Step 6,
   landed by ADR-0081) that both application binaries call; identity,
   principal profile, and `UiBridge` arrive as parameters.
-- **`serve_discovery`** — the discovery record a `neenee-server` writes so
-  attach clients can find it (path resolution, atomic write, removal).
+- **`serve_discovery`** — the global discovery record the daemon writes so
+  clients can find it (one per user, carrying the UDS path + TCP port), plus
+  the legacy per-project path resolution it replaced (ADR-0096).
 - **`slash_handler`** — the `SlashCommandHandler` extension point so embeddings
   register Rust slash commands without forking the server (ADR-0054).
 - **`UiBridge`** — the one frontend-capability trait (`/export` clipboard).
@@ -122,13 +128,12 @@ mission, or `PrincipalProfile`. The embedding supplies an `AgentIdentity` to
 `Agent::new` and binds a `PrincipalProfile` via `apply_principal_profile`.
 `/btw` side sessions reuse the primary agent's identity via `Agent::identity()`.
 
-**One session per process.** The ADR-0037 Step 6 factory has landed as
-`bootstrap::assemble`: both application binaries build their
-`SessionDriver` through it. Each process still hosts exactly one session;
-the multi-session registry (`SessionRegistry` / `SharedState`) remains
-deferred — `neenee-server` scales by one process per session, and the
-registry is the right next step only if a daemon ever needs N sessions in
-one process (ADR-0081).
+**One daemon, every session (ADR-0096).** The `SessionRegistry` hosts any
+number of sessions in one process — each still its own writer under the
+ADR-0018 invariant, indexed `project → session`. The ADR-0037 Step 6 factory
+(`bootstrap::assemble`) assembles each hosted session on demand; the daemon
+pays the assembly cost once per session, not once per process. The
+per-project, one-server-per-session model of ADR-0081 is superseded.
 
 ### Application layer — `neenee-cli` and `neenee-server`
 
@@ -136,14 +141,13 @@ The layer now holds two binaries, both assembled through the session
 layer's `bootstrap::assemble` factory:
 
 1. **`neenee-cli`** (package name; the command is `neenee`) — the
-   interactive TUI. It binds its principal
-   (`apply_principal_profile(&principal_code())`) — the identity and
-   principal live in the binary, **not** in the transport (ADR-0054) — then
-   runs the terminal frontend. By default it drives an in-process
-   standalone session; with `neenee --attach [session-id]` it instead
-   attaches as a WebSocket client to a running `neenee-server` and
-   co-drives that hosted session (ADR-0081).
-2. **`neenee-server`** — the headless host described below.
+   interactive TUI and the CLI verbs (`serve` / `attach` / `status`). It binds
+   its principal (`apply_principal_profile(&principal_code())`) — the identity
+   and principal live in the binary, **not** in the transport (ADR-0054).
+   Every invocation is a client of the daemon: bare `neenee` and
+   `neenee resume [id]` attach to a daemon-held session, spawning the daemon
+   on first use (ADR-0096). There is no in-process harness path.
+2. **`neenee-server`** — the unified session daemon described below.
 
 The session-layer factory retires the dependency "reach-through" this page
 used to document: provider/toolset/agent/driver assembly now lives behind
@@ -152,16 +156,20 @@ used to document: provider/toolset/agent/driver assembly now lives behind
 accordingly — it reaches the MCP runtime through `neenee-agent`, not a
 separate crate.
 
-#### `neenee-server` — headless session host
+#### `neenee-server` — the unified session daemon
 
-A thin binary that hosts one session with no terminal attached: it
-assembles the session through `bootstrap::assemble`, drains the driver's
-responses into a broadcast channel, and serves the session over WebSocket
-with the same protocol `/serve` uses. One server hosts one session.
-Clients find it through a per-project discovery record (written on
-startup, removed on clean shutdown), and `neenee --attach` spawns one on
-demand when none is running. See ADR-0081 for the attach model and its v1
-limitations.
+A thin binary that owns every session across every project, with no terminal
+attached: it assembles each session through `bootstrap::assemble`, drains each
+driver's responses into a per-session broadcast channel, and serves the whole
+registry over the control plane — a Unix domain socket by default (filesystem
+permissions as auth), TCP + bearer token when exposed. One daemon hosts all
+sessions, managed through the control verbs (create / prompt / interrupt /
+approve / kill) and observed through the monitor stream. Clients find it
+through a single global discovery record (written on startup, removed on
+clean shutdown), and any client spawns it on demand. `neenee serve` runs it
+in the foreground, `neenee serve --detach` in the background. See ADR-0096
+for the unified model, ADR-0093 for the monitor protocol, and ADR-0094 for
+the verb vocabulary.
 
 ## How a request flows across the layers
 
@@ -203,3 +211,11 @@ multi-frontend transport details.
   `neenee` → `neenee-cli` (command unchanged).
 - [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) — the server
   binary, the `bootstrap::assemble` factory, and the attach model.
+- [ADR-0089](../adr/0089-multi-session-daemon.md) — the multi-session
+  registry.
+- [ADR-0093](../adr/0093-daemon-observability-monitor-protocol.md) — the
+  monitor/observability protocol.
+- [ADR-0094](../adr/0094-serve-as-host-verb.md) — the serve/host verb
+  vocabulary.
+- [ADR-0096](../adr/0096-unified-session-daemon.md) — the unified session
+  daemon and control plane (current model).

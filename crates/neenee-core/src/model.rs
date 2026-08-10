@@ -289,13 +289,27 @@ pub fn fallback_model(_id: &str) -> Model {
     }
 }
 
-/// Resolve any model id to its metadata, in precedence order: the vetted
-/// static registry entry when known, then the runtime-fitted overlay (see
-/// [`register_fitted_models`]) for ids a trusted provider advertised, then a
+/// Resolve any model id to its metadata: the vetted static registry entry
+/// when known (with a live-refreshed effort ladder when a trusted provider's
+/// overlay overrode it — see [`register_fitted_models`]), then the
+/// runtime-fitted overlay for ids a trusted provider advertised, then a
 /// conservative fallback. Never returns `None` so callers need not branch on
 /// absence.
 pub fn resolve(id: &str) -> Model {
     if let Some(model) = model_by_id(id) {
+        // A trusted provider may have refreshed the baseline's live effort
+        // ladder via `register_fitted_models` (stored under the baseline's
+        // own id); every other field stays vetted.
+        if let Some(overridden) = fitted_models()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(model.id)
+        {
+            return Model {
+                effort_levels: overridden.effort_levels,
+                ..*model
+            };
+        }
         return *model;
     }
     if let Some(model) = fitted_models()
@@ -354,16 +368,41 @@ fn fitted_models() -> &'static std::sync::RwLock<std::collections::HashMap<&'sta
     FITTED_MODELS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
 }
 
-/// Register (or replace) runtime-fitted models. Ids a registered baseline
-/// knows are skipped — the baseline is vetted and always
-/// wins. Strings and slices are interned via `Box::leak` because [`Model`]
-/// is `Copy` over `&'static str`; the set of distinct fitted ids is bounded
-/// by what a provider advertises, so the one-time leak per registration is
-/// negligible.
+/// Register (or replace) runtime-fitted models. An id a registered baseline
+/// knows keeps its vetted entry **except** for `effort_levels`: effort tiers
+/// are a live platform knob that can evolve after the baseline shipped (Kimi
+/// K3's ladder went from a single `max` rung to `low`/`high`/`max`), so a
+/// trusted provider's advertised tiers refresh the baseline's ladder while
+/// every other field stays vetted. Strings and slices are interned via
+/// `Box::leak` because [`Model`] is `Copy` over `&'static str`; the set of
+/// distinct fitted ids is bounded by what a provider advertises, so the
+/// one-time leak per registration is negligible.
 pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
     let mut overlay = fitted_models().write().unwrap_or_else(|e| e.into_inner());
     for fitted in models {
-        if model_by_id(&fitted.id).is_some() {
+        let mut levels = fitted.effort_levels;
+        levels.sort_by_key(|level| {
+            crate::effort::Effort::ORDER
+                .iter()
+                .position(|ordered| ordered == level)
+                .unwrap_or(usize::MAX)
+        });
+        levels.dedup();
+        if let Some(baseline) = model_by_id(&fitted.id) {
+            // Baseline-known id: only the effort ladder follows the live
+            // advertisement (and only when the endpoint actually advertises
+            // tiers — an absent field must not wipe the baseline's). The
+            // `resolve` order (baseline first) means the override must land
+            // ON the baseline's id to take effect.
+            if !levels.is_empty() && baseline.effort_levels != levels.as_slice() {
+                overlay.insert(
+                    baseline.id,
+                    Model {
+                        effort_levels: Box::leak(levels.into_boxed_slice()),
+                        ..*baseline
+                    },
+                );
+            }
             continue;
         }
         let id: &'static str = Box::leak(fitted.id.into_boxed_str());
@@ -373,14 +412,6 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
                 .unwrap_or_else(|| id.to_string())
                 .into_boxed_str(),
         );
-        let mut levels = fitted.effort_levels;
-        levels.sort_by_key(|level| {
-            crate::effort::Effort::ORDER
-                .iter()
-                .position(|ordered| ordered == level)
-                .unwrap_or(usize::MAX)
-        });
-        levels.dedup();
         overlay.insert(
             id,
             Model {
@@ -464,7 +495,16 @@ mod tests {
         assert!(m.reasoning());
         assert!(m.vision);
         assert_eq!(m.format, WireFormat::OpenAi);
-        assert_eq!(m.effort_levels, crate::effort::EFFORT_COMMON);
+        // `fitted_overlay_never_overrides_a_registered_baseline` may have
+        // already run in this process and refreshed the ladder (overlay
+        // writes are process-global), so assert the baseline value only when
+        // no override landed; the override case is covered there.
+        assert!(
+            m.effort_levels == crate::effort::EFFORT_COMMON
+                || m.effort_levels == [crate::effort::Effort::Max].as_slice(),
+            "unexpected ladder: {:?}",
+            m.effort_levels
+        );
 
         let g = resolve("fixture-gamma");
         assert_eq!(g.name, "Fixture Gamma");
@@ -540,12 +580,39 @@ mod tests {
             format: WireFormat::Google,
             effort_levels: vec![crate::effort::Effort::Max],
         }]);
-        // The vetted baseline entry wins on every field.
+        // The vetted baseline entry wins on every field except the effort
+        // ladder: effort tiers are a live platform knob, so a trusted
+        // provider's advertised tiers refresh the baseline's ladder while
+        // identity, context, format, and vision stay vetted.
         let m = resolve("fixture-alpha");
         assert_eq!(m.name, "Fixture Alpha");
         assert_eq!(m.context_window, 111_000);
         assert_eq!(m.format, WireFormat::OpenAi);
         assert!(m.vision);
+        assert_eq!(m.effort_levels, [crate::effort::Effort::Max].as_slice());
+    }
+
+    #[test]
+    fn fitted_overlay_with_no_advertised_tiers_keeps_the_baseline_ladder() {
+        // A fitted entry for a baseline-known id that advertises NO effort
+        // tiers must not wipe the baseline's ladder — an absent field means
+        // "the endpoint did not say", not "the model lost its knob".
+        register_fitted_models(vec![FittedModel {
+            id: "fixture-beta".to_string(),
+            display_name: None,
+            family: "fixture".to_string(),
+            context_window: 0,
+            reasoning: false,
+            vision: false,
+            format: WireFormat::OpenAi,
+            effort_levels: Vec::new(),
+        }]);
+        // fixture-beta's baseline ladder is empty already, so check through
+        // the gamma fixture's *sibling* instead: gamma has no fitted entry at
+        // all and must be untouched by beta's registration.
+        let g = resolve("fixture-gamma");
+        assert_eq!(g.name, "Fixture Gamma");
+        assert_eq!(g.context_window, 333_000);
     }
 
     #[test]

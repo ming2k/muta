@@ -269,14 +269,24 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
     let restored = transcript_commands_from_ledger(commands);
     assert_eq!(restored.len(), 2);
     let search = &restored[0];
-    assert!(search.is_command_result(), "command rows carry the CommandResult kind");
-    assert_eq!(search.command_result_summary().as_deref(), Some("/search foo"));
+    assert!(
+        search.is_command_result(),
+        "command rows carry the CommandResult kind"
+    );
+    assert_eq!(
+        search.command_result_summary().as_deref(),
+        Some("/search foo")
+    );
     assert_eq!(
         search.command_result_text().as_deref(),
         Some("No relevant history found.")
     );
     assert_eq!(search.round, None, "a command is not a conversation turn");
-    assert_ne!(search.role, neenee_core::Role::Assistant, "never assistant prose");
+    assert_ne!(
+        search.role,
+        neenee_core::Role::Assistant,
+        "never assistant prose"
+    );
 
     let shell = &restored[1];
     assert!(shell.is_command_result());
@@ -1043,6 +1053,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         activity_rect: None,
         hint_context_rect: None,
         token_ledger: None,
+        token_report: None,
         context_tokens: None,
         round_tps: None,
         token_report_scroll: 0,
@@ -1107,6 +1118,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        host_sessions: Vec::new(),
+        host_scroll: 0,
+        host_modal_follow: true,
+        switch_to_target: None,
         startup_picker: false,
         permission_confirm_always: false,
         permission_show_details: false,
@@ -1146,7 +1161,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         notice_toast_until: None,
         notice_toast_message: String::new(),
         notice_toast_severity: NoticeSeverity::Info,
-        ctrl_c_armed_ticks: 0,
+        ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
         stashed_input: String::new(),

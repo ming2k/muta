@@ -1,27 +1,27 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-//! `neenee-server`: the headless multi-session daemon binary.
+//! `neenee-server`: the unified session daemon binary (ADR-0096).
 //!
-//! Spawned detached (by `neenee attach` when no daemon is running for the
-//! project), this binary hosts any number of sessions for one project and
-//! serves them over WebSocket so TUI/browser clients can co-drive the same
-//! live session(s). It is a thin shell: every piece of session logic lives
-//! in `neenee-transport::daemon` (ADR-0089); this binary only supplies the
-//! product identity/principal (ADR-0054), a headless UI bridge, and CLI
-//! parsing. `neenee daemon` is the same runtime under a different invocation.
+//! Spawned detached (by `neenee`/`neenee attach` when no daemon is running),
+//! or run in the foreground by `neenee serve`, this process owns every
+//! session across every project for the user and serves them over the
+//! control plane (UDS by default, TCP + bearer token with `--expose`). It is
+//! a thin shell: every piece of session logic lives in
+//! `neenee-transport::host`; this binary only supplies the product
+//! identity/principal (ADR-0054), a headless UI bridge, and CLI parsing.
 
 mod identity;
 mod ui;
 
 use std::path::PathBuf;
 
-use neenee_transport::daemon::{DaemonIdentity, DaemonOptions};
+use neenee_transport::host::{HostIdentity, HostOptions};
 use neenee_transport::serve::ServeExpose;
 use neenee_transport::startup::init_tracing;
 
 use crate::identity::{neenee_identity, principal_code};
 use crate::ui::HeadlessUi;
 
-const USAGE: &str = "Usage: neenee-server [--project <path>] [--port <n>] [--public]";
+const USAGE: &str = "Usage: neenee-server [--port <n>] [--expose] [--project <path>]";
 
 /// The parsed command line. Hand-rolled (the workspace does not use clap):
 /// the surface is deliberately tiny — this binary is spawned by wrappers,
@@ -100,17 +100,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let _ = std::io::stderr().flush();
     }
-    neenee_transport::daemon::run(
-        DaemonIdentity {
+    neenee_transport::host::run(
+        HostIdentity {
             identity: neenee_identity(),
             principal: principal_code(),
             ui: std::sync::Arc::new(HeadlessUi),
         },
-        &args.project,
-        DaemonOptions {
+        HostOptions {
             port: args.port,
             expose,
             token: None,
+            #[cfg(unix)]
+            uds_path: Some(neenee_transport::serve_discovery::default_uds_path()),
         },
     )
     .await?;

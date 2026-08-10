@@ -54,6 +54,25 @@ pub async fn detail(
     }
 }
 
+/// `AgentRequest::QueryTokenUsage` — snapshot the server-side token-source
+/// ledger for one session and reply with
+/// [`AgentResponse::TokenUsageReport`]. Attached frontends hold no local
+/// ledger, so the context-usage modal reads the daemon's accounting through
+/// this on-demand round-trip. Pure read: the ledger is shared across sessions
+/// and filtered by `session_id`, so an unknown/empty id simply yields an
+/// empty report.
+pub fn token_usage(
+    token_ledger: &neenee_core::TokenSourceLedger,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: String,
+) {
+    let report = token_ledger.snapshot_for_session(&session_id);
+    let _ = resp_tx.send(AgentResponse::TokenUsageReport {
+        session_id,
+        report,
+    });
+}
+
 /// `AgentRequest::QuerySessionContext` — build and push the
 /// model/tools/permissions/skills/mcp snapshot for the Tools / Mcp / Skills /
 /// Permissions manager modals.

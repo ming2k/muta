@@ -240,7 +240,21 @@ pub(super) struct UiRuntime {
     /// [`AgentResponse::SessionDetail`] and read into [`App::session_detail`]
     /// for the session-info sub-view.
     pub session_detail: Arc<Mutex<Option<neenee_core::SessionDetail>>>,
+    /// Latest token-source report fetched from the harness for the viewed
+    /// session (attach mode: the ledger is daemon-side). Written by the
+    /// listener from [`AgentResponse::TokenUsageReport`] and read into
+    /// [`App::token_report`]. In the standalone path the local ledger
+    /// ([`App::token_ledger`]) is the source instead and this stays `None`.
+    pub token_report: Arc<Mutex<Option<neenee_core::TokenSourceReport>>>,
     pub open_sessions: Arc<AtomicBool>,
+    /// Live daemon monitor snapshot for the `/host` control panel
+    /// (ADR-0096), maintained by a dedicated monitor client task.
+    pub host_sessions: Arc<Mutex<Vec<neenee_core::MonitoredSession>>>,
+    /// Revision for `host_sessions` (same skip-unchanged pattern as
+    /// `sessions_overview_rev`).
+    pub host_sessions_rev: Arc<std::sync::atomic::AtomicU64>,
+    /// Set by the response listener on `AgentResponse::OpenHostPanel`.
+    pub open_host: Arc<AtomicBool>,
     /// Live OAuth-add UI updates from the response listener.
     pub oauth_add_signal: Arc<Mutex<Option<OauthAddSignal>>>,
     /// Mirror of `App::awaiting_oauth_add`, written by the loop each frame so
@@ -791,6 +805,7 @@ pub(super) async fn run_app_loop(
     // Without this gate a large project (hundreds of sessions) re-cloned the
     // whole list every frame, a major contributor to picker hitches.
     let mut sessions_overview_rev_seen: u64 = 0;
+    let mut host_sessions_rev_seen: u64 = 0;
 
     loop {
         if app.should_quit.load(Ordering::SeqCst) {
@@ -944,12 +959,36 @@ pub(super) async fn run_app_loop(
                     app.session_modal_follow = true;
                 }
             }
+            // Mirror the daemon monitor snapshot for the `/host` panel.
+            {
+                let rev = runtime.host_sessions_rev.load(Ordering::Acquire);
+                if rev != host_sessions_rev_seen {
+                    app.host_sessions = runtime.host_sessions.lock().await.clone();
+                    host_sessions_rev_seen = rev;
+                }
+            }
+            if runtime.open_host.swap(false, Ordering::SeqCst)
+                && app.active_modal != Modal::Permission
+            {
+                let opening = app.active_modal != Modal::Host;
+                app.active_modal = Modal::Host;
+                if opening {
+                    app.modal_index = 0;
+                    app.host_scroll = 0;
+                    app.host_modal_follow = true;
+                }
+            }
             // Mirror the on-demand session detail (info sub-view) when the
             // listener has a fresh one. Replacing `None` with `None` is a
             // no-op, so this is cheap when the sub-view is closed.
             if let Some(detail) = runtime.session_detail.lock().await.take() {
                 app.session_detail = Some(detail);
                 app.session_info_scroll = 0;
+            }
+            // Mirror the on-demand token-source report (attach mode) when the
+            // listener has a fresh one for the viewed session.
+            if let Some(report) = runtime.token_report.lock().await.take() {
+                app.token_report = Some(report);
             }
             if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
                 match sig {
@@ -1011,7 +1050,11 @@ pub(super) async fn run_app_loop(
         // while the Ctrl+C quit window is armed so a freshly-shown
         // "input cleared — Ctrl+C again to exit" toast keeps the floor and
         // is not immediately overwritten by the per-frame image reminder.
-        if !app.pending_images.is_empty() && app.ctrl_c_armed_ticks == 0 {
+        // The armed window is wall-clock (`ctrl_c_armed_until`), so it
+        // lapses on its own — there is no per-tick counter to decrement
+        // here (the old tick counter stretched the intended ~2s window to
+        // ~20s under the 1s idle heartbeat).
+        if !app.pending_images.is_empty() && !app.ctrl_c_armed() {
             let n = app.pending_images.len();
             show_local_toast(
                 app,
@@ -1022,9 +1065,6 @@ pub(super) async fn run_app_loop(
                 false,
                 std::time::Duration::from_millis(600),
             );
-        }
-        if app.ctrl_c_armed_ticks > 0 {
-            app.ctrl_c_armed_ticks -= 1;
         }
         // The Esc armed toast only makes sense while a task is running; once
         // the turn finishes there is nothing left to interrupt, so let it
@@ -1238,7 +1278,7 @@ pub(super) async fn run_app_loop(
             || app.round_started_at.is_some()
             || app.copy_toast_until.is_some()
             || app.notice_toast_until.is_some()
-            || app.ctrl_c_armed_ticks > 0
+            || app.ctrl_c_armed()
             || app.esc_armed_ticks > 0
             || !app.pending_images.is_empty()
             || copy_pending.load(Ordering::SeqCst) > 0;
@@ -1536,11 +1576,16 @@ pub(super) async fn run_app_loop(
                     // standalone knob with no separate thinking field) shows
                     // whenever the model exposes one; Google never. `None`
                     // otherwise — non-reasoning models keep the bar quiet.
-                    let hint_reasoning = app
+                    let active_provider_row = app
                         .provider_picker
                         .rows
                         .iter()
-                        .find(|row| row.id == app.current_provider)
+                        .find(|row| row.id == app.current_provider);
+                    // The `@<instance>` suffix after the model name — the
+                    // instance's display name, so identical models served by
+                    // different instances stay attributable.
+                    let hint_instance = active_provider_row.map(|row| row.name.as_str());
+                    let hint_reasoning = active_provider_row
                         .and_then(|row| {
                             row.model_info.iter().find(|m| m.model == app.current_model)
                         })
@@ -1557,6 +1602,7 @@ pub(super) async fn run_app_loop(
                         hint_rect,
                         view::HintBarView {
                             current_model: &app.current_model,
+                            provider_name: hint_instance,
                             messages: view_messages,
                             reasoning_effort: hint_reasoning,
                             shell_active: app.focused_target.is_none()
@@ -2019,14 +2065,26 @@ pub(super) async fn run_app_loop(
                         app.session_detail.as_ref(),
                         &mut app.session_info_scroll,
                     )),
+                    Modal::Host => Some(view::draw_host_modal(
+                        f,
+                        &app.host_sessions,
+                        app.modal_index
+                            .min(app.host_sessions.len().saturating_sub(1)),
+                        app.modal_keymap_open,
+                        &mut app.host_scroll,
+                        app.host_modal_follow,
+                        &app.theme,
+                        spinner_phase,
+                        &viewed_session_id,
+                    )),
                     Modal::TokenReport => {
-                        // Snapshot the shared ledger; render an empty report
-                        // when no ledger is installed (tests).
-                        let report = app
-                            .token_ledger
-                            .as_ref()
-                            .map(|l| l.snapshot_for_session(&viewed_session_id))
-                            .unwrap_or_default();
+                        // Snapshot the shared ledger (standalone path) or the
+                        // on-demand harness reply (attach path); the attach
+                        // path renders a loading placeholder until the reply
+                        // lands.
+                        let report = app.token_source_report(&viewed_session_id);
+                        let loading = app.token_ledger.is_none() && report.is_none();
+                        let report = report.unwrap_or_default();
                         Some(view::draw_token_report_modal(
                             f,
                             &report,
@@ -2040,6 +2098,7 @@ pub(super) async fn run_app_loop(
                             app.modal_index
                                 .min(view::token_report_round_count(&report).saturating_sub(1)),
                             app.token_report_detail,
+                            loading,
                             &mut app.token_report_scroll,
                             &app.theme,
                         ))
@@ -2215,7 +2274,7 @@ pub(super) async fn run_app_loop(
                         app.notice_toast_severity,
                         &app.theme,
                     );
-                } else if app.ctrl_c_armed_ticks > 0 {
+                } else if app.ctrl_c_armed() {
                     // The copy toast and the armed toast render at the same
                     // screen position, so only one shows at a time. The
                     // clearing-input path surfaces the armed state through the
@@ -2788,6 +2847,8 @@ pub(super) async fn run_app_loop(
                                 port,
                                 expose,
                                 token: None,
+                                #[cfg(unix)]
+                                uds_path: None,
                             };
                             // `/serve` exposes the single live TUI session as a one-entry
                             // prehost registry (ADR-0089).
@@ -2796,10 +2857,47 @@ pub(super) async fn run_app_loop(
                             );
                             registry
                                 .host(neenee_transport::registry::HostedSession {
+                                    project_root: std::env::current_dir()
+                                        .unwrap_or_else(|_| std::path::PathBuf::from(".")),
                                     session: store.clone(),
                                     req_tx: app.tx.clone(),
                                     events: bc_tx.clone(),
                                     cancel: tokio_util::sync::CancellationToken::new(),
+                                    // A `/serve` prehost has no separate
+                                    // attach-sync buffer to drain — its single
+                                    // client is this live TUI, which already
+                                    // holds the state. An empty buffer is a
+                                    // no-op for any hypothetical attacher.
+                                    sync_buffer: Arc::new(tokio::sync::Mutex::new(
+                                        std::collections::VecDeque::new(),
+                                    )),
+                                    // A `/serve` prehost is observed over the same
+                                    // monitor protocol (ADR-0093); seed the tracker
+                                    // from the session header like the host does.
+                                    tracker: Arc::new(tokio::sync::Mutex::new(
+                                        neenee_transport::monitor::MonitorTracker::bootstrap(
+                                            neenee_core::MonitoredSession {
+                                                id: store.id().await,
+                                                overview: String::new(),
+                                                created_at: 0,
+                                                updated_at: 0,
+                                                message_count: 0,
+                                                status: neenee_core::SessionStatus::Idle,
+                                                // A `/serve` prehost session is driven
+                                                // by this process — the host.
+                                                hosting: neenee_core::SessionHosting::Hosted,
+                                                round: 0,
+                                                turn: None,
+                                                output_tokens: 0,
+                                                elapsed_ms: 0,
+                                                current_tool: None,
+                                                activity: None,
+                                                context_tokens: None,
+                                                note: None,
+                                            },
+                                            neenee_core::SessionStatus::Idle,
+                                        ),
+                                    )),
                                 })
                                 .await;
                             let handle = neenee_transport::serve::start_server(opts, registry);
@@ -3843,6 +3941,24 @@ pub(super) async fn run_app_loop(
                             .send(AgentRequest::SlashCommand(format!("/session open {}", id)));
                     }
                 }
+                input::InputAction::HostSwitchSelected => {
+                    let idx = app
+                        .modal_index
+                        .min(app.host_sessions.len().saturating_sub(1));
+                    if let Some(row) = app.host_sessions.get(idx) {
+                        // Only hosted sessions can be switched to — a mirrored
+                        // row belongs to another TUI (ADR-0095). Current
+                        // session is a no-op.
+                        let switchable = row.hosting == neenee_core::SessionHosting::Hosted
+                            && row.id != viewed_session_id;
+                        if switchable {
+                            app.switch_to_target = Some(row.id.clone());
+                            app.should_quit.store(true, Ordering::SeqCst);
+                        }
+                        app.active_modal = Modal::None;
+                        app.modal_index = 0;
+                    }
+                }
                 input::InputAction::DeleteSelectedSession => {
                     let idx = app
                         .modal_index
@@ -4005,13 +4121,8 @@ pub(super) async fn run_app_loop(
                 input::InputAction::TokenReportActivate => {
                     if app.active_modal == Modal::TokenReport && !app.token_report_detail {
                         let has_turns = app
-                            .token_ledger
-                            .as_ref()
-                            .map(|ledger| {
-                                view::token_report_round_count(
-                                    &ledger.snapshot_for_session(&viewed_session_id),
-                                ) > 0
-                            })
+                            .token_source_report(&viewed_session_id)
+                            .map(|report| view::token_report_round_count(&report) > 0)
                             .unwrap_or(false);
                         if has_turns {
                             app.token_report_detail = true;
@@ -4189,13 +4300,18 @@ pub(super) async fn run_app_loop(
                             false,
                             std::time::Duration::from_millis(2000),
                         );
-                        app.ctrl_c_armed_ticks = 20;
-                    } else if app.ctrl_c_armed_ticks > 0 {
+                        app.arm_ctrl_c(Some(
+                            std::time::Instant::now() + std::time::Duration::from_secs(2),
+                        ));
+                    } else if app.ctrl_c_armed() {
                         tracing::info!(reason = "ctrl_c_double_press", "app exiting");
                         return Ok(());
                     } else {
-                        // Arm a ~2s window in which a second Ctrl+C quits.
-                        app.ctrl_c_armed_ticks = 20;
+                        // Arm a real 2s window (wall-clock) in which a second
+                        // Ctrl+C quits.
+                        app.arm_ctrl_c(Some(
+                            std::time::Instant::now() + std::time::Duration::from_secs(2),
+                        ));
                     }
                 }
                 input::InputAction::OpenTodos => {
@@ -4602,6 +4718,18 @@ pub(super) async fn run_app_loop(
                         } else {
                             app.modal_index - 1
                         };
+                        app.session_modal_follow = true;
+                    }
+                    Modal::Host => {
+                        let count = app.host_sessions.len();
+                        app.modal_index = if count == 0 {
+                            0
+                        } else if app.modal_index == 0 {
+                            count - 1
+                        } else {
+                            app.modal_index - 1
+                        };
+                        app.host_modal_follow = true;
                         // Re-engage body-follow so the moved selection stays on
                         // screen (cleared again on manual page/wheel scroll).
                         app.session_modal_follow = true;
@@ -4639,13 +4767,8 @@ pub(super) async fn run_app_loop(
                             app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
                         } else {
                             let count = app
-                                .token_ledger
-                                .as_ref()
-                                .map(|ledger| {
-                                    view::token_report_round_count(
-                                        &ledger.snapshot_for_session(&viewed_session_id),
-                                    )
-                                })
+                                .token_source_report(&viewed_session_id)
+                                .map(|report| view::token_report_round_count(&report))
                                 .unwrap_or(0)
                                 .max(1);
                             app.modal_index = (app.modal_index + count - 1) % count;
@@ -4697,6 +4820,11 @@ pub(super) async fn run_app_loop(
                         // screen (cleared again on manual page/wheel scroll).
                         app.session_modal_follow = true;
                     }
+                    Modal::Host => {
+                        let count = app.host_sessions.len().max(1);
+                        app.modal_index = (app.modal_index + 1) % count;
+                        app.host_modal_follow = true;
+                    }
                     Modal::Permissions => {
                         let count = app
                             .session_context
@@ -4725,13 +4853,8 @@ pub(super) async fn run_app_loop(
                             app.token_report_scroll = app.token_report_scroll.saturating_add(1);
                         } else {
                             let count = app
-                                .token_ledger
-                                .as_ref()
-                                .map(|ledger| {
-                                    view::token_report_round_count(
-                                        &ledger.snapshot_for_session(&viewed_session_id),
-                                    )
-                                })
+                                .token_source_report(&viewed_session_id)
+                                .map(|report| view::token_report_round_count(&report))
                                 .unwrap_or(0)
                                 .max(1);
                             app.modal_index = (app.modal_index + 1) % count;
@@ -5119,21 +5242,17 @@ pub(super) async fn run_app_loop(
                         // Click on the context meter in the hint bar → token
                         // source report modal. In attach mode there is no
                         // local ledger (token accounting lives server-side),
-                        // so say so instead of opening an empty report.
-                        if app.token_ledger.is_some() {
-                            app.active_modal = Modal::TokenReport;
-                            app.modal_index = 0;
-                            app.token_report_scroll = 0;
-                            app.token_report_detail = false;
-                        } else {
-                            runtime
-                                .messages
-                                .write()
-                                .await
-                                .push(TranscriptMessage::notice(
-                                    NoticeSeverity::Info,
-                                    "Token-source report unavailable in attached mode.",
-                                ));
+                        // so fetch the report from the harness on demand and
+                        // render a loading placeholder until the reply lands.
+                        app.active_modal = Modal::TokenReport;
+                        app.modal_index = 0;
+                        app.token_report_scroll = 0;
+                        app.token_report_detail = false;
+                        if app.token_ledger.is_none() {
+                            app.token_report = None;
+                            let _ = app.tx.send(AgentRequest::QueryTokenUsage {
+                                session_id: viewed_session_id.clone(),
+                            });
                         }
                         app.selection = SelectionState::None;
                         app.focused_target = None;

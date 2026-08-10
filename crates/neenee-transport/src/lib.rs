@@ -7,7 +7,7 @@
 //! Historically `neenee` was a single process: one TUI driving one agent
 //! background task over a pair of `mpsc` channels. When the TUI process
 //! exited, the agent task died with it. That model cannot serve a browser
-//! frontend, which needs a long-running daemon holding multiple concurrent
+//! frontend, which needs a long-running host holding multiple concurrent
 //! sessions that several clients can subscribe to.
 //!
 //! This crate owns the per-session state that makes that possible — the
@@ -53,7 +53,6 @@
 pub mod agent_setup;
 pub mod bootstrap;
 pub mod commands;
-pub mod daemon;
 pub mod export;
 pub mod handlers_chat;
 pub mod handlers_permission;
@@ -61,6 +60,8 @@ pub mod handlers_provider;
 pub mod handlers_session;
 pub mod handlers_slash;
 pub mod hooks;
+pub mod host;
+pub mod monitor;
 pub mod project;
 pub mod registry;
 pub mod review;

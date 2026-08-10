@@ -35,12 +35,45 @@ pub struct Discovery {
     /// The bound TCP port the WebSocket listener serves.
     pub port: u16,
     /// The bearer token clients must present, when auth is active
-    /// (`--public`); `null` for the unauthenticated loopback default.
+    /// (`--public`/`--expose`); `null` for the unauthenticated loopback default.
     pub token: Option<String>,
-    /// The project root the host serves (as passed via `--project`).
+    /// The project root the host serves. Empty for the unified daemon
+    /// (ADR-0096), which is project-agnostic; retained for the legacy
+    /// per-project records.
     pub project_root: String,
     /// Unix seconds at startup.
     pub started_at: u64,
+    /// Unix domain socket the control plane also listens on (ADR-0096).
+    /// `None` for legacy records and when UDS is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uds_path: Option<PathBuf>,
+}
+
+/// The global discovery path for the unified daemon (ADR-0096): one record
+/// per user, in the runtime dir when available.
+pub fn global_discovery_path() -> PathBuf {
+    let dirs = paths::get();
+    match &dirs.runtime_dir {
+        Some(runtime) => runtime.join("daemon.json"),
+        None => dirs.data_dir.join("daemon.json"),
+    }
+}
+
+/// The default UDS path the daemon binds (ADR-0096).
+#[cfg(unix)]
+pub fn default_uds_path() -> PathBuf {
+    let dirs = paths::get();
+    match &dirs.runtime_dir {
+        Some(runtime) => runtime.join("daemon.sock"),
+        None => dirs.data_dir.join("daemon.sock"),
+    }
+}
+
+/// Write the unified daemon's global discovery record (ADR-0096). Atomic.
+pub fn write_global(record: &Discovery) -> Result<PathBuf, String> {
+    let path = global_discovery_path();
+    write_to(&path, record)?;
+    Ok(path)
 }
 
 /// Resolve the discovery-file path for `project_root` against the
@@ -117,6 +150,7 @@ mod tests {
             token: Some("deadbeef".to_string()),
             project_root: "/home/me/proj".to_string(),
             started_at: 1_755_000_000,
+            uds_path: None,
         }
     }
 

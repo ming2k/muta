@@ -41,11 +41,11 @@ pub use crate::tui::overlays::{
     QueueModalView, draw_activity_modal, draw_armed_toast, draw_config_layout_modal,
     draw_config_modal, draw_config_theme_custom_modal, draw_config_theme_modal,
     draw_connections_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
-    draw_history_panel, draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
-    draw_notice_toast, draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
-    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
-    draw_queue_modal, draw_sessions_modal, draw_skills_modal, draw_token_report_modal,
-    draw_tools_modal, token_report_round_count,
+    draw_history_panel, draw_host_modal, draw_input_injection, draw_mcp_modal, draw_model_editor,
+    draw_models_modal, draw_notice_toast, draw_oauth_pending, draw_permission_sheet,
+    draw_permissions_manager, draw_provider_delete_confirm, draw_provider_template_chooser,
+    draw_question_modal, draw_queue_modal, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_round_count,
 };
 use crate::tui::page_header::{PageHeader, draw_page_header};
 pub use crate::tui::primitives::recess_backdrop;

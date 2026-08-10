@@ -78,6 +78,10 @@ pub(crate) const HINT_BAR_INNER_PADDING: usize = 1;
 pub(crate) const HINT_BAR_GAP_MIN: usize = 2;
 /// Gap between adjacent right-aligned hint segments.
 pub(crate) const HINT_BAR_SEGMENT_GAP: usize = 2;
+/// Gap *inside* the model-identity group (`model effort @instance`) — these
+/// three tokens read as one identity, so they sit tighter than the gap
+/// between the identity group and the context-usage segment.
+pub(crate) const HINT_BAR_MODEL_GAP: usize = 1;
 
 /// Activity bar: the transient liveness row (breathing-dot indicator + live
 /// status label + elapsed timer) shown directly above the input box while a

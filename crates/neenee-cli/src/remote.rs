@@ -1,5 +1,7 @@
-//! Attach-mode client: `neenee attach` drives a session hosted by a running
-//! `neenee-server` daemon (ADR-0081/0089).
+//! Attach-mode client: `neenee` / `neenee attach` drive sessions owned by
+//! the unified session daemon (`neenee-server`; ADR-0096). Discovery is
+//! global (one daemon per user); connection prefers the Unix domain socket
+//! and falls back to TCP.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,15 +23,17 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_START_POLL: Duration = Duration::from_millis(100);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub fn discover(project_root: &Path) -> Option<ServeInfo> {
-    discover_at(&discovery::discovery_path(project_root))
+/// Find the unified daemon (ADR-0096): one global record. The project
+/// argument is accepted for source compatibility but no longer scopes the
+/// lookup — the daemon serves every project.
+pub fn discover(_project_root: &Path) -> Option<ServeInfo> {
+    discover_at(&discovery::global_discovery_path())
 }
 
 fn discover_at(path: &Path) -> Option<ServeInfo> {
     let bytes = std::fs::read(path).ok()?;
     let info: ServeInfo = serde_json::from_slice(&bytes).ok()?;
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], info.port));
-    if std::net::TcpStream::connect_timeout(&addr, LIVENESS_TIMEOUT).is_ok() {
+    if is_alive(&info) {
         Some(info)
     } else {
         discovery::remove(path);
@@ -37,11 +41,25 @@ fn discover_at(path: &Path) -> Option<ServeInfo> {
     }
 }
 
+/// Liveness probe: prefer the UDS (the daemon's primary local channel),
+/// fall back to the TCP port. Either reachable means the daemon is up.
+fn is_alive(info: &ServeInfo) -> bool {
+    #[cfg(unix)]
+    if let Some(uds) = &info.uds_path {
+        use std::os::unix::net::UnixStream;
+        if UnixStream::connect(uds).is_ok() {
+            return true;
+        }
+    }
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], info.port));
+    std::net::TcpStream::connect_timeout(&addr, LIVENESS_TIMEOUT).is_ok()
+}
+
 pub async fn ensure_server(project_root: &Path) -> Result<ServeInfo, String> {
     if let Some(info) = discover(project_root) {
         return Ok(info);
     }
-    spawn_server(project_root)?;
+    spawn_server()?;
     let deadline = std::time::Instant::now() + SERVER_START_TIMEOUT;
     loop {
         tokio::time::sleep(SERVER_START_POLL).await;
@@ -57,7 +75,7 @@ pub async fn ensure_server(project_root: &Path) -> Result<ServeInfo, String> {
     }
 }
 
-fn spawn_server(project_root: &Path) -> Result<(), String> {
+fn spawn_server() -> Result<(), String> {
     let program = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("neenee-server")))
@@ -65,8 +83,6 @@ fn spawn_server(project_root: &Path) -> Result<(), String> {
         .unwrap_or_else(|| PathBuf::from("neenee-server"));
     let mut command = std::process::Command::new(&program);
     command
-        .arg("--project")
-        .arg(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -83,11 +99,30 @@ pub enum Handshake {
         session_id: String,
         round_counter: u64,
         history: Vec<Message>,
+        /// The provider/model the session is currently serving, carried on
+        /// the welcome so the TUI's hint bar shows them from the first frame
+        /// instead of waiting for the next provider mutation.
+        provider: String,
+        model: String,
     },
     Pick(Vec<SessionOverview>),
 }
 
 pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake, String> {
+    // Prefer the Unix domain socket (the daemon's primary local channel,
+    // ADR-0096); fall back to TCP for exposed/legacy deployments.
+    #[cfg(unix)]
+    if let Some(uds) = &info.uds_path {
+        if let Ok(stream) = tokio::net::UnixStream::connect(uds).await {
+            let request = "ws://localhost/"
+                .into_client_request()
+                .map_err(|e| format!("bad uds ws request: {e}"))?;
+            let (ws, _) = tokio_tungstenite::client_async(request, stream)
+                .await
+                .map_err(|e| format!("ws handshake over uds: {e}"))?;
+            return finish_handshake(ws.split(), action).await;
+        }
+    }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
         .as_str()
@@ -101,7 +136,21 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
     let (ws, _response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    let (mut ws_sink, mut ws_source) = ws.split();
+    finish_handshake(ws.split(), action).await
+}
+
+/// The stream-generic attach handshake, shared by the UDS and TCP paths.
+async fn finish_handshake<S>(
+    parts: (
+        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    ),
+    action: AttachAction,
+) -> Result<Handshake, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut ws_sink, mut ws_source) = parts;
 
     let select = serde_json::to_string(&Wire::Select { action })
         .map_err(|e| format!("serialize select: {e}"))?;
@@ -118,11 +167,15 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
                         session_id,
                         round_counter,
                         messages,
+                        provider,
+                        model,
                     }) => {
                         return Ok(Reply::Welcome(Welcome {
                             session_id,
                             round_counter,
                             messages,
+                            provider,
+                            model,
                         }));
                     }
                     Ok(Wire::Pick { sessions }) => return Ok(Reply::Pick(sessions)),
@@ -139,7 +192,7 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
         }
     })
     .await
-    .map_err(|_| format!("timed out waiting for handshake from {url}"))??;
+    .map_err(|_| "timed out waiting for handshake from daemon".to_string())??;
 
     let welcome = match reply {
         Reply::Welcome(w) => w,
@@ -197,6 +250,8 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
         session_id: welcome.session_id,
         round_counter: welcome.round_counter,
         history: welcome.messages,
+        provider: welcome.provider,
+        model: welcome.model,
     })
 }
 
@@ -204,6 +259,8 @@ struct Welcome {
     session_id: String,
     round_counter: u64,
     messages: Vec<Message>,
+    provider: String,
+    model: String,
 }
 enum Reply {
     Welcome(Welcome),
@@ -213,8 +270,6 @@ enum Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tokio::sync::broadcast;
 
     fn record(port: u16, token: Option<String>) -> ServeInfo {
         ServeInfo {
@@ -223,6 +278,7 @@ mod tests {
             token,
             project_root: "/tmp/proj".to_string(),
             started_at: 0,
+            uds_path: None,
         }
     }
     fn dead_port() -> u16 {

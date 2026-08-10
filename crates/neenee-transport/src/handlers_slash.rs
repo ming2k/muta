@@ -504,6 +504,7 @@ pub async fn dispatch(
                     )
                     .await;
                     let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                        session_id: session.id().await,
                         messages: transcript,
                         commands: session.commands().await,
                     });
@@ -629,6 +630,7 @@ pub async fn dispatch(
                         .await;
                         let transcript = session.full_transcript().await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                            session_id: session.id().await,
                             messages: transcript,
                             commands: session.commands().await,
                         });
@@ -672,6 +674,7 @@ pub async fn dispatch(
                         )
                         .await;
                         let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                            session_id: session.id().await,
                             messages: transcript,
                             commands: session.commands().await,
                         });
@@ -759,6 +762,12 @@ pub async fn dispatch(
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(session).await,
             ));
+        }
+        Some(BuiltinCmd::Host) => {
+            record_invocation(session, name, args).await;
+            // The daemon control panel renders the monitor stream the TUI
+            // maintains client-side (ADR-0096); this is only the open signal.
+            let _ = resp_tx.send(AgentResponse::OpenHostPanel);
         }
         Some(BuiltinCmd::Btw) => {
             // `/btw [prompt]` opens a side conversation

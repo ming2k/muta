@@ -88,6 +88,8 @@ runtime exists.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `neenee.lock` | Cross-process advisory lock | Ephemeral |
+| `daemon.json` | Unified session-daemon discovery record (pid, TCP port, UDS path, token when exposed); written on startup, removed on clean shutdown (ADR-0096) | Ephemeral |
+| `daemon.sock` | The daemon's Unix-domain control-plane socket (0600); removed on shutdown (ADR-0096) | Ephemeral |
 
 ## Project working tree (not under XDG)
 

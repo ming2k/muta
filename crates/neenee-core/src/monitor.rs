@@ -1,0 +1,345 @@
+//! Daemon-observability wire contracts (ADR-0093): the [`MonitorAction`]
+//! handshake selector and the [`MonitorEvent`] stream a `neenee-server` daemon
+//! publishes about every session it hosts.
+//!
+//! These types are the read-only control-plane counterpart of the
+//! session-scoped `AgentRequest`/`AgentResponse` protocol: a control panel (or
+//! any other observer) connects, selects `Monitor`, receives one
+//! [`MonitorEvent::Snapshot`], and then follows [`MonitorEvent::Diff`]s. They
+//! carry **no conversation content** — only ids, titles/previews, status, and
+//! accounting — so a dashboard never deserializes a transcript.
+//!
+//! The types are pure contracts (ADR-0057): no I/O, no derivations. The
+//! session status machine that produces [`SessionStatus`] values from the
+//! `AgentResponse` stream lives in `neenee_transport::monitor`.
+
+use serde::{Deserialize, Serialize};
+
+/// Handshake action selecting a daemon-observability stream instead of a
+/// session attach (ADR-0093 §2). Sent as the first frame:
+/// `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorAction {
+    /// Keep the connection open and stream [`MonitorEvent::Diff`]s after the
+    /// initial snapshot (`neenee status --watch`, live control panels). When
+    /// `false` the server sends the snapshot and closes the connection.
+    #[serde(default)]
+    pub watch: bool,
+    /// Include live sessions that are simply idle (no round running and
+    /// nothing blocked). Defaults to `false` so a busy dashboard stays a
+    /// zero-statement surface: an all-idle daemon reports an empty list.
+    #[serde(default)]
+    pub include_idle: bool,
+}
+
+/// How the session behind a [`MonitoredSession`] row is hosted (ADR-0095).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionHosting {
+    /// The session's driver lives inside the serving host process (an
+    /// `attach`-created or lazily resumed session). The host owns its
+    /// lifecycle and can serve full `Attach` clients for it.
+    #[default]
+    Hosted,
+    /// A standalone `neenee` process owns the session and mirrors its status
+    /// to this host (ADR-0095). The row is observability-only: attaching to
+    /// it here fails, and the mirror owner drives the real session.
+    Mirrored,
+}
+
+impl SessionHosting {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hosted => "hosted",
+            Self::Mirrored => "mirrored",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionHosting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The static identity header a mirror client sends right after its
+/// handshake (ADR-0095). Updates from then on are whole [`MonitoredSession`]
+/// rows; the header's fields are pinned on the server's copy so a mirror
+/// cannot rewrite another session's identity by accident.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MirrorHello {
+    pub session_id: String,
+    pub overview: String,
+    pub created_at: u64,
+    pub message_count: usize,
+}
+
+/// A stream frame about the daemon as a whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MonitorEvent {
+    /// The full current state, sent exactly once as the first frame after the
+    /// monitor handshake. Sessions are sorted by `updated_at`, newest first.
+    Snapshot(MonitorSnapshot),
+    /// One hosted session was created or re-hosted (lazy resume). Carries its
+    /// complete row so a consumer needs no back-reference.
+    SessionAdded(MonitoredSession),
+    /// One hosted session's row changed in place.
+    SessionUpdated(MonitoredSession),
+    /// A hosted session shut down. Consumers drop the row. (Session teardown
+    /// is not yet emitted by the host — hosted sessions live for the daemon's
+    /// lifetime — but the variant is part of the contract so panels written
+    /// against it handle teardown when it lands.)
+    SessionRemoved { session_id: String },
+}
+
+/// The daemon-level snapshot: who is serving and what is happening right now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitorSnapshot {
+    pub project_root: String,
+    /// Unix seconds when the daemon process started (from the discovery
+    /// record; `0` when the registry was not created by a daemon, e.g. an
+    /// in-TUI `/serve` prehost).
+    pub daemon_started_at: u64,
+    pub sessions: Vec<MonitoredSession>,
+}
+
+/// One row of the control panel: a hosted session's identity, status, and
+/// accounting. Deliberately a superset of nothing — every field is cheap and
+/// content-free (see module docs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitoredSession {
+    pub id: String,
+    /// Stored AI/manual title, falling back to the first-prompt preview.
+    pub overview: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub message_count: usize,
+    /// Who owns the session's driver (ADR-0095). Defaults to `Hosted` so
+    /// producers written against ADR-0093 stay valid.
+    #[serde(default)]
+    pub hosting: SessionHosting,
+    /// Derived lifecycle status (ADR-0093 §3): the panel's primary sort key.
+    pub status: SessionStatus,
+    /// 1-based index of the current (or most recently completed) user round.
+    pub round: u64,
+    /// 0-based index of the model request within the current round, when one
+    /// has started.
+    pub turn: Option<usize>,
+    /// Output tokens generated by the current/most-recent round so far.
+    pub output_tokens: u64,
+    /// Wall-clock milliseconds since the current round started (frozen at the
+    /// final duration once the round terminates).
+    pub elapsed_ms: u64,
+    /// Currently executing tool, if any.
+    pub current_tool: Option<String>,
+    /// Latest one-line activity string (e.g. "waiting for model").
+    pub activity: Option<String>,
+    /// Current AI-visible context size, when reported.
+    pub context_tokens: Option<usize>,
+    /// One-line error/notice text for `Failed` / `NeedsApproval` / `NeedsInput`.
+    pub note: Option<String>,
+}
+
+impl MonitoredSession {
+    /// A zeroed row for one session id — the seed a mirror producer or a
+    /// tracker starts from before any event has been folded in.
+    pub fn empty(id: String) -> Self {
+        Self {
+            id,
+            overview: String::new(),
+            created_at: 0,
+            updated_at: 0,
+            message_count: 0,
+            hosting: SessionHosting::Hosted,
+            status: SessionStatus::Idle,
+            round: 0,
+            turn: None,
+            output_tokens: 0,
+            elapsed_ms: 0,
+            current_tool: None,
+            activity: None,
+            context_tokens: None,
+            note: None,
+        }
+    }
+}
+
+/// Display-level lifecycle status of a hosted session, derived from its
+/// response stream. This is the multi-session analogue of the single-session
+/// [`ParentStatus`](crate::ParentStatus) badge (ADR-0017): a coarse,
+/// panel-facing classification, not the protocol state — the round lifecycle
+/// itself stays binary (`RoundLifecycle`, ADR-0078).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStatus {
+    /// No round running, nothing waiting on a human.
+    Idle,
+    /// A round is actively producing model output or running tools.
+    Running,
+    /// Blocked on a tool-permission decision.
+    NeedsApproval,
+    /// Blocked on an `ask_user` question or interactive-command input.
+    NeedsInput,
+    /// The current round ended via interruption (Esc); the prompt may resume.
+    Interrupted,
+    /// The current round ended with a turn-level error.
+    Failed,
+}
+
+impl SessionStatus {
+    /// Whether a panel row in this status describes ongoing or blocked work —
+    /// the default (non-`include_idle`) filter for monitor snapshots.
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    /// The wire string, also used directly by the `neenee status` table.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::NeedsApproval => "needs-approval",
+            Self::NeedsInput => "needs-input",
+            Self::Interrupted => "interrupted",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monitor_action_defaults_are_off() {
+        let action: MonitorAction = serde_json::from_str("{}").unwrap();
+        assert!(!action.watch);
+        assert!(!action.include_idle);
+    }
+
+    #[test]
+    fn monitor_action_roundtrips() {
+        let action = MonitorAction {
+            watch: true,
+            include_idle: true,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let back: MonitorAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, action);
+    }
+
+    #[test]
+    fn session_status_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&SessionStatus::NeedsApproval).unwrap(),
+            "\"needs_approval\""
+        );
+        assert_eq!(SessionStatus::NeedsApproval.as_str(), "needs-approval");
+        assert_eq!(SessionStatus::NeedsInput.to_string(), "needs-input");
+    }
+
+    #[test]
+    fn session_status_is_active_gates_idle_only() {
+        assert!(!SessionStatus::Idle.is_active());
+        for status in [
+            SessionStatus::Running,
+            SessionStatus::NeedsApproval,
+            SessionStatus::NeedsInput,
+            SessionStatus::Interrupted,
+            SessionStatus::Failed,
+        ] {
+            assert!(status.is_active(), "{status} should be active");
+        }
+    }
+
+    #[test]
+    fn monitor_event_uses_kind_tag() {
+        let event = MonitorEvent::SessionRemoved {
+            session_id: "s-1".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert_eq!(json, r#"{"kind":"session_removed","session_id":"s-1"}"#);
+        let back: MonitorEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn mirrored_row_roundtrips_with_hosting() {
+        let row = MonitoredSession {
+            id: "s-9".into(),
+            overview: "standalone TUI".into(),
+            created_at: 1,
+            updated_at: 2,
+            message_count: 3,
+            hosting: SessionHosting::Mirrored,
+            status: SessionStatus::Running,
+            round: 1,
+            turn: Some(0),
+            output_tokens: 10,
+            elapsed_ms: 100,
+            current_tool: None,
+            activity: None,
+            context_tokens: None,
+            note: None,
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains("\"hosting\":\"mirrored\""), "{json}");
+        let back: MonitoredSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, row);
+    }
+
+    #[test]
+    fn hosting_defaults_to_hosted_for_older_producers() {
+        let json = r#"{"id":"s","overview":"","created_at":0,"updated_at":0,"message_count":0,"status":"idle","round":0,"turn":null,"output_tokens":0,"elapsed_ms":0,"current_tool":null,"activity":null,"context_tokens":null,"note":null}"#;
+        let row: MonitoredSession = serde_json::from_str(json).unwrap();
+        assert_eq!(row.hosting, SessionHosting::Hosted);
+    }
+
+    #[test]
+    fn mirror_hello_roundtrips() {
+        let hello = MirrorHello {
+            session_id: "s-1".into(),
+            overview: "fix parser".into(),
+            created_at: 7,
+            message_count: 4,
+        };
+        let json = serde_json::to_string(&hello).unwrap();
+        let back: MirrorHello = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, hello);
+    }
+
+    #[test]
+    fn snapshot_roundtrips_with_a_full_row() {
+        let snapshot = MonitorSnapshot {
+            project_root: "/tmp/proj".into(),
+            daemon_started_at: 1_700_000_000,
+            sessions: vec![MonitoredSession {
+                id: "s-1".into(),
+                overview: "fix the flaky test".into(),
+                created_at: 1,
+                updated_at: 2,
+                message_count: 7,
+                hosting: SessionHosting::Hosted,
+                status: SessionStatus::Running,
+                round: 3,
+                turn: Some(1),
+                output_tokens: 512,
+                elapsed_ms: 9_000,
+                current_tool: Some("bash".into()),
+                activity: Some("running bash".into()),
+                context_tokens: Some(48_000),
+                note: None,
+            }],
+        };
+        let json = serde_json::to_string(&MonitorEvent::Snapshot(snapshot.clone())).unwrap();
+        let back: MonitorEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, MonitorEvent::Snapshot(snapshot));
+    }
+}

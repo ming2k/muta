@@ -1,17 +1,32 @@
 asyncapi: 3.1.0
 info:
-  title: neenee hot-attach WebSocket API
-  version: 0.20.0
+  title: neenee session-host WebSocket API
+  version: 0.23.0
   description: |
-    Machine-readable contract for `neenee-transport`'s current hot-attach transport.
-    The server is started from a running TUI with `/serve [port] [--public]`, or
-    by the standalone `neenee-server` binary (ADR-0081), which hosts one session
-    and serves the same protocol; `neenee --attach` connects as a client of it.
-    It is not yet the multi-session daemon described as a future phase in ADR-0037.
+    Machine-readable contract for the unified session-daemon transport
+    (`neenee serve` / the `neenee-server` binary; ADR-0081/0089/0093/0094/0096).
+    One process owns every session across every project and serves them over a
+    single WebSocket endpoint (Unix domain socket by default, TCP + bearer token
+    when exposed). Client roles share the socket, distinguished by the client's
+    first frame (`Select`):
 
-    Every WebSocket text frame contains exactly one JSON value. The first
-    server frame is always `History`; subsequent server frames are `Response`.
-    Clients send only `Request` frames. Binary frames are ignored.
+    - **Attach** (`Select{action: new | attach(id?)}`): bidirectional. The
+      server answers `Welcome` (bound; full transcript), `Pick` (several
+      sessions; choose one), or `Error`, then streams `Response` frames and
+      accepts `Request` frames.
+    - **Monitor** (`Select{action: monitor{watch, include_idle}}`, ADR-0093):
+      server → client, read-only. The server sends one `Monitor{kind:
+      snapshot}` frame, then `session_added` / `session_updated` /
+      `session_removed` diffs while `watch` holds (`watch: false` closes after
+      the snapshot). Rows are whole `MonitoredSession` values; upsert by `id`.
+    - **Control** (`Select{action: {control: {verb, …}}}`, ADR-0096): one
+      round-trip session management — create_session / send_prompt / interrupt
+      / resolve_permission / kill_session — answered by a `ControlReply`.
+
+    Every WebSocket text frame contains exactly one JSON value. Binary frames
+    are ignored. There are no sequence numbers or replay cursors: an attach
+    reconnect starts from a fresh `Welcome`, a monitor reconnect from a fresh
+    `snapshot`.
 
     Authentication (ADR-0054): the default listener binds loopback and requires
     no token. The `--public` flag binds all interfaces and **requires** a bearer
@@ -23,58 +38,114 @@ info:
     url: https://opensource.org/license/mit
   externalDocs:
     description: Human-readable frontend integration guide
-    url: https://github.com/anthropics/neenee/blob/main/docs/reference/server-api.md
+    url: https://github.com/ming2k/neenee/blob/main/docs/reference/server-api.md
 defaultContentType: application/json
 servers:
+  uds:
+    host: $XDG_RUNTIME_DIR/neenee/daemon.sock
+    protocol: ws
+    description: |
+      Default (ADR-0096). The unified daemon's primary local channel is a Unix
+      domain socket (0600 in a 0700 runtime dir); filesystem permissions are
+      the auth boundary, so no bearer token. CLI and TUI connect here.
   loopback:
     host: 127.0.0.1:{port}
     protocol: ws
     description: |
-      Default. `/serve [port]` binds loopback only; no authentication. A local
-      co-process on the same machine is trusted.
+      TCP loopback fallback; no authentication. A local co-process on the same
+      machine is trusted.
     variables:
       port:
         default: '0'
-        description: Actual bound port printed by the TUI after startup.
-  public:
+        description: Actual bound port printed by the daemon after startup.
+  exposed:
     host: 0.0.0.0:{port}
     protocol: ws
     description: |
-      `/serve [port] --public` binds all interfaces. A bearer token is
-      mandatory: send `Authorization: Bearer <token>` on the handshake, else HTTP
-      401. The TUI generates and prints the token. Front with TLS for remote use.
+      `neenee serve --expose` binds all interfaces for LAN clients (ADR-0096).
+      A bearer token is mandatory: send `Authorization: Bearer <token>` on the
+      handshake, else HTTP 401. The daemon generates and prints the token on
+      startup. Front with TLS for remote use.
     security:
       - bearerAuth: []
     variables:
       port:
         default: '0'
-        description: Actual bound port printed by the TUI after startup.
+        description: Actual bound port printed by the daemon after startup.
 channels:
   session:
     address: /
-    description: One full-duplex connection to the TUI's currently active session.
+    description: |
+      One connection to the host. The client's first frame (`Select`) chooses
+      the role: attach (bidirectional session driving), monitor (read-only
+      observability stream), or control (session management).
     messages:
+      select:
+        $ref: '#/components/messages/Select'
       request:
         $ref: '#/components/messages/Request'
-      history:
-        $ref: '#/components/messages/History'
+      welcome:
+        $ref: '#/components/messages/Welcome'
+      pick:
+        $ref: '#/components/messages/Pick'
+      error:
+        $ref: '#/components/messages/Error'
       response:
         $ref: '#/components/messages/Response'
+      monitor:
+        $ref: '#/components/messages/Monitor'
+      controlReply:
+        $ref: '#/components/messages/ControlReply'
 operations:
+  sendSelect:
+    action: send
+    channel:
+      $ref: '#/channels/session'
+    summary: First frame on every connection; chooses the client role.
+    messages:
+      - $ref: '#/channels/session/messages/select'
   sendRequest:
     action: send
     channel:
       $ref: '#/channels/session'
-    summary: Send an agent command from the frontend to the server.
+    summary: Send an agent command from an attach client to the server.
     messages:
       - $ref: '#/channels/session/messages/request'
-  receiveHistory:
+  receiveWelcome:
     action: receive
     channel:
       $ref: '#/channels/session'
-    summary: Receive the transcript snapshot once, immediately after connect.
+    summary: Attach handshake reply carrying the bound session's transcript snapshot.
     messages:
-      - $ref: '#/channels/session/messages/history'
+      - $ref: '#/channels/session/messages/welcome'
+  receivePick:
+    action: receive
+    channel:
+      $ref: '#/channels/session'
+    summary: Attach handshake reply listing candidate sessions to choose from.
+    messages:
+      - $ref: '#/channels/session/messages/pick'
+  receiveMonitor:
+    action: receive
+    channel:
+      $ref: '#/channels/session'
+    summary: "Monitor stream: one snapshot, then whole-row diffs while watching."
+    messages:
+      - $ref: '#/channels/session/messages/monitor'
+  sendControl:
+    action: send
+    channel:
+      $ref: '#/channels/session'
+    summary: "Issue a session-management verb (create/prompt/interrupt/approve/kill)."
+    messages:
+      - $ref: '#/channels/session/messages/select'
+  receiveControlReply:
+    action: receive
+    channel:
+      $ref: '#/channels/session'
+    summary: "The single reply to a control verb."
+    messages:
+      - $ref: '#/channels/session/messages/controlReply'
   receiveResponse:
     action: receive
     channel:
@@ -109,18 +180,122 @@ components:
           payload:
             type: Request
             Interrupt: null
-    History:
-      name: History
-      title: Initial transcript snapshot
+    Select:
+      name: Select
+      title: Handshake selector (first frame on every connection)
       payload:
-        $ref: '#/components/schemas/HistoryEnvelope'
+        $ref: '#/components/schemas/SelectEnvelope'
       examples:
-        - name: emptyHistory
+        - name: attachAny
           payload:
-            type: History
+            type: Select
+            action:
+              attach: null
+        - name: monitorWatch
+          payload:
+            type: Select
+            action:
+              monitor:
+                watch: true
+                include_idle: false
+        - name: control
+          payload:
+            type: Select
+            action:
+              control:
+                verb: create_session
+                project: /abs/path
+    Welcome:
+      name: Welcome
+      title: Attach handshake reply with the bound session's transcript
+      payload:
+        $ref: '#/components/schemas/WelcomeEnvelope'
+      examples:
+        - name: emptyWelcome
+          payload:
+            type: Welcome
             session_id: session-123
             round_counter: 0
             messages: []
+    Pick:
+      name: Pick
+      title: Attach handshake reply listing candidate sessions
+      payload:
+        $ref: '#/components/schemas/PickEnvelope'
+      examples:
+        - name: twoSessions
+          payload:
+            type: Pick
+            sessions:
+              - id: session-123
+                overview: fix the parser
+                created_at: 1786100000
+                updated_at: 1786100100
+                message_count: 9
+                active: true
+    Error:
+      name: Error
+      title: Terminal handshake or request error
+      payload:
+        $ref: '#/components/schemas/ErrorEnvelope'
+      examples:
+        - name: unknownId
+          payload:
+            type: Error
+            message: unknown session id 'nope'
+    Monitor:
+      name: Monitor
+      title: Monitor stream frame (snapshot or whole-row diff)
+      payload:
+        $ref: '#/components/schemas/MonitorEnvelope'
+      examples:
+        - name: snapshot
+          payload:
+            type: Monitor
+            kind: snapshot
+            project_root: /home/u/proj
+            daemon_started_at: 1786100000
+            sessions: []
+        - name: sessionUpdated
+          payload:
+            type: Monitor
+            kind: session_updated
+            id: session-123
+            overview: fix the parser
+            created_at: 1786100000
+            updated_at: 1786100123
+            message_count: 14
+            hosting: hosted
+            status: running
+            round: 3
+            turn: 1
+            output_tokens: 512
+            elapsed_ms: 83000
+            current_tool: bash
+            activity: waiting for model
+            context_tokens: 48200
+            note: null
+        - name: sessionRemoved
+          payload:
+            type: Monitor
+            kind: session_removed
+            session_id: session-123
+    ControlReply:
+      name: ControlReply
+      title: Reply to a control-plane verb (ADR-0096)
+      payload:
+        $ref: '#/components/schemas/ControlReplyEnvelope'
+      examples:
+        - name: created
+          payload:
+            type: ControlReply
+            ok: true
+            session_id: session-123
+        - name: failure
+          payload:
+            type: ControlReply
+            ok: false
+            error: unknown session id 'nope'
     Response:
       name: Response
       title: Live server response envelope
@@ -161,12 +336,25 @@ components:
       allOf:
         - $ref: '#/components/schemas/AgentRequest'
       unevaluatedProperties: false
-    HistoryEnvelope:
+    SelectEnvelope:
+      description: |
+        The first frame on every connection. `action` is one of `"new"`,
+        `{ "attach": "<id>" | null }`, `{ "monitor": { watch, include_idle } }`,
+        or `{ "control": { verb, … } }` (serde `rename_all = "snake_case"`).
+      type: object
+      required: [type, action]
+      properties:
+        type:
+          const: Select
+        action:
+          description: AttachAction; see examples on the Select message.
+      additionalProperties: false
+    WelcomeEnvelope:
       type: object
       required: [type, session_id, round_counter, messages]
       properties:
         type:
-          const: History
+          const: Welcome
         session_id:
           type: string
           description: Id of the hosted session this transcript snapshot belongs to.
@@ -178,6 +366,124 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Message'
+      additionalProperties: false
+    PickEnvelope:
+      type: object
+      required: [type, sessions]
+      properties:
+        type:
+          const: Pick
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionOverview'
+      additionalProperties: false
+    ErrorEnvelope:
+      type: object
+      required: [type, message]
+      properties:
+        type:
+          const: Error
+        message:
+          type: string
+      additionalProperties: false
+    SessionOverview:
+      type: object
+      required: [id, overview, created_at, updated_at, message_count, active]
+      properties:
+        id:
+          type: string
+        overview:
+          type: string
+        created_at:
+          type: integer
+        updated_at:
+          type: integer
+        message_count:
+          type: integer
+        active:
+          type: boolean
+      additionalProperties: false
+    MonitoredSession:
+      description: |
+        One control-panel row (ADR-0093/0095). `hosting` is always
+        `hosted` under the unified daemon (ADR-0096). `status` is derived:
+        idle | running | needs_approval | needs_input | interrupted | failed.
+      type: object
+      required:
+        - id
+        - overview
+        - created_at
+        - updated_at
+        - message_count
+        - status
+        - round
+        - turn
+        - output_tokens
+        - elapsed_ms
+        - current_tool
+        - activity
+        - context_tokens
+        - note
+      properties:
+        id:
+          type: string
+        overview:
+          type: string
+        created_at:
+          type: integer
+        updated_at:
+          type: integer
+        message_count:
+          type: integer
+        hosting:
+          enum: [hosted]
+          default: hosted
+        status:
+          enum: [idle, running, needs_approval, needs_input, interrupted, failed]
+        round:
+          type: integer
+          minimum: 0
+        turn:
+          type: [integer, "null"]
+        output_tokens:
+          type: integer
+        elapsed_ms:
+          type: integer
+        current_tool:
+          type: [string, "null"]
+        activity:
+          type: [string, "null"]
+        context_tokens:
+          type: [integer, "null"]
+        note:
+          type: [string, "null"]
+      additionalProperties: false
+    MonitorEnvelope:
+      description: |
+        `type` is the Wire discriminator; `kind` is the flattened MonitorEvent
+        discriminator. `snapshot` carries MonitorSnapshot fields;
+        `session_added` / `session_updated` carry whole MonitoredSession rows;
+        `session_removed` carries `session_id`.
+      type: object
+      required: [type, kind]
+      properties:
+        type:
+          const: Monitor
+        kind:
+          enum: [snapshot, session_added, session_updated, session_removed]
+    ControlReplyEnvelope:
+      type: object
+      required: [type, ok]
+      properties:
+        type:
+          const: ControlReply
+        ok:
+          type: boolean
+        session_id:
+          type: [string, 'null']
+        error:
+          type: [string, 'null']
       additionalProperties: false
     ResponseEnvelope:
       description: "The type field plus one flattened AgentResponse variant."
@@ -932,7 +1238,7 @@ components:
       description: |
         Persisted transcript message. The core fields are stable; optional
         metadata is intentionally open because the transcript model evolves
-        independently and History must remain forward-compatible.
+        independently and the Welcome snapshot must remain forward-compatible.
       type: object
       required: [role, content, images, hidden, compacted, children]
       properties:

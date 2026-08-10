@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bare `neenee` always starts a fresh session.** Previously the daemon
+  auto-bound the caller to an existing session whenever exactly one was
+  hosted (so `cargo run` / `neenee` silently continued the previous
+  conversation). Resuming is now always explicit: bare `neenee` sends
+  `AttachAction::New`; `neenee resume` picks from the daemon's sessions;
+  `neenee resume <id>` attaches to that id directly. Also completes the
+  Ctrl+C quit-window migration to a wall-clock deadline
+  (`ctrl_c_armed_until`), so the ~2s double-press window no longer stretches
+  to ~20s when the loop idles at its 1s heartbeat.
+
+### Added
+
+- **Hint bar shows the serving instance and Kimi K3's effort tier.** The
+  right cluster now renders `Model effort @instance  context` — e.g.
+  `Kimi K3 max @kimi-code  89.2k (8%)`. The muted `@<instance>` suffix
+  carries the provider instance's display name so identical models served by
+  different instances stay attributable (mirroring the `· <provider>` suffix
+  in the Models picker); it drops before the context meter on narrow
+  terminals. Kimi K3's registry entry now advertises its single `max` effort
+  tier (`EFFORT_KIMI_K3`), so requests pin `reasoning_effort: "max"` (the
+  platform's `default_effort`) and the effort tag shows for it; models whose
+  effort ladder tops out below `high` now default to their deepest tier
+  instead of an unsupported `high`.
+
+- **Unified session daemon and the control plane (ADR-0096).** neenee is now  a client of one user-level daemon (`neenee serve`, or the `neenee-server`
+  binary) that owns **every session across every project**. The daemon
+  exposes a session-management **control plane** — create a session, send a
+  prompt, interrupt, answer a permission, kill — alongside the existing
+  attach and monitor roles, all over one WebSocket handshake. It listens on
+  a **Unix domain socket** by default (`$XDG_RUNTIME_DIR/neenee/daemon.sock`,
+  0600 in a 0700 dir; filesystem permissions are the auth boundary, no token)
+  and additionally on TCP with a mandatory bearer token when `--expose` /
+  `--public` is given (ADR-0054 model). Discovery is now a single global
+  record (`daemon.json`) carrying the UDS path. `neenee serve --detach`
+  forks the daemon into the background (and refuses to start a second one).
+  The TUI gains a **`/host` control panel**: a live view over all daemon
+  sessions with per-row status and a selected-row preview; Enter switches
+  the TUI to a hosted session (detach + re-attach — the previous round keeps
+  running in the daemon). See
+  [ADR-0096](docs/adr/0096-unified-session-daemon.md).
+
+- **Daemon-architecture documentation sweep.** A new concept page,
+  [The session daemon and the control plane](docs/explanation/session-daemon-and-control-plane.md),
+  explains the process topology, ownership, transports, and lifecycle;
+  `crate-layering.md` is rewritten for the unified model; `commands.md`
+  documents `/host` and marks in-TUI `/serve` superseded; `glossary.md`
+  updates the cli/server/attach entries and adds session-daemon /
+  control-plane / `/host` terms (plus a legacy Mirror entry); `paths.md`
+  records the global `daemon.json` + `daemon.sock`; `server-api.md` and
+  `server.asyncapi.yaml` gain the Control verbs and the UDS transport with
+  all Mirror remnants removed; READMEs list the daemon/control-plane as a
+  headline feature; ADR-0081/0089 are marked partially superseded.
+
+### Changed
+
+- **Every interactive session is daemon-held (ADR-0096).** Bare `neenee`
+  and `neenee resume [id]` now attach to the unified daemon (spawning it if
+  needed) instead of assembling an in-process harness. Two behaviour changes
+  follow directly and are intended: **closing the TUI no longer ends the
+  round** (the session lives in the daemon; re-attach any time), and
+  **switching sessions from the `/host` panel never kills running work** —
+  it is detach + attach, not the old `/session open` supersede. The ADR-0095
+  mirroring bridge is removed: with single ownership every session is
+  `hosted`, so the mirrored/hosted distinction and the mirror channel are
+  gone. This is a hard behaviour change on the still-unreleased serve/attach
+  surface.
+
+### Removed
+
+- **Session mirroring (ADR-0095) and the in-process harness path.** The
+  mirror tap, supervisor, `Mirror`/`MirrorUpdate` frames, and
+  `SessionHosting::Mirrored` are deleted; the unified daemon holds every
+  session, so a TUI no longer needs to report a session it owns. The
+  `Wire::Mirror` / `Wire::MirrorUpdate` envelope variants are retained on
+  the wire for one release as a parsing no-op for older clients, then
+  removed.
+
+### Fixed
+
+- **`neenee daemon` now actually parses.** ADR-0089 accepted the subcommand
+  and `main.rs` handled it, but `parse_args` never produced
+  `StartupMode::Daemon` — the branch was unreachable and `neenee daemon`
+  exited with "Unknown command 'daemon'". The parser now has the arm, and
+  the usage text lists the full daemon surface (`daemon`, `attach`,
+  `status`).
+
+### Changed
+
+- **Hint bar model identity: `(effort)` parentheses and an `@ instance` tag
+  replace the `◆` diamond.** The reasoning-effort attribute now hugs the
+  model name as a plain parenthetical (`Kimi K3 (max)`) instead of the `◆
+  max` glyph form, and the bar can finally tell you *which* provider instance
+  is serving the model: when the active model is offered by more than one
+  configured instance, an `@ {instance}` tag joins the identity group in
+  muted (`Kimi K3 (max) @ 官方中转`); single-instance setups stay quiet.
+  Under width pressure the instance tag drops first, then effort, context,
+  and finally the model name — unchanged priorities otherwise.
+  (`HintBarView::provider_label`; the `/models` picker's `◆ think on ·
+  <effort>` reasoning tag is untouched.)
+
 ## [0.22.2] - 2026-08-07
 
 ### Added

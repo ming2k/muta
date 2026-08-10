@@ -100,6 +100,7 @@ pub use events::{
     RoundSummary, SessionContextSnapshot, SessionDetail, SessionOverview, SkillInfo, ToolInfo,
     UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
+pub mod monitor;
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
 };
@@ -109,6 +110,10 @@ pub use model::{
     BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
     RemoteModelMetadata, WireFormat, baseline_models, model_by_id, register_fitted_models,
     resolve as resolve_model,
+};
+pub use monitor::{
+    MirrorHello, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting,
+    SessionStatus,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

@@ -1,45 +1,46 @@
 # Server WebSocket API
 
-This page is the frontend integration guide for the current `neenee-transport`
-hot-attach transport. Its machine-readable contract is
-[`server.asyncapi.yaml`](server.asyncapi.yaml).
+This page is the frontend integration guide for the session-host transport.
+Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
-> **Why AsyncAPI rather than OpenAPI or TypeSpec?** The current public surface
-> is a bidirectional WebSocket event stream, not an HTTP request/response API.
+> **Why AsyncAPI rather than OpenAPI or TypeSpec?** The public surface is a
+> bidirectional WebSocket event stream, not an HTTP request/response API.
 > AsyncAPI models channels, send/receive operations, messages, and ordering
 > directly. OpenAPI would only describe the HTTP upgrade incompletely, while a
-> TypeSpec file would still need a project-specific WebSocket convention. If
-> the planned daemon later adds REST endpoints, describe those separately with
-> OpenAPI/TypeSpec and keep this WebSocket channel in AsyncAPI.
+> TypeSpec file would still need a project-specific WebSocket convention.
 
-## Scope and current limitations
+## Roles and entry points
 
-This contract describes `crates/neenee-transport/src/serve.rs` as it exists now:
+The daemon (`neenee serve`, or the `neenee-server` binary) serves one
+control-plane endpoint per user, on a Unix domain socket by default and on
+TCP when exposed (ADR-0096). Four client roles share the protocol,
+distinguished by the first frame the client sends after the upgrade
+(`Select`):
 
-- `/serve [port] [--public]` starts a listener attached to the **currently
-  running TUI session**.
-- **Default (loopback):** binds `127.0.0.1` and requires no token — a local
-  co-process is trusted. This is what a bare `/serve [port]` does.
-- **`--public`:** binds `0.0.0.0` (all interfaces) and **requires a bearer
-  token**. The WebSocket handshake must carry `Authorization: Bearer <token>`,
-  else it is rejected with HTTP 401 before any session data is exchanged. The
-  TUI generates a random 32-char hex token and prints it so you can hand it to
-  a remote client. A public port is never started without a token.
-- Omitting `port` asks the OS for a free port; the TUI prints the selected port.
-- Invoking `/serve` again with no argument stops accepting new connections.
-- There is no TLS, origin check, version negotiation, subprotocol, or HTTP
-  endpoint yet. For a public listener without TLS, front it with a TLS-terminating
-  reverse proxy (e.g. `wss://` via nginx/Caddy) — the bearer token alone protects
-  the handshake but not the wire from eavesdropping.
-- Multiple clients may attach. Every client can send requests into the same
-  agent request queue and receives the broadcast response stream.
-- A slow client may lose broadcast events; the server logs the lag and
-  continues. Reconnect to obtain a fresh transcript snapshot.
+| Role | Handshake | Direction | Purpose |
+|------|-----------|-----------|---------|
+| **Attach** | `Select{action: New \| Attach(id?)}` | bidirectional | Drive a session: send `Request`s, receive `Response`s |
+| **Monitor** | `Select{action: Monitor{watch, include_idle}}` | server → client | Observe every session the daemon knows about (ADR-0093) |
+| **Control** | `Select{action: Control(verb)}` | one round-trip | Manage sessions: create / prompt / interrupt / approve / kill (ADR-0096) |
+| **Mirror** | `Select{action: Mirror}` | client → server | (Removed by ADR-0096 — no standalone sessions left) |
 
-The standalone `neenee-server` binary serves the same protocol for the one
-session it hosts — same code path, same envelopes — and `neenee --attach`
-runs the TUI as a client of it. See
-[ADR-0081](../adr/0081-neenee-server-and-attach-model.md).
+The in-TUI `/serve` command (legacy single-session prehost) is superseded by
+the unified daemon; the protocol below is the daemon's control plane.
+
+## Bind and authentication
+
+- **Unix domain socket (default, ADR-0096):** the daemon's primary local
+  channel at `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700`
+  runtime dir. No bearer token — the filesystem permissions are the auth
+  boundary. CLI and TUI use this.
+- **TCP loopback:** binds `127.0.0.1` and requires no token — a local
+  co-process is trusted.
+- **TCP exposed (`--expose` / `--public`):** binds `0.0.0.0` and **requires a
+  bearer token** (`Authorization: Bearer <token>` on the handshake, else HTTP
+  401). The daemon generates and prints the token on startup. Exposing is an
+  explicit opt-in that always carries a token; front it with a
+  TLS-terminating reverse proxy for remote use (the token protects the
+  handshake, not the wire).
 
 ### Security model
 
@@ -48,32 +49,41 @@ runs the TUI as a client of it. See
 | default (loopback) | `127.0.0.1` | none | local co-process on the same machine |
 | `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
 
-Because the default binds loopback, a casual `/serve` exposes nothing beyond
-this machine. Exposure is an explicit opt-in that cannot happen without a token.
+Because the default binds loopback, a casual host exposes nothing beyond this
+machine. Exposure is an explicit opt-in that cannot happen without a token.
 See ADR-0054 for the rationale.
 
-## Start and connect
+## Attach: drive a session
 
-From a running `neenee` TUI, default loopback (no auth):
+After the upgrade, the client selects a session:
 
-```text
-/serve 8765
+```json
+{ "type": "Select", "action": "new" }
+{ "type": "Select", "action": { "attach": "session-id" } }
+{ "type": "Select", "action": { "attach": null } }
 ```
 
-For a remote client, expose on all interfaces with a mandatory token:
+The server answers one of:
 
-```text
-/serve 8765 --public
+```json
+{ "type": "Welcome", "session_id": "…", "round_counter": 6, "messages": [] }
+{ "type": "Pick", "sessions": [ { "id": "…", "overview": "…", … } ] }
+{ "type": "Error", "message": "…" }
 ```
 
-The TUI prints the generated token, e.g. `a1b2c3d4e5f6...`. Connect a client:
+- `Welcome` binds the connection: `messages` is the full persisted transcript
+  (a replacement snapshot, not incremental), `round_counter` the authoritative
+  monotonic round counter. Process it before rendering subsequent live events.
+- `Pick` means several sessions are hosted and the client must choose
+  (`Attach(Some(id))` on a new connection).
+- `Error` is terminal.
 
-- **Loopback (no token):** connect to `ws://127.0.0.1:8765/` directly.
-- **Public (token required):** set the `Authorization: Bearer <token>` header on
-  the WebSocket handshake. Browsers cannot set that header on `new WebSocket()`
-  directly; use a client that can, or pass the token as a query string
-  `?token=<token>` (not yet implemented — for now use a non-browser client or a
-  proxy that injects the header).
+From then on the connection carries zero or more live frames in both
+directions — `{ "type": "Request", … }` client → server,
+`{ "type": "Response", … }` server → client. The server subscribes to the
+live broadcast after sending `Welcome`, so an event produced in that narrow
+interval can be missed; the transport has no sequence numbers or replay
+cursor.
 
 Node client with a token:
 
@@ -84,73 +94,100 @@ const socket = new WebSocket("ws://host:8765/", {
 });
 ```
 
-Then send requests and receive responses:
+(Browsers cannot set headers on `new WebSocket()`; use a client that can, or a
+proxy that injects the header.)
 
-```ts
-socket.addEventListener("open", () => {
-  socket.send(JSON.stringify({
-    type: "Request",
-    Chat: {
-      text: "Summarize the current project",
-      images: [],
-      sent_at_ms: Date.now(),
-    },
-  }));
-});
+## Monitor: observe the host (ADR-0093)
 
-socket.addEventListener("message", ({ data }) => {
-  if (typeof data !== "string") return;
-  const frame = JSON.parse(data);
-
-  if (frame.type === "History") {
-    replaceTranscript(frame.messages);
-    return;
-  }
-
-  if (frame.type === "Response") {
-    handleAgentResponse(frame);
-  }
-});
+```json
+{ "type": "Select", "action": { "monitor": { "watch": true, "include_idle": false } } }
 ```
 
-The server ignores binary messages. Send one complete JSON value per WebSocket
-text frame; newline separators are not required despite the older source
-comment referring to newline-delimited JSON.
+The server sends `{ "type": "Monitor", "kind": "snapshot", … }` first, then —
+while `watch` holds — `session_added` / `session_updated` / `session_removed`
+diffs. With `watch: false` it closes after the snapshot (one-shot poll, which
+is what `neenee status` does). Each diff carries a whole
+[`MonitoredSession`](#monitoredsession) row; consumers upsert by `id`.
 
-## Frame lifecycle
+`include_idle: false` (the default) filters both the snapshot and the diff
+stream to sessions whose `status` is not `idle`, so a quiet host reports an
+empty list.
 
-The connection has a simple ordering contract:
+A monitor client never sends anything after its `Select`; the channel is
+read-only and cannot steer any session.
 
-1. The server accepts the WebSocket handshake.
-2. The server sends exactly one `History` frame carrying the hosted session's
-   id (`session_id`) and the full persisted transcript at that moment
-   (`messages`).
-3. The connection carries zero or more live `Response` frames.
-4. The frontend may send `Request` frames at any time after the socket opens.
-
-The client should process `History` before rendering subsequent live events.
-Note that the server subscribes to the live broadcast **after** loading and
-sending history, so an event produced in that narrow interval can be missed.
-The transport currently has no sequence numbers or replay cursor.
-
-## JSON representation
-
-There are two discriminator levels:
-
-- `type` identifies the transport envelope: `Request`, `History`, or `Response`.
-- Rust enums use serde's default externally tagged representation.
-
-The initial `History` frame carries the hosted session's id and authoritative
-monotonic round counter alongside the transcript:
+### `MonitoredSession`
 
 ```json
 {
-  "type": "History",
-  "session_id": "session-123",
-  "round_counter": 6,
-  "messages": []
+  "id": "session-123",
+  "overview": "fix the flaky parser test",
+  "created_at": 1786100000,
+  "updated_at": 1786100123,
+  "message_count": 14,
+  "hosting": "hosted",
+  "status": "running",
+  "round": 3,
+  "turn": 1,
+  "output_tokens": 512,
+  "elapsed_ms": 83000,
+  "current_tool": "bash",
+  "activity": "waiting for model",
+  "context_tokens": 48200,
+  "note": null
 }
 ```
+
+- `status` is derived display state, not protocol state: `idle`, `running`,
+  `needs_approval`, `needs_input`, `interrupted`, `failed`. The `needs_*`
+  values are overlays on a still-running round (cleared when model output
+  resumes); `note` carries the blocking reason (e.g. `permission: write_file`).
+- `hosting` is `hosted` (the host drives the session; it can be attached to)
+  or `mirrored` (a standalone TUI owns it; observability only — ADR-0095).
+  Older producers may omit `hosting`; treat missing as `hosted`.
+- `elapsed_ms` runs while a round is active and freezes at its terminal
+  event; `turn` is the 0-based model-request index within `round`.
+
+## Mirror: report a session you own (ADR-0095)
+
+> **Removed by ADR-0096.** With the unified daemon owning every session there
+> are no standalone sessions to mirror; the `Mirror` / `MirrorUpdate` frames
+> remain on the wire for one release as a parsing no-op for older clients.
+
+## Control: manage sessions (ADR-0096)
+
+A control client issues one session-management verb per connection, then
+reads a single reply:
+
+```json
+{ "type": "Select", "action": { "control": { "verb": "create_session", "project": "/abs/path", "prompt": null } } }
+→ { "type": "ControlReply", "ok": true, "session_id": "…" }
+```
+
+The verbs (`Select{action: {control: {…}}}`):
+
+| `verb` | Extra fields | Effect |
+|--------|--------------|--------|
+| `create_session` | `project`, optional `prompt` | Host a new session for a project; reply carries its `session_id` |
+| `send_prompt` | `session_id`, `text` | Queue a new round |
+| `interrupt` | `session_id` | Stop the current round |
+| `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
+| `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
+
+`ControlReply` is `{ ok, session_id?, error? }`. On `ok:false`, `error`
+explains (unknown session, host cannot create, …). The connection closes
+after the reply; issue another verb on a fresh connection.
+
+## JSON representation
+
+Two discriminator levels:
+
+- `type` identifies the transport envelope: `Select`, `Welcome`, `Pick`,
+  `Error`, `Request`, `Response`, `Monitor`, `Mirror`, `MirrorUpdate`.
+- `Monitor` frames carry a second `kind` discriminator on the flattened
+  `MonitorEvent`: `snapshot`, `session_added`, `session_updated`,
+  `session_removed`.
+- Rust enums otherwise use serde's default externally tagged representation.
 
 A request carrying fields therefore looks like:
 
@@ -197,9 +234,6 @@ Nested unit `RoundEvent` values remain strings. For example, a stream start is:
 }
 ```
 
-These edge cases are exercised by the server integration test; use the
-AsyncAPI contract and that test as the authority for envelope shapes.
-
 A session-scoped streaming response has three levels:
 
 ```json
@@ -224,6 +258,10 @@ model-request index within that round:
     "event": { "TurnStarted": { "round": 7, "turn": 0 } }
   }
 }
+```
+
+These edge cases are exercised by the server integration test; use the
+AsyncAPI contract and that test as the authority for envelope shapes.
 
 ## Core frontend flows
 
@@ -319,7 +357,8 @@ values, and examples are in the AsyncAPI contract.
 
 A production frontend should:
 
-1. Treat `History` as a replacement snapshot, not as incremental messages.
+1. Treat `Welcome` (and a monitor `snapshot`) as a replacement snapshot, not
+   as incremental messages.
 2. Route every `Round` event by `session_id`.
 3. Preserve request ids and envoy `parent_call_id` values exactly.
 4. Render the plain `ToolResult.output` when its `structured` variant is
@@ -328,7 +367,8 @@ A production frontend should:
    socket. Rust enums are closed internally, but frontend/server versions may
    differ during development.
 6. Reconnect with backoff after disconnect. There is currently no resume token;
-   the next connection starts with a fresh `History` snapshot.
+   the next attach connection starts with a fresh `Welcome` snapshot, and the
+   next monitor connection with a fresh `snapshot`.
 7. Do not assume one request maps to one response. This is an asynchronous,
    multiplexed event protocol.
 8. On a `--public` listener, send the bearer token on the handshake. Loopback
@@ -336,18 +376,23 @@ A production frontend should:
    grants full session access. For a public listener without TLS, front it with
    a TLS-terminating reverse proxy; the bearer token protects the handshake but
    not the wire from eavesdropping.
+9. Upsert monitor diffs by `id`; handle `session_removed` even though hosted
+   sessions are not yet torn down (mirrored sessions are, on disconnect).
 
 ## Contract maintenance
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/neenee-transport/src/serve.rs` (`Wire`)
+- envelope: `crates/neenee-transport/src/serve.rs` (`Wire`, `AttachAction`,
+  `ControlRequest`) and the daemon runtime `crates/neenee-transport/src/host.rs`
 - requests/responses/events: `crates/neenee-core/src/events.rs`
+- monitor rows and status: `crates/neenee-core/src/monitor.rs`
+- session registry (hosting + control verbs): `crates/neenee-transport/src/registry.rs`
 - transcript: `crates/neenee-core/src/message.rs`
 - tool output: `crates/neenee-core/src/tool_output.rs`
 
 Any wire-visible change to those types must update
-`docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and the
-server contract tests. The AsyncAPI file can be opened in AsyncAPI Studio or
-validated with the AsyncAPI CLI. The bind/auth model is specified by
+`docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and
+the server contract tests. The AsyncAPI file can be opened in AsyncAPI Studio
+or validated with the AsyncAPI CLI. The bind/auth model is specified by
 `ServeOptions` / `ServeExpose` / `ServeHandle` in `serve.rs` (see ADR-0054).

@@ -97,8 +97,11 @@ impl Effort {
 
     /// Clamp `self` down to the highest allowed level ≤ `self` (so a requested
     /// `xhigh` on a model that tops out at `high` becomes `high`, never an
-    /// unsupported value). Falls back to `high` (the wire default) when nothing
-    /// allowed ranks ≤ the request.
+    /// unsupported value). When nothing allowed ranks ≤ the request, snap **up**
+    /// to the ladder's shallowest tier — the ladder is authoritative, so
+    /// emitting an unsupported `high` would earn a 400 (Kimi K3's
+    /// `low`/`high`/`max` ladder clamps a legacy `medium` override up to
+    /// `low`).
     pub fn clamp_to(self, allowed: &[Effort]) -> Effort {
         let req = self.rank();
         allowed
@@ -106,7 +109,13 @@ impl Effort {
             .copied()
             .filter(|e| e.rank() <= req)
             .max_by_key(|e| e.rank())
-            .unwrap_or(Effort::High)
+            .unwrap_or_else(|| {
+                allowed
+                    .iter()
+                    .copied()
+                    .min_by_key(|e| e.rank())
+                    .unwrap_or(Effort::High)
+            })
     }
 }
 
@@ -163,6 +172,15 @@ pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
 /// xAI Grok effort ladder (`none` / `low` / `medium` / `high`).
 pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medium, Effort::High];
 
+/// Kimi K3's effort ladder (`low` / `high` / `max`). The platform's docs
+/// (kimi.com/code/docs/models) and live `GET /models` advertise
+/// `think_efforts: { valid_efforts: ["low","high","max"], default_effort:
+/// "high" }` for the `k3` id — K3 always reasons, but the depth is tunable.
+/// An earlier snapshot advertised only `["max"]`, so this baseline may lag a
+/// platform update; `register_fitted_models` refreshes a baseline's ladder
+/// from the live list (ADR-0065) without touching its other vetted fields.
+pub const EFFORT_KIMI_K3: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +202,17 @@ mod tests {
         assert_eq!(Effort::Max.clamp_to(EFFORT_CLAUDE_FULL), Effort::Max);
         // low is honored everywhere.
         assert_eq!(Effort::Low.clamp_to(EFFORT_COMMON), Effort::Low);
+    }
+
+    #[test]
+    fn clamp_snaps_up_to_shallowest_supported_tier() {
+        // Kimi K3's ladder skips `medium`: a legacy `medium` override snaps
+        // up to `low` rather than emitting an unsupported wire value.
+        assert_eq!(Effort::Medium.clamp_to(EFFORT_KIMI_K3), Effort::Low);
+        // high is on K3's ladder and stays; max is honored too.
+        assert_eq!(Effort::High.clamp_to(EFFORT_KIMI_K3), Effort::High);
+        assert_eq!(Effort::Max.clamp_to(EFFORT_KIMI_K3), Effort::Max);
+        // An empty ladder keeps the historical wire-default fallback.
+        assert_eq!(Effort::Low.clamp_to(&[]), Effort::High);
     }
 }

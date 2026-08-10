@@ -193,6 +193,15 @@ pub enum AgentRequest {
     QuerySessionDetail {
         id: String,
     },
+    /// Request the token-source report (per-round / per-turn request usage,
+    /// reported vs. estimated) for one session. The harness replies with
+    /// [`AgentResponse::TokenUsageReport`] carrying a snapshot of its
+    /// server-side ledger. Attached frontends have no local ledger, so the
+    /// context-usage modal (click on the hint-bar meter) issues this on
+    /// demand — mirroring [`AgentRequest::QuerySessionDetail`].
+    QueryTokenUsage {
+        session_id: String,
+    },
     /// Request a fresh session-context snapshot (model / tools / permissions /
     /// skills / mcp). The harness replies with [`AgentResponse::SessionContext`].
     /// Sent by the TUI when a manager modal opens.
@@ -332,18 +341,35 @@ pub enum AgentResponse {
     /// ledger (ADR-0091) with another session's state, after `/session open`,
     /// `/resume`, `/session resume`. The frontend rebuilds the whole document
     /// from these two sources: pure dialogue from `messages`, command rows
-    /// from `commands`.
+    /// from `commands`. `session_id` identifies the session that produced the
+    /// replacement (the harness emits this only as a session switch, so it is
+    /// the post-switch id); attached frontends track it to keep on-demand
+    /// queries (e.g. [`AgentRequest::QueryTokenUsage`]) session-correct.
     ConversationReplaced {
+        session_id: String,
         messages: Vec<Message>,
         #[serde(default)]
         commands: Vec<crate::command::CommandRecord>,
     },
     /// Replace the sessions picker contents (and open the picker).
     SessionsOverview(Vec<SessionOverview>),
+    /// Open the daemon control panel (`/host`, ADR-0096). The TUI renders
+    /// the monitor stream it maintains independently; this is only the
+    /// open signal, carrying no data.
+    OpenHostPanel,
     /// Reply to [`AgentRequest::QuerySessionDetail`]: full detail for one
     /// session (complete last prompt, title, timestamps). Consumed by the
     /// session-info sub-view.
     SessionDetail(SessionDetail),
+    /// Reply to [`AgentRequest::QueryTokenUsage`]: the daemon-side token-source
+    /// report for one session (per-round request usage, reported vs.
+    /// estimated). Attached frontends hold no local ledger, so the
+    /// context-usage modal renders this snapshot; the session id lets the
+    /// frontend discard a reply that raced a session switch.
+    TokenUsageReport {
+        session_id: String,
+        report: crate::token_ledger::TokenSourceReport,
+    },
     Error(String),
     Exit,
     ProviderSwitched {

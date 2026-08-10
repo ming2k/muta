@@ -10,7 +10,7 @@ and the `cargo -p <name>` selector stay obvious.
 ```text
 crates/
   neenee-cli/          # the interactive application binary (default workspace member)
-  neenee-server/       # headless session host: one session served over WebSocket
+  neenee-server/       # unified session daemon: all sessions over the UDS/TCP control plane
   neenee-tui-engine/           # in-house grid + diff rendering engine
   neenee-transport/       # session harness, handlers, serve transport
   neenee-agent/         # orchestration: the round/turn loop, built-in tools (bash, read, grep, glob, webfetch, …), and the MCP runtime (mcp module)

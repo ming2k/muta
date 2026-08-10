@@ -215,6 +215,22 @@ impl SessionDriver {
             &config,
             &provider_usage,
         )));
+        // Announce the active provider/model as a synthetic `ProviderSwitched`
+        // so an attach client (which subscribes to the broadcast only after the
+        // handshake and so misses the startup emissions) can seed its hint bar
+        // — model name, reasoning effort, `@instance`, context meter — from the
+        // same single source the in-process TUI reads. The driver resolved this
+        // pair from the global default overlaid with the session's provider pin
+        // (C6), so it is authoritative for this session. Emitting it here (after
+        // the picker snapshot) also lets the registry's attach-sync buffer
+        // capture and replay it. Resolved config-only (`resolved_model_name`,
+        // not the usage variant) to mirror exactly the model the live provider
+        // was built with.
+        {
+            let provider = catalog::default_provider_id(&config).to_string();
+            let model = catalog::resolved_model_name(&config, &provider).unwrap_or_default();
+            let _ = resp_tx.send(AgentResponse::ProviderSwitched { provider, model });
+        }
         if open_picker_on_start {
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(&session).await,
@@ -461,6 +477,9 @@ impl SessionDriver {
                     tokio::spawn(async move {
                         crate::handlers_session::detail(&session, &resp_tx, id).await;
                     });
+                }
+                AgentRequest::QueryTokenUsage { session_id } => {
+                    crate::handlers_session::token_usage(&token_ledger, &resp_tx, session_id);
                 }
                 AgentRequest::QuerySessionContext => {
                     crate::handlers_session::query_context(

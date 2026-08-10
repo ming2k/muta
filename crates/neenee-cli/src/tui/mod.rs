@@ -195,7 +195,7 @@ pub async fn run_tui(
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
-) -> Result<Vec<neenee_core::HistoryEntry>, Box<dyn Error>> {
+) -> Result<TuiOutcome, Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -310,8 +310,30 @@ pub async fn run_tui(
     let sessions_overview_rev_clone = sessions_overview_rev.clone();
     let session_detail = Arc::new(tokio::sync::Mutex::new(None::<neenee_core::SessionDetail>));
     let session_detail_clone = session_detail.clone();
+    // Token-source report fetched on demand from the harness when the
+    // context-usage modal opens in attach mode (the ledger is daemon-side
+    // there). Mirrors the `session_detail` on-demand pattern.
+    let token_report =
+        Arc::new(tokio::sync::Mutex::new(None::<neenee_core::TokenSourceReport>));
+    let token_report_clone = token_report.clone();
+    // Attached frontends hold no local token-source ledger (the accounting is
+    // daemon-side), so the listener needs the currently-viewed primary session
+    // id to accept/discard `TokenUsageReport` replies. Starts at the
+    // handshake-learned id and follows `/session open|new|fork` switches via
+    // `ConversationReplaced`.
+    let attach_session_id = Arc::new(std::sync::Mutex::new(match &session {
+        SessionSource::Local(_) => None::<String>,
+        SessionSource::Remote { session_id } => Some(session_id.clone()),
+    }));
+    let attach_session_id_clone = attach_session_id.clone();
     let open_sessions = Arc::new(AtomicBool::new(false));
     let open_sessions_clone = open_sessions.clone();
+    // `/host` daemon control panel (ADR-0096): a live monitor snapshot the TUI
+    // maintains client-side (separate from the session attach stream).
+    let host_sessions = Arc::new(Mutex::new(Vec::<neenee_core::MonitoredSession>::new()));
+    let host_sessions_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let open_host = Arc::new(AtomicBool::new(false));
+    let open_host_clone = open_host.clone();
     let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
     let oauth_add_signal_clone = oauth_add_signal.clone();
     // Mirror of `App::awaiting_oauth_add` so the response listener can tell the
@@ -363,6 +385,50 @@ pub async fn run_tui(
         Arc::new(tokio::sync::Mutex::new(None));
     let serve_tap_for_listener = serve_tap.clone();
     let serve_tap_for_app = serve_tap.clone();
+
+    // Spawn the daemon monitor client (ADR-0096): maintains the live session
+    // snapshot the `/host` control panel renders. Best-effort — no daemon is
+    // a normal state and the panel simply shows an empty list.
+    {
+        let host_sessions = host_sessions.clone();
+        let host_sessions_rev = host_sessions_rev.clone();
+        let dirty = dirty_clone.clone();
+        let dirty_notify = dirty_notify_clone.clone();
+        tokio::spawn(async move {
+            let project_root =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let Some(info) = crate::remote::discover(&project_root) else {
+                return;
+            };
+            let action = neenee_core::MonitorAction {
+                watch: true,
+                include_idle: true,
+            };
+            let Ok(mut rx) = crate::status::monitor_stream(&info, action).await else {
+                return;
+            };
+            while let Some(event) = rx.recv().await {
+                {
+                    let mut rows = host_sessions.lock().await;
+                    match event {
+                        neenee_core::MonitorEvent::Snapshot(snap) => {
+                            *rows = snap.sessions;
+                        }
+                        neenee_core::MonitorEvent::SessionAdded(row)
+                        | neenee_core::MonitorEvent::SessionUpdated(row) => {
+                            crate::status::upsert(&mut rows, row);
+                        }
+                        neenee_core::MonitorEvent::SessionRemoved { session_id } => {
+                            rows.retain(|r| r.id != session_id);
+                        }
+                    }
+                }
+                host_sessions_rev.fetch_add(1, std::sync::atomic::Ordering::Release);
+                dirty.store(true, Ordering::SeqCst);
+                dirty_notify.notify_one();
+            }
+        });
+    }
 
     // Spawn response listener
     tokio::spawn(async move {
@@ -1217,7 +1283,11 @@ pub async fn run_tui(
                     needs_round_rebase = false;
                     context_tokens_clone.lock().await.clear();
                 }
-                AgentResponse::ConversationReplaced { messages, commands } => {
+                AgentResponse::ConversationReplaced {
+                    session_id,
+                    messages,
+                    commands,
+                } => {
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
                     rebuilt.extend(transcript_commands_from_ledger(commands));
                     *messages_clone.write().await = rebuilt;
@@ -1225,6 +1295,14 @@ pub async fn run_tui(
                     // The model-window revision changed; do not reuse an API
                     // anchor from the previous session/projection.
                     context_tokens_clone.lock().await.clear();
+                    // Attached mode: the viewed primary session just switched
+                    // (`/session open|new|fork`). Track the new id so
+                    // `TokenUsageReport` replies route correctly, and drop
+                    // the previous session's cached report.
+                    if let Some(id) = attach_session_id_clone.lock().unwrap().as_mut() {
+                        *id = session_id.clone();
+                    }
+                    *token_report_clone.lock().await = None;
                 }
                 AgentResponse::SessionsOverview(sessions) => {
                     *sessions_overview_clone.lock().await = sessions;
@@ -1233,8 +1311,23 @@ pub async fn run_tui(
                     sessions_overview_rev_clone.fetch_add(1, std::sync::atomic::Ordering::Release);
                     open_sessions_clone.store(true, Ordering::SeqCst);
                 }
+                AgentResponse::OpenHostPanel => {
+                    open_host_clone.store(true, Ordering::SeqCst);
+                }
                 AgentResponse::SessionDetail(detail) => {
                     *session_detail_clone.lock().await = Some(detail);
+                }
+                AgentResponse::TokenUsageReport { session_id, report } => {
+                    // Install the daemon-side report only when it still
+                    // belongs to the session the frontend is viewing — a
+                    // reply that raced a session switch would otherwise
+                    // populate the modal with the previous session's rows.
+                    let viewed = listener_side_id.clone().or_else(|| {
+                        attach_session_id_clone.lock().unwrap().clone()
+                    });
+                    if viewed.as_deref() == Some(session_id.as_str()) {
+                        *token_report_clone.lock().await = Some(report);
+                    }
                 }
                 AgentResponse::SessionContext(snapshot) => {
                     *session_context_clone.lock().await = Some(snapshot);
@@ -1369,6 +1462,7 @@ pub async fn run_tui(
         activity_rect: None,
         hint_context_rect: None,
         token_ledger,
+        token_report: None,
         context_tokens: None,
         round_tps: None,
         token_report_scroll: 0,
@@ -1437,6 +1531,10 @@ pub async fn run_tui(
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        host_sessions: Vec::new(),
+        host_scroll: 0,
+        host_modal_follow: true,
+        switch_to_target: None,
         startup_picker,
         permission_confirm_always: false,
         permission_show_details: false,
@@ -1489,7 +1587,7 @@ pub async fn run_tui(
         notice_toast_until: None,
         notice_toast_message: String::new(),
         notice_toast_severity: NoticeSeverity::Info,
-        ctrl_c_armed_ticks: 0,
+        ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
         stashed_input: String::new(),
@@ -1566,7 +1664,11 @@ pub async fn run_tui(
             sessions_overview,
             sessions_overview_rev,
             session_detail,
+            token_report,
             open_sessions,
+            host_sessions,
+            host_sessions_rev,
+            open_host,
             oauth_add_signal,
             awaiting_oauth_add,
             session_context,
@@ -1597,7 +1699,19 @@ pub async fn run_tui(
         return Err(err.into());
     }
 
-    Ok(app.input_history)
+    let switch = app.switch_to_target.take();
+    Ok(TuiOutcome {
+        history: app.input_history,
+        switch_to: switch,
+    })
+}
+
+/// What a TUI run produced (ADR-0096): the input history to persist, and —
+/// when the user picked a session in the `/host` panel — the daemon session
+/// to switch to (the caller re-attaches).
+pub struct TuiOutcome {
+    pub history: Vec<neenee_core::HistoryEntry>,
+    pub switch_to: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1616,7 +1730,7 @@ pub async fn start_tui(
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
     startup_picker: bool,
-) -> Result<Vec<neenee_core::HistoryEntry>, Box<dyn Error>> {
+) -> Result<TuiOutcome, Box<dyn Error>> {
     run_tui(
         tx,
         rx,

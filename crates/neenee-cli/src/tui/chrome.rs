@@ -17,8 +17,9 @@ use crate::tui::model::layout::LayoutMap;
 use super::Theme;
 use super::components::keycap::{keycap_span, keycap_style};
 use super::design::{
-    BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_SEGMENT_GAP,
-    JOIN_ENUMERATE_COLS, JOIN_MODIFY, STATUS_BAR_GAP_MIN, STATUS_BAR_INNER_PADDING,
+    BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_MODEL_GAP,
+    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS, JOIN_MODIFY, STATUS_BAR_GAP_MIN,
+    STATUS_BAR_INNER_PADDING,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
@@ -652,6 +653,13 @@ pub fn draw_completion_menu(
 /// not here.
 pub struct HintBarView<'a> {
     pub current_model: &'a str,
+    /// Display name of the provider instance serving the active model (the
+    /// user-given instance name, e.g. `"kimi-code"`). Rendered as a muted
+    /// `@<instance>` suffix right after the model name so identical models
+    /// served by different instances stay distinguishable — mirroring the
+    /// `· <provider>` suffix the flat Models picker shows on each row.
+    /// `None` (or empty) when no instance is known (pre-snapshot startup).
+    pub provider_name: Option<&'a str>,
     #[allow(dead_code)]
     pub messages: &'a [TranscriptMessage],
     /// Effective reasoning effort of the active model, shown as a `◆ {effort}`
@@ -744,6 +752,7 @@ pub fn draw_hint_bar(
 ) -> Option<Rect> {
     let HintBarView {
         current_model,
+        provider_name,
         messages: _,
         reasoning_effort,
         shell_active,
@@ -770,8 +779,9 @@ pub fn draw_hint_bar(
     let inner = HINT_BAR_INNER_PADDING;
 
     // Build right-side segments independently. Model identity is the last
-    // ambient item to drop; reasoning effort drops first, then context usage.
-    // The input action always wins when the row cannot hold both clusters.
+    // ambient item to drop; reasoning effort drops first, then the instance
+    // suffix, then context usage. The input action always wins when the row
+    // cannot hold both clusters.
     let model_label = crate::tui::providers::model_display_name(current_model);
     let model_width = model_label.width();
     let model_spans = vec![Span::styled(
@@ -782,28 +792,36 @@ pub fn draw_hint_bar(
             .bg(bg),
     )];
 
-    // Reasoning-effort tag: `◆ high`. Optional — only present when the active
-    // model is actually reasoning (caller-resolved and protocol-gated). Sits
-    // right after the model name so it reads as an attribute of the model —
-    // "Claude Opus 4.8  ◆ high  12k (1%)" — mirroring the `◆` glyph the
-    // `/models` picker uses for reasoning models. The context meter stays
-    // the last segment of the cluster, so the click-target rect math below is
-    // unaffected.
+    // Instance suffix: ` @kimi-code` — muted so it reads as provenance, not
+    // identity. Empty names render as nothing.
+    let instance_label = provider_name
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("@{name}"));
+    let mut instance_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(label) = &instance_label {
+        instance_spans.push(Span::styled(
+            label.clone(),
+            Style::default().fg(theme.muted()).bg(bg),
+        ));
+    }
+    let instance_width = instance_spans
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+
+    // Reasoning-effort tag: `{effort}` (e.g. `max`). Optional — only present
+    // when the active model is actually reasoning (caller-resolved and
+    // protocol-gated). Sits right after the model name so it reads as an
+    // attribute of the model — "Kimi K3 max @kimi-code  12k (1%)".
     let mut reasoning_spans: Vec<Span<'static>> = Vec::new();
     if let Some(effort) = reasoning_effort {
-        // `◆ {effort}` — the diamond marks a reasoning model, mirroring the
-        // glyph the `/models` picker uses.
-        reasoning_spans.extend([
-            Span::styled("◆", Style::default().fg(theme.info()).bg(bg)),
-            Span::styled(" ", Style::default().bg(bg)),
-            Span::styled(
-                effort.to_string(),
-                Style::default()
-                    .fg(theme.info())
-                    .add_modifier(Modifier::BOLD)
-                    .bg(bg),
-            ),
-        ]);
+        reasoning_spans.push(Span::styled(
+            effort.to_string(),
+            Style::default()
+                .fg(theme.info())
+                .add_modifier(Modifier::BOLD)
+                .bg(bg),
+        ));
     }
     let reasoning_width = reasoning_spans
         .iter()
@@ -829,35 +847,51 @@ pub fn draw_hint_bar(
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
+    let mut show_instance = instance_width > 0;
     let mut show_context = context_seg_width > 0;
-    let right_width_for = |model: bool, reasoning: bool, context: bool| {
-        let segment_count = usize::from(model) + usize::from(reasoning) + usize::from(context);
-        usize::from(model) * model_width
+    #[allow(clippy::too_many_arguments)]
+    let right_width_for = |model: bool, reasoning: bool, instance: bool, context: bool| {
+        // The model name, its reasoning effort, and the provider instance
+        // form one identity group (`Kimi K3 high @111xianyu`) joined by the
+        // tighter model gap; only the context segment sits across the wider
+        // segment gap.
+        let identity_count =
+            usize::from(model) + usize::from(reasoning) + usize::from(instance);
+        let identity_width = usize::from(model) * model_width
             + usize::from(reasoning) * reasoning_width
-            + usize::from(context) * context_seg_width
-            + segment_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
+            + usize::from(instance) * instance_width
+            + identity_count.saturating_sub(1) * HINT_BAR_MODEL_GAP;
+        let context_width = usize::from(context) * context_seg_width;
+        let group_gap = usize::from(identity_count > 0 && context) * HINT_BAR_SEGMENT_GAP;
+        identity_width + context_width + group_gap
     };
     let fits = |left_width: usize, right_width: usize| {
         inner + left_width + if right_width > 0 { HINT_BAR_GAP_MIN } else { 0 } + right_width
             <= full_w
     };
 
-    let mut right_width = right_width_for(show_model, show_reasoning, show_context);
+    let mut right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
         zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
-    // Drop order under width pressure: reasoning first, then context, then the
-    // model name. The action on the left always wins last. (Session-state flags
-    // such as `autopilot` are not on this row — they live on the status bar.)
+    // Drop order under width pressure: the instance suffix first (pure
+    // provenance — nice-to-have), then reasoning, then context, then the
+    // model name. The action on the left always wins last. (Session-state
+    // flags such as `autopilot` are not on this row — they live on the
+    // status bar.)
+    if !fits(zone_pill_width, right_width) && show_instance {
+        show_instance = false;
+        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+    }
     if !fits(zone_pill_width, right_width) && show_reasoning {
         show_reasoning = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     }
     if !fits(zone_pill_width, right_width) && show_context {
         show_context = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
@@ -866,23 +900,36 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) && show_model {
         show_model = false;
-        right_width = right_width_for(show_model, show_reasoning, show_context);
+        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     }
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
-    let separator = || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
+    let identity_separator =
+        || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
+    let group_separator =
+        || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
+    // Identity group: `model effort @instance` — single-space joins.
+    let mut identity_started = false;
     for segment in [
         show_model.then_some(model_spans),
         show_reasoning.then_some(reasoning_spans),
-        show_context.then_some(context_spans),
+        show_instance.then_some(instance_spans),
     ]
     .into_iter()
     .flatten()
     {
-        if !right_spans.is_empty() {
-            right_spans.push(separator());
+        if identity_started {
+            right_spans.push(identity_separator());
         }
+        identity_started = true;
         right_spans.extend(segment);
+    }
+    // Context usage sits across the wider segment gap.
+    if show_context {
+        if !right_spans.is_empty() {
+            right_spans.push(group_separator());
+        }
+        right_spans.extend(context_spans);
     }
 
     let left_used = inner + zone_pill_width;
@@ -1854,6 +1901,7 @@ mod tests {
                 Rect::new(0, 2, 80, 1),
                 HintBarView {
                     current_model: "mock-model",
+                    provider_name: Some("mock-instance"),
                     messages: &messages,
                     reasoning_effort: None,
                     shell_active: false,
@@ -1872,6 +1920,7 @@ mod tests {
             terminal.draw(|f| {
                 let view = HintBarView {
                     current_model: "",
+                    provider_name: None,
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
                     shell_active,
@@ -1908,6 +1957,7 @@ mod tests {
                 Rect::new(0, 0, 80, 1),
                 HintBarView {
                     current_model: "",
+                    provider_name: None,
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
                     shell_active: false,
@@ -1949,6 +1999,7 @@ mod tests {
                 Rect::new(0, 0, 120, 1),
                 HintBarView {
                     current_model: "mock",
+                    provider_name: None,
                     messages: &[],
                     reasoning_effort: None,
                     shell_active: false,
@@ -1978,6 +2029,7 @@ mod tests {
                 Rect::new(0, 0, 36, 1),
                 HintBarView {
                     current_model: "mock",
+                    provider_name: None,
                     messages: &[],
                     reasoning_effort: Some("high"),
                     shell_active: false,
@@ -2003,8 +2055,9 @@ mod tests {
     #[test]
     fn hint_bar_reasoning_tag_shows_effort_when_set() {
         // Render the full hint row for three effort states and read back the
-        // whole line: the `◆ {effort}` tag must appear right after the model
-        // name when reasoning is in use and be absent entirely otherwise.
+        // whole line: the bare `{effort}` tag must appear right after the
+        // model name when reasoning is in use and be absent entirely
+        // otherwise.
         fn row_text(effort: Option<&str>) -> String {
             let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
             terminal.draw(|f| {
@@ -2013,6 +2066,7 @@ mod tests {
                     Rect::new(0, 0, 80, 1),
                     HintBarView {
                         current_model: "mock",
+                        provider_name: None,
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: effort,
                         shell_active: false,
@@ -2030,13 +2084,101 @@ mod tests {
                 .to_string()
         }
 
-        // No reasoning → no diamond glyph anywhere on the row.
-        assert!(!row_text(None).contains('◆'));
-        // Reasoning on → `◆ high` appears after the model name.
+        // No reasoning → no effort word anywhere on the row.
+        let off = row_text(None);
+        assert!(!off.contains("high"), "effort leaked in: {off:?}");
+        assert!(!off.contains('◆'), "no diamond glyph in: {off:?}");
+        // Reasoning on → bare `high` appears after the model name.
         let on = row_text(Some("high"));
-        assert!(on.contains("◆ high"), "missing ◆ high tag in: {on:?}");
+        assert!(on.contains("high"), "missing effort tag in: {on:?}");
+        let model_pos = on.find("mock").expect("model name on the row");
+        let effort_pos = on.find("high").expect("effort tag");
+        assert!(model_pos < effort_pos, "effort must follow the model name");
         // A different effort level renders its own value, not a hardcoded one.
-        assert!(row_text(Some("max")).contains("◆ max"));
+        assert!(row_text(Some("max")).contains("max"));
+    }
+
+    #[test]
+    fn hint_bar_shows_the_instance_suffix_after_the_model_name() {
+        // The `@<instance>` suffix must trail the model name so identical
+        // models served by different instances stay attributable — and must
+        // vanish entirely when no instance is known.
+        fn row_text(provider_name: Option<&str>) -> String {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+            terminal.draw(|f| {
+                draw_hint_bar(
+                    f,
+                    Rect::new(0, 0, 80, 1),
+                    HintBarView {
+                        current_model: "mock",
+                        provider_name,
+                        messages: &Vec::<TranscriptMessage>::new(),
+                        reasoning_effort: None,
+                        shell_active: false,
+                        busy: false,
+                        context_tokens: None,
+                    },
+                    &Theme::default(),
+                );
+            });
+            let buf = terminal.buffer();
+            (0..buf.area().width as usize)
+                .map(|x| buf.content[x].symbol().to_string())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        }
+
+        let named = row_text(Some("kimi-code"));
+        assert!(named.contains("@kimi-code"), "missing @instance in: {named:?}");
+        // The suffix is the last cluster segment before the context meter:
+        // `Model effort @instance`.
+        let model_pos = named.find("mock").expect("model name on the row");
+        let inst_pos = named.find("@kimi-code").expect("instance suffix");
+        assert!(model_pos < inst_pos, "instance must follow the model name");
+        // Unknown / empty instance → no `@` anywhere on the row.
+        assert!(!row_text(None).contains('@'));
+        assert!(!row_text(Some("")).contains('@'));
+    }
+
+    #[test]
+    fn hint_bar_full_cluster_orders_model_effort_instance() {
+        // The right cluster reads `Kimi K3 max @kimi-code  89.2k (8%)` —
+        // effort tight after the model name, the @instance provenance last.
+        // The identity group (`model effort @instance`) joins with single
+        // spaces; only the context segment sits across the wider gap.
+        let mut terminal = neenee_tui_engine::TestTerminal::new(120, 1);
+        terminal.draw(|f| {
+            draw_hint_bar(
+                f,
+                Rect::new(0, 0, 120, 1),
+                HintBarView {
+                    current_model: "mock",
+                    provider_name: Some("kimi-code"),
+                    messages: &Vec::<TranscriptMessage>::new(),
+                    reasoning_effort: Some("max"),
+                    shell_active: false,
+                    busy: false,
+                    context_tokens: None,
+                },
+                &Theme::default(),
+            );
+        });
+        let buf = terminal.buffer();
+        let text = (0..buf.area().width as usize)
+            .map(|x| buf.content[x].symbol().to_string())
+            .collect::<String>();
+        let model_pos = text.find("mock").expect("model name");
+        let effort_pos = text.find("max").expect("effort");
+        let inst_pos = text.find("@kimi-code").expect("instance suffix");
+        assert!(
+            model_pos < effort_pos && effort_pos < inst_pos,
+            "expected `model effort @instance` order in: {text:?}"
+        );
+        assert!(
+            text.contains("mock max @kimi-code"),
+            "identity group should join with single spaces in: {text:?}"
+        );
     }
 
     /// Paint the completion menu into a test buffer and return the rect the

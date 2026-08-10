@@ -72,6 +72,11 @@ pub enum Modal {
     CustomProvider,
     Help,
     Sessions,
+    /// Daemon control panel (`/host`, ADR-0096): a live view over every
+    /// session the unified daemon hosts, with per-row status and a preview of
+    /// the selected row. Enter switches to a hosted session. Data comes from
+    /// the monitor stream the TUI maintains client-side.
+    Host,
     /// Tools manager modal: a centered, dismissable, selectable list of every
     /// session tool — builtins, `mcp:<server>`, `pursuit`, `plan` — each with a
     /// `Space` toggle to enable/disable it. Opened with the `/tools` slash
@@ -217,6 +222,7 @@ impl Modal {
                 | Modal::Mcp
                 | Modal::Skills
                 | Modal::Sessions
+                | Modal::Host
                 | Modal::Permissions
                 | Modal::Config
                 | Modal::ConfigTheme

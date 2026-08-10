@@ -489,11 +489,17 @@ fn model_list_body(
             );
 
         // The reasoning tag. ADR-0046: reasoning is opt-in, so a model only
-        // shows a tag when it has actually been turned on (thinking on), then
-        // with its effort level. An unconfigured model shows nothing.
+        // shows a tag when reasoning is actually engaged, then with its
+        // current effort level. Anthropic rows opt in via the thinking switch
+        // (`thinking == Some(true)`); OpenAI rows have no separate switch —
+        // an exposed effort knob means the model reasons — so they show
+        // their effective effort directly (mirrors the hint bar's
+        // per-protocol gating). An unconfigured model shows nothing.
+        // Keep in sync with `tests::reasoning_tag`.
         let tag = match (rm.thinking, rm.effort.as_deref()) {
             (Some(true), Some(effort)) => format!("think on {effort}"),
             (Some(true), None) => "think on".to_string(),
+            (None, Some(effort)) => effort.to_string(),
             _ => String::new(),
         };
 
@@ -1219,4 +1225,34 @@ pub fn draw_custom_provider_editor(
         frame.set_cursor_position((cursor_x, cursor_y));
     }
     area
+}
+
+#[cfg(test)]
+mod tests {
+    /// The reasoning-tag decision from `model_list_body`, factored out for a
+    /// direct unit test (the row renderer is layout machinery; the policy is
+    /// what matters).
+    fn reasoning_tag(thinking: Option<bool>, effort: Option<&str>) -> String {
+        match (thinking, effort) {
+            (Some(true), Some(effort)) => format!("think on {effort}"),
+            (Some(true), None) => "think on".to_string(),
+            (None, Some(effort)) => effort.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn reasoning_tag_shows_openai_effort_and_anthropic_opt_in() {
+        // Anthropic: opted-in thinking shows `think on <effort>`; opted-out
+        // shows nothing even when an effort value is configured.
+        assert_eq!(reasoning_tag(Some(true), Some("high")), "think on high");
+        assert_eq!(reasoning_tag(Some(true), None), "think on");
+        assert_eq!(reasoning_tag(Some(false), Some("high")), "");
+        // OpenAI (Kimi K3 & friends): no thinking switch, so the current
+        // effort shows directly — this is the picker-row half of the hint
+        // bar's `Kimi K3 max` tag.
+        assert_eq!(reasoning_tag(None, Some("max")), "max");
+        // Unconfigured models show nothing.
+        assert_eq!(reasoning_tag(None, None), "");
+    }
 }

@@ -192,10 +192,17 @@ pub struct App {
     /// `None` when the hint bar or context meter is not shown.
     pub hint_context_rect: Option<neenee_tui_engine::Rect>,
     /// Shared token-source ledger (reported vs. estimated token accounting),
-    /// read by the TokenReport modal. `None` in attach mode (the accounting
-    /// lives server-side; the modal open is gated on this) and in tests that
-    /// don't surface it.
+    /// read by the TokenReport modal. `Some` in the standalone path (the
+    /// in-process harness shares this ledger); `None` in attach mode, where
+    /// the accounting lives daemon-side and the modal renders the on-demand
+    /// [`Self::token_report`] snapshot instead.
     pub token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
+    /// Token-source report fetched on demand from the harness for the viewed
+    /// session. Populated by a `QueryTokenUsage` round-trip when the
+    /// TokenReport modal opens in attach mode (`token_ledger` is `None`);
+    /// `None` while the round-trip is in flight (the modal renders a loading
+    /// placeholder). Cleared when the viewed session switches.
+    pub token_report: Option<neenee_core::TokenSourceReport>,
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<neenee_core::ContextTokenSnapshot>,
@@ -459,6 +466,15 @@ pub struct App {
     pub question_modal_follow: bool,
     /// Rows shown in the sessions picker (`/sessions` or `neenee resume`).
     pub sessions_overview: Vec<SessionOverview>,
+    /// Live monitor snapshot for the `/host` daemon control panel
+    /// (ADR-0096), mirrored from `UiRuntime::host_sessions` each frame.
+    pub host_sessions: Vec<neenee_core::MonitoredSession>,
+    /// Scroll slot + selection-follow for the `/host` panel body.
+    pub host_scroll: usize,
+    pub host_modal_follow: bool,
+    /// `/host` Enter on a hosted session: the id to switch to, read by the
+    /// caller after the TUI exits to re-attach (ADR-0096).
+    pub switch_to_target: Option<String>,
     /// `true` only when the TUI was launched via `neenee resume` (no id): the
     /// sessions picker opened at startup *instead of* loading any session. In
     /// that mode the picker is not a transient overlay — there is no real
@@ -616,8 +632,11 @@ pub struct App {
     pub notice_toast_until: Option<std::time::Instant>,
     pub notice_toast_message: String,
     pub notice_toast_severity: NoticeSeverity,
-    /// Ticks remaining in which a second Ctrl+C quits.
-    pub ctrl_c_armed_ticks: u8,
+    /// Deadline until which a second Ctrl+C quits. Wall-clock based (like
+    /// the copy/notice toasts) so the quit window is a real duration —
+    /// previously this was a per-tick counter, which stretched the intended
+    /// ~2s window to ~20s whenever the loop idled at its 1s heartbeat.
+    pub ctrl_c_armed_until: Option<std::time::Instant>,
     /// Ticks remaining in which a second Esc interrupts the running task.
     pub esc_armed_ticks: u8,
     /// Epoch the breathing indicator is timed against. The spinner phase is
@@ -773,6 +792,35 @@ pub struct App {
 }
 
 impl App {
+    /// The token-source report for one session, from whichever source this
+    /// frontend has: the shared in-process ledger (standalone path) or the
+    /// on-demand harness snapshot (attach path). `None` in attach mode while
+    /// the `QueryTokenUsage` round-trip is still in flight.
+    pub fn token_source_report(
+        &self,
+        session_id: &str,
+    ) -> Option<neenee_core::TokenSourceReport> {
+        if let Some(ledger) = &self.token_ledger {
+            Some(ledger.snapshot_for_session(session_id))
+        } else {
+            self.token_report.clone()
+        }
+    }
+
+    /// Whether the Ctrl+C quit window is currently armed (a second Ctrl+C
+    /// before the deadline quits). Wall-clock based; an elapsed deadline
+    /// reads as disarmed.
+    pub fn ctrl_c_armed(&self) -> bool {
+        self.ctrl_c_armed_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    /// Arm the Ctrl+C quit window until the given deadline, or disarm it
+    /// entirely when called with `None`.
+    pub fn arm_ctrl_c(&mut self, until: Option<std::time::Instant>) {
+        self.ctrl_c_armed_until = until;
+    }
+
     pub fn byte_cursor(&self) -> usize {
         self.input
             .char_indices()
@@ -922,6 +970,7 @@ impl App {
                 &mut self.session_scroll,
                 Some(&mut self.session_modal_follow),
             )),
+            Modal::Host => Some((&mut self.host_scroll, Some(&mut self.host_modal_follow))),
             Modal::Queue => Some((&mut self.queue_scroll, Some(&mut self.queue_modal_follow))),
             Modal::HistorySearch => Some((
                 &mut self.history_scroll,

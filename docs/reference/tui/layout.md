@@ -77,7 +77,7 @@ hint, and status bars are persistent (when chrome is visible):
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
 | Queue bar | `QUEUE_BAR_ROWS = 2` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · key legend (`F3` block/resume, `F2` expand, row 1) and a one-line preview of the next item to pop (row 2). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
-| Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/reasoning/context cluster (right). |
+| Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/`@instance`/reasoning/context cluster (right). |
 | Status bar | `STATUS_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries ambient session state: the `autopilot` flag (left) and the tilde-shortened workspace path (right). See [Status bar](status-bar.md). |
 
 ```text
@@ -86,7 +86,7 @@ hint, and status bars are persistent (when chrome is visible):
 │ QUEUE 1    {next item preview…}         F3 block  F2 expand │  ← queue bar (2 rows)
 │ ● making edits (23s · Esc Esc to interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
-│ Enter send             Kimi K2.7 Code  ◆ high  89.2k (8%)   │  ← hint bar
+│ Enter send         Kimi K3 max @kimi-code  89.2k (8%)       │  ← hint bar
 │ autopilot                                     ~/projects/xx │  ← status bar
 └─────────────────────────────────────────────────────────────┘
 ```

@@ -48,12 +48,18 @@ pub fn token_report_round_count(report: &TokenSourceReport) -> usize {
 /// Draw the round list or, when `detail` is set, the turn breakdown for the
 /// selected round. `scroll` drives the visible body and is clamped by the shared
 /// modal renderer. Returns the painted panel rectangle.
+///
+/// `loading` marks the attach-mode round-trip: the frontend dispatched
+/// `QueryTokenUsage` and is waiting for the daemon's report. The body then
+/// shows a loading placeholder instead of the empty-ledger copy, so a
+/// not-yet-arrived report never reads as "no usage recorded".
 pub fn draw_token_report_modal(
     frame: &mut Frame,
     report: &TokenSourceReport,
     context: ContextUsageView,
     selected: usize,
     detail: bool,
+    loading: bool,
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
@@ -82,7 +88,16 @@ pub fn draw_token_report_modal(
         Vec<Line>,
         Vec<FooterHint>,
         Option<usize>,
-    ) = if drill {
+    ) = if loading && !drill {
+        (
+            vec![HeaderPart::title("Context Usage")],
+            vec![
+                placeholder("Loading token usage from the daemon…", true, theme.muted()),
+            ],
+            vec![FooterHint::always(keyvocab::ESC, "close")],
+            None,
+        )
+    } else if drill {
         // The drill-in sub-page keeps the same modal but switches its header
         // to a breadcrumb ("Context Usage › 1st round") so the user sees
         // where they are in the hierarchy.
@@ -789,6 +804,12 @@ impl TurnUsage {
 fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     let mut rounds = BTreeMap::<u64, RoundUsage>::new();
     for row in &report.rows {
+        // Legacy `record*` bookings (turns) and lifecycle request records can
+        // coexist on one provider/model row: the snapshot merges both sources
+        // and appends each terminal request's `as_turn()` to `turns`, so when
+        // `requests` is non-empty those same bookings also appear in `turns`.
+        // Counting the legacy turns as well would double-book them, so the
+        // legacy fallback only applies to rows with no lifecycle records.
         if row.requests.is_empty() {
             for turn in &row.turns {
                 rounds
@@ -808,7 +829,11 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
             }
         }
     }
-    rounds.into_values().collect()
+    // Newest round first: the most recent user exchange is what the user
+    // wants to see on top, mirroring the newest-first turn table inside a
+    // round. With index 0 as the initial selection this also means the modal
+    // opens on the latest round.
+    rounds.into_values().rev().collect()
 }
 
 /// One per-attempt row in the flattened detail table: the record plus its turn
@@ -1083,9 +1108,10 @@ mod tests {
         assert_eq!(token_report_round_count(&report), 2);
         let (list_body_lines, follow) = list_body(&report, None, 0, None, 0, 80, &theme);
         let list = body_text(&list_body_lines);
-        // List rows use bare ordinals ("2nd", "3rd"); the round context is
+        // List rows use bare ordinals ("3rd", "2nd"); the round context is
         // carried by the table header, and there is no longer a "Usage by
         // round" sub-heading (it was redundant with the modal title).
+        // The list shows both rounds, newest (3rd) on top.
         assert!(list.contains("2nd"));
         assert!(list.contains("3rd"));
         assert!(!list.contains("Usage by round"));
@@ -1103,18 +1129,29 @@ mod tests {
         assert!(!list.contains('›'));
         assert!(list.contains("State"));
         assert!(list.contains("done"));
-        // `selected == 0` selects the first round row; the follow index must
-        // point at that row (the one carrying "2nd") for auto-scroll.
+        // Rounds are newest-first: the latest (3rd) round is row 0, so the
+        // modal opens on the most recent user exchange.
+        let pos_3rd = list.find("3rd").expect("3rd round label");
+        let pos_2nd = list.find("2nd").expect("2nd round label");
+        assert!(
+            pos_3rd < pos_2nd,
+            "rounds must be newest-first (3rd before 2nd): got 3rd@{pos_3rd} vs 2nd@{pos_2nd}"
+        );
+        // `selected == 0` selects the first (newest) round row; the follow
+        // index must point at that row (the one carrying "3rd") for
+        // auto-scroll.
         let follow_idx = follow.expect("a follow index for the selected row");
         assert!(
             list_body_lines[follow_idx]
                 .spans
                 .iter()
-                .any(|span| span.content.contains("2nd")),
+                .any(|span| span.content.contains("3rd")),
             "follow index {follow_idx} does not point at the selected round row"
         );
 
-        let detail = detail_body(&report, 0, 80, &theme);
+        // Drill into round 2 — index 1 now that rounds are newest-first
+        // (3rd at index 0).
+        let detail = detail_body(&report, 1, 80, &theme);
         let detail_text = body_text(&detail);
         // The table is flattened: one row per attempt, principal-only. Turn 1
         // was retried (attempt 1 interrupted, attempt 2 completed). A turn's
@@ -1241,8 +1278,8 @@ mod tests {
         let body_width = 80usize;
         let (body, _follow) = list_body(&report, None, 0, None, 0, body_width, &theme);
 
-        // Header row carries "Tokens"; data rows carry a bare ordinal ("2nd",
-        // "3rd") plus a token value.
+        // Header row carries "Tokens"; data rows carry a bare ordinal ("3rd",
+        // "2nd") plus a token value.
         let header = body
             .iter()
             .find(|line| {
@@ -1415,5 +1452,62 @@ mod tests {
         let pos_2nd = detail_text.find("2nd").expect("2nd turn");
         let pos_1st = detail_text.find("1st").expect("1st turn");
         assert!(pos_2nd < pos_1st, "principal turns newest-first");
+    }
+
+    /// A row that mixes legacy `record*` bookings (turns) with lifecycle
+    /// request records must not double-count: the snapshot already appends
+    /// each terminal request's `as_turn()` to `turns`, so the legacy fallback
+    /// only applies to rows with no lifecycle records at all.
+    #[test]
+    fn mixed_legacy_and_request_rows_do_not_double_count() {
+        let ledger = neenee_core::TokenSourceLedger::new();
+        // Legacy booking on the same provider/model row: 100 tokens.
+        ledger.record_turn(
+            "relay",
+            "model-a",
+            neenee_core::TokenTurn {
+                round: 1,
+                turn: 1,
+                reported: true,
+                prompt_tokens: 70,
+                completion_tokens: 30,
+                total_tokens: 100,
+                ..Default::default()
+            },
+        );
+        // Lifecycle booking on the same row: 200 tokens.
+        let req = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
+        ledger.settle_request(
+            &req,
+            RequestUsageStatus::Completed,
+            Some(neenee_core::TokenUsage {
+                prompt_tokens: 150,
+                completion_tokens: 50,
+                total_tokens: 200,
+                ..Default::default()
+            }),
+            0,
+        );
+        let report = ledger.snapshot_for_session("session");
+        // Sanity: the row really is mixed (both sources populated).
+        let row = report
+            .rows
+            .iter()
+            .find(|r| r.provider == "relay" && r.model == "model-a")
+            .expect("mixed row");
+        assert!(!row.turns.is_empty() && !row.requests.is_empty());
+
+        let rounds = usage_rounds(&report);
+        // Round 2 must hold only the request's 200 tokens, not 200 + the
+        // as_turn() copy of it that also landed in `turns`.
+        let round2 = rounds
+            .iter()
+            .find(|r| r.number == 2)
+            .expect("round 2 usage");
+        assert_eq!(
+            round2.totals.total(),
+            200,
+            "lifecycle round must not double-count its legacy turn copy"
+        );
     }
 }
