@@ -72,10 +72,13 @@ pub enum Modal {
     CustomProvider,
     Help,
     Sessions,
-    /// Daemon control panel (`/host`, ADR-0096): a live view over every
-    /// session the unified daemon hosts, with per-row status and a preview of
-    /// the selected row. Enter switches to a hosted session. Data comes from
-    /// the monitor stream the TUI maintains client-side.
+    /// Session dashboard (`/host`, ADR-0096): a first-class, full-screen
+    /// control view over every session the unified daemon hosts. Unlike the
+    /// transient centered modals, it takes over the whole viewport — header,
+    /// live session list, detail pane, footer command strip — so it reads as a
+    /// primary screen, not an overlay. Enter attaches to a hosted session;
+    /// `i` / `p` / `n` issue control-plane verbs. Data comes from the monitor
+    /// stream the TUI maintains client-side.
     Host,
     /// Tools manager modal: a centered, dismissable, selectable list of every
     /// session tool — builtins, `mcp:<server>`, `pursuit`, `plan` — each with a
@@ -191,8 +194,11 @@ impl Modal {
             Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => {
                 Recess::None
             }
-            // Context switch: the one modal that fully owns the screen.
-            Modal::Sessions => Recess::Takeover,
+            // Context switch: the two surfaces that fully own the screen.
+            // Sessions is a context-switch picker; Host is the session
+            // dashboard — a primary, first-class view, so it occludes the
+            // conversation surface rather than floating on it.
+            Modal::Sessions | Modal::Host => Recess::Takeover,
             // Everything else recedes the surface for focus while keeping it
             // visible (transcript, chrome, and all).
             _ => Recess::Dim,
@@ -222,7 +228,6 @@ impl Modal {
                 | Modal::Mcp
                 | Modal::Skills
                 | Modal::Sessions
-                | Modal::Host
                 | Modal::Permissions
                 | Modal::Config
                 | Modal::ConfigTheme

@@ -255,6 +255,91 @@ where
     })
 }
 
+/// Issue one control-plane verb (ADR-0096) to the daemon and await its reply:
+/// create, prompt, interrupt, answer a permission, or kill — without attaching
+/// as a session client. The dashboard's session-management keys (`i` interrupt,
+/// `p` prompt, `n` new session) go through here. Prefers the Unix socket, falls
+/// back to TCP, exactly like [`connect`].
+pub async fn control(
+    info: &ServeInfo,
+    request: neenee_transport::serve::ControlRequest,
+) -> Result<(), String> {
+    use neenee_transport::serve::AttachAction;
+    let action = AttachAction::Control(request);
+
+    #[cfg(unix)]
+    if let Some(uds) = &info.uds_path
+        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    {
+        let req = "ws://localhost/"
+            .into_client_request()
+            .map_err(|e| format!("bad uds ws request: {e}"))?;
+        let (ws, _) = tokio_tungstenite::client_async(req, stream)
+            .await
+            .map_err(|e| format!("ws handshake over uds: {e}"))?;
+        return finish_control(ws.split(), action).await;
+    }
+    let url = format!("ws://127.0.0.1:{}/", info.port);
+    let mut req = url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| format!("bad ws url {url}: {e}"))?;
+    if let Some(token) = &info.token {
+        let value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|e| format!("bad bearer token: {e}"))?;
+        req.headers_mut().insert("Authorization", value);
+    }
+    let (ws, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .map_err(|e| format!("ws connect to {url}: {e}"))?;
+    finish_control(ws.split(), action).await
+}
+
+/// The stream-generic control handshake: send the `Select{Control}` frame and
+/// await the single `ControlReply`. One verb per connection.
+async fn finish_control<S>(
+    parts: (
+        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    ),
+    action: AttachAction,
+) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut ws_sink, mut ws_source) = parts;
+    let select = serde_json::to_string(&Wire::Select { action })
+        .map_err(|e| format!("serialize control select: {e}"))?;
+    ws_sink
+        .send(WsMessage::Text(select.into()))
+        .await
+        .map_err(|e| format!("ws send control select: {e}"))?;
+
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        loop {
+            match ws_source.next().await {
+                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
+                    Ok(Wire::ControlReply { ok, error, .. }) => {
+                        return if ok {
+                            Ok(())
+                        } else {
+                            Err(error.unwrap_or_else(|| "control verb rejected".to_string()))
+                        };
+                    }
+                    Ok(Wire::Error { message }) => return Err(message),
+                    Ok(_) => tracing::warn!("control: unexpected frame during handshake, ignored"),
+                    Err(error) => tracing::warn!(%error, "control: bad frame during handshake"),
+                },
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return Err(format!("ws recv during control: {error}")),
+                None => return Err("server closed the control connection".to_string()),
+            }
+        }
+    })
+    .await
+    .map_err(|_| "timed out waiting for control reply from daemon".to_string())?
+}
+
 struct Welcome {
     session_id: String,
     round_counter: u64,

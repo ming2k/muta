@@ -90,8 +90,8 @@ pub fn draw_history_panel(
     let row_count = ranked.len().max(1) as u16;
     let desired_rows = row_count.min(HISTORY_PANEL_MAX_ROWS);
     // +1 header (title), +1 footer (origin strip + key hints), +2 composer
-    // chrome (the half-block `▄`/`▀` top/bottom transition rows the panel
-    // shares with the composer below it).
+    // chrome (the full panel-bg top/bottom padding rows the panel shares with
+    // the composer below it).
     const CHROME_ROWS: u16 = 4;
     let desired_h = desired_rows.saturating_add(CHROME_ROWS);
     let panel_h = desired_h.min(room_above);
@@ -103,38 +103,22 @@ pub fn draw_history_panel(
     // of the activity bar's rows. Its footprint is [area_top - panel_h, area_top).
     let panel_y = area_top.saturating_sub(panel_h);
     let area = Rect::new(input_rect.x, panel_y, input_rect.width, panel_h);
-    let full_w = area.width as usize;
 
     // The panel shares the composer's surface language so the dropdown reads as
     // an extension of the input box rather than a separate floating window: a
-    // solid `panel()` fill bracketed by half-block `▄` (top) / `▀` (bottom)
-    // transition rows, so it floats a half row off the app background exactly
-    // like the composer does. No left accent bar — the composer has none, and a
-    // full-height brand column would read as selection/severity, which a
-    // history list is not.
+    // solid `panel()` fill with full panel-bg padding rows on the top and
+    // bottom edges, so it breathes exactly like the composer does. No left
+    // accent bar — the composer has none, and a full-height brand column would
+    // read as selection/severity, which a history list is not. The edges are
+    // painted by the same panel fill (no half-block `▄`/`▀` glyphs), so the
+    // transition is identical across terminals.
     let panel_bg = theme.panel();
-    let app_bg = theme.surface();
     let inner_w = area.width;
     frame.render_widget(RtClear, area);
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(panel_bg)),
         area,
     );
-
-    // Top transition row (▄) then bottom transition row (▀): painted as
-    // single-row Paragraphs so they overlay the panel fill on the edge rows.
-    let top_edge = Line::from(Span::styled(
-        "▄".repeat(full_w),
-        Style::default().fg(panel_bg).bg(app_bg),
-    ));
-    let bottom_edge = Line::from(Span::styled(
-        "▀".repeat(full_w),
-        Style::default().fg(panel_bg).bg(app_bg),
-    ));
-    let top_row = Rect::new(area.x, area.y, inner_w, 1);
-    let bottom_row = Rect::new(area.x, area.y + area.height.saturating_sub(1), inner_w, 1);
-    frame.render_widget(Paragraph::new(top_edge), top_row);
-    frame.render_widget(Paragraph::new(bottom_edge), bottom_row);
 
     // Header row: title + live query echo + counts. Sits just inside the top
     // transition row, full width (no left-accent column to inset around).

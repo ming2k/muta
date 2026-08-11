@@ -59,17 +59,17 @@ The default. A two-chunk vertical split inside `draw_transcript`:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-There is **no top header**. The model name and context-usage indicator that
-a header would carry live in the [hint bar](hint-line.md) at the bottom, so
-the transcript reclaims the full vertical space above the footer. Ambient
-session state (`autopilot`, workspace path) lives one row further down, on
-the [status bar](status-bar.md).
+The top of every view carries a **head row** — a single-row identity strip.
+On the Main session view it shows `SESSION`, the session-id tail, and the
+workspace path on the left, plus the session mode (`autopilot`) on the right.
+Contextual pages (`/btw`, Envoy, Dashboard) replace it with their own
+contextual header. See [Head row](status-bar.md).
 
 ### Footer stack
 
 The footer's height is the sum of its rows. The activity, todo, and queue
-bars are optional and collapse to 0 when they have nothing to show; the input,
-hint, and status bars are persistent (when chrome is visible):
+bars are optional and collapse to 0 when they have nothing to show; the input
+box and hint bar are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
@@ -78,16 +78,15 @@ hint, and status bars are persistent (when chrome is visible):
 | Queue bar | `QUEUE_BAR_ROWS = 2` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · key legend (`F3` block/resume, `F2` expand, row 1) and a one-line preview of the next item to pop (row 2). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/`@instance`/reasoning/context cluster (right). |
-| Status bar | `STATUS_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries ambient session state: the `autopilot` flag (left) and the tilde-shortened workspace path (right). See [Status bar](status-bar.md). |
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
+│ SESSION b3c4 ~/projects/xx                       autopilot │  ← head row
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
 │ QUEUE 1    {next item preview…}         F3 block  F2 expand │  ← queue bar (2 rows)
 │ ● making edits (23s · Esc Esc to interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
 │ Enter send         Kimi K3 max @kimi-code  89.2k (8%)       │  ← hint bar
-│ autopilot                                     ~/projects/xx │  ← status bar
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,9 +101,9 @@ units — follows the [join ladder](visual-language.md).) The structural counter
 (`round N › turn M · <model>`) deliberately do **not** appear on the bars;
 they live inside the Activity modal (opened by clicking the activity bar),
 along with the per-item todo breakdown. The hint bar carries the next input
-action plus model/context info; the status bar caps the footer with
-session-level state (the `autopilot` flag + the workspace path) so none of
-the bars above it have to. The footer is inset by
+action plus model/context info. Session-level state (workspace, mode flags)
+lives on the head row at the top of the view, so none of the footer bars
+have to carry it. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share
 the same horizontal extent so their left and right edges line up.
 
@@ -145,7 +144,7 @@ not the root conversation.
 | Transcript (children) | `Min(0)` | fills |
 | Envoy bar | `Length(ENVOY_BAR_ROWS = 1)` | 1 |
 
-The activity bar, todo bar, queue bar, input box, hint bar, and status bar
+The activity bar, todo bar, queue bar, input box, and hint bar
 all collapse to 0 — the zoomed view is read-only, with the navigation bar as
 its only chrome.
 See [Envoy view](envoy-view.md) for the focus stack that drives this
@@ -160,7 +159,7 @@ its normal height and darkens the whole live surface in place
 transcript and chrome stay visible for context while the centered panel reads
 as the focal layer. The **Takeover** policy (the sessions picker only) instead
 collapses the entire footer (activity bar, todo bar, queue bar, input box,
-hint bar, status bar) to 0 height and fully occludes the surface. The one
+hint bar) to 0 height and fully occludes the surface. The one
 **None**-recess surface is the [permission sheet](modals.md#permission-sheet),
 which is inline (no dimming, no footer collapse) and replaces only the
 input-box area.
@@ -209,7 +208,7 @@ wraps with `TRANSCRIPT_H_INSET` cells of slack on the right.
 ```
 
 The footer shares the same inset (`FOOTER_H_INSET = TRANSCRIPT_H_INSET`),
-so the activity bar, input box, hint bar, and status bar all line up
+so the activity bar, input box, and hint bar all line up
 with the transcript content above.
 
 ## Transcript viewport behavior
@@ -263,7 +262,8 @@ with the transcript content above.
 | `view.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `HINT_BAR_ROWS`, `STATUS_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
-| `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_status_bar` / `StatusBarView`, `draw_completion_menu` |
+| `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `tui/page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` — the unified head row at the top of every view |
 | `render/composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
 | `disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
 | `app.rs` | `in_envoy_view`, `focus_stack`, `follow_bottom`, scroll clamping |

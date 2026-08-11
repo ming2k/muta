@@ -43,13 +43,13 @@ the shared modal component in
 
 ```text
                 ┌──── centered_rect(px_w, px_h) ────┐
-   app_bg gutter│ ▄▄ modal border (top transition) │app_bg gutter
+   app_bg gutter│ ░░ modal padding (top, full row)  │app_bg gutter
                 │  Header  ·  brand+muted           │
                 │                                   │
                 │  Body  (scrollable, follow=sel.)  │
                 │                                   │
                 │  Footer  ·  muted                 │
-   app_bg gutter│ ▀▀ modal border (bot transition) │app_bg gutter
+   app_bg gutter│ ░░ modal padding (bot, full row)  │app_bg gutter
                 └───────────────────────────────────┘
 ```
 
@@ -257,9 +257,10 @@ the stable tiebreaker.
 
 The dropdown is an **extension of the composer**, not an independent window:
 it floats anchored to the top edge of the input box and grows upward. It shares
-the composer's surface language — a solid panel fill bracketed by half-block
-`▄`/`▀` transition rows, so it reads as continuous with the input box rather
-than a separately-bordered floating window (no left accent bar). Its height
+the composer's surface language — a solid panel fill with full panel-bg padding
+rows on the top and bottom edges, so it reads as continuous with the input box
+rather than a separately-bordered floating window (no left accent bar, no
+half-block glyphs). Its height
 tracks the actual row count (capped at ten entries, beyond which the body
 scrolls) — a short list collapses to just its rows plus the edge and
 header/footer rows, instead of reserving a fixed minimum. The activity bar

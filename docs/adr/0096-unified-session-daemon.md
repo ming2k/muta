@@ -100,13 +100,24 @@ backend is added.
 
 - `neenee serve [--expose [addr]] [--detach]` — the daemon verb.
 - `neenee attach [id]`, `neenee status [--watch/--json/--all]`,
-  `neenee sessions` — clients of the control plane. `status` shows every
-  project; `--project <path>` filters.
+  `neenee dashboard`, `neenee sessions` — clients of the control plane.
+  `status` shows every project; `--project <path>` filters.
 - **`/host` in the TUI** — the in-terminal control panel (ADR-0093's
   deferred follow-up, now enabled): a live view over the daemon's sessions
   with per-row status/preview; Enter attaches to the selected session
   (detach + attach, never killing its round). The `neenee attach` Pick
   prompt (ADR-0089's deferred follow-up) is folded into the same view.
+- **`neenee dashboard`** — that same in-terminal control panel reachable
+  straight from the shell, without first entering a session. The dashboard's
+  monitor stream and its control verbs ride their own daemon connections, so
+  it never depends on the attached session; the client attaches to the
+  most-recently-active hosted session purely as the underlying TUI carrier
+  and raises the dashboard over it. Esc from that opening dashboard quits
+  (there is no conversation the user asked for behind it); Enter on a row
+  attaches as usual. Like `status` it never spawns a daemon — a missing
+  daemon or an empty host is a clean error, not an excuse to spawn one or
+  fabricate a session. (`/host` was the pre-dashboard name for the panel;
+  it survives as a hidden alias.)
 
 ## Alternatives considered
 

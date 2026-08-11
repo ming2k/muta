@@ -928,16 +928,20 @@ mod tests {
             &self,
             _request: neenee_core::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-            if self.requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            if self
+                .requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
                 // First request: ask the envoy to run its `read_text` tool.
-                Ok(Box::pin(stream::iter(vec![
-                    Ok(ProviderStreamEvent::ToolCallDelta {
+                Ok(Box::pin(stream::iter(vec![Ok(
+                    ProviderStreamEvent::ToolCallDelta {
                         index: 0,
                         id: Some("envoy_inner_1".to_string()),
                         name: Some("read_text".to_string()),
                         arguments: "{}".to_string(),
-                    }),
-                ])))
+                    },
+                )])))
             } else {
                 // Second request: tell the test the envoy is mid-flight, then
                 // stall forever. The envoy's streaming loop races its

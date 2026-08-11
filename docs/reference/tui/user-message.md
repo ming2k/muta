@@ -5,9 +5,10 @@ Sent user prompts displayed in the transcript.
 ## Appearance
 
 ```text
-  ╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄     ← top transition
-  ┃ typed message text here          ← text row
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀     ← bottom transition
+  ▌ round 1 · 14:32                       ← header (outside the panel)
+  ┃                                       ← top padding (full panel-bg row)
+  ┃ typed message text here               ← text row
+  ┃                                       ← bottom padding (full panel-bg row)
 ```
 
 | Attribute | Value |
@@ -17,7 +18,7 @@ Sent user prompts displayed in the transcript.
 | Accent bar | `┃` in `accent` at column 2 |
 | Text color | `text_muted` — signals "read-only, already sent" |
 | Text indent | 4 cols (2 margin + `┃` + 1 space) |
-| Top/bottom padding | Half-block transition rows (see [half-block-chars](half-block-chars.md)) |
+| Top/bottom padding | Full panel-bg rows (no half-block glyphs — identical across terminals) |
 
 ## Selection
 

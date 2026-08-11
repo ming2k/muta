@@ -220,6 +220,22 @@ pub(crate) async fn monitor_stream(
     info: &ServeInfo,
     action: MonitorAction,
 ) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String> {
+    // Prefer the Unix domain socket (the daemon's primary local channel,
+    // ADR-0096); fall back to TCP for exposed/legacy deployments — the same
+    // transport policy as `remote::connect`/`remote::control`, so the monitor
+    // stream works against a UDS-only daemon.
+    #[cfg(unix)]
+    if let Some(uds) = &info.uds_path {
+        if let Ok(stream) = tokio::net::UnixStream::connect(uds).await {
+            let request = "ws://localhost/"
+                .into_client_request()
+                .map_err(|e| format!("bad uds ws request: {e}"))?;
+            let (ws, _) = tokio_tungstenite::client_async(request, stream)
+                .await
+                .map_err(|e| format!("ws handshake over uds: {e}"))?;
+            return finish_monitor(ws.split(), action, "uds").await;
+        }
+    }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
         .as_str()
@@ -233,7 +249,24 @@ pub(crate) async fn monitor_stream(
     let (ws, _response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    let (mut ws_sink, mut ws_source) = ws.split();
+    finish_monitor(ws.split(), action, &url).await
+}
+
+/// The stream-generic monitor handshake + framing, shared by the UDS and TCP
+/// paths: send the `Select{Monitor}` handshake, await the opening snapshot
+/// (bounded), then forward every diff frame into the returned channel.
+async fn finish_monitor<S>(
+    parts: (
+        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    ),
+    action: MonitorAction,
+    target: &str,
+) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut ws_sink, mut ws_source) = parts;
 
     let select = serde_json::to_string(&Wire::Select {
         action: neenee_transport::serve::AttachAction::Monitor(action),
@@ -261,7 +294,7 @@ pub(crate) async fn monitor_stream(
         }
     })
     .await
-    .map_err(|_| format!("timed out waiting for monitor snapshot from {url}"))??;
+    .map_err(|_| format!("timed out waiting for monitor snapshot from {target}"))??;
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = tx.send(first);
@@ -309,6 +342,8 @@ mod tests {
             activity: Some("waiting for model".into()),
             context_tokens: Some(48_200),
             note: None,
+            project_root: "/tmp/project".into(),
+            wip: None,
         }
     }
 

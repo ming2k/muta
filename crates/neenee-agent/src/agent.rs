@@ -639,7 +639,13 @@ impl RequestAccountingGuard {
             return;
         }
         if let (Some(ledger), Some(key)) = (&self.ledger, &self.key) {
-            ledger.settle_request(key, status, usage, estimated_completion_tokens);
+            ledger.settle_request(
+                key,
+                status,
+                usage,
+                estimated_completion_tokens,
+                self.generation_ms,
+            );
         }
         self.settled = true;
     }

@@ -23,9 +23,9 @@ pub mod config;
 pub mod config_layout;
 pub mod config_theme;
 pub mod config_theme_custom;
+pub mod dashboard;
 pub mod help;
 pub mod history;
-pub mod host;
 pub mod mcp;
 pub mod permission;
 pub mod permissions_manager;
@@ -44,9 +44,15 @@ pub use config::{ConfigOverview, draw_config_modal};
 pub use config_layout::draw_config_layout_modal;
 pub use config_theme::draw_config_theme_modal;
 pub use config_theme_custom::draw_config_theme_custom_modal;
+pub use dashboard::{DashboardFocus, creation_order, draw_dashboard, draw_session_preview};
+// `DashboardRects` is used by the event loop via `draw_dashboard`'s return; it
+// is part of the module's public API surface.
+#[allow(unused_imports)]
+pub use dashboard::DashboardRects;
 pub use help::{HelpBinding, draw_help_modal};
 pub use history::draw_history_panel;
-pub use host::draw_host_modal;
+// The old centered `/host` modal (`host.rs`) was superseded by the full-screen
+// `dashboard` surface and removed; `/host` now opens the dashboard.
 pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;

@@ -271,8 +271,10 @@ fn draw_composer_impl(
 ) {
     // The input box is a flat panel: each text row carries panel_bg and is
     // prefixed with `› ` on the first wrapped line / a two-space indent on
-    // continuations. The top and bottom edges are half-block rows so the panel
-    // floats a half row off the app background.
+    // continuations. The top and bottom edges are full panel-bg padding rows,
+    // giving the box a full row of breathing room above and below the text.
+    // Using a solid background (not `▄`/`▀` half-block glyphs) keeps the edge
+    // identical across terminals, since a cell can only carry one bg color.
     //
     // `focused` drives only the palette: when `false` the panel drops to the
     // dimmer `user_panel_bg` and the prompt glyph uses `text_muted`, matching
@@ -291,7 +293,6 @@ fn draw_composer_impl(
     } else {
         theme.muted()
     };
-    let app_bg = theme.surface();
     let full_w = input_rect.width as usize;
     // Reserve the left prompt prefix (`› `) and a matching right pad so text
     // never touches either edge of the input panel — the box reads as a
@@ -317,11 +318,15 @@ fn draw_composer_impl(
         cursor_screen_pos(input_rect, input, byte_cursor, input_scroll).unwrap_or((0, 0));
 
     let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + 2);
-    let top_edge = Span::styled("▄".repeat(full_w), Style::default().fg(panel_bg).bg(app_bg));
-    let bottom_edge = Span::styled("▀".repeat(full_w), Style::default().fg(panel_bg).bg(app_bg));
+    // The top and bottom edges are solid panel-bg rows, not half-block glyphs:
+    // a cell can only carry one background color, so painting the full row
+    // avoids relying on font-dependent `▄`/`▀` rasterization and stays
+    // identical across every terminal.
+    let top_edge = Span::styled(" ".repeat(full_w), Style::default().bg(panel_bg));
+    let bottom_edge = Span::styled(" ".repeat(full_w), Style::default().bg(panel_bg));
 
-    // Top edge: lower-half blocks so only the bottom half of the row carries
-    // panel_bg, meeting the full-height text rows below it.
+    // Top edge: a full panel-bg padding row, giving the text below a full
+    // row of breathing room instead of the old half-block transition.
     lines.push(Line::from(top_edge.clone()));
 
     // Text rows: `› ` marks the first logical line and a two-space indent
@@ -434,8 +439,8 @@ fn draw_composer_impl(
         }
     }
 
-    // Bottom edge: upper-half blocks so only the top half of the row carries
-    // panel_bg, meeting the full-height text rows above it.
+    // Bottom edge: a full panel-bg padding row, closing the box with the same
+    // breathing room as the top.
     lines.push(Line::from(bottom_edge));
 
     frame.render_widget(Paragraph::new(lines), input_rect);

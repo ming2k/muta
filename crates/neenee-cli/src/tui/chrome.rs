@@ -18,8 +18,7 @@ use super::Theme;
 use super::components::keycap::{keycap_span, keycap_style};
 use super::design::{
     BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_MODEL_GAP,
-    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS, JOIN_MODIFY, STATUS_BAR_GAP_MIN,
-    STATUS_BAR_INNER_PADDING,
+    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS, JOIN_MODIFY,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
@@ -118,8 +117,8 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
 /// Session-state flags such as `autopilot` deliberately do not live here:
-/// they live on the dedicated status bar below the hint bar
-/// ([`draw_status_bar`]) so this row stays a pure activity surface. The
+/// they live on the head row at the top of the view
+/// ([`crate::tui::page_header::draw_page_header`]) so this row stays a pure activity surface. The
 /// persistent task-list summary lives on its own [`draw_todo_bar`], floated
 /// above this row as ambient meta-info.
 ///
@@ -855,8 +854,7 @@ pub fn draw_hint_bar(
         // form one identity group (`Kimi K3 high @111xianyu`) joined by the
         // tighter model gap; only the context segment sits across the wider
         // segment gap.
-        let identity_count =
-            usize::from(model) + usize::from(reasoning) + usize::from(instance);
+        let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
         let identity_width = usize::from(model) * model_width
             + usize::from(reasoning) * reasoning_width
             + usize::from(instance) * instance_width
@@ -965,22 +963,6 @@ pub fn draw_hint_bar(
     context_rect
 }
 
-/// Inputs for [`draw_status_bar`]: the ambient **session** state that the row
-/// below the hint bar carries. This is state about the whole session, not about
-/// the current input — the workspace the session runs in, and status flags that
-/// persist across turns.
-pub struct StatusBarView<'a> {
-    /// Tilde-shortened workspace path the session is rooted at (e.g.
-    /// `~/projects/xx`). Already abbreviated by the caller; rendered as-is on
-    /// the right.
-    pub workspace: &'a str,
-    /// `true` while the session runs in autopilot mode (`--autopilot` /
-    /// `/autopilot on`). Shown as a warning-toned `autopilot` tag leading on
-    /// the left. Plain text rather than a pill: it reads as a persistent
-    /// session flag rather than a momentary input mode.
-    pub autopilot: bool,
-}
-
 /// Abbreviate an absolute path to its `~/...` form so the workspace reads as a
 /// short, glanceable label. Falls back to the literal path when no home
 /// directory is known or the path is outside it. Mirrors the home-resolution
@@ -1001,155 +983,6 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
         }
     }
     path.display().to_string()
-}
-
-/// Draw the single-line status bar pinned directly below the hint bar. It is
-/// the dedicated home for ambient **session** state — state that describes the
-/// whole session rather than the current input — so the hint bar above it
-/// stays focused on the next input action.
-///
-/// Layout: the `autopilot` safety flag leads on the left (it is the most
-/// glance-worthy state — a silent agent is running), and the tilde-shortened
-/// workspace path is right-aligned on the right. The path always renders (it
-/// is the row's reason to exist); the flag is built only while active. On
-/// narrow terminals the path is truncated from the left (`…suffix`) so its
-/// most specific tail (the project dir) stays pinned to the right edge, and
-/// the flag drops before the path disappears.
-pub fn draw_status_bar(frame: &mut Frame, rect: Rect, view: StatusBarView<'_>, theme: &Theme) {
-    let StatusBarView {
-        workspace,
-        autopilot,
-    } = view;
-
-    let bg = theme.surface();
-    let full_w = rect.width as usize;
-    let inner = STATUS_BAR_INNER_PADDING;
-
-    // --- Left cluster: the `autopilot` safety flag. Built from independent
-    // segments so future flags can be added the same way. `autopilot` is the
-    // only one today; it leads the row because a silent agent running is the
-    // most glance-worthy session state, but it is the first item to drop under
-    // width pressure (the workspace is the row's reason to exist).
-    let autopilot_spans: Vec<Span<'static>> = if autopilot {
-        vec![Span::styled(
-            "autopilot",
-            Style::default()
-                .fg(theme.warn())
-                .add_modifier(Modifier::BOLD)
-                .bg(bg),
-        )]
-    } else {
-        Vec::new()
-    };
-    let autopilot_width = autopilot_spans
-        .iter()
-        .map(|span| span.content.width())
-        .sum::<usize>();
-
-    let mut show_autopilot = autopilot_width > 0;
-    let left_width_for = |autopilot: bool| usize::from(autopilot) * autopilot_width;
-
-    // --- Right cluster: workspace path, truncated from the LEFT (`prefix…`)
-    // when it would collide with the left flag. Because the path is
-    // right-aligned, truncating from the left keeps its most specific tail
-    // (the project directory) pinned to the right edge. The full path is the
-    // common case and is shown as-is whenever it fits.
-    let workspace_style = Style::default().fg(theme.muted()).bg(bg);
-    let workspace_full_width = workspace.width();
-    let fits = |left_width: usize, right_width: usize| {
-        inner
-            + left_width
-            + if right_width > 0 {
-                STATUS_BAR_GAP_MIN
-            } else {
-                0
-            }
-            + right_width
-            <= full_w
-    };
-
-    // Drop the left flag first if it cannot coexist with the full path.
-    let mut left_width = left_width_for(show_autopilot);
-    if !fits(left_width, workspace_full_width) && show_autopilot {
-        show_autopilot = false;
-        left_width = left_width_for(show_autopilot);
-    }
-
-    // Resolve the workspace label: full path if it fits alongside the (possibly
-    // dropped) left flag, otherwise truncate from the left keeping a `…`-
-    // style suffix + the project dir tail so the path's most specific part
-    // stays visible at the right edge. If there is still no room, the path
-    // shrinks to `…` and finally the empty string — the row never overflows.
-    let mut workspace_spans: Vec<Span<'static>> = Vec::new();
-    if fits(left_width, workspace_full_width) {
-        if !workspace.is_empty() {
-            workspace_spans.push(Span::styled(workspace.to_string(), workspace_style));
-        }
-    } else {
-        // Truncate from the left, keeping a tail (`…suffix`) so the path's most
-        // specific end (the project dir) stays pinned to the right edge.
-        // Reserve the indent + gap + left flag; the remaining budget buys a
-        // `…` ellipsis (1 col, when any chars are dropped) plus as many
-        // trailing chars of the path as fit.
-        let budget = full_w
-            .saturating_sub(inner)
-            .saturating_sub(if left_width > 0 {
-                STATUS_BAR_GAP_MIN
-            } else {
-                0
-            })
-            .saturating_sub(left_width);
-        if budget >= 2 {
-            let ellipsis = '…';
-            let chars: Vec<char> = workspace.chars().collect();
-            // Keep the whole path if it now fits the post-gap budget (rare, but
-            // keeps it exact); otherwise keep its last `budget - 1` chars
-            // preceded by `…` so the tail stays at the right edge.
-            if chars.len() <= budget {
-                workspace_spans.push(Span::styled(workspace.to_string(), workspace_style));
-            } else {
-                let take = budget - 1; // -1 for the leading `…`
-                let start = chars.len() - take;
-                let mut s = String::with_capacity(1 + take);
-                s.push(ellipsis);
-                s.extend(chars.iter().skip(start).take(take));
-                workspace_spans.push(Span::styled(s, workspace_style));
-            }
-        } else if budget > 0 {
-            workspace_spans.push(Span::styled("…".to_string(), workspace_style));
-        }
-        // budget == 0 → render nothing for the path; the row still paints the
-        // left flag if present (or is empty fill).
-    }
-
-    // Assemble: [indent][left flag][gap][workspace][trailing fill].
-    let mut left_spans: Vec<Span<'static>> = Vec::new();
-    if show_autopilot {
-        left_spans.extend(autopilot_spans);
-    }
-    let right_width: usize = workspace_spans.iter().map(|s| s.content.width()).sum();
-    // The minimum gap only applies when both clusters are present; a lone
-    // workspace (flag dropped or absent) starts right after the indent.
-    let gap = full_w.saturating_sub(inner + left_width + right_width).max(
-        if left_width > 0 && right_width > 0 {
-            STATUS_BAR_GAP_MIN
-        } else {
-            0
-        },
-    );
-
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4 + left_spans.len());
-    spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
-    spans.extend(left_spans);
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
-    spans.extend(workspace_spans);
-    let used = inner + left_width + gap + right_width;
-    spans.push(Span::styled(
-        " ".repeat(full_w.saturating_sub(used)),
-        Style::default().bg(bg),
-    ));
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 /// One queued outbox item projected for the [`QueueBarView`] / queue modal. It
@@ -1537,131 +1370,6 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_autopilot_on_the_left_and_workspace_on_the_right() {
-        // The status bar owns ambient session state: the `autopilot` safety
-        // flag leads on the left (a silent agent running is the most
-        // glance-worthy state), and the workspace path trails on the right.
-        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
-        terminal.draw(|frame| {
-            draw_status_bar(
-                frame,
-                Rect::new(0, 0, 80, 1),
-                StatusBarView {
-                    workspace: "~/projects/xx",
-                    autopilot: true,
-                },
-                &Theme::default(),
-            );
-        });
-        let text = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            text.contains("~/projects/xx"),
-            "workspace missing: {text:?}"
-        );
-        assert!(text.contains("autopilot"), "flag missing: {text:?}");
-        // The flag must lead (left) and the workspace trail (right), so the
-        // workspace is never before the flag in the rendered row.
-        let ws = text.find("~/projects/xx").unwrap();
-        let flag = text.find("autopilot").unwrap();
-        assert!(flag < ws, "flag should lead the workspace: {text:?}");
-
-        // Without the flag the row must not show the tag, but still shows the
-        // workspace.
-        let mut terminal2 = neenee_tui_engine::TestTerminal::new(80, 1);
-        terminal2.draw(|frame| {
-            draw_status_bar(
-                frame,
-                Rect::new(0, 0, 80, 1),
-                StatusBarView {
-                    workspace: "~/projects/xx",
-                    autopilot: false,
-                },
-                &Theme::default(),
-            );
-        });
-        let text2 = terminal2
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            text2.contains("~/projects/xx"),
-            "workspace missing: {text2:?}"
-        );
-        assert!(!text2.contains("autopilot"), "flag leaked: {text2:?}");
-    }
-
-    #[test]
-    fn status_bar_truncates_long_workspace_from_the_left_keeping_its_tail() {
-        // When the workspace path is too long to fit (it is right-aligned),
-        // it is truncated from the LEFT keeping the most-specific tail (the
-        // project dir) pinned to the right edge, and never overflows the row.
-        let mut terminal = neenee_tui_engine::TestTerminal::new(24, 1);
-        terminal.draw(|frame| {
-            draw_status_bar(
-                frame,
-                Rect::new(0, 0, 24, 1),
-                StatusBarView {
-                    workspace: "~/projects/a-very-long-workspace-name",
-                    autopilot: false,
-                },
-                &Theme::default(),
-            );
-        });
-        let text = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            text.contains('…'),
-            "expected truncation marker, got {text:?}"
-        );
-        // The tail (project dir) is the meaningful part; keep it.
-        assert!(text.contains("name"), "tail dropped: {text:?}");
-        // The full un-truncated path must not have fit into the 24-col row.
-        assert!(
-            !text.contains("~/projects/a-very-long-workspace-name"),
-            "row overflowed: {text:?}"
-        );
-    }
-
-    #[test]
-    fn status_bar_drops_the_flag_before_the_workspace_under_width_pressure() {
-        // Width pressure: the workspace is the row's reason to exist, so the
-        // flag drops first; the workspace (truncated if needed) survives.
-        let mut terminal = neenee_tui_engine::TestTerminal::new(12, 1);
-        terminal.draw(|frame| {
-            draw_status_bar(
-                frame,
-                Rect::new(0, 0, 12, 1),
-                StatusBarView {
-                    workspace: "~/projects/xx",
-                    autopilot: true,
-                },
-                &Theme::default(),
-            );
-        });
-        let text = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(
-            !text.contains("autopilot"),
-            "flag should have dropped under width pressure: {text:?}"
-        );
-    }
-
-    #[test]
     fn tilde_home_shortens_a_home_rooted_path() {
         let home = std::path::PathBuf::from(
             std::env::var_os("HOME").unwrap_or_else(|| std::ffi::OsString::from("/tmp")),
@@ -1888,8 +1596,53 @@ mod tests {
         assert_eq!(text, "20.2k (8%)");
     }
 
-    /// The hint bar must render the model and context bar on a single line
-    /// below the input without panicking.
+    /// The `@<instance>` suffix is the first hint-bar segment to hide as the
+    /// row narrows: provenance is nice-to-have, so it drops while the model
+    /// name, reasoning tag, and context meter all still fit.
+    #[test]
+    fn narrow_hint_bar_hides_the_instance_suffix_first() {
+        let messages: Vec<TranscriptMessage> = Vec::new();
+        let row_text = |width: u16| -> String {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(width, 1);
+            terminal.draw(|f| {
+                draw_hint_bar(
+                    f,
+                    Rect::new(0, 0, width, 1),
+                    HintBarView {
+                        current_model: "kimi-k2.7-code",
+                        provider_name: Some("kimi-code"),
+                        messages: &messages,
+                        reasoning_effort: Some("max"),
+                        shell_active: false,
+                        busy: false,
+                        context_tokens: None,
+                    },
+                    &Theme::default(),
+                );
+            });
+            let buf = terminal.buffer();
+            (0..buf.area().width as usize)
+                .map(|x| buf.content[x].symbol().to_string())
+                .collect::<String>()
+        };
+
+        // Wide enough: the full cluster `model effort @instance  ctx` shows.
+        let wide = row_text(50);
+        assert!(wide.contains("@kimi-code"), "{wide:?}");
+        assert!(wide.contains("(0%)"), "{wide:?}");
+
+        // One column narrower and the instance suffix is gone — while the
+        // model name, the effort tag, and the context meter all survive.
+        let narrow = row_text(49);
+        assert!(
+            !narrow.contains('@'),
+            "instance should hide first: {narrow:?}"
+        );
+        assert!(narrow.contains("Kimi K2.7 Code"), "{narrow:?}");
+        assert!(narrow.contains("max"), "{narrow:?}");
+        assert!(narrow.contains("(0%)"), "{narrow:?}");
+    }
+
     #[test]
     fn hint_bar_renders_model_and_context() {
         let theme = Theme::default();
@@ -2130,7 +1883,10 @@ mod tests {
         }
 
         let named = row_text(Some("kimi-code"));
-        assert!(named.contains("@kimi-code"), "missing @instance in: {named:?}");
+        assert!(
+            named.contains("@kimi-code"),
+            "missing @instance in: {named:?}"
+        );
         // The suffix is the last cluster segment before the context meter:
         // `Model effort @instance`.
         let model_pos = named.find("mock").expect("model name on the row");

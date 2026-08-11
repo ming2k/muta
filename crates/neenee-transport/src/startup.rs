@@ -42,9 +42,14 @@ macro_rules! define_builtin_commands {
             /// Parse a `/<name>` token into a variant, or `None` when it is
             /// not a built-in (i.e. a custom command). The dispatch `match`
             /// consumes the `None` arm to run the custom-command path.
+            ///
+            /// Canonical names are matched against the declarative list;
+            /// backward-compatible aliases (renamed commands) are then matched
+            /// by [`BuiltinCmd::from_alias`] so old invocations keep working
+            /// without appearing in completion / `/help`.
             pub fn from_slash(input: &str) -> Option<Self> {
                 $( if input == $name { return Some(BuiltinCmd::$variant); } )+
-                None
+                Self::from_alias(input)
             }
         }
     };
@@ -65,7 +70,7 @@ define_builtin_commands! {
     Search      = "/search"       : "Semantic search over the project's session history",
     Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
     Sessions    = "/sessions"     : "Browse past sessions",
-    Host        = "/host"         : "Daemon control panel — live session status and switching",
+    Dashboard   = "/dashboard"    : "Session dashboard — live status and control over every daemon session",
     Btw         = "/btw"          : "Open a side conversation that runs alongside the main session",
     Resume      = "/resume"       : "Resume the most recent or selected session",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
@@ -80,6 +85,20 @@ define_builtin_commands! {
     Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
     Help        = "/help"         : "Show available commands and keybindings",
     Exit        = "/exit"         : "Exit the program",
+}
+
+impl BuiltinCmd {
+    /// Backward-compatible aliases for renamed commands. These resolve exactly
+    /// like their canonical target but are deliberately absent from
+    /// [`BuiltinCmd::ALL`], so they never appear in completion or `/help`.
+    fn from_alias(input: &str) -> Option<Self> {
+        match input {
+            // `/host` was the pre-dashboard name (it leaked the daemon "host"
+            // concept, ADR-0096); the surface is now the session dashboard.
+            "/host" => Some(BuiltinCmd::Dashboard),
+            _ => None,
+        }
+    }
 }
 
 /// Split `/<name> <arguments>` into `(name_without_slash, arguments_trimmed)`.
@@ -126,6 +145,14 @@ pub enum StartupMode {
         json: bool,
         include_idle: bool,
     },
+    /// `neenee dashboard`: open the full-screen session dashboard directly
+    /// (the interactive sibling of `status`). The client attaches to the
+    /// daemon's most-recently-active hosted session purely as the underlying
+    /// TUI carrier, then raises the dashboard over it; Esc from that opening
+    /// dashboard quits (there is no conversation the user asked for behind
+    /// it), while Enter on a row attaches to that session as usual. Like
+    /// `status` it never spawns a daemon — observing requires a running host.
+    Dashboard,
     /// Render a single UI component in isolation for interactive development
     /// (`neenee showcase <component>`). No agent, no session, no network —
     /// just the component's model + renderer wired to a real terminal so you
@@ -258,6 +285,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
         [] => StartupMode::Fresh,
         [cmd] if cmd == "resume" => StartupMode::Picker,
         [cmd, id] if cmd == "resume" => StartupMode::Resume(Some(id.clone())),
+        [cmd] if cmd == "dashboard" => StartupMode::Dashboard,
         [cmd, ..] if cmd == "doctor" => StartupMode::Doctor,
         #[cfg(debug_assertions)]
         [cmd, component] if cmd == "showcase" => StartupMode::Showcase(component.clone()),
@@ -270,7 +298,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee serve [--port <n>] [--public] [--detach]\n                          run the session daemon (foreground, or background with --detach)\n  neenee attach [id]      attach the TUI to a session the host serves (spawning one if none is running)\n  neenee status [--watch] [--json] [--all]\n                          show the host's sessions needing attention\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee serve [--port <n>] [--public] [--detach]\n                          run the session daemon (foreground, or background with --detach)\n  neenee attach [id]      attach the TUI to a session the host serves (spawning one if none is running)\n  neenee status [--watch] [--json] [--all]\n                          show the host's sessions needing attention\n  neenee dashboard        open the full-screen session dashboard\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
                 cmd
             );
             std::process::exit(2);
@@ -349,6 +377,29 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_is_the_canonical_command() {
+        assert!(matches!(
+            BuiltinCmd::from_slash("/dashboard"),
+            Some(BuiltinCmd::Dashboard)
+        ));
+    }
+
+    #[test]
+    fn host_resolves_as_dashboard_alias_but_is_not_listed() {
+        // The renamed command still parses, but stays out of completion/help.
+        assert!(matches!(
+            BuiltinCmd::from_slash("/host"),
+            Some(BuiltinCmd::Dashboard)
+        ));
+        assert!(!BuiltinCmd::ALL.iter().any(|(name, _)| *name == "/host"));
+        assert!(
+            BuiltinCmd::ALL
+                .iter()
+                .any(|(name, _)| *name == "/dashboard")
+        );
+    }
+
+    #[test]
     fn no_args_is_fresh() {
         let (mode, project, autopilot, single) = parse_args(Vec::new());
         assert!(matches!(mode, StartupMode::Fresh));
@@ -424,6 +475,15 @@ mod tests {
         ));
         let (mode, project, ..) = parse_args(args(&["--project", "/p", "serve"]));
         assert!(matches!(mode, StartupMode::Serve { .. }));
+        assert_eq!(project, Some(PathBuf::from("/p")));
+    }
+
+    #[test]
+    fn dashboard_subcommand_form() {
+        let (mode, ..) = parse_args(args(&["dashboard"]));
+        assert!(matches!(mode, StartupMode::Dashboard));
+        let (mode, project, ..) = parse_args(args(&["--project", "/p", "dashboard"]));
+        assert!(matches!(mode, StartupMode::Dashboard));
         assert_eq!(project, Some(PathBuf::from("/p")));
     }
 

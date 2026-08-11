@@ -5,8 +5,7 @@
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
 pub use crate::tui::chrome::{
-    HintBarView, QueueBarView, QueueItemView, StatusBarView, draw_completion_menu, draw_hint_bar,
-    draw_queue_bar, draw_status_bar,
+    HintBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_hint_bar, draw_queue_bar,
 };
 pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::tui::composer::{
@@ -16,13 +15,13 @@ pub use crate::tui::composer::{
 // used to reach them via the old `paint` parent's namespace still resolve.
 pub(crate) use crate::tui::design::{
     ACTIVITY_BAR_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP,
-    CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT,
-    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
-    FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS,
-    PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STATUS_BAR_ROWS, STEP_MIN_WIDTH, TODO_BAR_ROWS,
-    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
-    TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
+    CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_HINT_GAP_ROWS, COMPOSER_MAX_HEIGHT_DIVISOR,
+    COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS,
+    COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS,
+    MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS,
+    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH,
+    TODO_BAR_ROWS, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use crate::tui::disclosure::{StickyStep, draw_sticky_summary_if_needed};
 /// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
@@ -40,16 +39,16 @@ pub use crate::tui::overlays::{
     ActivityModalView, ConfigOverview, ContextUsageView, CustomEditorView, HelpBinding,
     QueueModalView, draw_activity_modal, draw_armed_toast, draw_config_layout_modal,
     draw_config_modal, draw_config_theme_custom_modal, draw_config_theme_modal,
-    draw_connections_modal, draw_copy_toast, draw_custom_provider_editor, draw_help_modal,
-    draw_history_panel, draw_host_modal, draw_input_injection, draw_mcp_modal, draw_model_editor,
+    draw_connections_modal, draw_copy_toast, draw_custom_provider_editor, draw_dashboard,
+    draw_help_modal, draw_history_panel, draw_input_injection, draw_mcp_modal, draw_model_editor,
     draw_models_modal, draw_notice_toast, draw_oauth_pending, draw_permission_sheet,
     draw_permissions_manager, draw_provider_delete_confirm, draw_provider_template_chooser,
-    draw_question_modal, draw_queue_modal, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal, token_report_round_count,
+    draw_question_modal, draw_queue_modal, draw_session_preview, draw_sessions_modal,
+    draw_skills_modal, draw_token_report_modal, draw_tools_modal, token_report_round_count,
 };
-use crate::tui::page_header::{PageHeader, draw_page_header};
+pub(crate) use crate::tui::page_header::{PageHeader, SessionHead, draw_page_header};
 pub use crate::tui::primitives::recess_backdrop;
-use crate::tui::primitives::viewport_rect;
+use crate::tui::primitives::{VIEWPORT_V_MARGIN, viewport_rect};
 #[cfg(test)]
 use crate::tui::text_layout::WrappedLine;
 #[cfg(test)]
@@ -179,6 +178,11 @@ pub struct TranscriptView<'a> {
     /// contextual page header is rendered with the coarse primary-session
     /// status and the return action.
     pub side_banner: Option<neenee_core::ParentStatus>,
+    /// Session identity for the Main view's head row: the persistent-id tail
+    /// plus the tilde-shortened workspace on the left, and the session mode
+    /// (`autopilot`) on the right. `None` only in non-session contexts
+    /// (tests/showcase) where no ambient session exists.
+    pub session_head: Option<SessionHead<'a>>,
     /// Live unified task list, if any. Surfaced on the todo bar (a one-row
     /// summary: tag · progress · current item); the full per-item breakdown
     /// lives in the Activity modal.
@@ -331,9 +335,6 @@ pub struct TranscriptRender {
     /// The hint-bar area pinned directly below the input box (zero-sized when
     /// hidden).
     pub hint_rect: Rect,
-    /// The status-bar area pinned directly below the hint bar (zero-sized when
-    /// hidden). Carries session-level state (workspace path + status flags).
-    pub status_rect: Rect,
     /// Screen rect of the activity bar for the current frame, so clicks inside
     /// it open the Activity modal. `None` when no activity bar is shown (idle,
     /// streaming, envoy view, or chrome hidden).
@@ -388,6 +389,7 @@ pub fn draw_transcript(
         queue_bar,
         envoy_bar,
         side_banner,
+        session_head,
         todos,
         review_alert,
         round_started_at,
@@ -426,7 +428,6 @@ pub fn draw_transcript(
         return TranscriptRender {
             input_rect: Rect::default(),
             hint_rect: Rect::default(),
-            status_rect: Rect::default(),
             activity_rect: None,
             todos_rect: None,
             queue_rect: None,
@@ -436,20 +437,48 @@ pub fn draw_transcript(
         };
     }
 
-    // Components render inside the vertical viewport margins (1 cell top and
-    // bottom); only the background fill uses the full terminal rect.
-    let viewport = viewport_rect(frame);
-
-    let size = viewport;
-
-    // Resolve all non-Main transcript modes to one page-header model. Envoy
-    // and `/btw` are mutually exclusive in the app; preferring Envoy here is a
-    // defensive fallback that keeps rendering deterministic if a malformed
-    // caller supplies both.
+    // Resolve every transcript page to one page-header model. The Main
+    // session view always carries a head (its ambient session state — id
+    // tail, workspace, mode — replaces the old bottom status bar). Envoy
+    // and `/btw` keep their contextual headers. Envoy and `/btw` are
+    // mutually exclusive in the app; preferring Envoy here is a defensive
+    // fallback that keeps rendering deterministic if a malformed caller
+    // supplies both.
     let page_header = envoy_bar
         .as_ref()
         .map(PageHeader::Envoy)
-        .or_else(|| side_banner.map(PageHeader::Btw));
+        .or_else(|| side_banner.map(PageHeader::Btw))
+        .or_else(|| session_head.as_ref().map(|head| PageHeader::Session(head)));
+
+    // When a head row is present it occupies the top row of the terminal
+    // directly — the head is a sibling of the transcript, not content inside
+    // it, so it replaces the viewport's top margin rather than nesting under
+    // it. Without a head, the standard viewport margin applies.
+    let (head_rect, viewport) = if page_header.is_some() {
+        let full = frame.area();
+        let sub = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(PAGE_HEADER_ROWS),
+                Constraint::Min(0),
+            ])
+            .split(full);
+        (
+            Some(transcript_band_rect(sub[0])),
+            // The remaining area keeps the bottom viewport margin but drops
+            // the top one (the head owns that row now).
+            Rect::new(
+                sub[1].x,
+                sub[1].y,
+                sub[1].width,
+                sub[1].height.saturating_sub(VIEWPORT_V_MARGIN),
+            ),
+        )
+    } else {
+        (None, viewport_rect(frame))
+    };
+
+    let size = viewport;
 
     // When zoomed into an envoy task, the footer (status bar, plan panel,
     // input box, hint bar) is hidden: the task detail page is a read-only view
@@ -516,42 +545,41 @@ pub fn draw_transcript(
     } else {
         desired_input_height.min(max_input_height)
     };
-    // The hint bar is a single-line status strip pinned directly below the
-    // input box. It carries the next Enter action plus ambient model/context
-    // info. Hidden alongside the rest of the chrome while an overlay is open.
+    // The hint bar is a single-line status strip pinned below the input box,
+    // separated from it by a single `surface` gap row (COMPOSER_HINT_GAP_ROWS)
+    // so the full-height composer panel does not crowd the bar. It carries the
+    // next Enter action plus ambient model/context info. Hidden alongside the
+    // rest of the chrome while an overlay is open.
     let hint_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
         HINT_BAR_ROWS
     };
-    // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state — the `autopilot` flag leads
-    // on the left, the workspace path trails on the right — so the hint bar
-    // above it stays focused on the next input action. Always present whenever
-    // the footer chrome is visible (it never conditionally hides), keeping the
-    // workspace always glanceable.
-    let status_height: u16 = if chrome_hidden || in_envoy {
-        0
+    // The composer/hint gap only needs reserving when the hint bar is actually
+    // visible — a hidden bar would leave a dangling blank row at the very
+    // bottom of the frame.
+    let composer_hint_gap: u16 = if hint_height > 0 {
+        COMPOSER_HINT_GAP_ROWS
     } else {
-        STATUS_BAR_ROWS
+        0
     };
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
         // Order, top → bottom: gap, todo bar, queue bar, activity bar, input
-        // box, hint bar, status bar. The ambient meta bars (todo = task list,
-        // queue = outbox) lead; the activity bar sits directly on top of the
-        // input box so the live status reads as part of the composer; the hint
-        // bar carries the next input action + model/context; the status bar
-        // caps the footer with session-level state (workspace path + flags such
-        // as `autopilot`, which used to have its own row above the input).
+        // box, composer/hint gap, hint bar. The ambient meta bars (todo = task
+        // list, queue = outbox) lead; the activity bar sits directly on top of
+        // the input box so the live status reads as part of the composer; the
+        // hint bar carries the next input action + model/context. Session-level
+        // state (workspace, mode flags such as `autopilot`) lives on the
+        // head row at the top of the view, not on a bottom status bar.
         FOOTER_TOP_GAP_ROWS
             + activity_height
             + todo_height
             + queue_height
             + input_box_height
+            + composer_hint_gap
             + hint_height
-            + status_height
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -561,27 +589,17 @@ pub fn draw_transcript(
         ])
         .split(size);
 
-    // 1. Transcript History
-    // Every non-Main page gets the same one-line header at the TOP of the
-    // viewport. The current context is therefore visible before its content,
-    // and `/btw`, Envoy, and future focused pages share one stable chrome slot.
-    let (transcript_area, page_header_rect) = if page_header.is_some() {
-        let sub = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(PAGE_HEADER_ROWS), Constraint::Min(0)])
-            .split(chunks[0]);
-        (
-            sub[1],
-            // The header spans the inset band so it aligns with the transcript
-            // content rather than edge-to-edge.
-            Some(transcript_band_rect(sub[0])),
-        )
-    } else {
-        (chunks[0], None)
-    };
-    if let (Some(header), Some(rect)) = (page_header.as_ref(), page_header_rect) {
+    // 1. Head row — drawn at the very top of the terminal, before the
+    // transcript. The head is a sibling of the transcript, not content inside
+    // it, so it was already split from `full` above; just paint it here.
+    if let (Some(header), Some(rect)) = (page_header.as_ref(), head_rect) {
         draw_page_header(frame, rect, header, theme);
     }
+
+    // 2. Transcript History — the transcript area is the whole `chunks[0]`
+    // when a head is present (it was already accounted for above), or the
+    // entire viewport-minus-footer when there is no head.
+    let transcript_area = chunks[0];
     // Apply the uniform horizontal inset (`TRANSCRIPT_H_INSET` on each side)
     // exactly once, here at the transcript-stream entry point. Every
     // downstream component receives `band` — an already-inset rect — so none
@@ -776,31 +794,14 @@ pub fn draw_transcript(
     let hint_rect = if hint_height > 0 {
         Rect::new(
             footer_x,
-            status_y + todo_height + queue_height + activity_height + input_box_height,
-            footer_w,
-            hint_height,
-        )
-    } else {
-        Rect::default()
-    };
-
-    // The status bar caps the footer, directly below the hint bar. It is the
-    // dedicated home for ambient session state (the `autopilot` flag leads
-    // on the left, the workspace path trails on the right) so the hint bar
-    // above it stays focused on the next input action. Its draw call is
-    // delegated to the app loop (which owns the workspace path and the
-    // session-state flags).
-    let status_rect = if status_height > 0 {
-        Rect::new(
-            footer_x,
             status_y
                 + todo_height
                 + queue_height
                 + activity_height
                 + input_box_height
-                + hint_height,
+                + composer_hint_gap,
             footer_w,
-            status_height,
+            hint_height,
         )
     } else {
         Rect::default()
@@ -814,7 +815,6 @@ pub fn draw_transcript(
     TranscriptRender {
         input_rect,
         hint_rect,
-        status_rect,
         activity_rect,
         todos_rect,
         queue_rect,
@@ -874,6 +874,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
+                    session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1175,6 +1176,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -1219,6 +1221,7 @@ mod tests {
                         total: 1,
                     }),
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -1234,15 +1237,15 @@ mod tests {
         });
 
         let width = terminal.buffer().area().width as usize;
-        let first_viewport_row: String = terminal.buffer().content[width..2 * width]
+        let head_row: String = terminal.buffer().content[0..width]
             .iter()
             .map(|cell| cell.symbol())
             .collect();
         assert!(
-            first_viewport_row
+            head_row
                 .trim_start()
                 .starts_with("Envoy explore the codebase · 1 of 1"),
-            "Envoy context should occupy the first viewport row: {first_viewport_row:?}"
+            "Envoy context should occupy the head row (first terminal row): {head_row:?}"
         );
     }
 
@@ -1300,6 +1303,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
+                    session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1405,6 +1409,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
+                    session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1623,6 +1628,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
+                    session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1692,6 +1698,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
+                    session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1769,6 +1776,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -1907,8 +1915,8 @@ mod tests {
                 neenee_tui_engine::CursorState::Visible(x, y) => (x, y),
                 other => panic!("{label}: caret should be visible, got {other:?}"),
             };
-            // The text row sits one line below the box's top `▄` edge, and the
-            // caret follows the `› ` prefix plus the full rendered width.
+            // The text row sits one line below the box's top padding row, and
+            // the caret follows the `› ` prefix plus the full rendered width.
             assert_eq!(
                 cursor,
                 (
@@ -2722,6 +2730,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -2873,6 +2882,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -2956,6 +2966,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3331,8 +3342,8 @@ mod tests {
             )
         });
         let panel = panel.expect("panel should render with ample room above");
-        // 2 entries + 4 chrome rows (top ▄ transition, header, footer, bottom
-        // ▀ transition) = 6 rows. The panel still collapses to the actual row
+        // 2 entries + 4 chrome rows (top padding, header, footer, bottom
+        // padding) = 6 rows. The panel still collapses to the actual row
         // count — a fixed minimum would have forced 8+ regardless of entries.
         assert_eq!(
             panel.height, 6,
@@ -3341,12 +3352,13 @@ mod tests {
     }
 
     /// The dropdown shares the composer's surface language, not the permission
-    /// sheet's: it is bracketed by half-block `▄`/`▀` transition rows and never
+    /// sheet's: it opens and closes with full panel-bg padding rows and never
     /// paints a full-height brand-colored left column (which would read as
-    /// selection/severity). The top and bottom rows must carry the half-block
-    /// glyphs, and the left column must NOT be brand-colored.
+    /// selection/severity). The top and bottom rows must be solid panel
+    /// background (no half-block `▄`/`▀` glyphs), and the left column must NOT
+    /// be brand-colored.
     #[test]
-    fn history_panel_uses_composer_edge_language_not_brand_column() {
+    fn history_panel_uses_composer_padding_not_brand_column() {
         let theme = Theme::default();
         let history: Vec<neenee_core::HistoryEntry> = ["one", "two", "three"]
             .into_iter()
@@ -3373,21 +3385,31 @@ mod tests {
         let panel = panel.expect("panel should render");
         let buf = terminal.buffer();
 
-        // Top row carries the ▄ lower-half transition glyph.
+        // Top row is a full panel-bg padding row (no half-block glyph).
         let top_left = buf.get(panel.x, panel.y).expect("top-left cell");
         assert_eq!(
-            top_left.symbol(),
-            "▄",
-            "top edge must use the composer's ▄ transition glyph"
+            top_left.bg,
+            theme.panel(),
+            "top edge must be a solid panel-bg row, matching the composer's padding"
         );
-        // Bottom row carries the ▀ upper-half transition glyph.
+        assert_eq!(
+            top_left.symbol(),
+            " ",
+            "top edge must be blank (no ▄ transition glyph)"
+        );
+        // Bottom row is likewise a solid panel-bg padding row.
         let bottom_left = buf
             .get(panel.x, panel.y + panel.height - 1)
             .expect("bottom-left cell");
         assert_eq!(
+            bottom_left.bg,
+            theme.panel(),
+            "bottom edge must be a solid panel-bg row, matching the composer's padding"
+        );
+        assert_eq!(
             bottom_left.symbol(),
-            "▀",
-            "bottom edge must use the composer's ▀ transition glyph"
+            " ",
+            "bottom edge must be blank (no ▀ transition glyph)"
         );
 
         // No full-height brand column: the background of the left column on the
@@ -3472,6 +3494,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3532,6 +3555,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3601,6 +3625,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3657,6 +3682,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3738,6 +3764,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3815,6 +3842,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,
@@ -3894,6 +3922,7 @@ mod tests {
                     },
                     envoy_bar: None,
                     side_banner: None,
+                    session_head: None,
                     todos: None,
                     review_alert: String::new(),
                     round_started_at: None,

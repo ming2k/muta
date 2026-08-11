@@ -353,9 +353,9 @@ pub enum AgentResponse {
     },
     /// Replace the sessions picker contents (and open the picker).
     SessionsOverview(Vec<SessionOverview>),
-    /// Open the daemon control panel (`/host`, ADR-0096). The TUI renders
-    /// the monitor stream it maintains independently; this is only the
-    /// open signal, carrying no data.
+    /// Open the session dashboard (`/dashboard`, formerly `/host`; ADR-0096).
+    /// The TUI renders the monitor stream it maintains independently; this is
+    /// only the open signal, carrying no data.
     OpenHostPanel,
     /// Reply to [`AgentRequest::QuerySessionDetail`]: full detail for one
     /// session (complete last prompt, title, timestamps). Consumed by the
@@ -456,6 +456,13 @@ impl AgentNotice {
     /// Prefer this constructor over `AgentNotice::new(...).with_surface(Toast)`
     /// so the `CommandAck` kind is stamped uniformly and frontends can branch
     /// on `kind == CommandAck` (e.g. to suppress re-surfacing on reconnect).
+    ///
+    /// A command acknowledgment is a *session-scoped* notice: emit it wrapped
+    /// in [`crate::RoundEvent::Notice`] (via `round_response`), not as a
+    /// top-level [`AgentResponse::Notice`]. Wrapping it routes the toast to the
+    /// frontend over the session's broadcast tap so every attached client (the
+    /// in-process TUI, `neenee attach`, `/serve`) sees the same confirmation,
+    /// and it is what the TUI's toast drain actually listens for.
     pub fn command_ack(title: impl Into<String>) -> Self {
         Self::new(
             NoticeKind::CommandAck,

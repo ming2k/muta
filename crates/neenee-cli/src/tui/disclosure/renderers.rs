@@ -1511,9 +1511,11 @@ fn fmt_no(no: Option<usize>, width: usize) -> String {
 
 /// Render an envoy `task` tool step as a compact, non-expandable step.
 /// Activating it (click / Enter) navigates into a dedicated envoy view
-/// rather than expanding a body inline. The step shows a one-line summary
-/// (the task description + duration) and a live status line summarizing the
-/// envoy's progress.
+/// rather than expanding a body inline. The step is exactly two rows: a
+/// summary line carrying the `[profile]` role badge + task description, and
+/// a single `└`-edged second row that shows the live "peek" (current
+/// activity + elapsed) while running and is replaced in place by the
+/// one-line conclusion when the envoy terminates.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_envoy_inline_step(
     frame: &mut Frame,
@@ -1546,19 +1548,10 @@ pub fn draw_envoy_inline_step(
 
     let bg = theme.surface();
 
-    // Summary line: just the summary text, registered as a tool-step summary
-    // (block_idx = usize::MAX) so the existing click/Enter handling recognizes
-    // it; the app decides to navigate rather than toggle for `task` steps. No
-    // expand marker or status glyph — the step navigates, and run state reads
-    // from the summary color (a steady accent, matching every other step per
-    // the single-breathing-anchor rule in ADR 0008). Color is resolved through
-    // the shared state machine: a non-completed lifecycle supplies an accent
-    // that supplies the hue, while the disclosure × interaction weight channel
-    // still modulates its brightness; the completed case yields no accent and
-    // falls fully through to the weight ladder (a task never expands inline, so
-    // it is bright when focused or under the pointer and calm otherwise).
-    // (Under the three-tone weight model "bright when focused/hovered" reads as
-    // the hover tone, not the primary foreground.)
+    // Summary color flows through the shared state machine exactly like a
+    // tool step (steady lifecycle accent while non-terminal, weight ladder
+    // once completed); the badge borrows the brand hue so the role reads as
+    // identity rather than as run state.
     let status_color = status.color(theme);
     let accent = match status {
         ToolStatus::Ok => None,
@@ -1580,7 +1573,35 @@ pub fn draw_envoy_inline_step(
         current_y,
         content_lines,
     );
-    let summary_row = tool_summary_line("", &summary, summary_color, bg, ctx.full_width);
+
+    // Row 1: `[badge]  summary`. The badge is a plain bracketed token in the
+    // brand color (no inverse pill) so it sits quietly next to the summary
+    // and survives narrow terminals. Two plain spaces separate badge and
+    // summary (R2 same-rank peers on the join ladder).
+    let badge = msg
+        .envoy_profile()
+        .map(|role| format!("[{}]", role.to_uppercase()))
+        .unwrap_or_else(|| "[ENVOY]".to_string());
+    let summary_row = {
+        let base = Style::default().bg(bg);
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+        let mut used = 0usize;
+        let badge_text = format!("  {}", badge);
+        used += badge_text.width();
+        spans.push(Span::styled(badge_text, base.fg(theme.brand())));
+        let sep = "  ";
+        used += sep.len();
+        spans.push(Span::styled(sep, base));
+        let summary_budget = full_width.saturating_sub(used);
+        let clamped = truncate_to_width(&summary, summary_budget);
+        used += clamped.width();
+        spans.push(Span::styled(
+            clamped,
+            base.fg(summary_color).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(padded_tail(full_width, used), base));
+        Line::from(spans)
+    };
     if let Some(rect) = ctx.paint(summary_row) {
         ctx.layout_map.push(BlockRegion {
             message_idx: mi,
@@ -1594,19 +1615,34 @@ pub fn draw_envoy_inline_step(
         });
     }
 
-    // Live status line (e.g. "↳ Running: grep foo" / "↳ Completed · 3 calls").
-    if let Some(status) = msg.envoy_status_line() {
-        let inner_width = ctx.full_width.saturating_sub(2);
-        let wrapped = wrap_text(&status, inner_width.max(1));
+    // Row 2: the `└`-edged live row. While running it carries the peek
+    // (current activity + elapsed); once the envoy terminates it is replaced
+    // in place by the one-line conclusion. The `└` is constant — the step is
+    // always exactly two rows, so the second row is always the leaf — and the
+    // running/terminated distinction is carried by color and content, not by
+    // the glyph.
+    let (row_text, row_color) = if let Some(peek) = msg.envoy_status_line() {
+        (peek, theme.info())
+    } else if let Some(outcome) = msg.envoy_outcome_line() {
+        (outcome, theme.muted())
+    } else {
+        (String::new(), theme.muted())
+    };
+    if !row_text.is_empty() {
         let bg_style = Style::default().bg(bg);
-        for wl in &wrapped {
-            let used = 2 + wl.text.width();
+        let inner_width = ctx.full_width.saturating_sub(4);
+        let wrapped = wrap_text(&row_text, inner_width.max(1));
+        for (i, wl) in wrapped.iter().enumerate() {
+            // The `└` edge marks the first wrapped row; continuation rows fall
+            // back to a plain indent so the tree edge reads as a single branch.
+            let (prefix, prefix_w) = if i == 0 { ("  └ ", 4) } else { ("    ", 4) };
+            let used = prefix_w + wl.text.width();
             let line = Line::from(vec![
-                Span::styled("  ", bg_style),
-                Span::styled(wl.text.clone(), bg_style.fg(ctx.theme.muted())),
+                Span::styled(prefix, bg_style.fg(ctx.theme.muted())),
+                Span::styled(wl.text.clone(), bg_style.fg(row_color)),
                 Span::styled(padded_tail(ctx.full_width, used), bg_style),
             ]);
-            // Make the whole status line part of the same clickable summary so
+            // Make the whole second row part of the same clickable summary so
             // clicking anywhere on the step enters the envoy view.
             if let Some(rect) = ctx.paint(line) {
                 ctx.layout_map.push(BlockRegion {

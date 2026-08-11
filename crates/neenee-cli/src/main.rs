@@ -77,6 +77,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             false,
             project_override,
             autopilot_at_start,
+            false,
         )
         .await;
     }
@@ -140,6 +141,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(Into::into);
     }
 
+    // `neenee dashboard`: the full-screen interactive session dashboard. The
+    // client attaches to the daemon's most-recently-active hosted session
+    // purely as the underlying TUI carrier, then raises the dashboard over it;
+    // Esc from that opening dashboard quits (there is no conversation the user
+    // asked for behind it), while Enter on a row attaches to that session as
+    // usual. Like `status`, it never spawns a daemon — observing requires one.
+    if matches!(startup, StartupMode::Dashboard) {
+        return run_dashboard(project_override, autopilot_at_start).await;
+    }
+
     // Unified ownership (ADR-0096): every interactive session is daemon-held.
     // The default invocations — bare `neenee`, `neenee resume [id]` — are the
     // attach path now: there is no in-process harness. Bare `neenee` always
@@ -157,13 +168,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Pick when several sessions exist, which the attach flow renders.
             _ => None,
         };
-        return run_attached(target, fresh, project_override, autopilot_at_start).await;
+        return run_attached(target, fresh, project_override, autopilot_at_start, false).await;
     }
 
     // The in-process harness path is unreachable after the unification above;
     // it is retained only so `assemble` and its tests keep compiling while
     // the standalone driver is fully retired (tracked as ADR-0096 follow-up).
-    let startup_picker = matches!(startup, StartupMode::Picker);
+    let startup_overlay = if matches!(startup, StartupMode::Picker) {
+        crate::tui::StartupOverlay::SessionsPicker
+    } else {
+        crate::tui::StartupOverlay::None
+    };
     let boot = bootstrap::assemble(BootstrapParams {
         identity: neenee_identity(),
         principal: principal_code(),
@@ -218,7 +233,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         input_history_config,
         crate::tui::SessionSource::Local(session),
         Some(token_ledger),
-        startup_picker,
+        startup_overlay,
     )
     .await
     {
@@ -305,6 +320,72 @@ fn detach_daemon() -> Result<(), String> {
     Ok(())
 }
 
+/// `neenee dashboard` entry: open the full-screen session dashboard directly.
+///
+/// The dashboard's data (the live `MonitorEvent` snapshot) and its control
+/// verbs (interrupt / prompt / create) ride their own daemon connections, so
+/// it never depends on the attached session — but the TUI still needs one
+/// hosted session as the underlying conversation carrier. We therefore attach
+/// to the daemon's most-recently-active hosted session and raise the
+/// dashboard over it on the first frame. Esc from that opening dashboard
+/// quits (there is no conversation the user asked for behind it); Enter on a
+/// row attaches to that session through the ordinary re-attach loop.
+///
+/// Observing is only meaningful against a running host, and a dashboard with
+/// no hosted sessions has nothing to manage — so, like `neenee status`
+/// (ADR-0093), a missing daemon or an empty host is a clean error rather than
+/// an excuse to spawn one or fabricate a session.
+async fn run_dashboard(
+    project_override: Option<PathBuf>,
+    autopilot_at_start: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let project_root = project_override
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let info = remote::discover(&project_root).ok_or_else(|| {
+        "no neenee daemon is running. Start one with `neenee serve` \
+         (or open a session first — bare `neenee` spawns one on demand)."
+            .to_string()
+    })?;
+    // One-shot monitor snapshot to pick the carrier session: the
+    // most-recently-active hosted session. Mirrored rows belong to other
+    // (standalone) clients and cannot be attached to (ADR-0095).
+    let mut rx = status::monitor_stream(
+        &info,
+        neenee_core::MonitorAction {
+            watch: false,
+            include_idle: true,
+        },
+    )
+    .await
+    .map_err(|e| format!("could not read the daemon's session list: {e}"))?;
+    let snapshot = match rx.recv().await {
+        Some(neenee_core::MonitorEvent::Snapshot(snap)) => snap,
+        Some(_) => return Err("daemon monitor stream opened without a snapshot".into()),
+        None => return Err("daemon closed the monitor stream".into()),
+    };
+    drop(rx); // one-shot: release the monitor connection before attaching
+    let carrier = snapshot
+        .sessions
+        .iter()
+        .filter(|s| s.hosting == neenee_core::SessionHosting::Hosted)
+        .max_by_key(|s| s.updated_at)
+        .map(|s| s.id.clone())
+        .ok_or_else(|| {
+            "the daemon hosts no sessions yet. Start one with bare `neenee` \
+             (or `neenee attach`), then re-run `neenee dashboard`."
+                .to_string()
+        })?;
+    run_attached(
+        Some(carrier),
+        false,
+        project_override,
+        autopilot_at_start,
+        true,
+    )
+    .await
+}
+
 /// Attach-mode entry (`neenee --attach [id]`): find or spawn the project's
 /// session server, connect over WebSocket, and drive the hosted session with
 /// the ordinary TUI. This process is only a client — the server owns the
@@ -315,6 +396,7 @@ async fn run_attached(
     fresh: bool,
     project_override: Option<PathBuf>,
     autopilot_at_start: bool,
+    dashboard_entry: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
         .clone()
@@ -325,6 +407,10 @@ async fn run_attached(
     // re-attach loop below always targets an explicit existing id.
     let mut fresh_pending = fresh;
     let mut autopilot_pending = autopilot_at_start;
+    // `neenee dashboard` raises the dashboard over the carrier session on the
+    // first TUI entry only; a `/host` switch re-attaches into an ordinary
+    // conversation view (the overlay does not re-arm).
+    let mut dashboard_pending = dashboard_entry;
     // Re-attach loop: returning from the TUI with a `/host` switch target
     // re-connects to that session instead of exiting (ADR-0096).
     loop {
@@ -376,6 +462,12 @@ async fn run_attached(
         let config = Config::load();
         let tui_config = config.tui.clone();
         let input_history_config = config.input_history.clone();
+        let startup_overlay = if dashboard_pending {
+            dashboard_pending = false;
+            crate::tui::StartupOverlay::Dashboard
+        } else {
+            crate::tui::StartupOverlay::None
+        };
         let outcome = start_tui(
             tx,
             rx,
@@ -397,7 +489,7 @@ async fn run_attached(
                 session_id: hosted_session_id,
             },
             None,
-            false,
+            startup_overlay,
         )
         .await?;
         save_history_bounded(outcome.history, config.input_history.dedup).await;

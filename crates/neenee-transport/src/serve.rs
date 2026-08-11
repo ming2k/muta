@@ -30,8 +30,7 @@ pub(crate) fn is_attach_sync_event(response: &AgentResponse) -> bool {
         AgentResponse::ProviderKeys(_) | AgentResponse::ProviderPicker(_) => true,
         AgentResponse::Round { event, .. } => matches!(
             event,
-            neenee_core::RoundEvent::ContextTokens(_)
-                | neenee_core::RoundEvent::HarnessState(_)
+            neenee_core::RoundEvent::ContextTokens(_) | neenee_core::RoundEvent::HarnessState(_)
         ),
         _ => false,
     }
@@ -458,8 +457,8 @@ where
         None => {
             let config = neenee_persistence::config::Config::load();
             let provider = neenee_agent::catalog::default_provider_id(&config).to_string();
-            let model = neenee_agent::catalog::resolved_model_name(&config, &provider)
-                .unwrap_or_default();
+            let model =
+                neenee_agent::catalog::resolved_model_name(&config, &provider).unwrap_or_default();
             (provider, model)
         }
     };

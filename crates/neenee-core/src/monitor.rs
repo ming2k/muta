@@ -139,6 +139,76 @@ pub struct MonitoredSession {
     pub context_tokens: Option<usize>,
     /// One-line error/notice text for `Failed` / `NeedsApproval` / `NeedsInput`.
     pub note: Option<String>,
+    /// Absolute project workspace path this session belongs to (ADR-0096's
+    /// two-level indexing projected down to the row). Empty for producers
+    /// that predate the field (mirror hellos, prehosts) — display code must
+    /// tolerate it. Content-free in the monitor sense: it is addressing
+    /// metadata, not conversation.
+    #[serde(default)]
+    pub project_root: String,
+    /// The session's declared work-in-progress (ADR-0097 §5), when it has
+    /// registered one: the paths it is mid-edit on plus a one-line summary.
+    /// Coordination metadata, not conversation; absent (`None`) means "no
+    /// declared WIP", which is what a consumer needs to answer `check_wip`.
+    #[serde(default)]
+    pub wip: Option<WipStatus>,
+}
+
+/// A session's declared work-in-progress (ADR-0097 §5): the paths it is
+/// mid-edit on plus a one-line summary, so peers in the same workspace can
+/// avoid colliding verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WipStatus {
+    /// Paths the session is actively editing (as declared; workspace-relative
+    /// or absolute, normalized at comparison time).
+    pub paths: Vec<String>,
+    /// One-line description of the in-flight work (e.g. "refactoring the
+    /// retry loop — tree doesn't build").
+    pub summary: String,
+}
+
+/// One overlapping WIP found by a `check_wip` query (ADR-0097 §5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WipConflict {
+    /// Session id holding the conflicting WIP.
+    pub session: String,
+    /// The WIP's declared paths.
+    pub paths: Vec<String>,
+    /// The WIP's one-line summary.
+    pub summary: String,
+    /// The subset of `paths` that overlaps the query's paths (empty when the
+    /// query named no paths — the conflict is then whole-workspace).
+    pub overlap: Vec<String>,
+}
+
+/// What a `check_wip` verdict advises the asking session to do (ADR-0097 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WipAdvice {
+    /// No conflicting WIP — proceed, including whole-tree verification.
+    Proceed,
+    /// Conflicting WIP exists — narrow to non-overlapping paths and skip
+    /// global verification (no full test suite / no direct run).
+    ProceedScoped,
+    /// A conflicting WIP directly overlaps what the session is about to do —
+    /// wait or ask the human rather than plough ahead.
+    Defer,
+}
+
+impl WipAdvice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proceed => "proceed",
+            Self::ProceedScoped => "proceed_scoped",
+            Self::Defer => "defer",
+        }
+    }
+}
+
+impl std::fmt::Display for WipAdvice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl MonitoredSession {
@@ -161,6 +231,8 @@ impl MonitoredSession {
             activity: None,
             context_tokens: None,
             note: None,
+            project_root: String::new(),
+            wip: None,
         }
     }
 }
@@ -288,6 +360,8 @@ mod tests {
             activity: None,
             context_tokens: None,
             note: None,
+            project_root: String::new(),
+            wip: None,
         };
         let json = serde_json::to_string(&row).unwrap();
         assert!(json.contains("\"hosting\":\"mirrored\""), "{json}");
@@ -336,6 +410,8 @@ mod tests {
                 activity: Some("running bash".into()),
                 context_tokens: Some(48_000),
                 note: None,
+                project_root: "/tmp/proj".into(),
+                wip: None,
             }],
         };
         let json = serde_json::to_string(&MonitorEvent::Snapshot(snapshot.clone())).unwrap();

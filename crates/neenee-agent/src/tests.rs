@@ -1271,10 +1271,16 @@ async fn execute_tool_evented_drains_interrupted_envoy() {
 
     // Wait until the envoy is genuinely mid-flight, then interrupt the turn.
     let mut gate_rx = gate_rx;
-    gate_rx.changed().await.expect("envoy reached second request");
+    gate_rx
+        .changed()
+        .await
+        .expect("envoy reached second request");
     cancel.cancel();
 
-    let outcome = task.await.expect("executor task").expect("no harness error");
+    let outcome = task
+        .await
+        .expect("executor task")
+        .expect("no harness error");
     assert!(outcome.interrupted, "interruption must be reported");
     let result = outcome.result.expect("drained result must be recovered");
     match result {

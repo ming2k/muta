@@ -113,7 +113,7 @@ pub use model::{
 };
 pub use monitor::{
     MirrorHello, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting,
-    SessionStatus,
+    SessionStatus, WipAdvice, WipConflict, WipStatus,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

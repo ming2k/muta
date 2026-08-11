@@ -763,9 +763,9 @@ pub async fn dispatch(
                 build_sessions_overview(session).await,
             ));
         }
-        Some(BuiltinCmd::Host) => {
+        Some(BuiltinCmd::Dashboard) => {
             record_invocation(session, name, args).await;
-            // The daemon control panel renders the monitor stream the TUI
+            // The session dashboard renders the monitor stream the TUI
             // maintains client-side (ADR-0096); this is only the open signal.
             let _ = resp_tx.send(AgentResponse::OpenHostPanel);
         }
@@ -2149,8 +2149,7 @@ mod autopilot_arg_tests {
     fn unknown_value_is_an_error_with_a_usage_hint() {
         let err = parse_autopilot_arg("maybe").unwrap_err();
         assert!(
-            err.contains("`/autopilot` to toggle")
-                && err.contains("`/autopilot on|off`"),
+            err.contains("`/autopilot` to toggle") && err.contains("`/autopilot on|off`"),
             "usage hint missing the toggle form: {err}"
         );
     }

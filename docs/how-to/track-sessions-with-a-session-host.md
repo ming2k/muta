@@ -16,7 +16,9 @@ CLI, web) talks to it over one control-plane protocol (ADR-0096).
 - **Control plane**: the daemon's read/write API — observe (`Monitor`),
   drive (`Attach`), and manage (`CreateSession`, `SendPrompt`, `Interrupt`,
   `ResolvePermission`, `KillSession`).
-- **Control view**: `neenee status` in a terminal, `/host` inside a TUI.
+- **Control view**: `neenee status` in a terminal, `/dashboard` inside a TUI,
+  or `neenee dashboard` to jump straight into that full-screen view from the
+  shell.
 
 ## 1. Start (or don't) the daemon
 
@@ -55,14 +57,22 @@ neenee status --all        # also list idle sessions
 neenee status --json       # raw monitor frames (scripts / a web panel)
 ```
 
-Inside any TUI, press **`/host`**: a live panel over every daemon session —
-status, round/turn, output tokens, current tool — with a preview of the
-selected row. Enter switches to that session **without killing the one you
-leave**: the TUI detaches and re-attaches, so both sessions stay alive in the
-daemon.
+Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
+view over every daemon session — status, round/turn, output tokens, current
+tool — with a detail pane for the selected row. Enter attaches to that session
+**without killing the one you leave**: the TUI detaches and re-attaches, so
+both sessions stay alive in the daemon. The same surface interrupts (`i`),
+prompts (`p`), and creates (`n`) sessions.
+
+Or open it straight from the shell with **`neenee dashboard`** — no need to
+enter a session first. It attaches to the daemon's most-recently-active
+session only as the underlying carrier and raises the dashboard over it:
+**Esc quits**, **Enter** on a row attaches into that session. Like
+`neenee status`, it never spawns a daemon, so it needs a running host with at
+least one session.
 
 ```text
-neenee daemon — all projects — 2 session(s) needing attention
+neenee dashboard — all projects — 2 session(s) needing attention
   SESSION    STATUS         ROUND      OUT ELAPSED   DETAIL
   8e439942   running        3 › 1      512 1m23s     tool bash · waiting for model · ctx 48.2k
   c71af03d   needs-approval 2          128 45s       permission: write_file
@@ -77,7 +87,7 @@ neenee daemon — all projects — 2 session(s) needing attention
 ## 4. Act from the control plane
 
 The daemon is not just observability — it manages sessions. These are the
-verbs the web panel and scripts use (the TUI uses attach + `/host`):
+verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 
 | Verb | Effect |
 |------|--------|
@@ -102,7 +112,7 @@ verbs; there is no separate web backend to run.
 
 ## Scope and limits
 
-- One daemon per user. `neenee status` aggregates every project; TUI `/host`
+- One daemon per user. `neenee status` aggregates every project; TUI `/dashboard`
   is the same view in-terminal.
 - Sessions outlive their TUIs by design — `KillSession` (or stopping the
   daemon) is how a session ends.

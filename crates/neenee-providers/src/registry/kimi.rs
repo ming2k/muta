@@ -38,15 +38,15 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
 pub const MODELS: &[Model] = &[
     // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
     Model {
-    // The Kimi Code platform's current flagship. The platform's live
-    // `GET /models` advertises `k3` with a 1M context window, image/video
-    // inputs, and always-on thinking (`supports_thinking_type: "only"`) —
-    // over the OpenAI-compatible wire the always-on reasoning simply streams
-    // back as `reasoning_content`, so there is no thinking switch to model.
-    // The effort ladder is tunable: `reasoning_effort` accepts
-    // `low`/`high`/`max` (platform default `high`), advertised so the
-    // pickers/hint bar can show the effective level and the editor can cycle
-    // it; the fitted overlay refreshes it from the live `/models` list.
+        // The Kimi Code platform's current flagship. The platform's live
+        // `GET /models` advertises `k3` with a 1M context window, image/video
+        // inputs, and always-on thinking (`supports_thinking_type: "only"`) —
+        // over the OpenAI-compatible wire the always-on reasoning simply streams
+        // back as `reasoning_content`, so there is no thinking switch to model.
+        // The effort ladder is tunable: `reasoning_effort` accepts
+        // `low`/`high`/`max` (platform default `high`), advertised so the
+        // pickers/hint bar can show the effective level and the editor can cycle
+        // it; the fitted overlay refreshes it from the live `/models` list.
         id: "k3",
         name: "Kimi K3",
         family: "kimi",

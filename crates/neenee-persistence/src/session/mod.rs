@@ -3631,11 +3631,7 @@ mod tests {
         // apply_events does not run schema migration; commands are untouched
         // by the message-only replay paths.
         assert_eq!(
-            restored.commands[0]
-                .result
-                .as_ref()
-                .unwrap()
-                .to_text(),
+            restored.commands[0].result.as_ref().unwrap().to_text(),
             "No relevant history found."
         );
     }

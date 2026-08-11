@@ -184,7 +184,6 @@ into its model turns:
 ┌─ Context Usage ───────────────────────────────────────────┐
 │ Size                 12.5k / 200.0k (6%)                  │
 │ Output rate          52.3 tok/s                           │
-│ Time                 2.1s gen                              │
 │                                                          │
 │   Round      State        Tokens      Turns               │
 │ ▌1st         done          12.3k         2                │
@@ -194,19 +193,18 @@ into its model turns:
 └────────────────────────────────────────────────────────────┘
 ```
 
-The top read-out has three peer key/value rows: context **Size**, latest
-**Output rate** (tokens/sec of the last completed round's model generation),
-and **Time** (the generation span that the rate was measured over). The label
-is "Output rate", not "Throughput", deliberately: throughput implies
+The top read-out has two peer key/value rows: context **Size** and the latest
+**Output rate** (tokens/sec of the last completed round's model generation).
+The label is "Output rate", not "Throughput", deliberately: throughput implies
 end-to-end processing speed, but this figure *excludes* tool execution, hooks,
 and human-decision pauses — it isolates how fast the model itself generated.
-The **Time** row renders exactly the denominator the rate was divided by
-(`generation_ms`, summed across the round's completed provider requests, with
-a fallback to active wall-clock when none completed measurably), so the two
-rows always correspond — the rate *is* `output_tokens / Time`. Envoy sub-agents
-are folded in symmetrically: their completion tokens reach the numerator and
-their own generation time reaches the denominator, so a delegating round does
-not show an inflated tok/s.
+Its denominator is `generation_ms`, summed across the round's completed
+provider requests (with a fallback to active wall-clock when none completed
+measurably); per-request spans are the same span the detail page's `tok/s`
+column divides by, so the summary and the drill-in always agree. Envoy
+sub-agents are folded in symmetrically: their completion tokens reach the
+numerator and their own generation time reaches the denominator, so a
+delegating round does not show an inflated tok/s.
 Beneath it sits the round ledger table — no sub-heading, since the modal
 title already names the view and the column headers frame the rows. The
 table has four columns: **Round** (bare ordinal label), **State** (the
@@ -231,8 +229,7 @@ The report answers two questions at a glance:
   spent streaming, excluding tool execution and human-decision pauses). A
   round that was mostly waiting (permission prompts, `ask_user`) therefore does
   not read as a slow model: only the model's own streaming span is in the
-  denominator. The Time row shows exactly that span, so the two are
-  self-checking.
+  denominator.
 - **"Which round cost what?"** — the per-round totals make token spend
   across the conversation visible at a glance; drilling into a round
   exposes its individual model turns (and any retries). The detail page
@@ -251,10 +248,10 @@ The report answers two questions at a glance:
 │ Turns / attempts     2 / 3                                │
 │                                                          │
 │ Turns                                                    │
-│ Turn            State             Input   Output    Total │
-│ 2nd             completed          —        —     2.4k    │
-│ 1st - 2nd       completed        790        40       830  │
-│ 1st             interrupted       —        —        —     │
+│ Turn            State          Input  Output  Total  tok/s│
+│ 2nd             completed         —       —   2.4k      52│
+│ 1st - 2nd       completed       790      40    830      20│
+│ 1st             interrupted       —       —      —       –│
 │                                                          │
 │ Tokens:  green = provider-reported   yellow = local est.  │
 │                                  ↑↓ scroll  Esc rounds    │
@@ -266,6 +263,32 @@ newest-first. A turn with a single attempt shows a bare ordinal (`1st`,
 `2nd`); a retried turn shows its later attempts as `<turn> - <attempt>`
 (e.g. `1st - 2nd`), so a transient retry surfaces as its own row with its
 own state rather than a collapsed `×2` suffix.
+
+The right-most **tok/s** column is the attempt's settled output rate:
+completion tokens ÷ the attempt's own measured generation span (request
+dispatch → validated response, booked into the request-usage record when the
+attempt settles). It renders `–` while the attempt is in flight, when no
+span was measured (a failure before any validated response, or a record
+persisted before timing existed), or when no completion tokens were booked.
+
+The table degrades *atomically* as the modal narrows: the Turn label column
+flexes first, then whole column groups drop as units — the Input + Output
+split pair goes together, then the Tokens total, then tok/s — and the
+inter-column gutters never squeeze cell by cell. Right-aligned columns are
+dropped from the left, so the surviving tok/s column keeps hugging the right
+modal margin at every tier:
+
+```
+≥62 cols   Turn  State  Input  Output  Total  tok/s
+≥42 cols   Turn  State  Tokens  tok/s
+≥32 cols   Turn  State  tok/s
+<32 cols   Turn  State
+```
+
+The provenance legend beneath the table is responsive: it prefers the full
+`green = provider-reported   yellow = local estimate` wording, collapses to
+`green reported   yellow estimated` on narrower modals, and finally splits
+across two lines, so the explanation is never clipped mid-word.
 
 ## Current context vs. request usage
 

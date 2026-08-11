@@ -297,6 +297,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         StartupMode::Attach(_) => unreachable!("attach returns before this match"),
         StartupMode::Serve { .. } => unreachable!("serve returns before this match"),
         StartupMode::Status { .. } => unreachable!("status returns before this match"),
+        // `neenee dashboard` is a pure attach-mode surface: it never assembles
+        // a local harness (the caller intercepts it before `assemble`, exactly
+        // like `status`/`attach`).
+        StartupMode::Dashboard => unreachable!("dashboard returns before this match"),
         #[cfg(debug_assertions)]
         StartupMode::Showcase(_) => unreachable!("showcase returns before this match"),
     };

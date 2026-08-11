@@ -81,6 +81,13 @@ pub enum MessageKind {
         /// `Instant` is cheap to capture at construction time and is not
         /// serialized — session restore reconstructs finished steps without it.
         started_at: Option<std::time::Instant>,
+        /// Set when this envoy surfaced a permission / user-input request that
+        /// is still parked awaiting a human decision. The peek row reads it to
+        /// show `awaiting approval` instead of the last tool activity, which
+        /// would misleadingly suggest the envoy is still making progress.
+        /// Cleared by the next progress event from this envoy (tool call,
+        /// tool result, or streamed text) and on any terminal transition.
+        awaiting: bool,
         /// Child events emitted by an envoy spawned from this tool step.
         children: Vec<TranscriptMessage>,
     },
@@ -527,6 +534,7 @@ impl TranscriptMessage {
                 user_pinned: false,
                 duration_ms: None,
                 started_at: Some(std::time::Instant::now()),
+                awaiting: false,
                 children: Vec::new(),
             },
             delivery: DeliveryStatus::default(),
@@ -600,6 +608,7 @@ impl TranscriptMessage {
             structured: step_structured,
             status,
             duration_ms: step_duration,
+            awaiting,
             ..
         } = &mut self.kind
         else {
@@ -608,6 +617,7 @@ impl TranscriptMessage {
         if step_id != id || !status.is_running() {
             return false;
         }
+        *awaiting = false;
         let output = output.into();
         // Classify from the structured result (data-level: a non-zero shell
         // exit, an explicit `ToolOutput::Error`, a `failed` envoy). The
@@ -749,6 +759,7 @@ impl TranscriptMessage {
                 status,
                 started_at,
                 duration_ms,
+                awaiting,
                 children,
                 ..
             } = &mut self.kind
@@ -758,6 +769,7 @@ impl TranscriptMessage {
             let mut changed = false;
             if status.is_running() {
                 *status = ToolStepStatus::Cancelled;
+                *awaiting = false;
                 // Freeze the elapsed time at the moment of cancellation so the
                 // step stops showing a live-running timer.
                 if duration_ms.is_none() {
@@ -792,15 +804,33 @@ impl TranscriptMessage {
     /// Returns `true` if this message is a tool step and the event was stored.
     pub fn push_envoy_event(&mut self, event: &EnvoyEvent) -> bool {
         let MessageKind::ToolStep {
-            children, profile, ..
+            children,
+            profile,
+            awaiting,
+            ..
         } = &mut self.kind
         else {
             return false;
         };
+        // Progress events clear a parked human-decision wait; request events
+        // (permission / ask-user / input) park it, so the peek row can say
+        // `awaiting approval` instead of replaying the last tool activity.
+        match event {
+            EnvoyEvent::PermissionRequest(_)
+            | EnvoyEvent::UserQuestionRequest(_)
+            | EnvoyEvent::InputRequest(_) => *awaiting = true,
+            EnvoyEvent::ToolCall { .. }
+            | EnvoyEvent::ToolResult { .. }
+            | EnvoyEvent::StreamStart
+            | EnvoyEvent::StreamDelta(_)
+            | EnvoyEvent::StreamEnd(_) => *awaiting = false,
+            _ => {}
+        }
         match event {
             // The envoy announced its role — stamp it on the step so the
-            // label can render "explore: …" / "plan: …" instead of a generic
-            // "Envoy". No child message is produced.
+            // renderer can draw an `[EXPLORE]` / `[PLAN]` role badge in front
+            // of the summary instead of a generic `[ENVOY]`.
+            // No child message is produced.
             EnvoyEvent::Started { profile: name } => {
                 *profile = Some(name.clone());
             }
@@ -1001,6 +1031,17 @@ impl TranscriptMessage {
         )
     }
 
+    /// The bound envoy profile name (`explore` / `plan` / `verify` / …), used
+    /// by the inline step's role badge. `None` until the `Started` event lands
+    /// (or for non-envoy steps); the renderer falls back to a generic
+    /// `[ENVOY]` badge then.
+    pub fn envoy_profile(&self) -> Option<&str> {
+        match &self.kind {
+            MessageKind::ToolStep { profile, .. } => profile.as_deref(),
+            _ => None,
+        }
+    }
+
     /// The call id of a tool step, used as the addressable identity of a
     /// envoy task for the focus stack.
     pub fn tool_step_call_id(&self) -> Option<&str> {
@@ -1051,63 +1092,98 @@ impl TranscriptMessage {
         }
     }
 
-    /// One-line live status derived from the envoy's children and the
-    /// parent tool step's completion state, e.g. `↳ Running · 3 tool calls ·
-    /// Grep "foo"` or `↳ Completed · 3 tool calls · 1.2s`. Returns
-    /// `None` for non-task steps. Duration is only shown once the step reaches
-    /// a terminal state; a running step surfaces progress instead of an
-    /// accumulating timer.
+    /// One-line live "peek" at the envoy's current activity, e.g.
+    /// `Grep "foo" · 12s` or `thinking · 8s`. Shown as the step's second row
+    /// while the envoy runs and replaced in place by
+    /// [`Self::envoy_outcome_line`] when the step terminates. Returns `None`
+    /// for non-task steps and for terminal steps (the outcome row owns the
+    /// second row then). The elapsed timer is derived from `started_at` at
+    /// render time, so the line stays fresh on every animation tick without
+    /// storing any ticking state.
     pub fn envoy_status_line(&self) -> Option<String> {
         if !self.is_envoy_task() {
             return None;
         }
         let MessageKind::ToolStep {
             status,
-            duration_ms,
+            started_at,
+            awaiting,
             children,
             ..
         } = &self.kind
         else {
             return None;
         };
-        let tool_calls = children.iter().filter(|child| child.is_tool_step()).count();
-        let line = match status {
-            ToolStepStatus::Failed => format!("↳ Failed · {} tool calls", tool_calls),
-            ToolStepStatus::Denied => format!("↳ Denied · {} tool calls", tool_calls),
-            ToolStepStatus::Cancelled => format!("↳ Cancelled · {} tool calls", tool_calls),
-            ToolStepStatus::Interrupted => {
-                format!("↳ Interrupted · {} tool calls", tool_calls)
+        if !status.is_running() {
+            return None;
+        }
+        let elapsed = started_at.map(|started| {
+            let ms = started.elapsed().as_millis() as u64;
+            if ms < 1000 {
+                format!("{}ms", ms)
+            } else if ms < 60_000 {
+                format!("{}s", ms / 1000)
+            } else {
+                duration_text(Some(ms))
             }
-            ToolStepStatus::Ok => format!(
-                "↳ Completed · {} tool calls · {}",
-                tool_calls,
-                duration_text(*duration_ms)
-            ),
-            ToolStepStatus::Running => {
-                // Running: show accumulated tool-call count followed by the
-                // most recent child activity. The elapsed timer is deliberately
-                // omitted while the step is in flight; duration is surfaced only
-                // once the step reaches a terminal state.
-                let stats = format!("· {} tool calls", tool_calls);
-                match children.last() {
-                    Some(child)
-                        if child.is_tool_step()
-                            && child.tool_step_status() == Some(ToolStepStatus::Running) =>
-                    {
-                        // A tool step still in flight.
-                        let header = child
-                            .tool_step_summary()
-                            .unwrap_or_else(|| "tool".to_string());
-                        format!("↳ Running {} · {}", stats, header)
-                    }
-                    Some(child) if child.role == Role::Assistant && !child.raw.is_empty() => {
-                        format!("↳ Running {} · thinking", stats)
-                    }
-                    _ => format!("↳ Running {}", stats),
+        });
+        // A parked human-decision wait outranks replaying the last tool
+        // activity: the envoy is blocked on the user, not making progress.
+        let activity = if *awaiting {
+            "awaiting approval".to_string()
+        } else {
+            match children.last() {
+                Some(child)
+                    if child.is_tool_step()
+                        && child.tool_step_status() == Some(ToolStepStatus::Running) =>
+                {
+                    // A tool step still in flight.
+                    child
+                        .tool_step_summary()
+                        .unwrap_or_else(|| "tool".to_string())
                 }
+                Some(child) if child.role == Role::Assistant && !child.raw.is_empty() => {
+                    "thinking".to_string()
+                }
+                _ => "starting".to_string(),
             }
         };
-        Some(line)
+        Some(match elapsed {
+            Some(elapsed) => format!("{} · {}", activity, elapsed),
+            None => activity,
+        })
+    }
+
+    /// One-line outcome replacing the peek row once the envoy terminates: the
+    /// first non-empty line of its conclusion (`ToolOutput::Envoy.summary`,
+    /// falling back to the legacy `output` text for restored sessions).
+    /// Returns `None` for non-task steps, running steps, and terminal steps
+    /// with no conclusion text.
+    pub fn envoy_outcome_line(&self) -> Option<String> {
+        if !self.is_envoy_task() {
+            return None;
+        }
+        let MessageKind::ToolStep {
+            status,
+            output,
+            structured,
+            ..
+        } = &self.kind
+        else {
+            return None;
+        };
+        if status.is_running() {
+            return None;
+        }
+        let source: &str = match structured.as_deref() {
+            Some(neenee_core::ToolOutput::Envoy { summary, .. }) => summary,
+            _ => output.as_deref()?,
+        };
+        source
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_string)
     }
 
     pub fn thinking(content: impl Into<String>) -> Self {
@@ -1385,6 +1461,7 @@ impl TranscriptMessage {
             user_pinned: _,
             duration_ms,
             started_at: _,
+            awaiting: _,
             children: _,
         } = &self.kind
         else {
@@ -2692,12 +2769,10 @@ mod tests {
             profile: "explore".to_string()
         }));
         assert_eq!(task.envoy_label(), "explore · write the plan");
-        // The collapsed header picks the role up via `tool_step_summary` too.
+        // The collapsed header carries only the description — the role is
+        // shown by the renderer's `[PROFILE]` badge in front of it.
         let header = task.tool_step_summary().expect("summary");
-        assert!(
-            header.starts_with("explore:"),
-            "collapsed summary should lead with the role; got: {header}"
-        );
+        assert_eq!(header, "write the plan");
     }
 
     #[test]
@@ -2705,16 +2780,15 @@ mod tests {
         let mut task =
             TranscriptMessage::tool_step("call_9", "envoy", r#"{"description":"d","prompt":"p"}"#);
 
-        // No children yet, still running.
+        // No children yet, still running — the peek row reports `starting`.
         let running = task.envoy_status_line().expect("running status");
-        assert!(running.starts_with("↳ Running"), "got: {running}");
+        assert!(running.starts_with("starting"), "got: {running}");
 
-        // Streaming assistant text => a "thinking" suffix.
+        // Streaming assistant text => the peek row reports `thinking`.
         task.push_envoy_event(&EnvoyEvent::StreamStart);
         task.push_envoy_event(&EnvoyEvent::StreamDelta("partial".into()));
         let thinking = task.envoy_status_line().expect("thinking status");
-        assert!(thinking.starts_with("↳ Running"), "got: {thinking}");
-        assert!(thinking.ends_with("thinking"), "got: {thinking}");
+        assert!(thinking.starts_with("thinking"), "got: {thinking}");
 
         // An in-flight child tool call surfaces the tool's header.
         task.push_envoy_event(&EnvoyEvent::ToolCall {
@@ -2723,20 +2797,25 @@ mod tests {
             arguments: r#"{"pattern":"foo"}"#.into(),
         });
         let running = task.envoy_status_line().expect("running status");
-        assert!(running.starts_with("↳ Running"), "got: {running}");
         assert!(running.contains("Grep"), "got: {running}");
 
-        // Completing the parent summarizes tool-call count + duration.
+        // Completing the parent hides the peek row; the outcome row takes over
+        // with the envoy's one-line conclusion.
         assert!(task.finish_tool_step(
             "call_9",
             "final answer",
             neenee_core::ToolOutput::text("final answer"),
             1500
         ));
-        let done = task.envoy_status_line().expect("done status");
-        assert!(done.starts_with("↳ Completed"), "got: {done}");
-        assert!(done.contains("1 tool calls"), "got: {done}");
-        assert!(done.contains("1.5s"), "got: {done}");
+        assert!(
+            task.envoy_status_line().is_none(),
+            "the peek row must disappear once the envoy terminates"
+        );
+        assert_eq!(
+            task.envoy_outcome_line().as_deref(),
+            Some("final answer"),
+            "the outcome row carries the envoy's conclusion"
+        );
 
         // Children are accessible for the dedicated envoy view.
         assert_eq!(task.envoy_children().map(|c| c.len()), Some(2));
@@ -2762,8 +2841,55 @@ mod tests {
             interrupted: false,
         };
         assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
-        let status = task.envoy_status_line().unwrap();
-        assert!(status.starts_with("↳ Failed"), "got: {status}");
+        assert!(
+            task.envoy_status_line().is_none(),
+            "a terminal envoy hides the peek row"
+        );
+        // The outcome row surfaces the error summary's first line.
+        assert_eq!(task.envoy_outcome_line().as_deref(), Some("Error: boom"));
+    }
+
+    #[test]
+    fn envoy_peek_reports_awaiting_approval_while_parked() {
+        let mut task =
+            TranscriptMessage::tool_step("c", "envoy", r#"{"description":"d","prompt":"p"}"#);
+        task.push_envoy_event(&EnvoyEvent::ToolCall {
+            id: "i".into(),
+            name: "bash".into(),
+            arguments: r#"{"command":"rm -rf x"}"#.into(),
+        });
+        // The in-flight tool normally drives the peek row…
+        let peek = task.envoy_status_line().unwrap();
+        assert!(peek.starts_with("Run rm"), "got: {peek}");
+
+        // …but a parked permission request takes over the row: the envoy is
+        // blocked on a human, not making progress.
+        task.push_envoy_event(&EnvoyEvent::PermissionRequest(
+            neenee_core::PermissionRequest {
+                id: "p1".into(),
+                tool: "bash".into(),
+                label: "Run rm".into(),
+                description: String::new(),
+                arguments: "{}".into(),
+                scope: "workspace".into(),
+                elevation: false,
+                one_off: false,
+            },
+        ));
+        let peek = task.envoy_status_line().unwrap();
+        assert!(peek.starts_with("awaiting approval"), "got: {peek}");
+
+        // The next progress event from the envoy clears the parked wait.
+        task.push_envoy_event(&EnvoyEvent::ToolResult {
+            id: "i".into(),
+            name: "bash".into(),
+            output: "done".into(),
+            duration_ms: 3,
+        });
+        task.push_envoy_event(&EnvoyEvent::StreamStart);
+        task.push_envoy_event(&EnvoyEvent::StreamDelta("…".into()));
+        let peek = task.envoy_status_line().unwrap();
+        assert!(peek.starts_with("thinking"), "got: {peek}");
     }
 
     #[test]
@@ -2799,9 +2925,15 @@ mod tests {
             Some(ToolStepStatus::Interrupted),
             "an interrupted envoy classifies as Interrupted"
         );
-        let line = task.envoy_status_line().unwrap();
-        assert!(line.starts_with("↳ Interrupted"), "got: {line}");
-        assert!(line.contains("1 tool calls"), "got: {line}");
+        assert!(
+            task.envoy_status_line().is_none(),
+            "a terminal envoy hides the peek row"
+        );
+        assert_eq!(
+            task.envoy_outcome_line().as_deref(),
+            Some("Interrupted: stopped by the user"),
+            "the outcome row carries the interruption summary"
+        );
     }
 
     #[test]
@@ -2957,8 +3089,11 @@ mod tests {
             "nested child must converge with the parent"
         );
 
-        let status = task.envoy_status_line().expect("status line");
-        assert!(status.starts_with("↳ Cancelled"), "got: {status}");
+        // A cancelled envoy is terminal: the peek row disappears and the
+        // outcome row falls back to the legacy output text (none was recorded
+        // here, so the row hides entirely).
+        assert!(task.envoy_status_line().is_none());
+        assert!(task.envoy_outcome_line().is_none());
     }
 
     #[test]

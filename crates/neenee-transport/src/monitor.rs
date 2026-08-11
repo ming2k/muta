@@ -12,7 +12,7 @@
 //! display badge, and the `Needs*` states are overlays on a still-running
 //! round, exactly like the single-session `ParentStatus` (ADR-0017).
 
-use neenee_core::{AgentResponse, MonitoredSession, RoundEvent, SessionStatus};
+use neenee_core::{AgentResponse, MonitoredSession, RoundEvent, SessionStatus, WipStatus};
 
 /// Tracks one hosted session. `base` is the cheap header row (from the same
 /// deferred parse that feeds the sessions picker); every other field is
@@ -29,6 +29,10 @@ pub struct MonitorTracker {
     activity: Option<String>,
     context_tokens: Option<usize>,
     note: Option<String>,
+    /// The session's declared WIP (ADR-0097 §5). Set by the registry's WIP
+    /// coordination registry (not folded from the event stream), so it lives
+    /// beside the tracked fields and is projected onto the row by [`row`].
+    wip: Option<WipStatus>,
 }
 
 impl MonitorTracker {
@@ -55,7 +59,15 @@ impl MonitorTracker {
             activity: None,
             context_tokens: None,
             note: None,
+            wip: None,
         }
+    }
+
+    /// Set or clear the session's declared WIP (ADR-0097 §5). Called by the
+    /// registry's WIP coordination registry; the next [`row`] projection
+    /// carries it to the dashboard.
+    pub fn set_wip(&mut self, wip: Option<WipStatus>) {
+        self.wip = wip;
     }
 
     /// Stamp a real identity (session id + header fields) onto the base row
@@ -84,6 +96,7 @@ impl MonitorTracker {
         row.activity = self.activity.clone();
         row.context_tokens = self.context_tokens;
         row.note = self.note.clone();
+        row.wip = self.wip.clone();
         row
     }
 
@@ -249,6 +262,8 @@ mod tests {
                 activity: None,
                 context_tokens: None,
                 note: None,
+                project_root: "/tmp/proj".into(),
+                wip: None,
             },
             SessionStatus::Idle,
         )

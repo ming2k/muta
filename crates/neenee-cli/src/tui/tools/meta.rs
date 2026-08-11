@@ -15,12 +15,12 @@ pub struct EnvoyPresenter;
 
 impl ToolPresenter for EnvoyPresenter {
     fn summary(&self, view: &ToolView) -> String {
-        // Label by role when the envoy announced it (explore / plan /
-        // verify / …); fall back to the generic "Envoy" otherwise.
-        let role = view.profile.unwrap_or("Envoy");
+        // The role badge `[explore]` / `[plan]` is drawn by the renderer in
+        // front of this summary, so the summary itself carries only the task
+        // description — repeating the role here would double it up.
         view.str("description")
-            .map(|desc| format!("{}: {}", role, truncate(desc, 56)))
-            .unwrap_or_else(|| format!("Run {} envoy", role))
+            .map(|desc| truncate(desc, 56).to_string())
+            .unwrap_or_else(|| "Run envoy".to_string())
     }
 }
 

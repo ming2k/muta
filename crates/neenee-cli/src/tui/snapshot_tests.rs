@@ -533,6 +533,7 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 },
                 envoy_bar: None,
                 side_banner: None,
+                    session_head: None,
                 todos: None,
                 review_alert: String::new(),
                 round_started_at: None,

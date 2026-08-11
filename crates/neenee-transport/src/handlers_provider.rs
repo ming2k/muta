@@ -7,7 +7,10 @@
 
 use neenee_agent::Agent;
 use neenee_agent::catalog;
-use neenee_core::{AgentResponse, Provider, SecretString};
+use neenee_agent::orchestration::round_response;
+use neenee_core::{
+    AgentNotice, AgentResponse, CommandRecord, CommandResult, Provider, RoundEvent, SecretString,
+};
 use neenee_persistence::{
     config::Config,
     provider_usage::ProviderUsage,
@@ -142,10 +145,13 @@ pub async fn switch(
     {
         tracing::warn!(?error, "could not persist session provider selection");
     }
+    // Pass the session through so `activate` can surface the acknowledgment
+    // toast + record the ledger entry for this genuine user-initiated switch.
     activate(
         config,
         agent,
         provider_for_task,
+        Some(session),
         resp_tx,
         provider_usage,
         provider_type,
@@ -294,6 +300,7 @@ pub async fn add(
         config,
         agent,
         provider_for_task,
+        None,
         resp_tx,
         provider_usage,
         id,
@@ -370,6 +377,7 @@ pub async fn edit(
             config,
             agent,
             provider_for_task,
+            None,
             resp_tx,
             provider_usage,
             id,
@@ -480,6 +488,7 @@ pub async fn edit_model(
             config,
             agent,
             provider_for_task,
+            None,
             resp_tx,
             provider_usage,
             provider_id,
@@ -536,6 +545,7 @@ pub async fn edit_model_reasoning(
             config,
             agent,
             provider_for_task,
+            None,
             resp_tx,
             provider_usage,
             provider_id.clone(),
@@ -610,6 +620,7 @@ pub async fn delete(
             config,
             agent,
             provider_for_task,
+            None,
             resp_tx,
             provider_usage,
             fallback,
@@ -667,6 +678,7 @@ pub async fn reapply_session_selection(
         &effective,
         agent,
         provider_for_task,
+        None,
         resp_tx,
         provider_usage,
         provider_id,
@@ -814,6 +826,7 @@ pub async fn connect(
         config,
         agent,
         provider_for_task,
+        None,
         resp_tx,
         provider_usage,
         provider_id,
@@ -1028,14 +1041,38 @@ async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
     }
 }
 
+/// Record a provider switch's acknowledgment in the durable command ledger —
+/// the ADR-0091 twin of the ADR-0088 toast. The live confirmation stays a
+/// transient toast (emitted by `activate`); the ledger keeps a durable `Ack`
+/// so resume/export/audit can show the switch happened, without polluting the
+/// message stream. Recorded under the `"models"` command word (the picker the
+/// user actually invoked to switch); best-effort, a failed persist logs but
+/// does not abort the switch.
+async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str, ack: String) {
+    let record = CommandRecord::new("models", format!("{provider} {model}"))
+        .with_result(CommandResult::Ack { title: ack });
+    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
+        tracing::warn!(?error, "could not persist provider-switch ack");
+    }
+}
+
 /// Shared tail of [`switch`] and [`add`]: rebuild the active provider through the
 /// catalog (so api-key / endpoint / user-agent resolution matches startup), swap
 /// it into the shared holder, re-seed mid-turn relief, and push the key + picker
 /// snapshots. `config` must already be persisted with the chosen pointers.
+///
+/// `session` is `Some` only for a genuine user-initiated switch ([`switch`]);
+/// those call sites additionally surface a toast acknowledgment and record the
+/// switch in the durable command ledger (ADR-0088/0091). The many *rebuild*
+/// callers (edit/delete/reasoning/reapply, …) pass `None` — re-activating the
+/// same provider is not a user-visible "switch", so it stays silent and
+/// unrecorded, exactly as before.
+#[allow(clippy::too_many_arguments)]
 async fn activate(
     config: &Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    session: Option<&SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ProviderUsage,
     provider_type: String,
@@ -1099,10 +1136,27 @@ async fn activate(
     if let Err(error) = provider_usage.save() {
         tracing::warn!(?error, "could not persist model usage telemetry");
     }
+    let ack = format!("Provider switched to {provider_type} ({model})");
     let _ = resp_tx.send(AgentResponse::ProviderSwitched {
-        provider: provider_type,
-        model,
+        provider: provider_type.clone(),
+        model: model.clone(),
     });
+    // A user-initiated switch is a command acknowledgment, not model output
+    // (ADR-0088): surface it as a transient toast, never appended to the
+    // transcript. Emitting it wrapped in `RoundEvent::Notice` (rather than as
+    // a top-level `AgentResponse::Notice`) routes the toast over the session's
+    // broadcast tap so every attached client sees it, and matches the TUI's
+    // toast drain. The ledger keeps the durable `Ack` for audit (ADR-0091).
+    // `ProviderSwitched` above already refreshed the hint bar, which is the
+    // long-lived "still in effect" indicator after the toast fades.
+    if let Some(session) = session {
+        let session_id = session.id().await;
+        let _ = resp_tx.send(round_response(
+            &session_id,
+            RoundEvent::Notice(AgentNotice::command_ack(ack.clone())),
+        ));
+        record_provider_ack(session, &provider_type, &model, ack).await;
+    }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
         config,
         provider_usage,
@@ -1208,6 +1262,35 @@ pub async fn set_default_model(
 mod tests {
     use super::*;
     use neenee_persistence::config::{UserChannelConfig, UserProviderConfig};
+
+    #[tokio::test]
+    async fn record_provider_ack_appends_durable_ack_to_command_ledger() {
+        // ADR-0091: a genuine provider switch keeps a durable `Ack` in the
+        // command ledger (the toast is its ephemeral live surface). The record
+        // rides under the `models` command word with the selection as args.
+        let tmp = tempfile::tempdir().unwrap();
+        let session = SessionStore::load_for_project(tmp.path().to_path_buf());
+        record_provider_ack(
+            &session,
+            "111xianyu",
+            "k3",
+            "Provider switched to 111xianyu (k3)".to_string(),
+        )
+        .await;
+
+        let commands = session.commands().await;
+        assert_eq!(commands.len(), 1);
+        let record = &commands[0];
+        assert_eq!(record.name, "models");
+        assert_eq!(record.args, "111xianyu k3");
+        assert_eq!(record.status, neenee_core::CommandStatus::Success);
+        match &record.result {
+            Some(neenee_core::CommandResult::Ack { title }) => {
+                assert_eq!(title, "Provider switched to 111xianyu (k3)");
+            }
+            other => panic!("expected a durable Ack result, got {other:?}"),
+        }
+    }
 
     #[test]
     fn custom_provider_id_slugifies_names() {

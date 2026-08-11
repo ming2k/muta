@@ -6,7 +6,7 @@ model name with its reasoning-effort tier, an `@<instance>` provenance suffix,
 and the context-usage indicator.
 
 Long-lived **session** state (the workspace path, the `autopilot` flag) does
-**not** live here — it has its own dedicated [status bar](status-bar.md) on the
+**not** live here — it has its own dedicated [head row](status-bar.md) at the
 row directly below this one.
 
 ## Appearance
@@ -50,7 +50,7 @@ disappears.
 
 | Attribute | Value |
 |-----------|-------|
-| Location | 1 row below the input box, above the status bar |
+| Location | 1 row below the input box (bottom of the footer stack) |
 | Left cluster | Next-Enter action sentence (`Enter …`) |
 | Model name | `brand` + BOLD |
 | Instance suffix | `@<instance>` in `muted`, after the effort tag — the provider instance's display name, so identical models served by different instances stay attributable (mirrors the `· <provider>` suffix in the Models picker) |

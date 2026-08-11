@@ -297,8 +297,8 @@ pub fn draw_message_body(
                 *content_lines += lines.len();
 
                 // User messages get top/bottom padding rows (matching the input
-                // box's breathing room).  The padding is a blank `user_panel_bg`
-                // row with the `┃` bar so the message reads as a solid panel.
+                // box's breathing room).  The padding is a full row of solid
+                // `user_panel_bg` so the message reads as a solid panel.
                 // Queued messages swap in the dimmer `user_surface_queued` so a
                 // pending send reads as more "pending" than delivered.
                 let user_bg = if is_queued {
@@ -313,7 +313,7 @@ pub fn draw_message_body(
                     // Header: the send-metadata label (turn no. + time, or a
                     // pending marker for queued messages) sits OUTSIDE the
                     // user-message panel, on plain `surface`, directly above
-                    // it. The panel's half-block top transition provides the
+                    // it. The panel's full panel-bg top padding provides the
                     // visual separator, so no extra blank row is needed.
                     if bi == 0 {
                         *content_lines += 1;
@@ -369,16 +369,18 @@ pub fn draw_message_body(
                         if *skip_rows > 0 {
                             *skip_rows = skip_rows.saturating_sub(1);
                         } else if *current_y < area.y + area.height {
-                            // Top edge: lower-half blocks so only the bottom half
-                            // carries user_panel_bg, meeting the text rows below.
+                            // Top edge: a full user_panel_bg padding row (not
+                            // half-block `▄`), so the panel opens with a full
+                            // row of breathing room and the edge is identical
+                            // across terminals.
                             let pad = Line::from(vec![
                                 Span::styled(
                                     user_gutter.clone(),
                                     Style::default().bg(theme.surface()),
                                 ),
                                 Span::styled(
-                                    "▄".repeat(user_content_w),
-                                    Style::default().fg(user_bg).bg(theme.surface()),
+                                    " ".repeat(user_content_w),
+                                    Style::default().bg(user_bg),
                                 ),
                                 Span::styled(
                                     user_gutter.clone(),
@@ -529,16 +531,17 @@ pub fn draw_message_body(
                         if *skip_rows > 0 {
                             *skip_rows = skip_rows.saturating_sub(1);
                         } else if *current_y < area.y + area.height {
-                            // Bottom edge: upper-half blocks so only the top half
-                            // carries user_panel_bg, meeting the text rows above.
+                            // Bottom edge: a full user_panel_bg padding row
+                            // (not half-block `▀`), closing the panel with a
+                            // full row of breathing room.
                             let pad = Line::from(vec![
                                 Span::styled(
                                     user_gutter.clone(),
                                     Style::default().bg(theme.surface()),
                                 ),
                                 Span::styled(
-                                    "▀".repeat(user_content_w),
-                                    Style::default().fg(user_bg).bg(theme.surface()),
+                                    " ".repeat(user_content_w),
+                                    Style::default().bg(user_bg),
                                 ),
                                 Span::styled(
                                     user_gutter.clone(),

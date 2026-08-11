@@ -976,6 +976,14 @@ pub(super) async fn run_app_loop(
                     app.modal_index = 0;
                     app.host_scroll = 0;
                     app.host_modal_follow = true;
+                    // Default focus is the console/input region (ADR-0097
+                    // §3): typing lands there; the dock is entered with Tab.
+                    app.host_focus = crate::tui::overlays::DashboardFocus::Detail;
+                    app.host_detail_scroll = 0;
+                    app.host_preview = None;
+                    app.host_preview_scroll = 0;
+                    app.host_prompting = false;
+                    app.modal_keymap_open = false;
                 }
             }
             // Mirror the on-demand session detail (info sub-view) when the
@@ -1371,7 +1379,9 @@ pub(super) async fn run_app_loop(
             let render_frame = |f: &mut neenee_tui_engine::Frame<'_>| {
                 let mut layout_map = LayoutMap::new();
 
-                if app.startup_picker && app.active_modal == Modal::Sessions {
+                if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+                    && app.active_modal == Modal::Sessions
+                {
                     // `neenee resume` (no id): initial launch opens ONLY the sessions picker
                     // on a clean background. Do not open/render the chat interface, empty state,
                     // composer input box, status bar, or header components until a session is selected.
@@ -1391,7 +1401,7 @@ pub(super) async fn run_app_loop(
                         &mut app.session_scroll,
                         app.session_modal_follow,
                         &app.theme,
-                        app.startup_picker,
+                        app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker,
                         spinner_phase,
                         app.session_info_detail,
                         app.session_detail.as_ref(),
@@ -1537,6 +1547,11 @@ pub(super) async fn run_app_loop(
                         },
                         envoy_bar,
                         side_banner,
+                        session_head: Some(view::SessionHead {
+                            session_id: &viewed_session_id,
+                            workspace: &app.current_workspace,
+                            autopilot: app.autopilot,
+                        }),
                         todos: app.todos.as_ref(),
                         review_alert: app.review_alert.clone(),
                         round_started_at: app.round_started_at,
@@ -1551,7 +1566,6 @@ pub(super) async fn run_app_loop(
                 );
                 let input_rect = transcript_render.input_rect;
                 let hint_rect = transcript_render.hint_rect;
-                let status_rect = transcript_render.status_rect;
                 let activity_rect = transcript_render.activity_rect;
                 let todos_rect = transcript_render.todos_rect;
                 let queue_rect = transcript_render.queue_rect;
@@ -1617,27 +1631,6 @@ pub(super) async fn run_app_loop(
                     app.hint_context_rect = None;
                 }
 
-                // The status bar caps the footer directly below the hint bar.
-                // It is the dedicated home for ambient session state: the
-                // `autopilot` flag leads on the left, the workspace path
-                // trails on the right. Drawn after the hint bar so its immutable borrow of `app.cwd` does not conflict with the
-                // composer's mutable borrow of `app.input_scroll` below. The
-                // permission sheet covers this row too, so suppress it while
-                // the sheet is open.
-                if !chrome_hidden && status_rect.height > 0 && app.active_modal != Modal::Permission
-                {
-                    let workspace = crate::tui::chrome::tilde_home(&app.cwd);
-                    view::draw_status_bar(
-                        f,
-                        status_rect,
-                        view::StatusBarView {
-                            workspace: &workspace,
-                            autopilot: app.autopilot,
-                        },
-                        &app.theme,
-                    );
-                }
-
                 // The input box is only shown when no overlay modal is open. The
                 // `focused` flag drops the panel to its dim "blurred" palette and
                 // hides the caret whenever keyboard focus is on the conversation
@@ -1647,14 +1640,16 @@ pub(super) async fn run_app_loop(
                 if !chrome_hidden {
                     if app.active_modal == Modal::Permission {
                         if let Some(request) = app.pending_permission.as_ref() {
-                            // Extend the slot down by the hint-line and
-                            // status-line heights so the sheet also covers
-                            // (replaces) both bars below the input.
+                            // Extend the slot down by the composer/hint gap plus
+                            // the hint-line height so the sheet also covers
+                            // (replaces) the bar below the input.
                             let permission_rect = neenee_tui_engine::Rect::new(
                                 input_rect.x,
                                 input_rect.y,
                                 input_rect.width,
-                                input_rect.height + hint_rect.height + status_rect.height,
+                                input_rect.height
+                                    + crate::tui::design::COMPOSER_HINT_GAP_ROWS
+                                    + hint_rect.height,
                             );
                             let max_scroll = view::draw_permission_sheet(
                                 f,
@@ -1832,6 +1827,12 @@ pub(super) async fn run_app_loop(
                 view::recess_backdrop(f, recess, &app.theme);
 
                 let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
+
+                // The dashboard reports its true list-body height through this
+                // slot (its body is not the centered panel-minus-chrome the
+                // shared post-match math assumes). Reset each frame; only the
+                // `Modal::Host` arm sets it.
+                let mut dashboard_list_body_height: Option<u16> = None;
 
                 // Modals
                 let drawn_modal_rect = match app.active_modal {
@@ -2059,24 +2060,52 @@ pub(super) async fn run_app_loop(
                         &mut app.session_scroll,
                         app.session_modal_follow,
                         &app.theme,
-                        app.startup_picker,
+                        app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker,
                         spinner_phase,
                         app.session_info_detail,
                         app.session_detail.as_ref(),
                         &mut app.session_info_scroll,
                     )),
-                    Modal::Host => Some(view::draw_host_modal(
-                        f,
-                        &app.host_sessions,
-                        app.modal_index
-                            .min(app.host_sessions.len().saturating_sub(1)),
-                        app.modal_keymap_open,
-                        &mut app.host_scroll,
-                        app.host_modal_follow,
-                        &app.theme,
-                        spinner_phase,
-                        &viewed_session_id,
-                    )),
+                    Modal::Host => {
+                        // The session dashboard is a first-class, full-screen
+                        // surface (Recess::Takeover already occluded the
+                        // conversation): lay it out over the whole viewport
+                        // instead of a centered modal rect.
+                        let rects = view::draw_dashboard(
+                            f,
+                            &app.host_sessions,
+                            app.modal_index
+                                .min(app.host_sessions.len().saturating_sub(1)),
+                            app.host_focus,
+                            app.modal_keymap_open,
+                            &mut app.host_scroll,
+                            app.host_modal_follow,
+                            &mut app.host_detail_scroll,
+                            app.host_prompting,
+                            app.host_prompt_new,
+                            &app.input,
+                            &app.theme,
+                            spinner_phase,
+                            &viewed_session_id,
+                        );
+                        // Stash the list-body height so the page-scroll step
+                        // (computed after this match from `drawn_modal_rect`)
+                        // can use the real body height, not panel-minus-chrome.
+                        dashboard_list_body_height = Some(rects.list_body.height);
+                        // The session preview overlays the dashboard (Enter on
+                        // a dock selection). Rendered after the dashboard so
+                        // it floats on top.
+                        if let Some(preview_id) = &app.host_preview {
+                            let row = app.host_sessions.iter().find(|r| &r.id == preview_id);
+                            view::draw_session_preview(
+                                f,
+                                row,
+                                &mut app.host_preview_scroll,
+                                &app.theme,
+                            );
+                        }
+                        Some(rects.area)
+                    }
                     Modal::TokenReport => {
                         // Snapshot the shared ledger (standalone path) or the
                         // on-demand harness reply (attach path); the attach
@@ -2298,18 +2327,23 @@ pub(super) async fn run_app_loop(
                 // for modals that return no rect (Permission sheet, which
                 // scrolls the transcript behind it via `view_height` instead),
                 // so the page step falls back to the transcript height there.
-                app.modal_body_height = drawn_modal_rect
-                    .map(|r| {
-                        r.height
-                            .saturating_sub(crate::tui::primitives::modal_chrome_rows(
-                                crate::tui::primitives::ModalSpec {
-                                    width_percent: 0,
-                                    header: true,
-                                    footer: true,
-                                },
-                            ))
-                    })
-                    .unwrap_or(0);
+                app.modal_body_height = match dashboard_list_body_height {
+                    // The dashboard's scroll body is its list pane, whose height
+                    // was reported directly by the renderer.
+                    Some(h) => h,
+                    None => drawn_modal_rect
+                        .map(|r| {
+                            r.height
+                                .saturating_sub(crate::tui::primitives::modal_chrome_rows(
+                                    crate::tui::primitives::ModalSpec {
+                                        width_percent: 0,
+                                        header: true,
+                                        footer: true,
+                                    },
+                                ))
+                        })
+                        .unwrap_or(0),
+                };
 
                 // Record the open modal's actual panel rect (when one is
                 // dismissable) so a click on the backdrop outside it can close it.
@@ -2532,6 +2566,7 @@ pub(super) async fn run_app_loop(
                             .as_ref()
                             .is_some_and(|q| q.is_other_highlighted()),
                         history_clear_confirm: app.history_clear_confirm,
+                        host_prompting: app.host_prompting,
                     },
                     &mut app.drag,
                 )
@@ -2894,6 +2929,10 @@ pub(super) async fn run_app_loop(
                                                 activity: None,
                                                 context_tokens: None,
                                                 note: None,
+                                                // A `/serve` prehost lives in the
+                                                // current project by construction.
+                                                project_root: String::new(),
+                                                wip: None,
                                             },
                                             neenee_core::SessionStatus::Idle,
                                         ),
@@ -3935,17 +3974,33 @@ pub(super) async fn run_app_loop(
                         // real conversation now backs the view: subsequent
                         // `/sessions` modals should behave as ordinary
                         // transient overlays (Esc = dismiss, not quit).
-                        app.startup_picker = false;
+                        app.startup_overlay = crate::tui::StartupOverlay::None;
                         let _ = app
                             .tx
                             .send(AgentRequest::SlashCommand(format!("/session open {}", id)));
+                    }
+                }
+                input::InputAction::HostPreviewSelected => {
+                    // Enter on a dock selection opens the read-only preview
+                    // modal. Selection alone never opens it; Esc closes.
+                    let idx = app
+                        .modal_index
+                        .min(app.host_sessions.len().saturating_sub(1));
+                    let order = crate::tui::overlays::creation_order(&app.host_sessions);
+                    if let Some(row) = order.get(idx).map(|&i| &app.host_sessions[i]) {
+                        app.host_preview = Some(row.id.clone());
+                        app.host_preview_scroll = 0;
                     }
                 }
                 input::InputAction::HostSwitchSelected => {
                     let idx = app
                         .modal_index
                         .min(app.host_sessions.len().saturating_sub(1));
-                    if let Some(row) = app.host_sessions.get(idx) {
+                    // The dock renders sessions in creation order (`#seq`);
+                    // the selection indexes that sequence, not the raw
+                    // newest-first snapshot.
+                    let order = crate::tui::overlays::creation_order(&app.host_sessions);
+                    if let Some(row) = order.get(idx).map(|&i| &app.host_sessions[i]) {
                         // Only hosted sessions can be switched to — a mirrored
                         // row belongs to another TUI (ADR-0095). Current
                         // session is a no-op.
@@ -3957,6 +4012,122 @@ pub(super) async fn run_app_loop(
                         }
                         app.active_modal = Modal::None;
                         app.modal_index = 0;
+                        app.host_prompting = false;
+                    }
+                }
+                input::InputAction::HostFocusToggle => {
+                    app.host_focus = match app.host_focus {
+                        crate::tui::overlays::DashboardFocus::List => {
+                            crate::tui::overlays::DashboardFocus::Detail
+                        }
+                        crate::tui::overlays::DashboardFocus::Detail => {
+                            crate::tui::overlays::DashboardFocus::List
+                        }
+                    };
+                }
+                input::InputAction::HostInterruptSelected => {
+                    let idx = app
+                        .modal_index
+                        .min(app.host_sessions.len().saturating_sub(1));
+                    // Creation-order selection, mirroring the dock (see
+                    // HostSwitchSelected).
+                    let order = crate::tui::overlays::creation_order(&app.host_sessions);
+                    if let Some(row) = order.get(idx).map(|&i| &app.host_sessions[i]) {
+                        if row.hosting == neenee_core::SessionHosting::Hosted {
+                            let id = row.id.clone();
+                            tokio::spawn(async move {
+                                let project_root = std::env::current_dir()
+                                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                                let Some(info) = crate::remote::discover(&project_root) else {
+                                    return;
+                                };
+                                let req = neenee_transport::serve::ControlRequest::Interrupt {
+                                    session_id: id.clone(),
+                                };
+                                if let Err(e) = crate::remote::control(&info, req).await {
+                                    tracing::warn!(%e, session=%id, "dashboard interrupt failed");
+                                }
+                            });
+                            app.notice_toast_message = "interrupt sent".to_string();
+                            app.notice_toast_severity = NoticeSeverity::Info;
+                            app.notice_toast_until = Some(
+                                std::time::Instant::now() + std::time::Duration::from_millis(1600),
+                            );
+                        } else {
+                            app.notice_toast_message = "mirrored session is view-only".to_string();
+                            app.notice_toast_severity = NoticeSeverity::Warning;
+                            app.notice_toast_until = Some(
+                                std::time::Instant::now() + std::time::Duration::from_millis(2000),
+                            );
+                        }
+                    }
+                }
+                input::InputAction::HostPromptOpen => {
+                    // `p`: prompt the selected session. The composer buffer
+                    // becomes the task text.
+                    app.host_prompting = true;
+                    app.host_prompt_new = false;
+                    app.input.clear();
+                    app.set_cursor(0);
+                }
+                input::InputAction::HostNewSession => {
+                    // `n`: create a new session with the text as opening task.
+                    app.host_prompting = true;
+                    app.host_prompt_new = true;
+                    app.input.clear();
+                    app.set_cursor(0);
+                }
+                input::InputAction::HostPromptSubmit => {
+                    let text = app.input.trim().to_string();
+                    let create_new = app.host_prompt_new;
+                    app.host_prompting = false;
+                    app.host_prompt_new = false;
+                    app.input.clear();
+                    app.set_cursor(0);
+                    if !text.is_empty() {
+                        let project_root = std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        let idx = app
+                            .modal_index
+                            .min(app.host_sessions.len().saturating_sub(1));
+                        // Creation-order selection, mirroring the dock.
+                        let order = crate::tui::overlays::creation_order(&app.host_sessions);
+                        let selected = order.get(idx).map(|&i| app.host_sessions[i].clone());
+                        tokio::spawn(async move {
+                            let Some(info) = crate::remote::discover(&project_root) else {
+                                tracing::warn!("dashboard control: no daemon discovered");
+                                return;
+                            };
+                            // `n` always creates; `p` prompts the selected
+                            // hosted session (creating is impossible without a
+                            // selection, so fall back to create).
+                            let req = if !create_new
+                                && let Some(row) = &selected
+                                && row.hosting == neenee_core::SessionHosting::Hosted
+                            {
+                                neenee_transport::serve::ControlRequest::SendPrompt {
+                                    session_id: row.id.clone(),
+                                    text,
+                                }
+                            } else {
+                                neenee_transport::serve::ControlRequest::CreateSession {
+                                    project: project_root.display().to_string(),
+                                    prompt: Some(text),
+                                }
+                            };
+                            if let Err(e) = crate::remote::control(&info, req).await {
+                                tracing::warn!(%e, "dashboard prompt/create failed");
+                            }
+                        });
+                        app.notice_toast_message = if create_new {
+                            "session created".to_string()
+                        } else {
+                            "task sent".to_string()
+                        };
+                        app.notice_toast_severity = NoticeSeverity::Info;
+                        app.notice_toast_until = Some(
+                            std::time::Instant::now() + std::time::Duration::from_millis(1600),
+                        );
                     }
                 }
                 input::InputAction::DeleteSelectedSession => {
@@ -3972,7 +4143,7 @@ pub(super) async fn run_app_loop(
                     }
                 }
                 input::InputAction::CreateNewSession => {
-                    app.startup_picker = false;
+                    app.startup_overlay = crate::tui::StartupOverlay::None;
                     app.active_modal = Modal::None;
                     let _ = app
                         .tx
@@ -4002,7 +4173,22 @@ pub(super) async fn run_app_loop(
                     // before any close/quit logic runs — otherwise pressing Esc
                     // in e.g. the Sessions › Info sub-view at startup would quit
                     // the program instead of dropping back to the sessions list.
-                    if app.active_modal == Modal::TokenReport && app.token_report_detail {
+                    if app.active_modal == Modal::Host && app.host_preview.is_some() {
+                        // Deepest dashboard layer: first Esc closes the
+                        // session preview, returning to the dashboard; a
+                        // second Esc closes the dashboard itself.
+                        app.host_preview = None;
+                        app.host_preview_scroll = 0;
+                    } else if app.active_modal == Modal::Host && app.host_prompting {
+                        // First Esc cancels the dashboard's inline prompt,
+                        // returning to the list; a second Esc closes the
+                        // dashboard. Mirrors the two-stage Esc of the other
+                        // drill-in sub-layers below.
+                        app.host_prompting = false;
+                        app.host_prompt_new = false;
+                        app.input.clear();
+                        app.set_cursor(0);
+                    } else if app.active_modal == Modal::TokenReport && app.token_report_detail {
                         // First Esc returns from the turn breakdown to the round list;
                         // a second Esc closes the modal.
                         app.token_report_detail = false;
@@ -4013,13 +4199,24 @@ pub(super) async fn run_app_loop(
                         app.session_info_detail = false;
                         app.session_detail = None;
                         app.session_info_scroll = 0;
-                    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+                    } else if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+                        && app.active_modal == Modal::Sessions
+                    {
                         // `neenee resume` (no id) opened the picker at startup
                         // instead of loading any session: there is no real
                         // conversation behind the modal, so closing the *list*
                         // (not a sub-view — those are handled above) must quit
                         // the program rather than drop into an empty chat.
                         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
+                        app.should_quit.store(true, Ordering::SeqCst);
+                    } else if app.startup_overlay == crate::tui::StartupOverlay::Dashboard
+                        && app.active_modal == Modal::Host
+                    {
+                        // `neenee dashboard` opened the dashboard over a carrier
+                        // session the user never asked to converse with: Esc
+                        // here quits rather than dropping into that chat. Enter
+                        // on a row (HostSwitchSelected) re-attaches as usual.
+                        tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
                         app.should_quit.store(true, Ordering::SeqCst);
                     } else {
                         // Most modals close straight to chat. The model editor
@@ -4256,7 +4453,9 @@ pub(super) async fn run_app_loop(
                         // query and sub-flags too).
                         app.restore_history_draft();
                         app.active_modal = Modal::None;
-                    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+                    } else if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+                        && app.active_modal == Modal::Sessions
+                    {
                         // `neenee resume` (no id) opened the picker at startup:
                         // there is no conversation behind it, so Ctrl+C — like
                         // Esc and an outside click — quits the program rather
@@ -4721,18 +4920,22 @@ pub(super) async fn run_app_loop(
                         app.session_modal_follow = true;
                     }
                     Modal::Host => {
-                        let count = app.host_sessions.len();
-                        app.modal_index = if count == 0 {
-                            0
-                        } else if app.modal_index == 0 {
-                            count - 1
+                        if app.host_focus == crate::tui::overlays::DashboardFocus::List {
+                            let count = app.host_sessions.len();
+                            app.modal_index = if count == 0 {
+                                0
+                            } else if app.modal_index == 0 {
+                                count - 1
+                            } else {
+                                app.modal_index - 1
+                            };
+                            app.host_modal_follow = true;
+                            // Re-engage body-follow so the moved selection stays on
+                            // screen (cleared again on manual page/wheel scroll).
+                            app.session_modal_follow = true;
                         } else {
-                            app.modal_index - 1
-                        };
-                        app.host_modal_follow = true;
-                        // Re-engage body-follow so the moved selection stays on
-                        // screen (cleared again on manual page/wheel scroll).
-                        app.session_modal_follow = true;
+                            app.host_detail_scroll = app.host_detail_scroll.saturating_sub(1);
+                        }
                     }
                     Modal::Permissions => {
                         let count = app
@@ -4821,9 +5024,13 @@ pub(super) async fn run_app_loop(
                         app.session_modal_follow = true;
                     }
                     Modal::Host => {
-                        let count = app.host_sessions.len().max(1);
-                        app.modal_index = (app.modal_index + 1) % count;
-                        app.host_modal_follow = true;
+                        if app.host_focus == crate::tui::overlays::DashboardFocus::List {
+                            let count = app.host_sessions.len().max(1);
+                            app.modal_index = (app.modal_index + 1) % count;
+                            app.host_modal_follow = true;
+                        } else {
+                            app.host_detail_scroll = app.host_detail_scroll.saturating_add(1);
+                        }
                     }
                     Modal::Permissions => {
                         let count = app
@@ -5170,7 +5377,8 @@ pub(super) async fn run_app_loop(
                                 // no conversation behind it, so a click-outside
                                 // (mirroring Esc) quits instead of landing in an
                                 // empty chat.
-                                if app.startup_picker {
+                                if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+                                {
                                     tracing::info!(
                                         reason = "startup_picker_cancelled",
                                         "app exiting"

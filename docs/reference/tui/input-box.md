@@ -5,9 +5,9 @@ The live editable prompt at the bottom of the frame.
 ## Appearance
 
 ```text
-  ╻▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀     ← top transition
+  ┃                                   ← top padding (full panel-bg row)
   ┃ type here…                        ← text row(s)
-  ╹▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄     ← bottom transition
+  ┃                                   ← bottom padding (full panel-bg row)
 ```
 
 | Attribute | Value |
@@ -17,7 +17,7 @@ The live editable prompt at the bottom of the frame.
 | Accent bar | `┃` in `accent` (Build mode) or Plan-mode blue |
 | Text color | `text` (brighter than sent messages) |
 | Text indent | 4 cols (2 margin + `┃` + 1 leading space) |
-| Top/bottom padding | Half-block transition rows (see [half-block-chars](half-block-chars.md)) |
+| Top/bottom padding | Full panel-bg rows (no half-block glyphs — a cell can only carry one bg color, so a solid row is identical across terminals) |
 
 ## Height growth
 
@@ -108,5 +108,6 @@ never edited by recall; only the recorded prompt text is shown.
 ## Source
 
 `draw_composer` in `render/composer.rs`. Rendered manually (not via a `Block`
-widget) so the `┃` bar can be half-height (`╻`/`╹`) on transition rows. `INPUT_MSG_IDX = usize::MAX - 2` is the layout-map
+widget) so the panel can paint full panel-bg padding rows directly.
+`INPUT_MSG_IDX = usize::MAX - 2` is the layout-map
 message index reserved for live input selection.

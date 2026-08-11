@@ -26,21 +26,59 @@ so the existing click / `Enter` machinery recognizes it.
 
 ## Inline step
 
+The inline step is exactly **two rows**: a summary line with a `[profile]`
+role badge, and a single `└`-edged second row that shows a live **peek**
+while running and is replaced in place by the one-line conclusion once the
+envoy terminates.
+
+Running:
+
 ```text
-  ↳ Explore the codebase to find the login bug
-  ↳ Running: grep -n "session" src/auth
+  [EXPLORE]  Explore the codebase to find the login bug
+    └ Grep "session" · 12s
+```
+
+Finished:
+
+```text
+  [EXPLORE]  Explore the codebase to find the login bug · 8.2s
+    └ The bug is in src/auth/session.rs:42 — token expiry is not …
 ```
 
 | Attribute | Value |
 |-----------|-------|
 | Background | `theme.surface()` (`app_bg`), inset 2 cols (`TRANSCRIPT_H_INSET`) |
 | Marker | None — the step navigates; disclosure is conveyed by Enter/click, not `+`/`-` |
+| Role badge | `[PROFILE]` (uppercased) in `theme.brand()` (falls back to `[ENVOY]` before the `Started` event lands); two plain spaces separate badge and summary (R2 peers) |
 | Summary color | `summary_text_color(accent, Collapsed, Hovered?)` via the shared [step state machine](step-state.md); `Running` reads as a steady `info` accent (no per-step breathing — see [ADR-0008](../../adr/0008-single-breathing-anchor.md)) |
-| Status line | Wrapped, `theme.muted()`, indented 2 cols; the whole line is part of the same clickable summary so clicking anywhere enters the zoom |
+| Second row | Always prefixed `  └ ` in `theme.muted()`. **Peek** (running): `theme.info()`, current activity + live elapsed. **Outcome** (terminal): `theme.muted()`, the envoy's conclusion. The whole row is part of the same clickable summary so clicking anywhere enters the zoom |
 | Lifecycle accent | Same wiring as a tool step: `Ok → None`, `Failed → Some(theme.error_fg)`, `Denied → Some(theme.warn)`, `Cancelled → Some(theme.text_muted)`, `Running → Some(theme.info)` |
 
-The live status line comes from `TranscriptMessage::envoy_status_line`
-(e.g. `↳ Running: grep foo`, `↳ Completed · 3 calls`).
+The step is always two rows, so the `└` edge is constant — the second row is
+always the leaf. The running / terminated distinction is carried by color and
+content, not by the glyph.
+
+### Peek row (running)
+
+`TranscriptMessage::envoy_status_line` derives the peek from the envoy's
+children and `started_at`:
+
+| State | Peek shows |
+|-------|-----------|
+| No child activity yet | `starting · 0s` |
+| A child tool in flight | that tool's summary, e.g. `Grep "session" · 12s` |
+| Between tools (assistant streaming) | `thinking · 8s` |
+| Parked on a permission / `ask_user` / input request | `awaiting approval · 45s` (a `awaiting` flag set by `EnvoyEvent::{Permission,UserQuestion,Input}Request` and cleared by the next progress event) |
+
+The elapsed timer is derived from `started_at` at render time — it stays fresh
+on every animation tick without storing any ticking state.
+
+### Outcome row (terminal)
+
+`TranscriptMessage::envoy_outcome_line` replaces the peek in place once the
+step terminates. It takes the first non-empty line of the envoy's conclusion
+(`ToolOutput::Envoy.summary`, falling back to the legacy `output` text for
+restored sessions), so the answer surfaces without opening the zoom.
 
 ## Zoomed view
 

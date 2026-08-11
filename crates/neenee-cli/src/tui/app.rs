@@ -472,17 +472,35 @@ pub struct App {
     /// Scroll slot + selection-follow for the `/host` panel body.
     pub host_scroll: usize,
     pub host_modal_follow: bool,
+    /// Which pane of the `/host` session dashboard owns the keyboard: the
+    /// console/input region (default) or the sessions dock (`Tab` toggles).
+    pub host_focus: crate::tui::overlays::DashboardFocus,
+    /// Scroll offset for the dashboard's console pane.
+    pub host_detail_scroll: usize,
+    /// The dashboard's session preview modal (ADR-0097 §3): the session id
+    /// opened by Enter on a dock selection. Selection alone never opens it;
+    /// Esc closes. Read-only.
+    pub host_preview: Option<String>,
+    /// Scroll offset for the preview modal body.
+    pub host_preview_scroll: usize,
+    /// Whether the dashboard's inline new-session prompt is open. While true,
+    /// the composer input buffer is the task description and Enter creates a
+    /// session instead of attaching.
+    pub host_prompting: bool,
+    /// What the open dashboard prompt does on submit: `true` = create a new
+    /// session (from `n`), `false` = prompt the selected session (from `p`).
+    pub host_prompt_new: bool,
     /// `/host` Enter on a hosted session: the id to switch to, read by the
     /// caller after the TUI exits to re-attach (ADR-0096).
     pub switch_to_target: Option<String>,
-    /// `true` only when the TUI was launched via `neenee resume` (no id): the
-    /// sessions picker opened at startup *instead of* loading any session. In
-    /// that mode the picker is not a transient overlay — there is no real
-    /// conversation behind it yet — so closing it must quit the program rather
-    /// than drop into an empty chat. Cleared once a session is opened from the
-    /// picker. Always `false` for the in-session `/sessions` modal, which just
-    /// dismisses on Esc/click-out.
-    pub startup_picker: bool,
+    /// Which full-screen overlay (if any) the TUI opened straight into at
+    /// startup instead of a conversation view. In that mode the overlay is not
+    /// a transient modal — there is no conversation the user asked for behind
+    /// it — so closing it must quit the program rather than drop into an empty
+    /// chat. Cleared (set to [`crate::tui::StartupOverlay::None`]) once a
+    /// session is opened from the picker. Always `None` for the in-session
+    /// `/sessions` modal, which just dismisses on Esc/click-out.
+    pub startup_overlay: crate::tui::StartupOverlay,
     pub permission_confirm_always: bool,
     /// Whether the inline permission sheet is expanded to show the full
     /// description + arguments. Collapsed by default so the prompt stays
@@ -796,10 +814,7 @@ impl App {
     /// frontend has: the shared in-process ledger (standalone path) or the
     /// on-demand harness snapshot (attach path). `None` in attach mode while
     /// the `QueryTokenUsage` round-trip is still in flight.
-    pub fn token_source_report(
-        &self,
-        session_id: &str,
-    ) -> Option<neenee_core::TokenSourceReport> {
+    pub fn token_source_report(&self, session_id: &str) -> Option<neenee_core::TokenSourceReport> {
         if let Some(ledger) = &self.token_ledger {
             Some(ledger.snapshot_for_session(session_id))
         } else {
@@ -970,7 +985,23 @@ impl App {
                 &mut self.session_scroll,
                 Some(&mut self.session_modal_follow),
             )),
-            Modal::Host => Some((&mut self.host_scroll, Some(&mut self.host_modal_follow))),
+            // The dashboard routes body-scroll to the deepest open layer:
+            // the session preview when present, else the focused pane (dock
+            // selection-scroll or the console read-out scroll).
+            Modal::Host => {
+                if self.host_preview.is_some() {
+                    Some((&mut self.host_preview_scroll, None))
+                } else {
+                    match self.host_focus {
+                        crate::tui::overlays::DashboardFocus::List => {
+                            Some((&mut self.host_scroll, Some(&mut self.host_modal_follow)))
+                        }
+                        crate::tui::overlays::DashboardFocus::Detail => {
+                            Some((&mut self.host_detail_scroll, None))
+                        }
+                    }
+                }
+            }
             Modal::Queue => Some((&mut self.queue_scroll, Some(&mut self.queue_modal_follow))),
             Modal::HistorySearch => Some((
                 &mut self.history_scroll,

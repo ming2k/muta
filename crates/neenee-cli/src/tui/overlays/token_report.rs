@@ -91,9 +91,11 @@ pub fn draw_token_report_modal(
     ) = if loading && !drill {
         (
             vec![HeaderPart::title("Context Usage")],
-            vec![
-                placeholder("Loading token usage from the daemon…", true, theme.muted()),
-            ],
+            vec![placeholder(
+                "Loading token usage from the daemon…",
+                true,
+                theme.muted(),
+            )],
             vec![FooterHint::always(keyvocab::ESC, "close")],
             None,
         )
@@ -223,9 +225,9 @@ fn list_body(
     // reflects the server's real efficiency rather than how long tools ran or
     // how long the user deliberated. "Output rate" is more honest than
     // "Throughput" — throughput implies end-to-end processing speed, whereas
-    // this deliberately excludes everything except model generation. The Time
-    // row renders *exactly* the denominator the rate was divided by, so the two
-    // stay consistent (the old code used `.max(active_ms)`, which was larger).
+    // this deliberately excludes everything except model generation. (The
+    // companion "Time" row was dropped: the per-attempt tok/s column in the
+    // round detail now carries the granular timing story.)
     if let Some(summary) = latest_tps {
         let tps = summary.tps();
         let tps_label = if tps > 0.0 {
@@ -233,16 +235,9 @@ fn list_body(
         } else {
             "–".to_string()
         };
-        let gen_s = summary.denominator_ms() as f64 / 1000.0;
         body.push(kv_styled(
             "Output rate",
             &tps_label,
-            Style::default().fg(theme.fg()),
-            theme,
-        ));
-        body.push(kv_styled(
-            "Time",
-            &format!("{gen_s:.1}s gen"),
             Style::default().fg(theme.fg()),
             theme,
         ));
@@ -459,124 +454,253 @@ fn detail_body(
     // Token totals are tinted by their provenance: green when fully reported
     // by the provider, yellow when estimated locally, plain when unknown. A
     // legend is shown beneath the table.
-    let full_table = body_width >= 62;
-    if full_table {
-        const STATE_W: usize = 16;
-        const VALUE_W: usize = 10;
-        let label_w = body_width.saturating_sub(STATE_W + VALUE_W * 3).max(10);
-        body.push(Line::from(Span::styled(
-            format!(
-                "{:<label_w$}{:<STATE_W$}{:>VALUE_W$}{:>VALUE_W$}{:>VALUE_W$}",
-                "Turn", "State", "Input", "Output", "Total"
-            ),
-            Style::default().fg(theme.muted()),
-        )));
-
-        for a in &attempts {
-            push_full_attempt_row(&mut body, a, label_w, theme);
-        }
-    } else {
-        const STATE_W: usize = 16;
-        const TOTAL_W: usize = 11;
-        let label_w = body_width.saturating_sub(STATE_W + TOTAL_W).max(10);
-        body.push(Line::from(Span::styled(
-            format!(
-                "{:<label_w$}{:<STATE_W$}{:>TOTAL_W$}",
-                "Turn", "State", "Tokens"
-            ),
-            Style::default().fg(theme.muted()),
-        )));
-
-        for a in &attempts {
-            push_compact_attempt_row(&mut body, a, label_w, theme);
-        }
+    //
+    // Width pressure degrades the table in discrete steps rather than by
+    // squeezing gutters: the Turn label column flexes first (down to a small
+    // floor), then whole *column groups* drop as atoms — never a gap shrink.
+    // Columns are dropped from the left so the right edge keeps hugging the
+    // modal margin at every tier:
+    //   ≥62   input · output · total · tok/s
+    //   ≥42   tokens · tok/s
+    //   ≥32   tok/s only
+    //   <32   state alone
+    let columns = AttemptColumns::for_width(body_width);
+    columns.push_header(&mut body, body_width, theme);
+    for a in &attempts {
+        columns.push_row(&mut body, a, body_width, theme);
     }
 
     body.push(Line::from(""));
-    body.push(Line::from(vec![
-        Span::styled("Tokens:  ".to_string(), Style::default().fg(theme.muted())),
-        Span::styled("green", Style::default().fg(theme.ok())),
-        Span::styled(
-            " = provider-reported   ".to_string(),
-            Style::default().fg(theme.muted()),
-        ),
-        Span::styled("yellow", Style::default().fg(theme.warn())),
-        Span::styled(
-            " = local estimate".to_string(),
-            Style::default().fg(theme.muted()),
-        ),
-    ]));
+    // The provenance legend is responsive: the full single-line form when it
+    // fits, otherwise the shortened "green/yellow = reported/estimated" form
+    // (wrapping onto a second line as a last resort), so a narrow modal never
+    // clips the explanation mid-word.
+    for spans in legend_lines(body_width, theme) {
+        body.push(Line::from(spans));
+    }
 
     body
 }
 
-/// One attempt row in the wide (≥62-col) detail table: label · state · input
-/// · output · total. Token counts are tinted by the attempt's source.
-fn push_full_attempt_row(
-    body: &mut Vec<Line<'static>>,
-    a: &FlatAttempt<'_>,
-    label_w: usize,
-    theme: &Theme,
-) {
-    const STATE_W: usize = 16;
-    const VALUE_W: usize = 10;
-    let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
-    let (state, state_style) = attempt_state(a.record, theme);
-    let value_style = attempt_source_style(a.record, theme);
-    let rec = a.record;
-    let known_split = rec.prompt_tokens > 0 || rec.completion_tokens > 0;
-    let (input, output) = if known_split {
-        (
-            fmt_tokens(rec.prompt_tokens),
-            fmt_tokens(rec.completion_tokens),
-        )
+/// Legend beneath the turns table, as one or two span rows. The widest form
+/// ("Tokens:  green = provider-reported   yellow = local estimate") is
+/// preferred; when it exceeds `body_width` the wording collapses to
+/// "Tokens:  green reported   yellow estimated" — or, narrower still, the
+/// even shorter "Tokens:  green reported" / "yellow estimated" pair, and
+/// finally a two-line layout so nothing is ever truncated.
+fn legend_lines(body_width: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let muted = Style::default().fg(theme.muted());
+    let green = Style::default().fg(theme.ok());
+    let yellow = Style::default().fg(theme.warn());
+
+    let full: Vec<Span<'static>> = vec![
+        Span::styled("Tokens:  ".to_string(), muted),
+        Span::styled("green", green),
+        Span::styled(" = provider-reported   ".to_string(), muted),
+        Span::styled("yellow", yellow),
+        Span::styled(" = local estimate".to_string(), muted),
+    ];
+    let short: Vec<Span<'static>> = vec![
+        Span::styled("Tokens:  ".to_string(), muted),
+        Span::styled("green", green),
+        Span::styled(" reported   ".to_string(), muted),
+        Span::styled("yellow", yellow),
+        Span::styled(" estimated".to_string(), muted),
+    ];
+    let short_green: Vec<Span<'static>> = vec![
+        Span::styled("Tokens:  ".to_string(), muted),
+        Span::styled("green", green),
+        Span::styled(" reported".to_string(), muted),
+    ];
+    let short_yellow: Vec<Span<'static>> = vec![
+        Span::styled("yellow", yellow),
+        Span::styled(" estimated".to_string(), muted),
+    ];
+
+    let width_of = |spans: &[Span<'static>]| spans_width(spans);
+    if width_of(&full) <= body_width {
+        vec![full]
+    } else if width_of(&short) <= body_width {
+        vec![short]
+    } else if width_of(&short_green) <= body_width && width_of(&short_yellow) <= body_width {
+        vec![short_green, short_yellow]
     } else {
-        ("—".to_string(), "—".to_string())
-    };
-    let total = if rec.total_tokens > 0 {
-        fmt_tokens(rec.total_tokens)
-    } else {
-        "—".to_string()
-    };
-    body.push(Line::from(vec![
-        Span::styled(
-            format!("{label:<label_w$}"),
-            Style::default().fg(theme.fg()),
-        ),
-        Span::styled(format!("{state:<STATE_W$}"), state_style),
-        Span::styled(format!("{input:>VALUE_W$}"), value_style),
-        Span::styled(format!("{output:>VALUE_W$}"), value_style),
-        Span::styled(format!("{total:>VALUE_W$}"), value_style),
-    ]));
+        vec![
+            short_green,
+            vec![Span::styled("yellow".to_string(), yellow)],
+            vec![Span::styled("estimated".to_string(), muted)],
+        ]
+    }
 }
 
-/// One attempt row in the narrow detail table: label · state · total.
-fn push_compact_attempt_row(
-    body: &mut Vec<Line<'static>>,
-    a: &FlatAttempt<'_>,
-    label_w: usize,
-    theme: &Theme,
-) {
-    const STATE_W: usize = 16;
-    const TOTAL_W: usize = 11;
-    let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
-    let (state, state_style) = attempt_state(a.record, theme);
-    let total = if a.record.total_tokens > 0 {
-        fmt_tokens(a.record.total_tokens)
+/// Total display width of a span row, used to pick a legend variant that
+/// never overflows the modal body.
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(|span| span.content.as_ref().width()).sum()
+}
+
+/// Width budget of one right-aligned atomic column unit: the value plus the
+/// single gutter that separates it from whatever stands to its left. Units
+/// are added or dropped *whole* as the modal narrows — the gutter is never
+/// squeezed cell by cell.
+const ATTEMPT_COLUMN_W: usize = 10;
+/// Fixed width of the left-aligned State column: the longest state label
+/// ("interrupted") plus breathing room.
+const ATTEMPT_STATE_W: usize = 16;
+/// The Turn label column is the flexible one, absorbing slack above each
+/// tier's threshold; it never shrinks below this floor before the narrowest
+/// column group drops as a unit instead.
+const ATTEMPT_LABEL_MIN: usize = 6;
+
+/// The four-column layout ladder for the detail turns table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttemptColumns {
+    /// Turn · State · Input · Output · Total · tok/s (≥62 cols).
+    Split,
+    /// Turn · State · Tokens · tok/s (≥46 cols).
+    Total,
+    /// Turn · State · tok/s (≥37 cols).
+    Rate,
+    /// Turn · State (<37 cols).
+    State,
+}
+
+impl AttemptColumns {
+    /// Pick the widest layout whose columns fit `body_width`: each tier's
+    /// threshold is `label floor + state + columns × atomic unit`.
+    fn for_width(body_width: usize) -> Self {
+        let fits = |columns: usize| {
+            body_width >= ATTEMPT_LABEL_MIN + ATTEMPT_STATE_W + columns * ATTEMPT_COLUMN_W
+        };
+        if fits(4) {
+            Self::Split
+        } else if fits(2) {
+            Self::Total
+        } else if fits(1) {
+            Self::Rate
+        } else {
+            Self::State
+        }
+    }
+
+    /// Number of atomic right-aligned columns this layout carries.
+    fn column_count(&self) -> usize {
+        match self {
+            Self::Split => 4,
+            Self::Total => 2,
+            Self::Rate => 1,
+            Self::State => 0,
+        }
+    }
+
+    /// Width left for the flexible Turn label column.
+    fn label_width(&self, body_width: usize) -> usize {
+        body_width
+            .saturating_sub(ATTEMPT_STATE_W + self.column_count() * ATTEMPT_COLUMN_W)
+            .max(ATTEMPT_LABEL_MIN)
+    }
+
+    fn push_header(&self, body: &mut Vec<Line<'static>>, body_width: usize, theme: &Theme) {
+        let muted = Style::default().fg(theme.muted());
+        let label_w = self.label_width(body_width);
+        let mut spans = vec![
+            Span::styled(format_padded_left("Turn", label_w), muted),
+            Span::styled(format_padded_left("State", ATTEMPT_STATE_W), muted),
+        ];
+        let headers: &[&str] = match self {
+            Self::Split => &["Input", "Output", "Total", "tok/s"],
+            Self::Total => &["Tokens", "tok/s"],
+            Self::Rate => &["tok/s"],
+            Self::State => &[],
+        };
+        for title in headers {
+            spans.push(Span::styled(format!("{title:>ATTEMPT_COLUMN_W$}"), muted));
+        }
+        body.push(Line::from(spans));
+    }
+
+    /// One attempt row: flexible label · state · the layout's atomic columns.
+    /// Token counts are tinted by the attempt's source; the tok/s cell stays
+    /// muted (a pace metric, not a billing count).
+    fn push_row(
+        &self,
+        body: &mut Vec<Line<'static>>,
+        a: &FlatAttempt<'_>,
+        body_width: usize,
+        theme: &Theme,
+    ) {
+        let rec = a.record;
+        let label_w = self.label_width(body_width);
+        let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
+        let (state, state_style) = attempt_state(rec, theme);
+        let value_style = attempt_source_style(rec, theme);
+        let rate_style = Style::default().fg(theme.muted());
+
+        let known_split = rec.prompt_tokens > 0 || rec.completion_tokens > 0;
+        let (input, output) = if known_split {
+            (
+                fmt_tokens(rec.prompt_tokens),
+                fmt_tokens(rec.completion_tokens),
+            )
+        } else {
+            ("—".to_string(), "—".to_string())
+        };
+        let total = if rec.total_tokens > 0 {
+            fmt_tokens(rec.total_tokens)
+        } else {
+            "—".to_string()
+        };
+        let rate = fmt_attempt_rate(rec);
+
+        // Cells are appended left-to-right in the same atomic units as the
+        // header, so the tok/s column always hugs the right modal margin.
+        let cells: Vec<(String, Style)> = match self {
+            Self::Split => vec![
+                (input, value_style),
+                (output, value_style),
+                (total, value_style),
+                (rate, rate_style),
+            ],
+            Self::Total => vec![(total, value_style), (rate, rate_style)],
+            Self::Rate => vec![(rate, rate_style)],
+            Self::State => vec![],
+        };
+
+        let mut spans = vec![
+            Span::styled(
+                format_padded_left(&label, label_w),
+                Style::default().fg(theme.fg()),
+            ),
+            Span::styled(format_padded_left(state, ATTEMPT_STATE_W), state_style),
+        ];
+        for (text, style) in cells {
+            spans.push(Span::styled(format!("{text:>ATTEMPT_COLUMN_W$}"), style));
+        }
+        body.push(Line::from(spans));
+    }
+}
+
+/// One attempt's settled output rate: completion tokens ÷ measured generation
+/// span. Renders `–` whenever the rate would be meaningless: the attempt is
+/// still in flight, no generation span was measured (failed before a validated
+/// response, or persisted before timing was recorded), or the completion side
+/// was never booked. Untinted by provenance — it is a pace metric, not a
+/// billing count, so it stays muted next to the tinted token columns.
+fn fmt_attempt_rate(record: &RequestUsageRecord) -> String {
+    if record.status == RequestUsageStatus::InFlight || record.generation_ms == 0 {
+        return "–".to_string();
+    }
+    if record.completion_tokens <= 0 {
+        return "–".to_string();
+    }
+    let rate = record.completion_tokens as f64 * 1000.0 / record.generation_ms as f64;
+    if rate > 0.0 && rate < 10.0 {
+        // Below ~10 tok/s one decimal keeps 8.5 from reading as 9 while the
+        // cell stays within the fixed 9-column width.
+        format!("{rate:.1}")
     } else {
-        "—".to_string()
-    };
-    body.push(Line::from(vec![
-        Span::styled(
-            format!("{label:<label_w$}"),
-            Style::default().fg(theme.fg()),
-        ),
-        Span::styled(format!("{state:<STATE_W$}"), state_style),
-        Span::styled(
-            format!("{total:>TOTAL_W$}"),
-            attempt_source_style(a.record, theme),
-        ),
-    ]));
+        format!("{rate:.0}")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1085,7 +1209,7 @@ mod tests {
         let ledger = neenee_core::TokenSourceLedger::new();
 
         let first = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
-        ledger.settle_request(&first, RequestUsageStatus::Interrupted, None, 20);
+        ledger.settle_request(&first, RequestUsageStatus::Interrupted, None, 20, 0);
         let retry = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
         ledger.settle_request(
             &retry,
@@ -1097,12 +1221,13 @@ mod tests {
                 ..Default::default()
             }),
             0,
+            2_000,
         );
         let second_turn =
             ledger.begin_request("session", "another-provider", "model-b", 2, 2, 1_200);
-        ledger.settle_request(&second_turn, RequestUsageStatus::Completed, None, 60);
+        ledger.settle_request(&second_turn, RequestUsageStatus::Completed, None, 60, 0);
         let next_round = ledger.begin_request("session", "relay", "model-a", 3, 1, 1_500);
-        ledger.settle_request(&next_round, RequestUsageStatus::Completed, None, 75);
+        ledger.settle_request(&next_round, RequestUsageStatus::Completed, None, 75, 0);
         let report = ledger.snapshot_for_session("session");
 
         assert_eq!(token_report_round_count(&report), 2);
@@ -1168,6 +1293,23 @@ mod tests {
         // The token-source legend is rendered beneath the turns table.
         assert!(detail_text.contains("green"));
         assert!(detail_text.contains("local estimate"));
+        // The detail table carries a per-attempt output-rate column. The
+        // retried attempt settled with 40 completion tokens over a 2 s
+        // measured generation span → "20" tok/s; the untimed attempt (an
+        // interrupt with no measured span) and the legacy-estimated turn
+        // render a dash instead.
+        assert!(detail_text.contains("tok/s"));
+        let rate_for = |turn_label: &str| -> String {
+            detail
+                .iter()
+                .find(|line| line.spans.iter().any(|s| s.content.trim() == turn_label))
+                .and_then(|line| line.spans.last())
+                .map(|s| s.content.trim().to_string())
+                .unwrap_or_else(|| panic!("no rate cell for turn {turn_label}"))
+        };
+        assert_eq!(rate_for("1st - 2nd"), "20");
+        assert_eq!(rate_for("1st"), "–");
+        assert_eq!(rate_for("2nd"), "–");
         // The detail page's title is now the breadcrumb, not an in-body
         // "2nd round" heading.
         assert!(!detail_text.contains("2nd round"));
@@ -1196,9 +1338,9 @@ mod tests {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
         let a = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
-        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40);
+        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40, 0);
         let b = ledger.begin_request("session", "relay", "model-a", 3, 1, 1_500);
-        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 75);
+        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 75, 0);
         let report = ledger.snapshot_for_session("session");
 
         // Select the second round (index 1).
@@ -1268,11 +1410,11 @@ mod tests {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
         let a = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
-        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40);
+        ledger.settle_request(&a, RequestUsageStatus::Completed, None, 40, 0);
         // A second round with a longer token total so the Tokens column must
         // grow to fit it.
         let b = ledger.begin_request("session", "relay", "model-a", 3, 1, 0);
-        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 1_234_567);
+        ledger.settle_request(&b, RequestUsageStatus::Completed, None, 1_234_567, 0);
         let report = ledger.snapshot_for_session("session");
 
         let body_width = 80usize;
@@ -1352,7 +1494,9 @@ mod tests {
         let theme = Theme::default();
         let ledger = neenee_core::TokenSourceLedger::new();
 
-        // Turn 1: reported usage (green). Turn 2: estimated (yellow).
+        // Turn 1: reported usage (green), 40 completion tokens over a 2 s
+        // measured generation span → 20 tok/s. Turn 2: estimated (yellow)
+        // with no measured span → the rate cell renders a dash.
         let t1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
         ledger.settle_request(
             &t1,
@@ -1364,9 +1508,10 @@ mod tests {
                 ..Default::default()
             }),
             0,
+            2_000,
         );
         let t2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
-        ledger.settle_request(&t2, RequestUsageStatus::Completed, None, 60);
+        ledger.settle_request(&t2, RequestUsageStatus::Completed, None, 60, 0);
         let report = ledger.snapshot_for_session("session");
 
         let detail = detail_body(&report, 0, 80, &theme);
@@ -1408,6 +1553,162 @@ mod tests {
         assert!(detail_text.contains("provider-reported"));
         assert!(detail_text.contains("yellow"));
         assert!(detail_text.contains("local estimate"));
+
+        // The per-attempt rate column: the reported turn shows its settled
+        // output rate (40 completion tokens / 2 s = 20 tok/s), the untimed
+        // estimated turn shows a dash.
+        let rate_cell = |turn_label: &str| {
+            detail
+                .iter()
+                .find(|line| line.spans.iter().any(|s| s.content.trim() == turn_label))
+                .and_then(|line| line.spans.last())
+                .map(|s| s.content.trim().to_string())
+                .unwrap_or_else(|| panic!("no rate cell for turn {turn_label}"))
+        };
+        assert_eq!(rate_cell("1st"), "20");
+        assert_eq!(rate_cell("2nd"), "–");
+    }
+
+    /// The detail turns table degrades in whole column groups as the modal
+    /// narrows — the Turn label flexes, but inter-column gutters never
+    /// squeeze. Dropping below a tier boundary removes the entire column
+    /// (header and every row together) in one step, and the remaining
+    /// right-aligned columns keep hugging the right modal margin.
+    #[test]
+    fn detail_columns_degrade_atomically_with_width() {
+        let theme = Theme::default();
+        let ledger = neenee_core::TokenSourceLedger::new();
+        let t = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
+        ledger.settle_request(
+            &t,
+            RequestUsageStatus::Completed,
+            Some(neenee_core::TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 40,
+                total_tokens: 140,
+                ..Default::default()
+            }),
+            0,
+            2_000,
+        );
+        let report = ledger.snapshot_for_session("session");
+
+        // The table header is the line whose first span trims to "Turn".
+        let header_at = |width: usize| -> String {
+            detail_body(&report, 0, width, &theme)
+                .into_iter()
+                .find(|line| {
+                    line.spans
+                        .first()
+                        .is_some_and(|s| s.content.trim() == "Turn")
+                })
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .expect("table header row")
+        };
+
+        // ≥62: full split. The label column (not the gutters) absorbs slack:
+        // at 62 exactly the label sits at its 6-cell floor.
+        let wide = header_at(62);
+        for title in ["Input", "Output", "Total", "tok/s"] {
+            assert!(
+                wide.contains(title),
+                "62-col header missing {title:?}; header = {wide:?}"
+            );
+        }
+        assert_eq!(
+            wide.find("State"),
+            Some(6),
+            "label must be at its floor at 62"
+        );
+        // Header and every row fill the body width exactly.
+        let wide_rows = detail_body(&report, 0, 62, &theme);
+        for line in wide_rows.iter().filter(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.content.trim() == "1st" || s.content.trim() == "Turn")
+        }) {
+            let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
+            assert_eq!(w, 62, "row must fill body width exactly");
+        }
+
+        // 61: the Input+Output pair drops as one atom — never half a pair,
+        // never a squeezed gutter.
+        let compact = header_at(61);
+        assert!(!compact.contains("Input"));
+        assert!(!compact.contains("Output"));
+        assert!(compact.contains("Tokens"));
+        assert!(compact.contains("tok/s"));
+
+        // 41: the Tokens column drops; tok/s survives alone and still hugs
+        // the right edge.
+        let rate_only = header_at(41);
+        assert!(!rate_only.contains("Tokens"), "rate_only = {rate_only:?}");
+        assert!(rate_only.contains("tok/s"));
+        assert!(
+            rate_only.ends_with("tok/s"),
+            "tok/s must hug the right margin: {rate_only:?}"
+        );
+
+        // 31: every value column is gone as a unit; only label + state remain.
+        let bare = header_at(31);
+        assert!(!bare.contains("tok/s"));
+        assert!(bare.trim_end().ends_with("State"));
+
+        // Tier boundaries agree with the width formula.
+        assert_eq!(AttemptColumns::for_width(62), AttemptColumns::Split);
+        assert_eq!(AttemptColumns::for_width(61), AttemptColumns::Total);
+        assert_eq!(AttemptColumns::for_width(42), AttemptColumns::Total);
+        assert_eq!(AttemptColumns::for_width(41), AttemptColumns::Rate);
+        assert_eq!(AttemptColumns::for_width(32), AttemptColumns::Rate);
+        assert_eq!(AttemptColumns::for_width(31), AttemptColumns::State);
+    }
+
+    /// The provenance legend is responsive: the full single-line form when it
+    /// fits, the shortened wording when it doesn't, and a two-line fallback
+    /// for very narrow modals — the explanation is never clipped mid-word.
+    #[test]
+    fn provenance_legend_collapses_gracefully_on_narrow_modals() {
+        let theme = Theme::default();
+
+        let width = |lines: &[Vec<Span<'static>>]| -> Vec<usize> {
+            lines.iter().map(|spans| spans_width(spans)).collect()
+        };
+        let text = |lines: &[Vec<Span<'static>>]| -> String {
+            lines
+                .iter()
+                .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        // Wide enough → the full single-line form, exactly one line.
+        let full = legend_lines(80, &theme);
+        assert_eq!(full.len(), 1);
+        assert!(text(&full).contains("green = provider-reported"));
+        assert!(text(&full).contains("yellow = local estimate"));
+
+        // One column below the full form's width → shortened single line.
+        let full_w = width(&full)[0];
+        let short = legend_lines(full_w - 1, &theme);
+        assert_eq!(short.len(), 1);
+        assert!(text(&short).contains("green reported"));
+        assert!(text(&short).contains("yellow estimated"));
+        assert!(!text(&short).contains("provider-reported"));
+
+        // Below the short form → two lines, each fitting the width.
+        let short_w = width(&short)[0];
+        let split = legend_lines(short_w - 1, &theme);
+        assert_eq!(split.len(), 2);
+        assert!(text(&split).contains("green reported"));
+        assert!(text(&split).contains("yellow estimated"));
+        for w in width(&split) {
+            assert!(w < short_w, "split line width {w} must fit < {short_w}");
+        }
     }
 
     /// Envoy sub-conversations are forks: their usage belongs to the fork's own
@@ -1421,9 +1722,9 @@ mod tests {
 
         // Principal turns 1 and 2.
         let p1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
-        ledger.settle_request(&p1, RequestUsageStatus::Completed, None, 40);
+        ledger.settle_request(&p1, RequestUsageStatus::Completed, None, 40, 0);
         let p2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
-        ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60);
+        ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60, 0);
         // An envoy sub-turn (turn 1 of the envoy actor) in the same round,
         // with its own token spend that must NOT count toward the round.
         let e1 = ledger.begin_request_for_actor(
@@ -1435,7 +1736,7 @@ mod tests {
             1,
             0,
         );
-        ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120);
+        ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120, 0);
         let report = ledger.snapshot_for_session("session");
 
         let detail = detail_body(&report, 0, 80, &theme);
@@ -1486,6 +1787,7 @@ mod tests {
                 total_tokens: 200,
                 ..Default::default()
             }),
+            0,
             0,
         );
         let report = ledger.snapshot_for_session("session");

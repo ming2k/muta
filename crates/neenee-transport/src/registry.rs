@@ -6,6 +6,7 @@ use neenee_agent::{AgentIdentity, PrincipalProfile};
 use neenee_core::{
     AgentRequest, AgentResponse, MirrorHello, MonitorAction, MonitorEvent, MonitorSnapshot,
     MonitoredSession, PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
+    WipStatus,
 };
 use neenee_persistence::session::SessionStore;
 use std::collections::{HashMap, VecDeque};
@@ -80,6 +81,11 @@ pub struct SessionRegistry {
     mirrors: Arc<Mutex<HashMap<String, MonitoredSession>>>,
     monitor: MonitorBus,
     meta: Arc<Mutex<MonitorMeta>>,
+    /// Declared work-in-progress per session id (ADR-0097 §5): the
+    /// coordination registry sessions consult via `check_wip`. In-memory —
+    /// advisory by design, so a restart simply drops declarations until
+    /// peers re-declare (never a correctness hazard).
+    wip: Arc<Mutex<HashMap<String, WipStatus>>>,
 }
 impl SessionRegistry {
     pub fn new(params: HostParams) -> Self {
@@ -96,6 +102,7 @@ impl SessionRegistry {
             mirrors: Arc::new(Mutex::new(HashMap::new())),
             monitor,
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
+            wip: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     /// Record the host's provenance (project root + start time) so monitor
@@ -118,7 +125,8 @@ impl SessionRegistry {
     ) -> ResolveOutcome {
         match action {
             AttachAction::New => {
-                self.create_session_outcome(caller_project.to_path_buf()).await
+                self.create_session_outcome(caller_project.to_path_buf())
+                    .await
             }
             AttachAction::Attach(None) => self.resolve_auto(caller_project).await,
             AttachAction::Attach(Some(id)) => self.resolve_id(&id, caller_project).await,
@@ -169,7 +177,9 @@ impl SessionRegistry {
     pub async fn interrupt(&self, session_id: &str) -> Result<(), String> {
         let map = self.sessions.lock().await;
         let Some(e) = map.get(session_id) else {
-            return Err(format!("session '{session_id}' is not hosted on this server"));
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
         };
         let _ = e.req_tx.send(AgentRequest::Interrupt);
         Ok(())
@@ -184,7 +194,9 @@ impl SessionRegistry {
     ) -> Result<(), String> {
         let map = self.sessions.lock().await;
         let Some(e) = map.get(session_id) else {
-            return Err(format!("session '{session_id}' is not hosted on this server"));
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
         };
         let _ = e.req_tx.send(AgentRequest::PermissionReply {
             request_id,
@@ -199,7 +211,9 @@ impl SessionRegistry {
     pub async fn send_prompt(&self, session_id: &str, text: String) -> Result<(), String> {
         let map = self.sessions.lock().await;
         let Some(e) = map.get(session_id) else {
-            return Err(format!("session '{session_id}' is not hosted on this server"));
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
         };
         let _ = e.req_tx.send(AgentRequest::Chat {
             text,
@@ -214,14 +228,112 @@ impl SessionRegistry {
     pub async fn kill_session(&self, session_id: &str) -> Result<(), String> {
         let removed = self.sessions.lock().await.remove(session_id);
         let Some(e) = removed else {
-            return Err(format!("session '{session_id}' is not hosted on this server"));
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
         };
         e.cancel.cancel();
+        // A killed session's declared WIP goes with it (ADR-0097 §5 cleanup).
+        self.clear_wip(session_id).await;
         self.publish(MonitorEvent::SessionRemoved {
             session_id: session_id.to_string(),
         })
         .await;
         Ok(())
+    }
+
+    // ── WIP coordination (ADR-0097 §5) ────────────────────────────────────
+
+    /// Register (or replace) a session's declared WIP and project it onto the
+    /// session's monitor row so peers and the dashboard see it.
+    pub async fn declare_wip(&self, session_id: &str, paths: Vec<String>, summary: String) {
+        let status = WipStatus { paths, summary };
+        self.wip
+            .lock()
+            .await
+            .insert(session_id.to_string(), status.clone());
+        let hosted = self.sessions.lock().await.get(session_id).cloned();
+        if let Some(e) = hosted {
+            e.tracker.lock().await.set_wip(Some(status));
+        }
+    }
+
+    /// Clear a session's declared WIP (on `wip_done`, kill, or natural
+    /// settle) and remove it from the monitor row.
+    pub async fn clear_wip(&self, session_id: &str) {
+        self.wip.lock().await.remove(session_id);
+        let hosted = self.sessions.lock().await.get(session_id).cloned();
+        if let Some(e) = hosted {
+            e.tracker.lock().await.set_wip(None);
+        }
+    }
+
+    /// Answer a session's `check_wip`: the conflicting declared-WIPs of
+    /// *other* sessions in the same workspace, plus the advice the session
+    /// should act on (ADR-0097 §5). Advisory, never a lock.
+    pub async fn check_wip(
+        &self,
+        session_id: &str,
+        query_paths: &[String],
+        concern: Option<&str>,
+    ) -> (Vec<neenee_core::WipConflict>, neenee_core::WipAdvice) {
+        let workspace = self
+            .sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|e| e.project_root.clone());
+        let Some(workspace) = workspace else {
+            // Unknown session: no coordination data — proceed as today.
+            return (Vec::new(), neenee_core::WipAdvice::Proceed);
+        };
+
+        // Peer sessions in the same workspace (by registry index), minus the
+        // asker itself. Collect ids up front (session.id() is async).
+        let peers: Vec<String> = {
+            let map = self.sessions.lock().await;
+            let mut ids = Vec::new();
+            for e in map.values() {
+                if e.project_root == workspace {
+                    let id = e.session.id().await;
+                    if id != session_id {
+                        ids.push(id);
+                    }
+                }
+            }
+            ids
+        };
+
+        let declared = self.wip.lock().await;
+        let mut conflicts = Vec::new();
+        for peer in peers {
+            let Some(wip) = declared.get(&peer) else { continue };
+            let overlap = overlap_paths(query_paths, &wip.paths);
+            // A peer whose WIP doesn't intersect the query at all is not a
+            // conflict for this concern (when the query named paths).
+            if !query_paths.is_empty() && overlap.is_empty() && concern.is_none() {
+                continue;
+            }
+            conflicts.push(neenee_core::WipConflict {
+                session: peer,
+                paths: wip.paths.clone(),
+                summary: wip.summary.clone(),
+                overlap,
+            });
+        }
+
+        let advice = if conflicts.is_empty() {
+            neenee_core::WipAdvice::Proceed
+        } else if query_paths.is_empty() {
+            // Whole-workspace concern (e.g. "run the full suite") with any
+            // WIP present: narrow / skip global verification.
+            neenee_core::WipAdvice::ProceedScoped
+        } else if conflicts.iter().any(|c| !c.overlap.is_empty()) {
+            neenee_core::WipAdvice::Defer
+        } else {
+            neenee_core::WipAdvice::ProceedScoped
+        };
+        (conflicts, advice)
     }
 
     pub async fn host(&self, entry: HostedSession) -> BoundSession {
@@ -252,7 +364,7 @@ impl SessionRegistry {
             n if n > 1 => {
                 return ResolveOutcome::Pick {
                     sessions: self.overview_subset(&mine).await,
-                }
+                };
             }
             _ => {}
         }
@@ -340,7 +452,7 @@ impl SessionRegistry {
         // catches up from the live stream.
         let base = overview_of(&session, true).await;
         let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
-            base_row(base),
+            base_row(base, &project_root),
             SessionStatus::Idle,
         )));
         let tracker_for_tap = tracker.clone();
@@ -460,6 +572,11 @@ impl SessionRegistry {
             overview: hello.overview,
             created_at: hello.created_at,
             updated_at: now_secs(),
+            // A mirror hello carries no project path; the row's workspace
+            // shows as unknown until a hosted twin wins the id.
+            project_root: String::new(),
+            // A mirror carries no declared WIP.
+            wip: None,
             message_count: hello.message_count,
             hosting: SessionHosting::Mirrored,
             status: SessionStatus::Idle,
@@ -472,7 +589,10 @@ impl SessionRegistry {
             context_tokens: None,
             note: None,
         };
-        self.mirrors.lock().await.insert(row.id.clone(), row.clone());
+        self.mirrors
+            .lock()
+            .await
+            .insert(row.id.clone(), row.clone());
         self.publish(MonitorEvent::SessionAdded(row)).await;
     }
 
@@ -545,8 +665,10 @@ enum AssembleErr {
 
 /// Project the picker's cheap header row into the monitor base row; every
 /// status/accounting field starts at its zero value and is folded from the
-/// live event stream by the [`MonitorTracker`].
-fn base_row(overview: SessionOverview) -> MonitoredSession {
+/// live event stream by the [`MonitorTracker`]. `project_root` rides along
+/// from the registry's two-level index so clients can name the workspace
+/// without a second lookup.
+fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> MonitoredSession {
     MonitoredSession {
         id: overview.id,
         overview: overview.overview,
@@ -563,6 +685,8 @@ fn base_row(overview: SessionOverview) -> MonitoredSession {
         activity: None,
         context_tokens: None,
         note: None,
+        project_root: project_root.display().to_string(),
+        wip: None,
     }
 }
 
@@ -604,4 +728,36 @@ async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> boo
         .await
         .map(|items| items.iter().any(|i| i.id == id))
         .unwrap_or(false)
+}
+
+/// The subset of `wip` paths overlapping the query's `query` paths. Paths are
+/// compared normalized (separators unified, trailing slashes stripped, `.`
+/// resolved); a declared path overlaps a queried path when either is a prefix
+/// of the other (a directory WIP covers files beneath it, and vice versa).
+/// Empty when the query named no paths.
+fn overlap_paths(query: &[String], wip: &[String]) -> Vec<String> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let norm = |p: &str| -> String {
+        let p = p.replace('\\', "/");
+        let mut p = p.trim_end_matches('/').to_string();
+        // Resolve leading "./" so workspace-relative forms compare equal.
+        while let Some(rest) = p.strip_prefix("./") {
+            p = rest.to_string();
+        }
+        p
+    };
+    let query_norm: Vec<String> = query.iter().map(|p| norm(p)).collect();
+    wip.iter()
+        .filter(|w| {
+            let w = norm(w);
+            query_norm.iter().any(|q| {
+                w == *q
+                    || w.starts_with(&format!("{q}/"))
+                    || q.starts_with(&format!("{w}/"))
+            })
+        })
+        .cloned()
+        .collect()
 }

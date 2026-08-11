@@ -67,10 +67,7 @@ pub fn token_usage(
     session_id: String,
 ) {
     let report = token_ledger.snapshot_for_session(&session_id);
-    let _ = resp_tx.send(AgentResponse::TokenUsageReport {
-        session_id,
-        report,
-    });
+    let _ = resp_tx.send(AgentResponse::TokenUsageReport { session_id, report });
 }
 
 /// `AgentRequest::QuerySessionContext` — build and push the

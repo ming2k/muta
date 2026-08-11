@@ -62,7 +62,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Todo bar](todo-bar.md) | One-row task-list summary: `TODOS` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
 | [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
-| [Status bar](status-bar.md) | Ambient session state: `autopilot` flag (left) + tilde-shortened workspace path (right) |
+| [Head row](status-bar.md) | Ambient session state at the top of every view: session identity + workspace (left) + mode flags (right) |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |
 | [Visual language](visual-language.md) | The join ladder: how ` · `, whitespace, and ` › ` encode relationship strength between adjacent tokens |
@@ -74,7 +74,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 - [Color palette](theme.md) — all `Theme` tokens with RGB values
 - [Transcript spacing](transcript-spacing.md) — spacing ownership rules for transcript layouts and components
 - [Key measurements](layout.md#key-measurements) — indents, margins, scroll steps
-- [Half-block characters](half-block-chars.md) — `╻╹▀▄┃` transition reference
+- [Panel padding](half-block-chars.md) — why the top/bottom edges use full panel-bg rows, not `╻╹▀▄┃` glyphs
 
 ## Source files
 
@@ -99,7 +99,8 @@ ADR-0079; paths below are relative to that directory.
 | `layout/` | Transcript arrangement strategies: `default`, `legacy` (selected by `[tui] transcript_layout`) |
 | `tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
-| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_status_bar` / `StatusBarView`, `draw_completion_menu` |
+| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` — the unified head row at the top of every view |
 | `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
 | `notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `components/notice.rs` |

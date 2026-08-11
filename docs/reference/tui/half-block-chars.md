@@ -1,9 +1,18 @@
-# Half-block transition characters
+# Panel top/bottom padding
 
-Used on the top and bottom padding rows of user messages and the input box to
-create a half-row visual inset instead of a full empty row.
+User messages and the input box pad their top and bottom edges with a **full
+row of solid panel background** — no characters, no transition glyphs.
 
-## Character reference
+```text
+  ┃                             ← top: full panel-bg padding row
+  ┃ text content                ← full height
+  ┃                             ← bottom: full panel-bg padding row
+```
+
+## Why not half-block characters?
+
+An earlier iteration used the Unicode half-block pair `▄` (U+2584, lower half)
+and `▀` (U+2580, upper half) so the panel edge occupied only half a row:
 
 | Character | Unicode | Name | Half filled |
 |-----------|---------|------|-------------|
@@ -13,32 +22,14 @@ create a half-row visual inset instead of a full empty row.
 | `▀` | U+2580 | UPPER HALF BLOCK | Top half = fg color |
 | `▄` | U+2584 | LOWER HALF BLOCK | Bottom half = fg color |
 
-## Transition logic
+That produced a compact half-row inset, but it depends on the terminal font
+rasterizing `▄`/`▀` exactly to the cell's half height. In practice glyph
+hinting, line-height scaling, and font substitution make the seam land a pixel
+or two off in some terminals, so the panel edge looked different depending on
+where it ran.
 
-### Top transition row
-
-The panel "fades in" from the bottom half, connecting to the text row below.
-
-| Column | Character | fg | bg | Effect |
-|--------|-----------|----|----|--------|
-| Bar | `╻` | `accent` | `app_bg` | Bottom-half bar visible |
-| Content | `▄` | panel bg | `app_bg` | Bottom half = panel color |
-
-### Bottom transition row
-
-The panel "fades out" from the top half, connecting from the text row above.
-
-| Column | Character | fg | bg | Effect |
-|--------|-----------|----|----|--------|
-| Bar | `╹` | `accent` | `app_bg` | Top-half bar visible |
-| Content | `▀` | panel bg | `app_bg` | Top half = panel color |
-
-## Visual result
-
-```text
-  ╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄     ← top: only bottom half carries panel + bar
-  ┃ text content          ← full height
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀     ← bottom: only top half carries panel + bar
-```
-
-The `┃` bar and panel background smoothly fade in/out in half-cell increments.
+A terminal cell can only carry **one** background color — there is no way to
+paint the top half of a cell one color and the bottom half another without a
+glyph. So the only background-only option is a full row. Trading the half-row
+inset for a full padding row keeps the edge pixel-identical across every
+terminal, which is the consistency the design optimizes for.

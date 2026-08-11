@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`neenee dashboard`: the full-screen session dashboard, straight from the
+  shell.** Reaches the same in-terminal control panel as TUI `/dashboard`
+  (ADR-0096) without first entering a session. The client attaches to the
+  daemon's most-recently-active hosted session purely as the underlying TUI
+  carrier and raises the dashboard over it on the first frame — the
+  dashboard's monitor stream and its control verbs (interrupt / prompt /
+  create) ride their own daemon connections, so the panel never depends on
+  that carrier. Esc from the opening dashboard quits (there is no
+  conversation the user asked for behind it); Enter on a row attaches into
+  that session through the ordinary re-attach loop. Like `neenee status`
+  (ADR-0093), it never spawns a daemon: a missing daemon or an empty host is
+  a clean error, not an excuse to spawn one or fabricate a session. Also
+  fixes the dashboard/`status` monitor stream to prefer the daemon's Unix
+  domain socket (previously TCP-only, so the panel could come up empty
+  against a UDS-only daemon).
+
 ### Changed
+
+- **Provider-switch confirmation is a toast, not a transcript row.** The
+  `ℹ Provider switched to …` line is no longer appended to the transcript as
+  an inline notice (ADR-0088: a status confirmation is acknowledgment, not
+  conversational content). A genuine user-initiated switch (`/models`, the
+  Models picker, `/provider`) now surfaces a transient toast — emitted by the
+  harness wrapped in `RoundEvent::Notice` so every attached client (in-process
+  TUI, `neenee attach`, `/serve`) sees it — while the hint bar keeps the
+  long-lived "still in effect" indicator and the durable command ledger
+  records an `Ack` for audit (ADR-0091). Startup/attach synthetic
+  `ProviderSwitched` replays only re-hydrate the hint bar: no toast, no
+  transcript row. Provider *rebuilds* (edit/delete/reasoning/reapply) stay
+  silent and unrecorded, exactly as before.
 
 - **Bare `neenee` always starts a fresh session.** Previously the daemon
   auto-bound the caller to an existing session whenever exactly one was

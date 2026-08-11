@@ -1121,8 +1121,14 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         host_sessions: Vec::new(),
         host_scroll: 0,
         host_modal_follow: true,
+        host_focus: crate::tui::overlays::DashboardFocus::Detail,
+        host_detail_scroll: 0,
+        host_preview: None,
+        host_preview_scroll: 0,
+        host_prompting: false,
+        host_prompt_new: false,
         switch_to_target: None,
-        startup_picker: false,
+        startup_overlay: crate::tui::StartupOverlay::None,
         permission_confirm_always: false,
         permission_show_details: false,
         permission_scroll: 0,
@@ -3240,12 +3246,12 @@ fn modal_page_step_tracks_body_height_and_floors_at_one() {
 }
 
 /// `neenee resume` (no id) opens the sessions picker at startup instead of
-/// loading any session, so the `startup_picker` flag must gate quit-on-close.
+/// loading any session, so the `startup_overlay` state must gate quit-on-close.
 /// This pins the two state transitions the event loop relies on:
 ///
-/// 1. The flag defaults to `false` in an ordinary (in-session) App, so the
+/// 1. The overlay defaults to `None` in an ordinary (in-session) App, so the
 ///    `/sessions` modal only ever dismisses on Esc.
-/// 2. Selecting a session from the picker clears the flag — once a real
+/// 2. Selecting a session from the picker clears the overlay — once a real
 ///    conversation backs the view, the picker reverts to a plain transient
 ///    overlay. (The event loop's `OpenSelectedSession` arm does this.)
 #[test]
@@ -3255,22 +3261,26 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
 
     // Default: an in-session App never treats the picker as a startup gate.
-    assert!(!app.startup_picker);
+    assert_eq!(app.startup_overlay, crate::tui::StartupOverlay::None);
 
     // Simulate the startup path (`neenee resume` with no id): the picker
-    // opens and `startup_picker` is armed. Closing it must quit.
-    app.startup_picker = true;
+    // opens and `startup_overlay` is armed. Closing it must quit.
+    app.startup_overlay = crate::tui::StartupOverlay::SessionsPicker;
     app.active_modal = Modal::Sessions;
-    assert!(app.startup_picker && app.active_modal == Modal::Sessions);
+    assert!(
+        app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+            && app.active_modal == Modal::Sessions
+    );
     // The quit gate is `should_quit`; it is still clear until a close happens.
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
-    // Open a session from the picker: the flag clears so a later `/sessions`
+    // Open a session from the picker: the overlay clears so a later `/sessions`
     // modal behaves as a normal transient overlay.
-    app.startup_picker = false;
+    app.startup_overlay = crate::tui::StartupOverlay::None;
     app.active_modal = Modal::None;
-    assert!(
-        !app.startup_picker,
+    assert_eq!(
+        app.startup_overlay,
+        crate::tui::StartupOverlay::None,
         "opening a session drops the startup gate"
     );
 }
@@ -3418,7 +3428,7 @@ fn resolve_scroll_follows_selection_and_clamps_to_max_scroll() {
 /// Esc back-out must respect modal hierarchy: a drill-in sub-page backs out to
 /// its parent view *before* any close/quit logic runs. Regression for a bug
 /// where pressing Esc in the `Sessions › Info` sub-view at startup
-/// (`startup_picker` armed) quit the program instead of returning to the
+/// (`startup_overlay` armed) quit the program instead of returning to the
 /// sessions list — because the startup-quit check was ordered before the
 /// sub-page back-out check. This mirrors the event loop's `CloseModal` arm
 /// ordering exactly (deepest level first).
@@ -3431,7 +3441,7 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     // The user is in the Sessions › Info sub-view at startup: both the startup
     // gate AND the info drill-in are active. Esc must back out to the list,
     // NOT quit.
-    app.startup_picker = true;
+    app.startup_overlay = crate::tui::StartupOverlay::SessionsPicker;
     app.active_modal = Modal::Sessions;
     app.session_info_detail = true;
     app.session_detail = Some(neenee_core::SessionDetail {
@@ -3446,7 +3456,9 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
         app.session_detail = None;
         app.session_info_scroll = 0;
         false
-    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+    } else if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+        && app.active_modal == Modal::Sessions
+    {
         app.should_quit.store(true, Ordering::SeqCst);
         true
     } else {
@@ -3466,7 +3478,9 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     // there is no deeper sub-view left.
     let quit = if app.active_modal == Modal::Sessions && app.session_info_detail {
         false
-    } else if app.startup_picker && app.active_modal == Modal::Sessions {
+    } else if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+        && app.active_modal == Modal::Sessions
+    {
         app.should_quit.store(true, Ordering::SeqCst);
         true
     } else {
@@ -3487,13 +3501,15 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     use std::sync::atomic::Ordering;
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.startup_picker = true;
+    app.startup_overlay = crate::tui::StartupOverlay::SessionsPicker;
     app.active_modal = Modal::Sessions;
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
-    // Mirror the CtrlC arm: startup_picker + Sessions → quit (not modal-close).
+    // Mirror the CtrlC arm: startup_overlay + Sessions → quit (not modal-close).
     // (Selection copy is skipped — no selection in a modal.)
-    let quit = if app.startup_picker && app.active_modal == Modal::Sessions {
+    let quit = if app.startup_overlay == crate::tui::StartupOverlay::SessionsPicker
+        && app.active_modal == Modal::Sessions
+    {
         app.should_quit.store(true, Ordering::SeqCst);
         true
     } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {

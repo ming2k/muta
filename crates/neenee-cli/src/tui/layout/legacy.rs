@@ -25,12 +25,14 @@ impl TranscriptLayout for Legacy {
             stream.dispatch(mi);
 
             // ── Inter-message spacing ───────────────────────────────────────
-            // A user message's panel already ends with a bottom transition row
-            // (▀) that separates it from the next message, so the extra blank
-            // line is omitted there to keep the gap to a single row. The
+            // A user message's panel ends with a full panel-bg padding row.
+            // That row reads as part of the panel, not as open space, so the
+            // message still needs one blank row of `surface` before the next
+            // component to keep the same visual separation the old half-block
+            // `▀` transition provided (its bottom half was app_bg). The
             // exception is when the next message is a step (thinking or tool
-            // step): a blank row between the user panel's transition and the
-            // step header keeps the two visually distinct.
+            // step): a blank row between the user panel's edge and the step
+            // header keeps the two visually distinct.
             //
             // Collapsed tool steps stack flush: a batch of parallel/sequential
             // collapsed tool-call headers forms a compact log block with no

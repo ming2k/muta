@@ -78,6 +78,15 @@ pub struct RequestUsageRecord {
     pub total_tokens: i64,
     pub cache_write_tokens: i64,
     pub cache_read_tokens: i64,
+    /// Milliseconds the provider spent *generating* this attempt — measured
+    /// from request dispatch to a validated assistant response, so it excludes
+    /// tool execution and human-decision pauses. Together with
+    /// `completion_tokens` this yields the attempt's honest output rate
+    /// (`completion_tokens / generation_ms`). `0` for in-flight attempts,
+    /// attempts that failed before any response was validated, and records
+    /// persisted before this field existed (they deserialize to the default).
+    #[serde(default)]
+    pub generation_ms: u64,
 }
 
 impl RequestUsageRecord {
@@ -309,13 +318,17 @@ impl TokenSourceLedger {
 
     /// Terminally settle one attempt. Replaying the same event is harmless;
     /// authoritative reported usage can upgrade an estimate, but an estimate
-    /// can never downgrade an already reported record.
+    /// can never downgrade an already reported record. `generation_ms` is the
+    /// attempt's provider-generation span (request dispatch → validated
+    /// response; `0` when none was measured) and backs the per-attempt output
+    /// rate shown by the Context Usage modal.
     pub fn settle_request(
         &self,
         key: &RequestUsageKey,
         status: RequestUsageStatus,
         usage: Option<crate::TokenUsage>,
         estimated_completion_tokens: i64,
+        generation_ms: u64,
     ) {
         if !status.is_terminal() {
             return;
@@ -328,6 +341,7 @@ impl TokenSourceLedger {
             return;
         }
         record.status = status;
+        record.generation_ms = generation_ms;
         if let Some(usage) = usage {
             record.source = RequestUsageSource::Reported;
             record.prompt_tokens = usage.prompt_tokens.max(0);
@@ -578,7 +592,7 @@ mod tests {
         assert_eq!(other.attempt, 1);
         assert_eq!(envoy.attempt, 1, "a distinct actor has its own attempts");
 
-        ledger.settle_request(&first, RequestUsageStatus::Failed, None, 25);
+        ledger.settle_request(&first, RequestUsageStatus::Failed, None, 25, 0);
         ledger.settle_request(
             &retry,
             RequestUsageStatus::Completed,
@@ -589,10 +603,11 @@ mod tests {
                 ..Default::default()
             }),
             0,
+            2_000,
         );
         // A duplicate weaker terminal event cannot downgrade reported usage.
-        ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 999);
-        ledger.settle_request(&envoy, RequestUsageStatus::Completed, None, 30);
+        ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 999, 9_999);
+        ledger.settle_request(&envoy, RequestUsageStatus::Completed, None, 30, 1_000);
 
         let report = ledger.snapshot_for_session("s1");
         assert_eq!(report.rows.len(), 1);
@@ -607,6 +622,10 @@ mod tests {
             report.rows[0].requests[1].source,
             RequestUsageSource::Reported
         );
+        // The per-attempt generation span is booked at settle, and the
+        // idempotency fence keeps a replayed settle from overwriting it.
+        assert_eq!(report.rows[0].requests[1].generation_ms, 2_000);
+        assert_eq!(report.rows[0].requests[0].generation_ms, 0);
     }
 
     #[test]

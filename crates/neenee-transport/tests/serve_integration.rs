@@ -33,6 +33,8 @@ fn idle_base(id: String) -> neenee_core::MonitoredSession {
         activity: None,
         context_tokens: None,
         note: None,
+        project_root: String::new(),
+        wip: None,
     }
 }
 
@@ -57,7 +59,9 @@ async fn prehosted(
     let tap_tracker = tracker.clone();
     let mut tap_rx = bc_tx.subscribe();
     let registry_for_tap = registry.clone();
-    let sync_buffer = Arc::new(Mutex::new(std::collections::VecDeque::<AgentResponse>::new()));
+    let sync_buffer = Arc::new(Mutex::new(
+        std::collections::VecDeque::<AgentResponse>::new(),
+    ));
     let sync_buffer_for_tap = sync_buffer.clone();
     tokio::spawn(async move {
         while let Ok(response) = tap_rx.recv().await {
@@ -715,9 +719,7 @@ async fn uds_serves_same_protocol_without_token() {
 
     // Full handshake over UDS: monitor one-shot.
     let stream = tokio::net::UnixStream::connect(&uds).await.unwrap();
-    let request = "ws://localhost/"
-        .into_client_request()
-        .unwrap();
+    let request = "ws://localhost/".into_client_request().unwrap();
     let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
         .await
         .unwrap();

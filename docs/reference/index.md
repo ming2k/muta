@@ -36,7 +36,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
 - [TUI overview](tui/) — component map, file responsibilities
 - [Frame layout](tui/layout.md) — vertical chunks, chrome hiding, measurements
 - [Color palette](tui/theme.md) — all theme tokens with RGB values
-- [Half-block characters](tui/half-block-chars.md) — `╻╹▀▄┃` Unicode reference
+- [Panel padding](tui/half-block-chars.md) — full panel-bg edges, not `╻╹▀▄┃` glyphs
 
 ### Components
 
@@ -53,5 +53,5 @@ Lookup-oriented documentation — tables, lists, and exact values.
 | Envoy view | [envoy-view.md](tui/envoy-view.md) |
 | Activity bar | [activity-bar.md](tui/activity-bar.md) |
 | Hint bar | [hint-line.md](tui/hint-line.md) |
-| Status bar | [status-bar.md](tui/status-bar.md) |
+| Head row | [status-bar.md](tui/status-bar.md) |
 | Modals | [modals.md](tui/modals.md) |

@@ -23,7 +23,7 @@ Project and user-defined commands are covered under
 | `/search <query>` | Semantic search over the project's session history |
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
 | `/sessions` | Browse past sessions |
-| `/host` | Open the daemon control panel — live status of every session and switching (ADR-0096) |
+| `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session, with attach / interrupt / prompt / create (ADR-0096). `/host` is a hidden alias |
 | `/btw` | Open a side conversation that runs alongside the main session |
 | `/resume [id]` | Resume the most recent or selected session |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
@@ -53,7 +53,7 @@ backend.
 > serve` / `neenee-server` daemon now owns every session and serves them all
 > over the control plane; hot-attaching a listener to a single running TUI
 > session is a legacy of the per-session-host model. Use `neenee serve` to run
-> the daemon and `neenee attach` / `/host` to drive its sessions. See the
+> the daemon and `neenee attach` / `/dashboard` to drive its sessions. See the
 > [Server WebSocket API](server-api.md) for the current protocol.
 
 ## Subcommands

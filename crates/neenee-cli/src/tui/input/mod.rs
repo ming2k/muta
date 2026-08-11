@@ -82,6 +82,10 @@ pub struct InputContext {
     /// owns the keyboard until the decision is made. Mirrors
     /// `App::history_clear_confirm`.
     pub history_clear_confirm: bool,
+    /// Whether the `/host` dashboard's inline prompt is open (`p` prompt or
+    /// `n` new session). While true, printable keys edit the prompt text and
+    /// Enter submits it. Mirrors `App::host_prompting`.
+    pub host_prompting: bool,
 }
 
 impl InputContext {
@@ -153,6 +157,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Activity
             | super::Modal::Queue
             | super::Modal::TokenReport
+            | super::Modal::Host
     )
 }
 
@@ -382,6 +387,24 @@ pub enum InputAction {
     /// `/host` panel Enter: switch the TUI to drive the selected daemon
     /// session (ADR-0096). Handled by exiting to re-attach.
     HostSwitchSelected,
+    /// Dashboard Enter on a dock selection: open the read-only preview modal
+    /// for that session (ADR-0097 §3). Selection alone never triggers this —
+    /// only an explicit Enter.
+    HostPreviewSelected,
+    /// Dashboard `Tab`: toggle keyboard focus between the session list and
+    /// the detail pane.
+    HostFocusToggle,
+    /// Dashboard `i`: interrupt the selected session's current round
+    /// (control-plane verb, ADR-0096).
+    HostInterruptSelected,
+    /// Dashboard `p`: open the inline prompt to send a task to the selected
+    /// session. While open, Enter submits the prompt text.
+    HostPromptOpen,
+    /// Dashboard `n`: open the inline new-session prompt (create + optional
+    /// opening task). While open, Enter creates the session.
+    HostNewSession,
+    /// Dashboard inline-prompt submit (Enter while `p`/`n` is open).
+    HostPromptSubmit,
     /// Drill into the selected turn's model-round usage. Bound to `Enter`.
     TokenReportActivate,
     /// Delete the currently-selected session in the sessions picker.
@@ -1083,6 +1106,46 @@ pub fn process_event(
                 return global;
             }
 
+            // While the `/host` dashboard's inline prompt is open, printable
+            // keys and Backspace edit the prompt text (the composer buffer is
+            // borrowed as the input). Enter submits; Esc falls through to
+            // CloseModal, which the event loop turns into a prompt-cancel when
+            // `host_prompting` is set. Every other key is swallowed so the
+            // prompt owns the keyboard.
+            if context.active_modal == super::Modal::Host && context.host_prompting {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        let byte_pos = input
+                            .char_indices()
+                            .map(|(i, _)| i)
+                            .nth(*cursor_position)
+                            .unwrap_or(input.len());
+                        input.insert(byte_pos, c);
+                        *cursor_position += 1;
+                        return InputAction::InsertChar(c);
+                    }
+                    KeyCode::Backspace => {
+                        if *cursor_position > 0 {
+                            let byte_pos = input
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .nth(*cursor_position - 1)
+                                .unwrap_or(0);
+                            input.remove(byte_pos);
+                            *cursor_position -= 1;
+                        }
+                        return InputAction::None;
+                    }
+                    // Enter submits the prompt (never swallowed by the `_`
+                    // arm below); Esc cancels via the normal close path.
+                    KeyCode::Enter => return InputAction::HostPromptSubmit,
+                    KeyCode::Esc => return InputAction::CloseModal,
+                    // Swallow every other key (Tab, arrows, `?`, …) so the
+                    // prompt owns the keyboard.
+                    _ => return InputAction::None,
+                }
+            }
+
             match key.code {
                 KeyCode::Esc => {
                     // In-modal keymap page: Esc closes the page first, never
@@ -1262,7 +1325,14 @@ pub fn process_event(
                         super::Modal::HistorySearch => InputAction::HistoryInsert,
                         super::Modal::Sessions if context.session_info_detail => InputAction::None,
                         super::Modal::Sessions => InputAction::OpenSelectedSession,
-                        super::Modal::Host => InputAction::HostSwitchSelected,
+                        // With the dashboard's inline prompt open, Enter
+                        // submits the task/new-session text; otherwise it
+                        // opens the highlighted session's preview. (Attach
+                        // moved to `a`; Enter previews, ADR-0097 §3.)
+                        super::Modal::Host if context.host_prompting => {
+                            InputAction::HostPromptSubmit
+                        }
+                        super::Modal::Host => InputAction::HostPreviewSelected,
                         super::Modal::Permission => InputAction::PermissionSubmit,
                         super::Modal::Question => InputAction::QuestionSubmit,
                         super::Modal::InputInjection => InputAction::InputSubmit,
@@ -1376,6 +1446,10 @@ pub fn process_event(
                         // entry. The fuzzy filter is a free-text field, so an
                         // alpha key would clash; Tab is the unambiguous gesture.
                         InputAction::HistoryTogglePreview
+                    } else if context.active_modal == super::Modal::Host {
+                        // The dashboard has two panes: Tab moves focus between
+                        // the session list and the detail read-out.
+                        InputAction::HostFocusToggle
                     } else {
                         // No completion open and no modal field to cycle: Tab
                         // is a no-op. (There is no zone switching: focus is
@@ -1786,6 +1860,26 @@ pub fn process_event(
                         && c == 'i'
                     {
                         InputAction::OpenSessionInfo
+                    } else if context.active_modal == super::Modal::Host && c == 'a' {
+                        // Dashboard: attach to the selected session (detach +
+                        // re-attach). Enter only previews; `a` is the attach.
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostSwitchSelected;
+                    } else if context.active_modal == super::Modal::Host && c == 'i' {
+                        // Dashboard: interrupt the selected session's round.
+                        // Early `return` so this keypress is never re-inserted
+                        // as prompt text by the arms below (the dashboard keys
+                        // are actions, never literal input).
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostInterruptSelected;
+                    } else if context.active_modal == super::Modal::Host && c == 'p' {
+                        // Dashboard: open the inline prompt-to-session field.
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostPromptOpen;
+                    } else if context.active_modal == super::Modal::Host && c == 'n' {
+                        // Dashboard: open the inline new-session field.
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostNewSession;
                     } else if context.active_modal == super::Modal::Queue && c == 'D' {
                         // Queue modal: `Shift+D` deletes the highlighted item
                         // outright (the queue is auto-blocked on open, so a
@@ -2317,6 +2411,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -2366,6 +2461,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -2492,6 +2588,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2536,6 +2633,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2579,6 +2677,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2619,6 +2718,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2659,6 +2759,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2703,6 +2804,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2747,6 +2849,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2786,6 +2889,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2866,6 +2970,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -2906,6 +3011,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2942,6 +3048,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -2981,6 +3088,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3018,6 +3126,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3057,6 +3166,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3095,6 +3205,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3132,6 +3243,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3171,6 +3283,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3210,6 +3323,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3245,6 +3359,7 @@ mod tests {
             custom_provider_field: None,
             question_other_highlighted: false,
             history_clear_confirm: false,
+            host_prompting: false,
         };
         let letter = process_event(
             Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
@@ -3302,6 +3417,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3334,6 +3450,7 @@ mod tests {
             custom_provider_field: None,
             question_other_highlighted: false,
             history_clear_confirm: false,
+            host_prompting: false,
         };
         let action = process_event(
             Event::Key(crossterm::event::KeyEvent::new(
@@ -3377,6 +3494,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3411,6 +3529,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -3445,6 +3564,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -3509,6 +3629,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -3710,6 +3831,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -4059,6 +4181,7 @@ mod tests {
                     custom_provider_field: None,
                     question_other_highlighted: false,
                     history_clear_confirm: false,
+                    host_prompting: false,
                 },
                 &mut drag,
             )
@@ -4753,6 +4876,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -4894,6 +5018,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -4929,6 +5054,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -4968,6 +5094,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -5129,6 +5256,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -5165,6 +5293,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -5249,6 +5378,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -5295,6 +5425,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )
@@ -5427,6 +5558,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         );
@@ -5709,6 +5841,7 @@ mod tests {
                 custom_provider_field: None,
                 question_other_highlighted: false,
                 history_clear_confirm: false,
+                host_prompting: false,
             },
             &mut drag,
         )

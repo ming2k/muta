@@ -133,10 +133,10 @@ shouldn't be.
 Because an autopilot session silently executes actions that would otherwise
 pause, the harness makes the state impossible to miss without making it loud:
 
-- The status bar shows a flat `autopilot` label in the warning tone for the
+- The head row shows a flat `autopilot` label in the warning tone for the
   whole session — plain text, not a raised pill, because it is a persistent
   state flag rather than a momentary mode. See
-  [TUI status bar](../../reference/tui/status-bar.md).
+  [TUI head row](../../reference/tui/status-bar.md).
 - Toggling emits a `RoundEvent::AutopilotChanged` so the TUI refreshes the badge
   immediately, mid-turn, without flushing the activity bar.
 

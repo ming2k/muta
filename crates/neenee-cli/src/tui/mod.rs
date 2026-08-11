@@ -158,6 +158,22 @@ impl SessionSource {
     }
 }
 
+/// Which full-screen overlay (if any) the TUI opens straight into at startup
+/// instead of a conversation view. In that mode the overlay is not a transient
+/// modal — there is no conversation the user asked for behind it — so closing
+/// it quits the program rather than dropping into an empty chat (mirrors how
+/// `neenee resume`'s picker behaves). Distinct from `None`, where the TUI
+/// opens directly onto a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupOverlay {
+    /// Ordinary startup: land on the conversation.
+    None,
+    /// `neenee resume` (no id): open the sessions picker to choose a session.
+    SessionsPicker,
+    /// `neenee dashboard`: open the session dashboard over the carrier session.
+    Dashboard,
+}
+
 /// Whether an inbound response is a high-frequency visual update that can wait
 /// for the active 10fps render heartbeat. The listener still applies it and
 /// marks the UI dirty immediately; it merely avoids waking the event loop for
@@ -194,7 +210,7 @@ pub async fn run_tui(
     input_history_config: config::InputHistoryConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
-    startup_picker: bool,
+    startup_overlay: StartupOverlay,
 ) -> Result<TuiOutcome, Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -313,8 +329,9 @@ pub async fn run_tui(
     // Token-source report fetched on demand from the harness when the
     // context-usage modal opens in attach mode (the ledger is daemon-side
     // there). Mirrors the `session_detail` on-demand pattern.
-    let token_report =
-        Arc::new(tokio::sync::Mutex::new(None::<neenee_core::TokenSourceReport>));
+    let token_report = Arc::new(tokio::sync::Mutex::new(
+        None::<neenee_core::TokenSourceReport>,
+    ));
     let token_report_clone = token_report.clone();
     // Attached frontends hold no local token-source ledger (the accounting is
     // daemon-side), so the listener needs the currently-viewed primary session
@@ -332,7 +349,12 @@ pub async fn run_tui(
     // maintains client-side (separate from the session attach stream).
     let host_sessions = Arc::new(Mutex::new(Vec::<neenee_core::MonitoredSession>::new()));
     let host_sessions_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let open_host = Arc::new(AtomicBool::new(false));
+    // `neenee dashboard` seeds the open flag so the event loop's very first
+    // frame raises the dashboard over the carrier session (the same
+    // one-shot signal `AgentResponse::OpenHostPanel` sets for `/dashboard`).
+    let open_host = Arc::new(AtomicBool::new(
+        startup_overlay == StartupOverlay::Dashboard,
+    ));
     let open_host_clone = open_host.clone();
     let oauth_add_signal = Arc::new(Mutex::new(None::<event_loop::OauthAddSignal>));
     let oauth_add_signal_clone = oauth_add_signal.clone();
@@ -1322,9 +1344,9 @@ pub async fn run_tui(
                     // belongs to the session the frontend is viewing — a
                     // reply that raced a session switch would otherwise
                     // populate the modal with the previous session's rows.
-                    let viewed = listener_side_id.clone().or_else(|| {
-                        attach_session_id_clone.lock().unwrap().clone()
-                    });
+                    let viewed = listener_side_id
+                        .clone()
+                        .or_else(|| attach_session_id_clone.lock().unwrap().clone());
                     if viewed.as_deref() == Some(session_id.as_str()) {
                         *token_report_clone.lock().await = Some(report);
                     }
@@ -1336,12 +1358,14 @@ pub async fn run_tui(
                     should_quit_clone.store(true, Ordering::SeqCst);
                 }
                 AgentResponse::ProviderSwitched { provider, model } => {
-                    let mut msgs = messages_clone.write().await;
-                    push_local_notice(
-                        &mut msgs,
-                        NoticeSeverity::Info,
-                        format!("Provider switched to {} ({})", provider, model),
-                    );
+                    // A provider/model switch refreshes the hint bar (the
+                    // long-lived "still in effect" indicator) but is NOT
+                    // appended to the transcript as an inline notice: the
+                    // acknowledgment is a command ack (ADR-0088), surfaced as a
+                    // transient toast the harness emits alongside this event
+                    // for genuine user-initiated switches. Attach/startup
+                    // synthetic replays of this event only re-hydrate the hint
+                    // bar — no toast, no transcript row.
                     *cp_clone.lock().await = provider;
                     *cm_clone.lock().await = model;
                 }
@@ -1483,7 +1507,7 @@ pub async fn run_tui(
         custom_commands,
         cursor_position: 0,
         input_scroll: 0,
-        active_modal: if startup_picker {
+        active_modal: if startup_overlay == StartupOverlay::SessionsPicker {
             Modal::Sessions
         } else {
             Modal::None
@@ -1534,8 +1558,14 @@ pub async fn run_tui(
         host_sessions: Vec::new(),
         host_scroll: 0,
         host_modal_follow: true,
+        host_focus: crate::tui::overlays::DashboardFocus::Detail,
+        host_detail_scroll: 0,
+        host_preview: None,
+        host_preview_scroll: 0,
+        host_prompting: false,
+        host_prompt_new: false,
         switch_to_target: None,
-        startup_picker,
+        startup_overlay,
         permission_confirm_always: false,
         permission_show_details: false,
         permission_scroll: 0,
@@ -1729,7 +1759,7 @@ pub async fn start_tui(
     input_history_config: config::InputHistoryConfig,
     session: SessionSource,
     token_ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
-    startup_picker: bool,
+    startup_overlay: StartupOverlay,
 ) -> Result<TuiOutcome, Box<dyn Error>> {
     run_tui(
         tx,
@@ -1745,7 +1775,7 @@ pub async fn start_tui(
         input_history_config,
         session,
         token_ledger,
-        startup_picker,
+        startup_overlay,
     )
     .await
 }
