@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-08-12
+
 ### Added
 
 - **Effort ignition: selecting a model's top reasoning tier fires a
@@ -2652,7 +2654,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.2...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.3...HEAD
+[0.22.3]: https://github.com/ming2k/neenee/releases/tag/v0.22.3
 [0.22.2]: https://github.com/ming2k/neenee/releases/tag/v0.22.2
 [0.22.1]: https://github.com/ming2k/neenee/releases/tag/v0.22.1
 [0.22.0]: https://github.com/ming2k/neenee/releases/tag/v0.22.0
