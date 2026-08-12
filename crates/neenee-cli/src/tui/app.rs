@@ -37,8 +37,18 @@ use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedDispatchState {
+    /// Staged in the outbox, waiting for its turn (auto-drain or a recall /
+    /// delete / reorder from the Queue modal).
     Waiting,
+    /// A fresh round is being started for this item (`ChatToSession` sent,
+    /// `NextRoundStarted` not yet received).
     Dispatching,
+    /// Handed to the *running* round via `InsertUserInput` (`F4`); not yet
+    /// admitted at a safe turn boundary. Excluded from FIFO dispatch and
+    /// recall; the bar/modal show it as `steer›`. Resolved by
+    /// `UserInputInserted` (success — the item is dropped) or
+    /// `UserInputUnavailable` (the round closed first — back to `Waiting`).
+    Inserting,
 }
 
 /// A user message owned by the compact outbox. It is intentionally absent
@@ -218,7 +228,7 @@ pub struct App {
     /// on it opens the Activity modal directly on the Todos section. `None`
     /// when no todos are shown (empty task list or bar hidden).
     pub todos_rect: Option<neenee_tui_engine::Rect>,
-    /// Screen rect of the persistent queue bar (the two-row outbox summary),
+    /// Screen rect of the persistent queue bar (the one-row outbox summary),
     /// so a click anywhere on it expands the full Queue modal. `None` when the
     /// bar is hidden (chrome hidden or envoy zoom).
     pub queue_rect: Option<neenee_tui_engine::Rect>,
@@ -663,6 +673,13 @@ pub struct App {
     /// how often the loop redraws (mouse movement, streaming, paste, etc. all
     /// wake the loop at irregular intervals and would otherwise jitter it).
     pub spinner_epoch: std::time::Instant,
+    /// Epoch the effort-ignition celebration is timed against. Set when the
+    /// model's top reasoning tier (`max`) is selected; `None` once the
+    /// animation completes. Wall-clock based (like `spinner_epoch`) so the
+    /// wave cadence survives the loop's irregular wakeups. Drives the
+    /// composer's background wave tint, the hint bar's `M A X` label
+    /// takeover, and the prompt's charge — see [`crate::tui::effort_ignition`].
+    pub effort_ignition_epoch: Option<std::time::Instant>,
     /// Input stashed while the API-key modal borrows the input line.
     pub stashed_input: String,
     /// Provider id targeted by the unified key editor ([`Modal::ModelEditor`]).
@@ -1099,32 +1116,41 @@ impl App {
     }
 
     /// Remove the viewed session's outbox item at display index `idx`. Used by
-    /// the queue modal's `D` delete. Returns the removed dispatch (mostly for
-    /// tests).
+    /// the queue modal's `D` delete. In-flight steers (`Inserting`) are
+    /// excluded from the selectable range — they are already with the running
+    /// round, so the outbox can no longer drop them. Returns the removed
+    /// dispatch (mostly for tests).
     pub fn remove_queued_at(&mut self, session_id: &str, idx: usize) -> Option<QueuedDispatch> {
         let position = self
             .pending_dispatch
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.session_id == session_id)
+            .filter(|(_, item)| {
+                item.session_id == session_id && item.state == QueuedDispatchState::Waiting
+            })
             .nth(idx)
             .map(|(pos, _)| pos)?;
         self.pending_dispatch.remove(position)
     }
 
     /// Move the viewed session's outbox item at display index `idx` by `delta`
-    /// slots within the session's slice (`delta < 0` toward the front / next
-    /// to pop, `delta > 0` toward the tail). Other items in the slice shift to
-    /// make room (a true reorder, not a swap). Clamped at the slice boundaries
-    /// so an item can never escape into another session's region of the deque.
+    /// slots within the session's Waiting slice (`delta < 0` toward the front
+    /// / next to pop, `delta > 0` toward the tail). Other items in the slice
+    /// shift to make room (a true reorder, not a swap). Clamped at the slice
+    /// boundaries so an item can never escape into another session's region
+    /// of the deque. In-flight steers (`Inserting`) are excluded from the
+    /// slice entirely: they are already with the running round, so display
+    /// order no longer affects them.
     pub fn move_queued(&mut self, session_id: &str, idx: usize, delta: i32) {
         // Collect the positions (into the global deque) of this session's
-        // items in display order.
+        // Waiting items in display order — the selectable range.
         let positions: Vec<usize> = self
             .pending_dispatch
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.session_id == session_id)
+            .filter(|(_, item)| {
+                item.session_id == session_id && item.state == QueuedDispatchState::Waiting
+            })
             .map(|(pos, _)| pos)
             .collect();
         let count = positions.len();
@@ -1193,7 +1219,9 @@ impl App {
     /// Used by the queue modal's `Enter` re-edit, which keys off the `↑/↓`
     /// selection rather than always targeting the newest — so a mid-queue item
     /// can be pulled back to the composer too. The item is removed from the
-    /// outbox, exactly like [`Self::recall_queued`].
+    /// outbox, exactly like [`Self::recall_queued`]. In-flight steers
+    /// (`Inserting`) are excluded from the selectable range, matching the
+    /// modal's row list.
     pub fn recall_queued_at(&mut self, session_id: &str, idx: usize) -> Option<RecallQueued> {
         let position = self
             .pending_dispatch
@@ -1211,6 +1239,32 @@ impl App {
 
     pub fn restore_dispatch(&mut self, dispatch: QueuedDispatch) {
         self.adopt_as_draft(dispatch.text, dispatch.images, dispatch.text_pastes);
+    }
+
+    /// Stage a composed message as an in-flight mid-round steer (`F4`). The
+    /// item is pushed to the back of the outbox marked [`QueuedDispatchState::Inserting`]
+    /// so it stays visible in the bar/modal (as `steer›`) until the harness
+    /// reports admission (`UserInputInserted`) or hands it back
+    /// (`UserInputUnavailable` → [`Self::requeue_dispatch`]). Returns the new
+    /// item's id.
+    pub fn stage_insert_dispatch(
+        &mut self,
+        session_id: &str,
+        text: String,
+        images: Vec<ImagePart>,
+        text_pastes: Vec<String>,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.pending_dispatch.push_back(QueuedDispatch {
+            id: id.clone(),
+            session_id: session_id.to_string(),
+            state: QueuedDispatchState::Inserting,
+            text,
+            queued_at_ms: crate::tui::event_loop::now_epoch_ms(),
+            images,
+            text_pastes,
+        });
+        id
     }
 
     /// Adopt `text` (plus its staged attachments) as the new **draft** — the
@@ -1716,7 +1770,7 @@ impl App {
         if entry.is_empty() && images.is_empty() && text_pastes.is_empty() {
             return;
         }
-        // Slash-command invocations (`/model`, `/clear`, …) are UI gestures,
+        // Slash-command invocations (`/model`, `/new`, …) are UI gestures,
         // not prompts: they are already visible in the transcript, and most
         // users don't want `/model` noise cluttering the Ctrl+R picker. Skip
         // them unless `[input_history] record_commands` opts them back in.

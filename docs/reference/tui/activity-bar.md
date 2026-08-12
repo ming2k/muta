@@ -10,7 +10,7 @@ below the hint bar — and the task-list summary lives on its own todo bar above
 ## Appearance
 
 ```text
- ● making edits (23s · Esc Esc to interrupt)
+ ● making edits (23s · Esc Esc interrupt)
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **live
@@ -19,7 +19,7 @@ inside the interrupt hint. Segments are omitted when there is nothing to
 report, so a plain round reads simply:
 
 ```text
- ● making edits (3s · Esc Esc to interrupt)
+ ● making edits (3s · Esc Esc interrupt)
 ```
 
 The structural counters — `round N · turn M · <model>` — no longer live on

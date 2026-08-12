@@ -620,7 +620,7 @@ async fn run_mirror<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
                 Ok(Wire::Mirror { hello }) => {
                     // Re-adoption: the owning TUI switched which session it
-                    // drives (`/session open`, `/clear`, fork). Drop the old
+                    // drives (`/session open`, `/new`, fork). Drop the old
                     // row, adopt the new identity (ADR-0095 §3).
                     registry.mirror_remove(&current_id).await;
                     current_id = hello.session_id.clone();

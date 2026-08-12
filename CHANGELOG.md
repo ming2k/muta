@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Effort ignition: selecting a model's top reasoning tier fires a
+  footer-wide celebration (codex `ultra` port).** When the active model's
+  effective effort reaches `max` (Kimi K3's top tier — via the Models
+  picker's `e` editor, or by switching to a model already pinned to `max`),
+  the composer band and hint bar ignite for ~1.3s: two warm fire-wave
+  crests sweep left→right across the panel's background (a staggered chase
+  crest makes it read as more than a single pass), a violet `· → ✦ → ✧`
+  spark lands on the band's top-right corner once the wave has landed, the
+  hint bar's identity cluster collapses into a converging `M A X` label
+  whose letters fall inward from wide-at-the-edges gaps to a tight centered
+  row, and the `›` prompt tint charges toward the fire accent in a 150ms
+  ramp. The glow only ever repaints cell *backgrounds*, so a half-typed
+  draft rides the wave untouched, and the prompt glyph itself never changes
+  — it stays `›`, returning to its ordinary color once the animation ends.
+  The animation is timed against a single wall-clock epoch (like the
+  breathing dot), so its cadence is immune to the event loop's irregular
+  wakeups, and it is dropped from the `animating` set the frame it
+  finishes. `neenee showcase ignition` runs it standalone (Space
+  re-ignites).
+
 - **`neenee dashboard`: the full-screen session dashboard, straight from the
   shell.** Reaches the same in-terminal control panel as TUI `/dashboard`
   (ADR-0096) without first entering a session. The client attaches to the
@@ -17,15 +37,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dashboard's monitor stream and its control verbs (interrupt / prompt /
   create) ride their own daemon connections, so the panel never depends on
   that carrier. Esc from the opening dashboard quits (there is no
-  conversation the user asked for behind it); Enter on a row attaches into
-  that session through the ordinary re-attach loop. Like `neenee status`
+  conversation the user asked for behind it); `a` on a dock card attaches
+  into that session through the ordinary re-attach loop (Enter previews).
+  Like `neenee status`
   (ADR-0093), it never spawns a daemon: a missing daemon or an empty host is
   a clean error, not an excuse to spawn one or fabricate a session. Also
   fixes the dashboard/`status` monitor stream to prefer the daemon's Unix
   domain socket (previously TCP-only, so the panel could come up empty
   against a UDS-only daemon).
 
+- **`F4` steers the running round: insert the composed message at the next
+  safe turn boundary.** Where a busy `Enter` stages the message in the outbox
+  to wait for a fresh round, `F4` hands it to the *currently running* round
+  via `AgentRequest::InsertUserInput` — the agent admits it as a visible user
+  message between its ReAct turns, so a correction or a missing piece of
+  context lands in this round instead of queuing behind it. While admission
+  is pending the item stays in the queue bar marked with a `steer›` badge; a
+  race loss (the round ended first) returns it to the outbox as a paused
+  next-round entry, so nothing is ever dropped. In-flight steers are pinned
+  out of the Queue modal's edit/delete/reorder range until they resolve.
+
 ### Changed
+
+- **The queue bar condenses to a single row.** The outbox summary is now one
+  line — `QUEUE N · inline next-item preview … F4 insert  F3 block  F2 expand`
+  — instead of a two-row header + preview stack (`QUEUE_BAR_ROWS = 1`). The
+  preview truncates under width pressure before the legend sheds its labels
+  and clusters, so the identity always survives; an empty outbox still hides
+  the row entirely, and an idle session gains one more transcript row.
+
+- **Footer chrome packs three rows tighter.** The activity bar now sits flush
+  against the composer (`ACTIVITY_COMPOSER_GAP_ROWS = 0`), the hint bar flush
+  against the composer's bottom edge (`COMPOSER_HINT_GAP_ROWS = 0`), and the
+  bottom viewport margin is gone (`VIEWPORT_BOTTOM_MARGIN = 0`) so the hint
+  bar pins flush against the terminal's bottom edge — the composer's own
+  top/bottom panel-bg padding rows already provide the visual separation, so
+  the gap/margin rows only burned transcript space. The 1-row top margin
+  stays (the transcript still breathes at the top when no head row is
+  shown); a round in flight now leaves three more rows for the conversation.
 
 - **Provider-switch confirmation is a toast, not a transcript row.** The
   `ℹ Provider switched to …` line is no longer appended to the transcript as

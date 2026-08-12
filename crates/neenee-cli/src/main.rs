@@ -187,6 +187,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         project_root: project_override.clone(),
         autopilot: autopilot_at_start,
         single_instance,
+        extra_session_tools: None,
     })
     .await?;
 
@@ -205,6 +206,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         tui_config,
         input_history_config,
         process_lock,
+        extra_session_tools: _,
+        agent: _,
     } = boot;
     // The advisory process lock (ADR-0018, `--single-instance`) releases on
     // drop — hold the guard in `main`'s scope for the process lifetime.
@@ -386,7 +389,7 @@ async fn run_dashboard(
     .await
 }
 
-/// Attach-mode entry (`neenee --attach [id]`): find or spawn the project's
+/// Attach-mode entry (`neenee attach [id]`, formerly `--attach`): find or spawn the project's
 /// session server, connect over WebSocket, and drive the hosted session with
 /// the ordinary TUI. This process is only a client — the server owns the
 /// session lifecycle (and fires SessionEnd hooks on its own shutdown), so

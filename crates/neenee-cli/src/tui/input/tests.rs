@@ -2332,3 +2332,71 @@ fn sessions_modal_n_key_triggers_create_new_session() {
     assert_eq!(action_big_n, InputAction::CreateNewSession);
 }
 
+/// Dispatch a key against the model-settings editor with a given focused
+/// field, returning the action. Mirrors `run_key` but threads the editor's
+/// `editor_field` context so the effort/thinking field gestures resolve.
+fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputAction {
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::ModelEditor,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            editor_field: Some(editor_field),
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn digit_on_effort_field_jumps_to_that_ladder_rung() {
+    // The flat segmented selector makes direct selection natural: `1`..=`7`
+    // map to ladder rungs (0-indexed here), and the key never lands in the
+    // borrowed input line.
+    let mut input = "high".to_string();
+    assert_eq!(
+        editor_key(KeyCode::Char('1'), 1, &mut input),
+        InputAction::ModelEditorEffortJump { index: 0 }
+    );
+    assert_eq!(
+        editor_key(KeyCode::Char('7'), 1, &mut input),
+        InputAction::ModelEditorEffortJump { index: 6 }
+    );
+    assert_eq!(input, "high", "digit must not edit the effort field's line");
+}
+
+#[test]
+fn digit_jump_is_scoped_to_the_effort_field() {
+    // `0` is not a tier (ladder rungs are 1-based), and digits on the API-key
+    // field stay ordinary typed characters (a key can contain digits).
+    let mut input = "high".to_string();
+    assert_eq!(
+        editor_key(KeyCode::Char('0'), 1, &mut input),
+        InputAction::InsertChar('0'),
+        "`0` is not a rung, so it falls through to the borrowed line"
+    );
+
+    let mut key = "sk-".to_string();
+    assert_eq!(
+        editor_key(KeyCode::Char('5'), 0, &mut key),
+        InputAction::InsertChar('5'),
+        "digits on the API-key field type normally"
+    );
+    assert_eq!(key, "sk-5");
+}
+

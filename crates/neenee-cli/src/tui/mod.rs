@@ -51,6 +51,7 @@ pub(crate) mod tools;
 pub(crate) mod chrome;
 pub(crate) mod composer;
 pub(crate) mod design;
+pub(crate) mod effort_ignition;
 pub(crate) mod empty_state;
 pub(crate) mod markdown_table;
 pub(crate) mod message_body;
@@ -527,15 +528,29 @@ pub async fn run_tui(
                                 },
                             );
                         }
-                        // The mid-round insert path is no longer reachable
-                        // from this frontend: a busy Enter always queues for
-                        // the next round, and there is no Tab to opt into
-                        // Insert. These variants remain in the core protocol
-                        // for other frontends / future use, so they are
-                        // handled here as deliberate no-ops rather than masked
-                        // by a catch-all (which would silently swallow any
-                        // genuinely new variant).
-                        RoundEvent::UserInputInserted(_) => {}
+                        // The mid-round insert path is live again via `F4`
+                        // (InsertIntoRound): the steer is admitted at a safe
+                        // turn boundary, so this event is the transcript
+                        // commit point — append the visible user message here
+                        // (exactly like `NextRoundStarted` below) and signal
+                        // the loop to drop the shadow outbox item. The
+                        // cancellation variants stay unused by this frontend
+                        // (nothing cancels a pending insert today) and remain
+                        // deliberate no-ops rather than being masked by a
+                        // catch-all.
+                        RoundEvent::UserInputInserted(input) => {
+                            let input_id = input.id.clone();
+                            let visible = input.display_text.unwrap_or(input.text);
+                            let mut message = TranscriptMessage::new(Role::User, visible);
+                            message.sent_at_ms = input.sent_at_ms;
+                            buf.write().await.push(message);
+                            outbox_signals_clone.lock().await.push_back(
+                                event_loop::OutboxSignal::Inserted {
+                                    session_id,
+                                    input_id,
+                                },
+                            );
+                        }
                         RoundEvent::UserInputCancelled { .. } => {}
                         RoundEvent::UserInputCancelFailed { .. } => {}
                         RoundEvent::NextRoundStarted(input) => {
@@ -1620,6 +1635,7 @@ pub async fn run_tui(
         ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
+        effort_ignition_epoch: None,
         stashed_input: String::new(),
         editor_target: None,
         editor_field: 0,

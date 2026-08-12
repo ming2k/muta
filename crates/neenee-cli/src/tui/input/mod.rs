@@ -240,9 +240,16 @@ pub enum InputAction {
     /// Cycle focus between the editor's fields (API key ↔ effort).
     ModelEditorNextField,
     /// Cycle the effort selector (←/→) on the Anthropic key editor's effort
-    /// field. Carries a delta of ±1; wraps around the five effort levels.
+    /// field. Carries a delta of ±1; wraps around the effort levels.
     ModelEditorEffortCycle {
         delta: i8,
+    },
+    /// Jump the effort selector straight to a tier (digit `1`..=`7` on the
+    /// ladder, `0`-indexed here) on the effort field — the flat segmented
+    /// layout makes direct selection the natural counterpart to ←/→ stepping.
+    /// Ignored when the index is past the model's ladder.
+    ModelEditorEffortJump {
+        index: usize,
     },
     /// Toggle extended thinking on/off (Space) on the Anthropic key editor's
     /// thinking field. Orthogonal to effort.
@@ -505,6 +512,11 @@ pub enum InputAction {
     /// Reachable from `F3` (bar, no modal) and the queue modal's block
     /// control.
     QueueToggleBlock,
+    /// `F4` at the top level: insert the current composer text into the
+    /// running round (steer at the next safe turn boundary). Data-less — the
+    /// event loop reads the composer buffer itself, exactly like the
+    /// text-triggered modal commands do.
+    InsertIntoRound,
     /// Delete the queue modal's selected item. Bound to `D` inside the queue
     /// modal (matching the destructive-delete convention in Connections /
     /// Sessions).
@@ -1271,6 +1283,10 @@ pub fn process_event(
                         InputAction::None
                     }
                 }
+                // F4 is a declared global binding (registry → InsertIntoRound) and
+                // only reaches this arm inside a modal, where the composer is
+                // borrowed (or hidden) — so it is a no-op there.
+                KeyCode::F(4) => InputAction::None,
                 // Ctrl+H opens help only when the Kitty enhanced-keyboard
                 // protocol is active (enabled in `run_tui`). In a raw
                 // terminal Ctrl+H is byte-identical to Backspace (0x08), so
@@ -1905,6 +1921,18 @@ pub fn process_event(
                         // Space toggles the key editor's thinking field
                         // (Anthropic, field 2) instead of inserting a space.
                         InputAction::ModelEditorThinkingToggle
+                    } else if c.is_ascii_digit()
+                        && c != '0'
+                        && context.active_modal == super::Modal::ModelEditor
+                        && context.editor_field == Some(1)
+                    {
+                        // A digit on the effort field jumps straight to that
+                        // ladder rung (`1` = shallowest … `7` = deepest) instead
+                        // of inserting into the borrowed input line — the flat
+                        // segmented selector makes direct selection the natural
+                        // gesture. `0` is not a tier.
+                        let index = c as usize - '1' as usize;
+                        InputAction::ModelEditorEffortJump { index }
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionInsertChar(c)
                     } else if context.active_modal == super::Modal::ConfigThemeCustom

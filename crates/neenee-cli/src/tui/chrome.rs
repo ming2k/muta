@@ -112,7 +112,7 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Layout:
 /// ```text
-/// <spinner> <status> (<elapsed> · Esc Esc to interrupt) [· » <pursuit>] [⚠ <alert>]
+/// <spinner> <status> (<elapsed> · Esc Esc interrupt) [· » <pursuit>] [⚠ <alert>]
 /// ```
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
@@ -172,9 +172,9 @@ pub fn draw_activity_bar(
     let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
     let full_hint_width = elapsed
         .as_ref()
-        .map(|value| UnicodeWidthStr::width(format!(" ({value} · Esc Esc to interrupt)").as_str()))
-        .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc to interrupt)"));
-    let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc to interrupt)");
+        .map(|value| UnicodeWidthStr::width(format!(" ({value} · Esc Esc interrupt)").as_str()))
+        .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc interrupt)"));
+    let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc interrupt)");
     let tiny_interrupt_hint_width = UnicodeWidthStr::width(" Esc Esc");
     let prefix_width = UnicodeWidthStr::width(" ● ");
     const MIN_STATUS_WIDTH: usize = 4;
@@ -245,7 +245,7 @@ pub fn draw_activity_bar(
         spans.push(keycap_span(theme, Key::ESC.display()));
         spans.push(Span::styled(" ", dim));
         spans.push(keycap_span(theme, Key::ESC.display()));
-        spans.push(Span::styled(" to interrupt)", dim));
+        spans.push(Span::styled(" interrupt)", dim));
     } else if show_interrupt_keys {
         // At the minimum supported terminal width, keep the actual keys and
         // drop only the explanatory words. The Activity help entry supplies
@@ -682,6 +682,13 @@ pub struct HintBarView<'a> {
     /// rendered transcript size. `None` is shown as zero until the first
     /// projection snapshot arrives.
     pub context_tokens: Option<usize>,
+    /// Effort-ignition phase: `Some(elapsed_ms)` while the `max`-effort
+    /// ignition celebration is running. During the label phase the whole
+    /// right identity cluster (model / effort / instance) is replaced by the
+    /// converging `M A X` label ([`super::effort_ignition::label_cluster`]);
+    /// the caller's band tint paints over whatever renders here, so the
+    /// takeover never fights the wave colors.
+    pub ignition_elapsed_ms: Option<u128>,
 }
 
 #[derive(Clone, Copy)]
@@ -757,6 +764,7 @@ pub fn draw_hint_bar(
         shell_active,
         busy,
         context_tokens,
+        ignition_elapsed_ms,
     } = view;
 
     let bg = theme.surface();
@@ -901,36 +909,48 @@ pub fn draw_hint_bar(
         right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     }
 
+    // Ignition label takeover: during the `M A X` label phase the identity
+    // cluster (and the context segment — the label needs the room) renders
+    // as the converging label instead; the caller's band tint paints the
+    // glow over it.
+    let label_spans = ignition_elapsed_ms
+        .and_then(|ms| super::effort_ignition::label_cluster(right_width, ms, bg, theme));
+
     let mut right_spans: Vec<Span<'static>> = Vec::new();
-    let identity_separator =
-        || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
-    let group_separator =
-        || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
-    // Identity group: `model effort @instance` — single-space joins.
-    let mut identity_started = false;
-    for segment in [
-        show_model.then_some(model_spans),
-        show_reasoning.then_some(reasoning_spans),
-        show_instance.then_some(instance_spans),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if identity_started {
-            right_spans.push(identity_separator());
+    if let Some(label) = label_spans {
+        right_spans = label;
+    } else {
+        let identity_separator =
+            || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
+        let group_separator =
+            || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
+        // Identity group: `model effort @instance` — single-space joins.
+        let mut identity_started = false;
+        for segment in [
+            show_model.then_some(model_spans),
+            show_reasoning.then_some(reasoning_spans),
+            show_instance.then_some(instance_spans),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if identity_started {
+                right_spans.push(identity_separator());
+            }
+            identity_started = true;
+            right_spans.extend(segment);
         }
-        identity_started = true;
-        right_spans.extend(segment);
-    }
-    // Context usage sits across the wider segment gap.
-    if show_context {
-        if !right_spans.is_empty() {
-            right_spans.push(group_separator());
+        // Context usage sits across the wider segment gap.
+        if show_context {
+            if !right_spans.is_empty() {
+                right_spans.push(group_separator());
+            }
+            right_spans.extend(context_spans);
         }
-        right_spans.extend(context_spans);
     }
 
     let left_used = inner + zone_pill_width;
+    let right_rendered_width: usize = right_spans.iter().map(|s| s.content.width()).sum();
 
     let gap = full_w
         .saturating_sub(left_used + right_width)
@@ -942,7 +962,7 @@ pub fn draw_hint_bar(
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
     spans.extend(right_spans);
     // Trailing fill so the row owns every cell on this line.
-    let used = left_used + gap + right_width;
+    let used: usize = left_used + gap + right_rendered_width;
     spans.push(Span::styled(
         " ".repeat(full_w.saturating_sub(used)),
         Style::default().bg(bg),
@@ -999,13 +1019,20 @@ pub struct QueueItemView {
     pub queued_at_ms: u64,
     /// The user's literal prompt text (the first run is previewed in the bar).
     pub text: String,
+    /// `true` while the item is an in-flight mid-round steer (`F4` —
+    /// [`crate::tui::app::QueuedDispatchState::Inserting`]): handed to the
+    /// running round, waiting for admission at the next safe turn boundary.
+    /// The bar and the modal mark it with a `steer›` badge so it never reads
+    /// as an ordinary next-round entry.
+    pub steering: bool,
 }
 
-/// Inputs for [`draw_queue_bar`]: the persistent two-row outbox summary pinned
+/// Inputs for [`draw_queue_bar`]: the persistent one-row outbox summary pinned
 /// below the transcript gap. This is the permanent home for queue affordances.
 pub struct QueueBarView<'a> {
     /// Outbox items for the viewed session, in dispatch order (front pops
-    /// first). May be empty — the bar then renders a muted empty state.
+    /// first). The layout hides the bar while this is empty, so an empty
+    /// slice is only a defensive case (a bare identity row).
     pub items: &'a [QueueItemView],
     /// `true` while next-round items are held back because the running round
     /// has not yet naturally completed. Recolors the count so the user can see
@@ -1018,27 +1045,20 @@ pub struct QueueBarView<'a> {
     pub blocked: bool,
 }
 
-/// The persistent two-row outbox summary pinned below the transcript gap.
+/// The persistent one-row outbox summary pinned below the transcript gap.
 ///
 /// A brand-colored `QUEUE` label on the plain surface, quietly matching the
-/// todo bar above it. Every staged
-/// message waits for the running round to finish naturally before starting a
-/// new one (next-round only), so there is no insert/next badge.
+/// todo bar above it. The single row carries, left → right: the identity
+/// (`QUEUE` + count, plus a `· blocked` state tag while the user holds the
+/// outbox), a one-line preview of the next item to pop (a `steer›` badge
+/// marks an in-flight mid-round steer), and the right-pinned keycap legend
+/// (`F4` insert into the running round, `F3` block/resume, `F2` expand).
 ///
-/// Layout:
-/// ```text
-/// QUEUE N               F3 block  F2 expand
-/// {next item preview…}
-/// ```
-/// - Row 1 carries the identity (the `QUEUE` label and the total count) on
-///   the left and a compact keycap legend on the right (`F3` to block/resume
-///   the outbox, `F2` to expand the full list). The two keycap units are
-///   same-rank peers — separated by `JOIN_ENUMERATE_COLS` of whitespace, no
-///   dot. The legend keeps [`BAR_LEGEND_GAP_MIN`] columns of breathing room
-///   from the identity and drops under width pressure (F2 first, then the
-///   labels, then F3) so the identity always survives.
-/// - Row 2 previews the next item to pop: as many characters of its text as
-///   the width allows (truncated with `…`). Empty queue → muted hint.
+/// Width pressure degrades the middle and the legend before the identity:
+/// the preview truncates with `…`, then the legend sheds its labels and the
+/// `F2`/`F4` clusters (keeping `F3`, the state toggle), then the legend
+/// drops entirely. An empty queue is never rendered (the layout hides the
+/// row), so there is no empty-hint state.
 ///
 /// `paused` recolors the count (warn) so the user can see the queue is held
 /// back because the running round has not yet completed, not forgotten. A user
@@ -1059,16 +1079,15 @@ pub fn draw_queue_bar(
         blocked,
     } = view;
 
-    // Plain surface: every span drops the background entirely, so the two rows
-    // blend with the frame instead of reading as a raised band.
+    // Plain surface: every span drops the background entirely, so the row
+    // blends with the frame instead of reading as a raised band.
     let full_w = rect.width as usize;
-    // The bar spans two rows; reserve them up front.
-    let row_height = 1u16;
 
     // ── Resolve the next item to pop ────────────────────────────────────────
-    // Dispatch is FIFO: the front-most Waiting item pops first. We preview
-    // the first item in dispatch order.
-    let next = items.first().cloned();
+    // Dispatch is FIFO: the front-most item pops first. We preview the first
+    // item in dispatch order; an in-flight steer (`Inserting`) leads the deque
+    // and wears the `steer›` badge.
+    let next = items.first();
 
     let count = items.len();
     let dim = Style::default().fg(theme.muted());
@@ -1092,130 +1111,168 @@ pub fn draw_queue_bar(
         .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
 
-    // ── Row 1: `QUEUE N`  …  `F3 block  F2 expand` ─────────────────────
-    let mut left1: Vec<Span<'static>> =
+    // ── Left: `QUEUE N [· blocked]` ─────────────────────────────────────────
+    let mut left: Vec<Span<'static>> =
         vec![Span::styled("QUEUE", tag_style), Span::styled(" ", dim)];
     let count_label = if count > 99 {
         "99+".to_string()
     } else {
         count.to_string()
     };
-    left1.push(Span::styled(count_label, count_style));
+    left.push(Span::styled(count_label, count_style));
     // When blocked, append an explicit `· blocked` tag in the error color so
     // the held-back state never reads as an ordinary pause — the count is
     // already error-colored, and this label spells out why. R1: `blocked` is
     // a state of the queue (JOIN_MODIFY).
     if blocked {
-        left1.push(Span::styled(JOIN_MODIFY, dim));
-        left1.push(Span::styled("blocked", count_style));
+        left.push(Span::styled(JOIN_MODIFY, dim));
+        left.push(Span::styled("blocked", count_style));
     }
 
-    // Right-side keycap legend. The keys explain the two outbox affordances:
-    //   F3    — block / resume the outbox (toggles; label flips with state)
-    //   F2    — expand the full queue list
-    // The two keycap units are same-rank peers (R2), so they are separated by
-    // plain whitespace — no dot. The right cluster drops under width pressure
-    // (F2 first, then the labels, then F3), so the identity always survives.
+    // ── Right-side keycap legend ────────────────────────────────────────────
+    // The keys explain the three outbox affordances:
+    //   F4 — insert the composer text into the running round (mid-round steer)
+    //   F3 — block / resume the outbox (toggles; label flips with state)
+    //   F2 — expand the full queue list
+    // The keycap units are same-rank peers (R2), so they are separated by
+    // plain whitespace — no dot. Under width pressure the labels drop first,
+    // then the F2 and F4 clusters, keeping `F3` (the state toggle) last.
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let sep = |spans: &mut Vec<Span<'static>>| {
             spans.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
         };
+        if !matches!(density, LegendDensity::Tiny) {
+            spans.push(keycap_span(theme, Key::F4.display()));
+            if matches!(density, LegendDensity::Full) {
+                spans.push(Span::styled(" insert", dim));
+            }
+            sep(&mut spans);
+        }
         spans.push(keycap_span(theme, Key::F3.display()));
-        if matches!(density, LegendDensity::Full | LegendDensity::Compact) {
+        if matches!(density, LegendDensity::Full) {
             spans.push(Span::styled(
                 if blocked { " resume" } else { " block" },
                 dim,
             ));
         }
-        if !matches!(density, LegendDensity::Tiny) {
+        if matches!(density, LegendDensity::Full) {
             sep(&mut spans);
             spans.push(keycap_span(theme, Key::F2.display()));
-            if matches!(density, LegendDensity::Full) {
-                spans.push(Span::styled(" expand", dim));
-            }
+            spans.push(Span::styled(" expand", dim));
         }
         spans
     };
 
-    let left1_w: usize = left1.iter().map(|s| s.content.width()).sum();
-    let fits = |left: usize, right: &[Span<'static>]| {
-        let rw: usize = right.iter().map(|s| s.content.width()).sum();
-        left + if rw > 0 { BAR_LEGEND_GAP_MIN } else { 0 } + rw <= full_w
-    };
-    let mut legend_density = LegendDensity::Full;
-    let mut right1 = mk_right(legend_density);
-    if !fits(left1_w, &right1) {
-        legend_density = LegendDensity::Compact;
-        right1 = mk_right(legend_density);
-    }
-    if !fits(left1_w, &right1) {
-        legend_density = LegendDensity::Tiny;
-        right1 = mk_right(legend_density);
-    }
-    if !fits(left1_w, &right1) && legend_density == LegendDensity::Tiny {
-        // Still too tight: drop the legend entirely and keep the identity.
-        right1.clear();
-    }
-    let right1_w: usize = right1.iter().map(|s| s.content.width()).sum();
-    let gap1 = full_w
-        .saturating_sub(left1_w + right1_w)
-        .max(if right1_w > 0 { BAR_LEGEND_GAP_MIN } else { 0 });
-
-    let mut row1: Vec<Span<'static>> = Vec::with_capacity(2 + left1.len() + right1.len());
-    row1.extend(left1);
-    row1.push(Span::styled(" ".repeat(gap1), dim));
-    row1.extend(right1);
-    let used1 = left1_w + gap1 + right1_w;
-    row1.push(Span::styled(" ".repeat(full_w.saturating_sub(used1)), dim));
-
-    let row1_rect = Rect::new(rect.x, rect.y, rect.width, row_height);
-    frame.render_widget(Paragraph::new(Line::from(row1)), row1_rect);
-
-    // ── Row 2: `{next item preview…}` ───────────────────────────────────────
-    // With the insert/next distinction gone there is no target badge; the row
-    // is just the one-line preview of the next message to pop, with the muted
-    // style filling the rest. Empty queue → muted hint.
-    let mut row2: Vec<Span<'static>> = Vec::new();
-    if let Some(item) = next.as_ref() {
-        // One-line, control-chars-collapsed preview; truncated to the width
-        // with an ellipsis so a multi-line paste never wraps the bar.
+    // ── Middle: next-item preview ───────────────────────────────────────────
+    // One-line, control-chars-collapsed; an in-flight mid-round steer leads
+    // with a brand-colored `steer›` badge so it never reads as an ordinary
+    // next-round entry. The preview is the most elastic segment: it truncates
+    // to whatever the identity and the legend leave behind, and disappears
+    // entirely on very narrow rows.
+    let preview_text = next.map(|item| {
         let one_line = crate::tui::overlays::common::one_line(item.text.trim());
-        let preview = if one_line.width() > full_w {
-            crate::tui::overlays::common::truncate_ellipsis(&one_line, full_w)
+        if item.steering {
+            format!("steer› {one_line}")
         } else {
             one_line
-        };
-        let pad = full_w.saturating_sub(preview.width());
-        row2.push(Span::styled(preview, fg));
-        row2.push(Span::styled(" ".repeat(pad), dim));
-    } else {
-        let hint = "queue empty — press Enter while the agent runs to stage a message";
-        let hint_budget = full_w;
-        let hint_text = if hint.width() > hint_budget {
-            crate::tui::overlays::common::truncate_ellipsis(hint, hint_budget)
-        } else {
-            hint.to_string()
-        };
-        let pad = full_w.saturating_sub(hint_text.width());
-        row2.push(Span::styled(hint_text, dim));
-        row2.push(Span::styled(" ".repeat(pad), dim));
+        }
+    });
+
+    let left_w: usize = left.iter().map(|s| s.content.width()).sum();
+    let right_w =
+        |right: &[Span<'static>]| -> usize { right.iter().map(|s| s.content.width()).sum() };
+    // Minimum columns a preview must get to stay meaningful; below this the
+    // space goes to the legend instead.
+    const PREVIEW_MIN_COLS: usize = 8;
+
+    // Pick the densest legend that still fits identity + legend (+ preview).
+    let mut legend_density = LegendDensity::Full;
+    let mut right = mk_right(legend_density);
+    loop {
+        let rw = right_w(&right);
+        let reserved = left_w
+            + if rw > 0 { BAR_LEGEND_GAP_MIN + rw } else { 0 }
+            + if preview_text.is_some() {
+                JOIN_ENUMERATE_COLS + PREVIEW_MIN_COLS
+            } else {
+                0
+            };
+        if reserved <= full_w {
+            break;
+        }
+        match legend_density {
+            LegendDensity::Full => {
+                legend_density = LegendDensity::Compact;
+                right = mk_right(legend_density);
+            }
+            LegendDensity::Compact => {
+                legend_density = LegendDensity::Tiny;
+                right = mk_right(legend_density);
+            }
+            LegendDensity::Tiny => {
+                // Still too tight: drop the legend entirely and keep the
+                // identity (+ preview).
+                right.clear();
+                break;
+            }
+        }
     }
 
-    let row2_rect = Rect::new(rect.x, rect.y + row_height, rect.width, row_height);
-    frame.render_widget(Paragraph::new(Line::from(row2)), row2_rect);
+    let rw = right_w(&right);
+    let preview_budget = full_w
+        .saturating_sub(left_w)
+        .saturating_sub(if rw > 0 { BAR_LEGEND_GAP_MIN + rw } else { 0 })
+        .saturating_sub(if preview_text.is_some() {
+            JOIN_ENUMERATE_COLS
+        } else {
+            0
+        });
+    let preview = preview_text
+        .filter(|_| preview_budget >= PREVIEW_MIN_COLS)
+        .map(|text| {
+            if text.width() > preview_budget {
+                crate::tui::overlays::common::truncate_ellipsis(&text, preview_budget)
+            } else {
+                text
+            }
+        });
+    let preview_w = preview.as_ref().map_or(0, |p| p.width());
+
+    // ── Compose the single row: left · preview … legend ─────────────────────
+    let mut row: Vec<Span<'static>> = Vec::with_capacity(left.len() + right.len() + 4);
+    row.extend(left);
+    if let Some(preview) = preview {
+        row.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
+        row.push(Span::styled(preview, fg));
+    }
+    let used = left_w
+        + if preview_w > 0 {
+            JOIN_ENUMERATE_COLS + preview_w
+        } else {
+            0
+        };
+    let gap = full_w
+        .saturating_sub(used + rw)
+        .max(if rw > 0 { BAR_LEGEND_GAP_MIN } else { 0 });
+    row.push(Span::styled(" ".repeat(gap), dim));
+    row.extend(right);
+    let used = used + gap + rw;
+    row.push(Span::styled(" ".repeat(full_w.saturating_sub(used)), dim));
+
+    frame.render_widget(Paragraph::new(Line::from(row)), rect);
 
     rect
 }
 
-/// How much of the row-1 keycap legend survives under width pressure.
+/// How much of the queue bar's keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `F3 block  F2 expand`.
+    /// Keys + labels: `F4 insert  F3 block  F2 expand`.
     Full,
-    /// Keys + first label: `F3 block  F2`.
+    /// Bare keycaps: `F4  F3  F2`.
     Compact,
-    /// Only the block key: `F3`.
+    /// Only the block/resume toggle: `F3`.
     Tiny,
 }
 
@@ -1355,7 +1412,7 @@ mod tests {
 
         let row = activity_row_text(80, "Working", 8);
         assert!(row.contains("Working"));
-        assert!(row.contains("Esc Esc to interrupt"));
+        assert!(row.contains("Esc Esc interrupt"));
     }
 
     #[test]
@@ -1365,7 +1422,7 @@ mod tests {
             "retrying a provider request after a very detailed transient failure",
             8,
         );
-        assert!(row.contains("Esc Esc to interrupt"), "row was {row:?}");
+        assert!(row.contains("Esc Esc interrupt"), "row was {row:?}");
         assert!(row.contains('…'), "long status was not truncated: {row:?}");
     }
 
@@ -1616,6 +1673,7 @@ mod tests {
                         shell_active: false,
                         busy: false,
                         context_tokens: None,
+                        ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
                 );
@@ -1660,6 +1718,7 @@ mod tests {
                     shell_active: false,
                     busy: false,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 },
                 &theme,
             );
@@ -1679,6 +1738,7 @@ mod tests {
                     shell_active,
                     busy: false,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 };
                 draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
             });
@@ -1716,6 +1776,7 @@ mod tests {
                     shell_active: false,
                     busy: false,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 },
                 &theme,
             );
@@ -1758,6 +1819,7 @@ mod tests {
                     shell_active: false,
                     busy: true,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
             );
@@ -1788,6 +1850,7 @@ mod tests {
                     shell_active: false,
                     busy: true,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
             );
@@ -1825,6 +1888,7 @@ mod tests {
                         shell_active: false,
                         busy: false,
                         context_tokens: None,
+                        ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
                 );
@@ -1870,6 +1934,7 @@ mod tests {
                         shell_active: false,
                         busy: false,
                         context_tokens: None,
+                        ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
                 );
@@ -1916,6 +1981,7 @@ mod tests {
                     shell_active: false,
                     busy: false,
                     context_tokens: None,
+                    ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
             );
@@ -1935,6 +2001,60 @@ mod tests {
             text.contains("mock max @kimi-code"),
             "identity group should join with single spaces in: {text:?}"
         );
+    }
+
+    #[test]
+    fn hint_bar_ignition_label_takes_over_the_identity_cluster() {
+        // During the ignition's label phase the right cluster swaps the whole
+        // `model effort @instance  ctx` identity for the converging `M A X`
+        // label; once the phase ends the normal cluster returns.
+        fn row_text(elapsed_ms: Option<u128>) -> String {
+            let mut terminal = neenee_tui_engine::TestTerminal::new(100, 1);
+            terminal.draw(|f| {
+                draw_hint_bar(
+                    f,
+                    Rect::new(0, 0, 100, 1),
+                    HintBarView {
+                        current_model: "k3",
+                        provider_name: Some("kimi-code"),
+                        messages: &Vec::<TranscriptMessage>::new(),
+                        reasoning_effort: Some("max"),
+                        shell_active: false,
+                        busy: false,
+                        context_tokens: Some(12_400),
+                        ignition_elapsed_ms: elapsed_ms,
+                    },
+                    &Theme::default(),
+                );
+            });
+            let buf = terminal.buffer();
+            (0..buf.area().width as usize)
+                .map(|x| buf.content[x].symbol().to_string())
+                .collect::<String>()
+        }
+
+        // Mid-label-phase: the `M A X` label replaces the identity cluster.
+        let label = row_text(Some(900));
+        assert!(
+            label.contains('M') && label.contains('A') && label.contains('X'),
+            "label phase must render M A X: {label:?}"
+        );
+        assert!(
+            !label.contains("@kimi-code"),
+            "instance cluster is hidden during the label takeover: {label:?}"
+        );
+
+        // After the label phase the identity cluster is back, effort included.
+        let settled = row_text(Some(1250));
+        assert!(settled.contains("max"), "effort returns: {settled:?}");
+        assert!(
+            settled.contains("@kimi-code"),
+            "instance returns: {settled:?}"
+        );
+
+        // No ignition at all renders the ordinary cluster.
+        let plain = row_text(None);
+        assert!(plain.contains("Kimi K3"), "model name renders: {plain:?}");
     }
 
     /// Paint the completion menu into a test buffer and return the rect the
@@ -2124,21 +2244,18 @@ mod tests {
         assert!(!first.contains('·'), "row was {first:?}");
     }
 
-    /// Read back a two-row region as joined text for assertion.
+    /// Read back the one-row bar as joined text for assertion.
     fn queue_row_text(view: QueueBarView<'_>, width: u16, theme: &Theme) -> String {
-        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 2);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 1);
         terminal.draw(|f| {
-            draw_queue_bar(f, Rect::new(0, 0, width, 2), view, theme);
+            draw_queue_bar(f, Rect::new(0, 0, width, 1), view, theme);
         });
         let buf = terminal.buffer();
-        let bw = buf.area().width as usize;
         let mut out = String::new();
-        for y in 0..2usize {
-            for x in 0..width as usize {
-                out.push_str(buf.content[y * bw + x].symbol());
-            }
-            out.push('\n');
+        for x in 0..width as usize {
+            out.push_str(buf.content[x].symbol());
         }
+        out.push('\n');
         out
     }
 
@@ -2151,12 +2268,13 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "fix the flaky test".to_string(),
+            steering: false,
         };
-        let mut terminal = neenee_tui_engine::TestTerminal::new(70, 2);
+        let mut terminal = neenee_tui_engine::TestTerminal::new(70, 1);
         terminal.draw(|f| {
             draw_queue_bar(
                 f,
-                Rect::new(0, 0, 70, 2),
+                Rect::new(0, 0, 70, 1),
                 QueueBarView {
                     items: &[item],
                     paused: false,
@@ -2172,10 +2290,9 @@ mod tests {
         assert_eq!(cells[0].fg(), theme.brand(), "QUEUE tag not brand-colored");
 
         // (2) The bar sits on the plain surface: no raised tint anywhere
-        // (sample row 1's trailing cell and row 2's first cell too).
+        // (sample the row's trailing cell too).
         assert_eq!(cells[0].bg(), Color::Reset, "tag must not sit on a tint");
-        assert_eq!(cells[69].bg(), Color::Reset, "row 1 must stay plain");
-        assert_eq!(cells[70].bg(), Color::Reset, "row 2 must stay plain");
+        assert_eq!(cells[69].bg(), Color::Reset, "the row must stay plain");
     }
 
     #[test]
@@ -2189,11 +2306,11 @@ mod tests {
             70,
             &Theme::default(),
         );
-        // Identity + zero count on row 1; no time label anymore.
+        // Identity + zero count on the single row; no time label anymore.
         assert!(text.contains("QUEUE 0"), "row was {text:?}");
         assert!(!text.contains("--:--"), "time label leaked: {text:?}");
-        // Empty hint on row 2.
-        assert!(text.contains("queue empty"), "row was {text:?}");
+        // The layout hides an empty queue, so the bar renders no hint for it.
+        assert!(!text.contains("queue empty"), "empty hint leaked: {text:?}");
     }
 
     #[test]
@@ -2201,6 +2318,7 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "fix the flaky test in parser".to_string(),
+            steering: false,
         };
         let text = queue_row_text(
             QueueBarView {
@@ -2214,20 +2332,49 @@ mod tests {
         // Identity + count reflects the one item; no time label anymore.
         assert!(text.contains("QUEUE 1"), "row was {text:?}");
         assert!(!text.contains(":"), "time label leaked: {text:?}");
-        // Legend: the two keycap units are same-rank peers (R2) — joined by
+        // Legend: the three keycap units are same-rank peers (R2) — joined by
         // plain whitespace, never a `·` (which would imply one modifies the
         // other).
         assert!(
-            text.contains("F3 block  F2 expand"),
+            text.contains("F4 insert  F3 block  F2 expand"),
             "peer keycaps must use R2 whitespace: {text:?}"
         );
         assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");
-        // Preview text on row 2; no insert/next badge (next-round only).
-        assert!(!text.contains("insert"), "insert badge leaked: {text:?}");
-        assert!(!text.contains(" next"), "next badge leaked: {text:?}");
+        // A non-steering item previews plainly — no `steer›` badge (that marks
+        // an in-flight mid-round steer). The legend's `F4 insert` affordance
+        // is always present and is unrelated to the badge.
+        assert!(!text.contains("steer›"), "steer badge leaked: {text:?}");
+        // The preview rides inline on the same row.
         assert!(
             text.contains("fix the flaky test"),
             "preview text missing: {text:?}"
+        );
+    }
+
+    #[test]
+    fn queue_bar_marks_an_in_flight_steer_with_a_badge() {
+        // An `F4` steer already handed to the running round must never read
+        // as an ordinary next-round entry: it leads with the `steer›` badge.
+        let item = QueueItemView {
+            queued_at_ms: 1_700_000_000_000,
+            text: "also cover the edge case".to_string(),
+            steering: true,
+        };
+        let text = queue_row_text(
+            QueueBarView {
+                items: &[item],
+                paused: false,
+                blocked: false,
+            },
+            70,
+            &Theme::default(),
+        );
+        assert!(text.contains("steer›"), "steer badge missing: {text:?}");
+        // The badge borrows the preview budget, so the text truncates — but
+        // the head of the message must survive the ellipsis.
+        assert!(
+            text.contains("also cover the ed…"),
+            "steer preview missing: {text:?}"
         );
     }
 
@@ -2239,6 +2386,7 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "add a comment".to_string(),
+            steering: false,
         };
         let text = queue_row_text(
             QueueBarView {
@@ -2250,6 +2398,7 @@ mod tests {
             &Theme::default(),
         );
         assert!(!text.contains("Tab"), "tab legend leaked: {text:?}");
-        assert!(!text.contains("insert"), "insert badge leaked: {text:?}");
+        // A non-steering item never wears the mid-round `steer›` badge.
+        assert!(!text.contains("steer›"), "steer badge leaked: {text:?}");
     }
 }

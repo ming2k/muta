@@ -288,7 +288,7 @@ By default the history is **deduplicated on the prompt text** (`[input_history]
 dedup = true`): sending the same prompt twice — even in different sessions —
 keeps one row, and re-sending bumps it to the top of the newest-first list.
 Set `dedup = false` to keep per-session entries instead. `/command`
-invocations (`/model`, `/clear`, …) are **not recorded** by default
+invocations (`/model`, `/new`, …) are **not recorded** by default
 (`[input_history] record_commands = false`): they are UI gestures, already
 visible in the transcript, and only clutter the prompt picker. Set it to
 `true` to make commands recallable from `Ctrl+R` again.
@@ -464,9 +464,9 @@ use a 3-row panel via the shared toast component, positioned at
 left+right borders colored by variant.
 
 ```text
-                                    ┃ press Esc again to interrupt ┃
-                                    ┃                              ┃
-                                    ┃                              ┃
+                                    ┃ Esc again interrupts ┃
+                                    ┃                      ┃
+                                    ┃                      ┃
 ```
 
 | Toast | Border color | Trigger |

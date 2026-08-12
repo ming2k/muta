@@ -24,6 +24,7 @@ expression: film
 
 
 
+
            ↑↓ navigate  Enter submit  Esc cancel
 
 === 1,2,3 → select all three ===
@@ -47,6 +48,7 @@ expression: film
 
 
 
+
            ↑↓ navigate  Enter submit  Esc cancel
 
 === '2' again → deselect 'b' ===
@@ -64,6 +66,7 @@ expression: film
              [ ] b
              [x] c
              [ ] Other
+
 
 
 

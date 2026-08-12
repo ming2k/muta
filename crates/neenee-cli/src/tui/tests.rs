@@ -707,7 +707,7 @@ fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
 
 #[test]
 fn resolved_slash_len_matches_builtin_command_without_args() {
-    assert_eq!(resolved_slash_command_len("/clear", &[]), Some(6));
+    assert_eq!(resolved_slash_command_len("/models", &[]), Some(7));
 }
 
 #[test]
@@ -732,9 +732,81 @@ fn resolved_slash_len_rejects_partial_prefix_and_unknown_commands() {
     assert_eq!(resolved_slash_command_len("/", &[]), None);
     assert_eq!(resolved_slash_command_len("/cle", &[]), None);
     assert_eq!(resolved_slash_command_len("/not-a-command", &[]), None);
+    // Trigger words steer to a command but are NOT commands themselves, so
+    // they never earn the resolved-command accent.
+    assert_eq!(resolved_slash_command_len("/clear", &[]), None);
+    assert_eq!(resolved_slash_command_len("/reset", &[]), None);
+    assert_eq!(resolved_slash_command_len("/continue", &[]), None);
     // Plain prose and `@` mentions never highlight.
     assert_eq!(resolved_slash_command_len("hello", &[]), None);
     assert_eq!(resolved_slash_command_len("@src/main.rs", &[]), None);
+}
+
+#[test]
+fn completions_trigger_word_pins_suggestion_on_top() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/clear".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(app.completion_kind(), CompletionKind::Slash);
+    let first = completions.first().expect("a suggestion row is present");
+    assert_eq!(first.label, "/new");
+    assert!(
+        !first.description.is_empty(),
+        "the suggestion must explain why the user is being steered"
+    );
+    // Accepting rewrites the whole input to the target command.
+    assert_eq!(first.replace_start, 0);
+    assert_eq!(first.replace_end, app.input.len());
+    // No built-in starts with `/clear`, so the suggestion is the only row.
+    assert_eq!(completions.len(), 1);
+}
+
+#[test]
+fn completions_trigger_word_suggestion_precedes_prefix_matches() {
+    // A trigger that also prefixes a real command must still pin its
+    // suggestion first. `/re` is a shared prefix, not a trigger: normal
+    // prefix completion with no suggestion. `/reset` is the full trigger.
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/re".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(
+        !app.completions().iter().any(|c| c.label == "/new"),
+        "a partial trigger is prose-in-progress, not a suggestion"
+    );
+
+    app.input = "/reset".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(
+        completions.first().map(|c| c.label.as_str()),
+        Some("/new"),
+        "the suggestion pins on top even if a real command shares the prefix"
+    );
+}
+
+#[test]
+fn completions_continue_trigger_suggests_resume() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/continue".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(
+        completions.first().map(|c| c.label.as_str()),
+        Some("/resume")
+    );
+}
+
+#[test]
+fn completions_subcommand_argument_never_triggers_suggestion() {
+    // `clear` is a trigger word at the top level, but as a `/permissions`
+    // argument it is a real subcommand and must not be steered away.
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/permissions clear".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/permissions clear"]);
 }
 
 #[test]
@@ -1170,6 +1242,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
+        effort_ignition_epoch: None,
         stashed_input: String::new(),
         editor_target: None,
         editor_field: 0,
@@ -2150,7 +2223,7 @@ async fn record_input_history_skips_slash_commands_by_default() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.current_session_id = "session-a".to_string();
     app.record_input_history("/model".to_string(), Vec::new(), Vec::new());
-    app.record_input_history("/clear".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("/new".to_string(), Vec::new(), Vec::new());
     assert!(
         app.input_history.is_empty(),
         "commands must not pollute the prompt history"
@@ -2650,6 +2723,74 @@ fn move_queued_swaps_within_session_and_clamps_at_edges() {
         .map(|d| d.id.as_str())
         .collect();
     assert_eq!(order, vec!["c", "b", "a"]);
+}
+
+#[test]
+fn inserting_dispatch_is_excluded_from_dispatch_recall_and_edits() {
+    // An in-flight `F4` steer (`Inserting`) is already with the running
+    // round: it must not pop via FIFO dispatch, must not be recallable, and
+    // must be invisible to the queue modal's index space (delete / reorder /
+    // re-edit). Only `UserInputUnavailable` (requeue) or `UserInputInserted`
+    // (remove) resolves it.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("w1", "session-a", "waiting one"));
+    let steer_id = app.stage_insert_dispatch(
+        "session-a",
+        "steer this".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    app.pending_dispatch
+        .push_back(queued_dispatch("w2", "session-a", "waiting two"));
+
+    // The steer counts in the outbox total but never dispatches…
+    assert_eq!(app.pending_count("session-a"), 3);
+    let popped = app
+        .begin_next_round_dispatch("session-a")
+        .expect("a Waiting item pops first");
+    assert_eq!(popped.id, "w1");
+    // (Dispatching items stay in the outbox until `NextRoundStarted` removes
+    // them, so the count is still 3 here.)
+
+    // …never recalled (recall is Waiting-only, LIFO → "w2")…
+    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
+        panic!("expected recall of the newest Waiting item");
+    };
+    assert_eq!(dispatch.id, "w2");
+
+    // …and invisible to the modal's selectable index space (the steer and
+    // the Dispatching item are both out of range, so only… nothing is
+    // addressable).
+    assert!(app.remove_queued_at("session-a", 0).is_none());
+    assert!(app.recall_queued_at("session-a", 0).is_none());
+    app.move_queued("session-a", 0, 1); // no-op, must not panic
+    assert_eq!(
+        app.pending_dispatch
+            .iter()
+            .filter(|d| {
+                d.session_id == "session-a" && d.state == QueuedDispatchState::Inserting
+            })
+            .count(),
+        1,
+        "the steer must still be there, untouched"
+    );
+
+    // Clean up the Dispatching leftover so the rest of the test reasons
+    // about the steer alone.
+    app.remove_dispatch("session-a", "w1");
+    assert_eq!(app.pending_count("session-a"), 1);
+
+    // A race loss returns the steer to Waiting as a paused next-round item…
+    app.requeue_dispatch("session-a", &steer_id);
+    assert!(app.recall_queued_at("session-a", 0).is_some());
+    // …and a fresh steer resolves to removal on admission.
+    let steer_id =
+        app.stage_insert_dispatch("session-a", "again".to_string(), Vec::new(), Vec::new());
+    let removed = app
+        .remove_dispatch("session-a", &steer_id)
+        .expect("admission drops the shadow item");
+    assert_eq!(removed.id, steer_id);
 }
 
 #[test]

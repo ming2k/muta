@@ -580,9 +580,16 @@ impl EnvoyTool {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(id.to_string(), child_cancel.clone());
         }
+        // Track the envoy's own ReAct position as `ModelRequestStarted`
+        // events arrive so the streamed `StreamStart` / `ToolCall` events can
+        // carry it (mirroring the main session's `(round, turn)` stamping).
+        let mut position: (u64, usize) = (1, 0);
         let result = envoy
             .run_streaming_with_events(&mut messages, &child_cancel, |event| {
-                Self::forward_event(event, &mut on_event)
+                if let neenee_core::AgentEvent::ModelRequestStarted { round, turn, .. } = &event {
+                    position = (*round, *turn);
+                }
+                Self::forward_event(event, position, &mut on_event)
             })
             .await;
         // Drop the registry entry for this call regardless of outcome so it
@@ -685,6 +692,7 @@ impl EnvoyTool {
 
     fn forward_event(
         event: neenee_core::AgentEvent,
+        position: (u64, usize),
         on_event: &mut dyn FnMut(neenee_core::EnvoyEvent),
     ) {
         match event {
@@ -701,7 +709,10 @@ impl EnvoyTool {
             }
             neenee_core::AgentEvent::AssistantDelta { delta, start } => {
                 if start {
-                    on_event(neenee_core::EnvoyEvent::StreamStart);
+                    on_event(neenee_core::EnvoyEvent::StreamStart {
+                        round: position.0,
+                        turn: position.1,
+                    });
                 }
                 on_event(neenee_core::EnvoyEvent::StreamDelta(delta));
             }
@@ -717,6 +728,8 @@ impl EnvoyTool {
                     id,
                     name,
                     arguments,
+                    round: position.0,
+                    turn: position.1,
                 });
             }
             neenee_core::AgentEvent::ToolResult {

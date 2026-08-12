@@ -74,6 +74,7 @@ pub mod side;
 pub mod slash_handler;
 pub mod startup;
 pub mod ui_bridge;
+pub mod wip_tools;
 
 pub use session_driver::SessionDriver;
 pub use ui_bridge::{CopyOutcome, UiBridge};

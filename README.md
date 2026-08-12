@@ -58,7 +58,7 @@ and several clients can co-drive or observe them:
 neenee                   # attach to the daemon (auto-started on first use)
 neenee serve             # run the daemon in the foreground
 neenee serve --detach    # ... or in the background
-neenee serve --expose    # also listen on TCP+token for LAN clients
+neenee serve --public    # also listen on all interfaces (TCP+token) for LAN clients
 neenee attach [id]       # drive a specific daemon-held session
 neenee status            # one-shot table: sessions needing attention
 neenee status --watch    # live table, redraws on every change
@@ -67,8 +67,9 @@ neenee dashboard         # the full-screen dashboard, straight from the shell
 ```
 
 Inside the TUI, **`/dashboard`** opens the session dashboard: a full-screen
-live view over every daemon session — a session list plus a detail pane
-(current tool, activity, context, progress) for the selected row. Enter
+live view over every daemon session — a console region (the selected
+session's live status: current tool, activity, context, progress) over a
+sessions dock with one card per session. Enter opens a read-only preview; `a`
 attaches to a hosted session — the TUI detaches and re-attaches, so the
 session you leave **keeps running** in the daemon. From the same surface you
 can interrupt (`i`), prompt (`p`), or create (`n`) a session. Closing the TUI
@@ -78,7 +79,7 @@ kept as a hidden alias.)
 **`neenee dashboard`** reaches that same full-screen dashboard straight from
 the shell — no need to enter a session first. It attaches to the daemon's
 most-recently-active session only as the underlying carrier and raises the
-dashboard over it: Esc quits, Enter on a row attaches into that session. Like
+dashboard over it: Esc quits, `a` on a card attaches into that session. Like
 `neenee status` it never spawns a daemon, so it needs a running host with at
 least one session.
 

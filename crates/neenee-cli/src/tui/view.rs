@@ -10,17 +10,18 @@ pub use crate::tui::chrome::{
 pub use crate::tui::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::tui::composer::{
     INPUT_MSG_IDX, cursor_screen_pos, draw_composer, draw_composer_highlighted,
+    draw_composer_igniting,
 };
 // Design tokens are re-exported crate-visibility so the drawing leaves that
 // used to reach them via the old `paint` parent's namespace still resolve.
 pub(crate) use crate::tui::design::{
-    ACTIVITY_BAR_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP,
-    CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_HINT_GAP_ROWS, COMPOSER_MAX_HEIGHT_DIVISOR,
-    COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS,
-    COMPOSER_VERTICAL_CHROME_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS,
-    MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS,
-    REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH,
-    TODO_BAR_ROWS, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
+    ACTIVITY_BAR_ROWS, ACTIVITY_COMPOSER_GAP_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS,
+    CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_HINT_GAP_ROWS,
+    COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT, COMPOSER_PROMPT_PREFIX_COLS,
+    COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS, ENVOY_FOOTER_ROWS, FOOTER_H_INSET,
+    FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS,
+    QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS, REASONING_TRACE_BODY_TOP_GAP_ROWS,
+    STEP_MIN_WIDTH, TODO_BAR_ROWS, TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS,
     TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
 };
 use crate::tui::disclosure::{StickyStep, draw_sticky_summary_if_needed};
@@ -46,9 +47,11 @@ pub use crate::tui::overlays::{
     draw_question_modal, draw_queue_modal, draw_session_preview, draw_sessions_modal,
     draw_skills_modal, draw_token_report_modal, draw_tools_modal, token_report_round_count,
 };
-pub(crate) use crate::tui::page_header::{PageHeader, SessionHead, draw_page_header};
+pub(crate) use crate::tui::page_header::{
+    PageHeader, SessionHead, draw_envoy_footer, draw_page_header,
+};
 pub use crate::tui::primitives::recess_backdrop;
-use crate::tui::primitives::{VIEWPORT_V_MARGIN, viewport_rect};
+use crate::tui::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};
 #[cfg(test)]
 use crate::tui::text_layout::WrappedLine;
 #[cfg(test)]
@@ -166,7 +169,7 @@ pub struct TranscriptView<'a> {
     pub byte_cursor: usize,
     /// When true, the hint bar and input box are hidden (overlay modal open).
     pub chrome_hidden: bool,
-    /// The persistent two-row outbox summary pinned below the transcript gap.
+    /// The persistent one-row outbox summary pinned below the transcript gap.
     /// Its `items` slice is the viewed session's queued dispatches; an empty
     /// slice renders a muted empty state so the bar is always present (the
     /// permanent home for queue affordances).
@@ -320,7 +323,11 @@ impl HeightCache {
 
 /// Page-header context for an Envoy view (shown when zoomed into a task).
 pub struct EnvoyBarInfo {
-    /// Label for the focused envoy (its task description).
+    /// The envoy's role (`explore` / `plan` / …), when the `Started` event
+    /// has identified it. Rendered as the `[ROLE]` tag between the `ENVOY`
+    /// identity and the title; omitted before the role is known.
+    pub role: Option<String>,
+    /// Title of the focused envoy (its task description).
     pub label: String,
     /// 1-based index of the focused envoy among its siblings.
     pub index: usize,
@@ -343,7 +350,7 @@ pub struct TranscriptRender {
     /// on it opens the Activity modal directly on the Todos section. `None`
     /// when no todos are shown (empty task list or bar hidden).
     pub todos_rect: Option<Rect>,
-    /// Screen rect of the persistent queue bar (the two-row outbox summary),
+    /// Screen rect of the persistent queue bar (the one-row outbox summary),
     /// so a click anywhere on it expands the full Queue modal. `None` when the
     /// bar is hidden (chrome hidden or envoy zoom).
     pub queue_rect: Option<Rect>,
@@ -448,34 +455,44 @@ pub fn draw_transcript(
         .as_ref()
         .map(PageHeader::Envoy)
         .or_else(|| side_banner.map(PageHeader::Btw))
-        .or_else(|| session_head.as_ref().map(|head| PageHeader::Session(head)));
+        .or_else(|| session_head.as_ref().map(PageHeader::Session));
 
     // When a head row is present it occupies the top row of the terminal
     // directly — the head is a sibling of the transcript, not content inside
     // it, so it replaces the viewport's top margin rather than nesting under
-    // it. Without a head, the standard viewport margin applies.
-    let (head_rect, viewport) = if page_header.is_some() {
+    // it. Without a head, the standard viewport margins apply. The Envoy page
+    // additionally owns the terminal's last rows for its permanent key-legend
+    // footer (three background-painted rows whose middle row carries the
+    // shortcuts), so the transcript ends above that band.
+    let (head_rect, envoy_footer_rect, viewport) = if page_header.is_some() {
         let full = frame.area();
+        let footer_rows = if envoy_bar.is_some() {
+            ENVOY_FOOTER_ROWS
+        } else {
+            0
+        };
         let sub = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(PAGE_HEADER_ROWS),
                 Constraint::Min(0),
+                Constraint::Length(footer_rows),
             ])
             .split(full);
         (
             Some(transcript_band_rect(sub[0])),
-            // The remaining area keeps the bottom viewport margin but drops
-            // the top one (the head owns that row now).
+            (footer_rows > 0).then_some(sub[2]),
+            // The remaining area keeps the bottom viewport margin (0) but
+            // drops the top one (the head owns that row now).
             Rect::new(
                 sub[1].x,
                 sub[1].y,
                 sub[1].width,
-                sub[1].height.saturating_sub(VIEWPORT_V_MARGIN),
+                sub[1].height.saturating_sub(VIEWPORT_BOTTOM_MARGIN),
             ),
         )
     } else {
-        (None, viewport_rect(frame))
+        (None, None, viewport_rect(frame))
     };
 
     let size = viewport;
@@ -521,7 +538,7 @@ pub fn draw_transcript(
 
     // The queue bar surfaces pending outbox messages. It is hidden while the
     // viewed session's queue is empty (the common idle case) so an ordinary
-    // session reclaims the two rows; it appears the moment a message is staged
+    // session reclaims the row; it appears the moment a message is staged
     // and stays up until the outbox drains, so the user always has a glanceable
     // surface while there is pending work.
     let queue_row_needed = !chrome_hidden && !in_envoy && !queue_bar.items.is_empty();
@@ -545,9 +562,9 @@ pub fn draw_transcript(
     } else {
         desired_input_height.min(max_input_height)
     };
-    // The hint bar is a single-line status strip pinned below the input box,
-    // separated from it by a single `surface` gap row (COMPOSER_HINT_GAP_ROWS)
-    // so the full-height composer panel does not crowd the bar. It carries the
+    // The hint bar is a single-line status strip pinned flush below the input
+    // box — the composer's own bottom panel-bg padding row is all the
+    // separation it needs (COMPOSER_HINT_GAP_ROWS = 0). It carries the
     // next Enter action plus ambient model/context info. Hidden alongside the
     // rest of the chrome while an overlay is open.
     let hint_height: u16 = if chrome_hidden || in_envoy {
@@ -555,28 +572,39 @@ pub fn draw_transcript(
     } else {
         HINT_BAR_ROWS
     };
-    // The composer/hint gap only needs reserving when the hint bar is actually
-    // visible — a hidden bar would leave a dangling blank row at the very
-    // bottom of the frame.
+    // The composer/hint gap is 0: the hint bar sits flush against the
+    // composer's bottom edge (the panel's own bottom padding row is the
+    // separation). Kept as a token-derived term so the footer math stays
+    // explicit.
     let composer_hint_gap: u16 = if hint_height > 0 {
         COMPOSER_HINT_GAP_ROWS
+    } else {
+        0
+    };
+    // Likewise the activity/composer gap is 0: the activity bar sits flush
+    // against the composer's top edge while it is up, and the term collapses
+    // with the bar when idle.
+    let activity_composer_gap: u16 = if activity_row_needed {
+        ACTIVITY_COMPOSER_GAP_ROWS
     } else {
         0
     };
     let footer_height: u16 = if chrome_hidden || in_envoy {
         0
     } else {
-        // Order, top → bottom: gap, todo bar, queue bar, activity bar, input
-        // box, composer/hint gap, hint bar. The ambient meta bars (todo = task
-        // list, queue = outbox) lead; the activity bar sits directly on top of
-        // the input box so the live status reads as part of the composer; the
-        // hint bar carries the next input action + model/context. Session-level
-        // state (workspace, mode flags such as `autopilot`) lives on the
-        // head row at the top of the view, not on a bottom status bar.
+        // Order, top → bottom: gap, todo bar, queue bar, activity bar,
+        // input box, hint bar. The ambient meta bars (todo = task list,
+        // queue = outbox) lead; the activity bar sits flush above the input
+        // box so the live status reads as part of the composer; the hint bar
+        // sits flush below it and carries the next input action +
+        // model/context. Session-level state (workspace, mode flags such as
+        // `autopilot`) lives on the head row at the top of the view,
+        // not on a bottom status bar.
         FOOTER_TOP_GAP_ROWS
             + activity_height
             + todo_height
             + queue_height
+            + activity_composer_gap
             + input_box_height
             + composer_hint_gap
             + hint_height
@@ -594,6 +622,13 @@ pub fn draw_transcript(
     // it, so it was already split from `full` above; just paint it here.
     if let (Some(header), Some(rect)) = (page_header.as_ref(), head_rect) {
         draw_page_header(frame, rect, header, theme);
+    }
+
+    // 1b. Envoy key-legend footer — pinned to the terminal's last rows (its
+    // rect came out of the same layout split as the head). Painted on the
+    // page-body background with the shortcuts on its middle row.
+    if let (Some(info), Some(rect)) = (envoy_bar.as_ref(), envoy_footer_rect) {
+        draw_envoy_footer(frame, rect, info, theme);
     }
 
     // 2. Transcript History — the transcript area is the whole `chunks[0]`
@@ -713,7 +748,7 @@ pub fn draw_transcript(
     // the persistent todo bar (when the task list is non-empty), the
     // persistent queue bar (when the outbox is non-empty), the transient
     // activity bar (when active), the input box, and the hint bar. The
-    // activity bar sits directly above the input box so the live "what the
+    // activity bar sits flush above the input box so the live "what the
     // agent is doing right now" status reads as part of the composer cluster;
     // the todo and queue bars are ambient meta-info and float above it. The
     // separator keeps the latest response visually distinct from the controls
@@ -738,7 +773,7 @@ pub fn draw_transcript(
     };
 
     // The persistent queue bar sits directly below the todo bar. It is a
-    // stable two-row outbox summary so pending messages never have to be
+    // stable one-row outbox summary so pending messages never have to be
     // inferred from the hint bar. The whole bar is the click target that
     // expands the full Queue modal. Returns its rect for the event loop to
     // hit-test.
@@ -778,10 +813,12 @@ pub fn draw_transcript(
         None
     };
 
-    // The input box sits directly below the activity bar.
+    // The input box sits flush directly below the activity bar — the
+    // composer's top panel-bg padding row already separates its text from
+    // the live status line, so no `surface` gap row is reserved between them.
     let input_rect = Rect::new(
         footer_x,
-        status_y + todo_height + queue_height + activity_height,
+        status_y + todo_height + queue_height + activity_height + activity_composer_gap,
         footer_w,
         input_box_height,
     );
@@ -907,8 +944,8 @@ mod tests {
                     &mut layout_map,
                     &[
                         crate::tui::completion::Completion {
-                            label: "/clear".to_string(),
-                            description: "Clear".to_string(),
+                            label: "/new".to_string(),
+                            description: "New".to_string(),
                             replace_start: 0,
                             replace_end: 0,
                             kind: crate::tui::completion::CompletionItemKind::Slash,
@@ -978,7 +1015,7 @@ mod tests {
                 0,
                 &theme,
             );
-            draw_model_editor(f, "OpenAI", "", 0, true, 0, None, None, &theme);
+            draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, &theme);
             // Provider-template chooser.
             let mut template_scroll = 0;
             draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
@@ -1126,6 +1163,121 @@ mod tests {
 
     /// Render both the compact Envoy step (root view) and the zoomed-in
     /// Envoy view with its page header, ensuring no layout panics.
+    /// Visual verification (run with NEENEE_VISUAL=1 --nocapture): an envoy
+    /// zoom view with two ReAct turns, each emitting a concurrent tool-call
+    /// batch, groups into turn bands with flush same-turn calls and a blank
+    /// line between turns — exactly like the main session.
+    #[test]
+    fn envoy_view_groups_children_into_turn_bands() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 30);
+        let mut task = TranscriptMessage::tool_step(
+            "task_1",
+            "envoy",
+            r#"{"description":"explore the codebase","prompt":"..."}"#,
+        );
+        let call =
+            |id: &str, name: &str, round: u64, turn: usize| neenee_core::EnvoyEvent::ToolCall {
+                id: id.into(),
+                name: name.into(),
+                arguments: r#"{"p":"x"}"#.into(),
+                round,
+                turn,
+            };
+        let result = |id: &str, name: &str| neenee_core::EnvoyEvent::ToolResult {
+            id: id.into(),
+            name: name.into(),
+            output: "done".into(),
+            duration_ms: 5,
+        };
+        // Turn 1: a 3-call concurrent batch.
+        for (id, name) in [("a", "read_text"), ("b", "grep"), ("c", "list_dir")] {
+            task.push_envoy_event(&call(id, name, 1, 0));
+            task.push_envoy_event(&result(id, name));
+        }
+        // Turn 2: a 2-call concurrent batch.
+        for (id, name) in [("d", "websearch"), ("e", "webfetch")] {
+            task.push_envoy_event(&call(id, name, 1, 1));
+            task.push_envoy_event(&result(id, name));
+        }
+        let children = task.envoy_children().unwrap().to_vec();
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &children,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    awaiting_permission: false,
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                        blocked: false,
+                    },
+                    envoy_bar: Some(EnvoyBarInfo {
+                        role: Some("explore".to_string()),
+                        label: "the codebase".to_string(),
+                        index: 1,
+                        total: 1,
+                    }),
+                    side_banner: None,
+                    session_head: None,
+                    todos: None,
+                    review_alert: String::new(),
+                    round_started_at: None,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::None,
+                    theme: &theme,
+                    layout: crate::tui::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+        let width = terminal.buffer().area().width as usize;
+        let rows: Vec<String> = (0..terminal.buffer().area().height as usize)
+            .map(|row| {
+                terminal.buffer().content[row * width..(row + 1) * width]
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect()
+            })
+            .collect();
+        if std::env::var("NEENEE_VISUAL").is_ok() {
+            eprintln!("\n┌─ Envoy zoom (turn-banded) ─");
+            for r in &rows {
+                eprintln!("│{r}");
+            }
+            eprintln!("└────\n");
+        }
+        // Two turn headers appear (turn 1 and turn 2 of the envoy's round 1).
+        let body = rows.join("\n");
+        assert!(body.contains("turn 1"), "expected a `turn 1` band: {body}");
+        assert!(body.contains("turn 2"), "expected a `turn 2` band: {body}");
+        // Same-turn sibling calls are flush (no blank row between `read_text`
+        // and `grep` inside turn 1); the two turns are separated by a blank.
+        let line_of = |needle: &str| {
+            rows.iter()
+                .position(|r| r.contains(needle))
+                .unwrap_or_else(|| panic!("no row containing {needle}"))
+        };
+        let t1_first = line_of("Read");
+        let t1_second = line_of("Grep");
+        assert_eq!(t1_second, t1_first + 1, "same-turn calls stay flush");
+        // turn 2's header sits at least one blank row after turn 1's batch.
+        let t2_header = line_of("turn 2");
+        assert!(t2_header > t1_second + 1, "turns are separated");
+    }
+
     #[test]
     fn envoy_step_and_view_render_without_panicking() {
         let theme = Theme::default();
@@ -1141,6 +1293,8 @@ mod tests {
             id: "inner".into(),
             name: "grep".into(),
             arguments: r#"{"pattern":"foo"}"#.into(),
+            round: 1,
+            turn: 0,
         });
         task.finish_tool_step(
             "task_1",
@@ -1216,9 +1370,10 @@ mod tests {
                         blocked: false,
                     },
                     envoy_bar: Some(EnvoyBarInfo {
-                        label: "explore the codebase".to_string(),
+                        role: Some("explore".to_string()),
+                        label: "the codebase".to_string(),
                         index: 1,
-                        total: 1,
+                        total: 2,
                     }),
                     side_banner: None,
                     session_head: None,
@@ -1237,15 +1392,28 @@ mod tests {
         });
 
         let width = terminal.buffer().area().width as usize;
-        let head_row: String = terminal.buffer().content[0..width]
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
+        let row_text = |row: usize| -> String {
+            terminal.buffer().content[row * width..(row + 1) * width]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
+        };
+        let head_row = row_text(0);
+        assert_eq!(
+            head_row,
+            "   ENVOY [EXPLORE] the codebase                                         (1/2)   ",
+            "Envoy identity, role tag, title and sibling index on the head row"
+        );
+        // The permanent key legend occupies the last three terminal rows,
+        // with the shortcuts on its middle row.
+        let legend = row_text(28);
         assert!(
-            head_row
-                .trim_start()
-                .starts_with("Envoy explore the codebase · 1 of 1"),
-            "Envoy context should occupy the head row (first terminal row): {head_row:?}"
+            legend.contains("Esc back") && legend.contains("[ prev") && legend.contains("] next"),
+            "Envoy shortcuts pinned on the footer's middle row: {legend:?}"
+        );
+        assert!(
+            row_text(27).trim().is_empty() && row_text(29).trim().is_empty(),
+            "The footer's top and bottom rows are blank padding"
         );
     }
 
@@ -1303,7 +1471,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
-                    session_head: None,
+                        session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1409,7 +1577,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
-                    session_head: None,
+                        session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1628,7 +1796,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
-                    session_head: None,
+                        session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,
@@ -1698,7 +1866,7 @@ mod tests {
                         },
                         envoy_bar: None,
                         side_banner: None,
-                    session_head: None,
+                        session_head: None,
                         todos: None,
                         review_alert: String::new(),
                         round_started_at: None,

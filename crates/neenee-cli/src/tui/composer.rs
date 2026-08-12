@@ -208,6 +208,48 @@ pub fn draw_composer(
         None,
         image_count,
         paste_count,
+        None,
+    )
+}
+
+/// The effort-ignition variant of [`draw_composer`]: `prompt_accent` carries
+/// the ignition's elapsed milliseconds while the wave is live, driving a
+/// color-only tint on the `›` prompt (the glyph never changes). Once the
+/// animation ends the caller passes no accent and the ordinary composer
+/// renders. See [`super::effort_ignition`].
+#[allow(clippy::too_many_arguments)]
+pub fn draw_composer_igniting(
+    frame: &mut Frame,
+    input_rect: Rect,
+    input: &str,
+    byte_cursor: usize,
+    focused: bool,
+    show_caret: bool,
+    theme: &Theme,
+    layout_map: &mut LayoutMap,
+    record: bool,
+    input_scroll: &mut usize,
+    selection: &SelectionState,
+    image_count: usize,
+    paste_count: usize,
+    prompt_accent: (bool, Option<u128>),
+) {
+    draw_composer_impl(
+        frame,
+        input_rect,
+        input,
+        byte_cursor,
+        focused,
+        show_caret,
+        theme,
+        layout_map,
+        record,
+        input_scroll,
+        selection,
+        None,
+        image_count,
+        paste_count,
+        Some(prompt_accent),
     )
 }
 
@@ -249,6 +291,7 @@ pub fn draw_composer_highlighted(
         Some(highlight_len),
         image_count,
         paste_count,
+        None,
     )
 }
 
@@ -268,6 +311,9 @@ fn draw_composer_impl(
     highlight_len: Option<usize>,
     image_count: usize,
     paste_count: usize,
+    // Effort-ignition prompt accent: `(effort_is_max, ignition_elapsed_ms)`.
+    // `None` (or `focused == false`) renders the standard `›` prompt.
+    prompt_accent: Option<(bool, Option<u128>)>,
 ) {
     // The input box is a flat panel: each text row carries panel_bg and is
     // prefixed with `› ` on the first wrapped line / a two-space indent on
@@ -292,6 +338,16 @@ fn draw_composer_impl(
         theme.brand()
     } else {
         theme.muted()
+    };
+    // Effort-ignition tint (codex port): while the ignition wave is live the
+    // `›` prompt charges toward the fire accent — a color-only accent. The
+    // glyph itself stays `›`; once the wave ends the prompt returns to its
+    // ordinary palette. See `effort_ignition`.
+    let prompt_fg = match prompt_accent {
+        Some((_, ms)) if focused => {
+            super::effort_ignition::ignition_prompt_color(ms, theme).unwrap_or(prompt_fg)
+        }
+        _ => prompt_fg,
     };
     let full_w = input_rect.width as usize;
     // Reserve the left prompt prefix (`› `) and a matching right pad so text

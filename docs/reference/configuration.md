@@ -286,7 +286,7 @@ slash-command invocations.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `input_history.dedup` | `true` | Collapse identical prompt text into a single entry, keyed on the text **alone** (across sessions and workspaces). Re-sending the same prompt bumps it to the top of the newest-first picker. Set `false` to keep `(text, session)` entries distinct — the same words typed in two sessions then stay as two rows, each with its own origin |
-| `input_history.record_commands` | `false` | Record `/slash` command invocations (`/model`, `/clear`, …) into the input history. With the default `false`, new commands are not recorded and any legacy ones stop showing in the picker. Commands are UI gestures, not prompts — they are already visible in the transcript. Set `true` to make them recallable from `Ctrl+R` again |
+| `input_history.record_commands` | `false` | Record `/slash` command invocations (`/model`, `/new`, …) into the input history. With the default `false`, new commands are not recorded and any legacy ones stop showing in the picker. Commands are UI gestures, not prompts — they are already visible in the transcript. Set `true` to make them recallable from `Ctrl+R` again |
 
 ```toml
 [input_history]

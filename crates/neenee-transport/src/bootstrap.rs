@@ -69,6 +69,10 @@ pub struct BootstrapParams {
     /// `--single-instance`: restore the pre-ADR-0018 exclusive per-project
     /// process lock.
     pub single_instance: bool,
+    /// Extra tools to publish onto the assembled agent (ADR-0097 §5's
+    /// WIP-coordination tools). The assemble passes them through untouched;
+    /// the registry publishes them once the session id is known.
+    pub extra_session_tools: Option<Vec<Arc<dyn neenee_core::Tool>>>,
 }
 
 /// The assembled session harness: the driver (ready to `run`), the frontend
@@ -115,6 +119,12 @@ pub struct Bootstrap {
     /// caller must hold it for the process lifetime (e.g. bind it to
     /// `let _process_lock = ...` in `main`).
     pub process_lock: Option<lock::ProcessLock>,
+    /// Echo of [`BootstrapParams::extra_session_tools`], for the registry to
+    /// publish once the session id is known. Not consumed by the assemble.
+    pub extra_session_tools: Option<Vec<Arc<dyn neenee_core::Tool>>>,
+    /// The primary agent (same `Arc` as `agent_for_session_end`), exposed so
+    /// the registry can publish session-scoped tools onto it.
+    pub agent: Arc<Agent>,
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
@@ -149,6 +159,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         project_root: project_override,
         autopilot: autopilot_at_start,
         single_instance,
+        extra_session_tools,
     } = params;
     debug_assert!(
         matches!(
@@ -708,7 +719,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         driver,
         req_tx,
         resp_rx,
-        agent_for_session_end,
+        agent_for_session_end: agent_for_session_end.clone(),
         session,
         token_ledger,
         initial_provider_name,
@@ -719,5 +730,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         tui_config,
         input_history_config,
         process_lock,
+        extra_session_tools,
+        agent: agent_for_session_end.clone(),
     })
 }

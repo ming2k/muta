@@ -28,11 +28,13 @@ info:
     reconnect starts from a fresh `Welcome`, a monitor reconnect from a fresh
     `snapshot`.
 
-    Authentication (ADR-0054): the default listener binds loopback and requires
-    no token. The `--public` flag binds all interfaces and **requires** a bearer
-    token sent as `Authorization: Bearer <token>` on the handshake; a missing or
-    wrong token is rejected with HTTP 401 before any session data is exchanged.
-    There is no TLS or subprotocol negotiation yet.
+    Authentication (ADR-0054): the default listeners are a Unix domain socket
+    (filesystem permissions as the boundary) plus a TCP loopback fallback, and
+    require no token. The `--public` flag (`neenee serve`; `--expose` on the
+    `neenee-server` binary) binds all interfaces and **requires** a bearer
+    token sent as `Authorization: Bearer <token>` on the handshake; a missing
+    or wrong token is rejected with HTTP 401 before any session data is
+    exchanged. There is no TLS or subprotocol negotiation yet.
   license:
     name: MIT
     url: https://opensource.org/license/mit
@@ -62,7 +64,8 @@ servers:
     host: 0.0.0.0:{port}
     protocol: ws
     description: |
-      `neenee serve --expose` binds all interfaces for LAN clients (ADR-0096).
+      `neenee serve --public` (`--expose` on the `neenee-server` binary) binds
+      all interfaces for LAN clients (ADR-0096).
       A bearer token is mandatory: send `Authorization: Bearer <token>` on the
       handshake, else HTTP 401. The daemon generates and prints the token on
       startup. Front with TLS for remote use.

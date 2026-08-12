@@ -688,7 +688,7 @@ impl SessionDriver {
             }
 
             // Re-publish a session-scoped projection only when the AI-visible
-            // context actually changed this request (session switch, `/clear`,
+            // context actually changed this request (session switch, `/new`,
             // `/compact`, provider/tool/skill change, …). Comparing the pre-
             // and post-dispatch estimates — rather than enumerating request
             // variants — keeps a non-driving command echo (or any no-op

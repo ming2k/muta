@@ -12,9 +12,9 @@ use crate::tui::model::layout::LayoutMap;
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::tui::primitives::{
     ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, content_modal_area, keymap_body_lines, keymap_page_footer_hints, keyvocab,
-    modal_area, modal_chrome_rows, modal_frame, modal_header, modal_header_parts, render_body,
-    render_modal_footer, render_modal_footer_with_more,
+    breadcrumb_parts, content_modal_area, content_modal_probe, keymap_body_lines,
+    keymap_page_footer_hints, keyvocab, modal_area, modal_chrome_rows, modal_frame, modal_header,
+    modal_header_parts, render_body, render_modal_footer, render_modal_footer_with_more,
 };
 use crate::tui::providers::{CustomField, PROVIDER_TEMPLATES, RankedModel, RankedProvider};
 use crate::tui::view::Theme;
@@ -582,6 +582,168 @@ fn match_set(m: Option<&crate::tui::fuzzy::FuzzyMatch>) -> std::collections::Has
         .unwrap_or_default()
 }
 
+// ── Effort selector (segmented flat ladder) ─────────────────────────────────
+
+/// The leading label column shared by the editor's rows (`" {:<8}"`).
+const EFFORT_LABEL_W: usize = 9;
+
+/// Resolve a wire effort string to its typed tier, for the caption text. An
+/// unrecognized value yields `None` (no caption rather than a wrong one).
+fn effort_tier(wire: &str) -> Option<neenee_core::effort::Effort> {
+    neenee_core::effort::Effort::parse(wire)
+}
+
+/// The current tier's caption, e.g. `deep reasoning — the default for real
+/// work`. Empty when the wire value is unrecognized.
+fn effort_caption(wire: &str) -> &'static str {
+    effort_tier(wire).map(|e| e.description()).unwrap_or("")
+}
+
+/// The flat selector's own width: label + every tier (the selected one
+/// bracketed), tiers joined by two-space gaps. This is the *only* thing that
+/// decides flat-vs-carousel — the caption is a trailing nicety that yields
+/// (truncates, then drops) to whatever width the selector leaves behind, so a
+/// long caption never forces the whole ladder into the carousel form.
+fn flat_selector_width(levels: &[String], selected: &str) -> usize {
+    let tiers_w: usize = levels
+        .iter()
+        .map(|l| {
+            UnicodeWidthStr::width(l.as_str()) + usize::from(l == selected) * 2 // [ ] wraps
+        })
+        .sum::<usize>()
+        + 2 * levels.len().saturating_sub(1); // inter-tier gaps
+    EFFORT_LABEL_W + tiers_w
+}
+
+/// True when the segmented ladder itself fits on one body row. When the ladder
+/// is unknown (empty `levels`) we cannot lay it out flat at all; when it fits,
+/// the caption rides along in whatever space remains.
+fn effort_block_flat(body_width: usize, levels: &[String]) -> bool {
+    if levels.is_empty() {
+        return false;
+    }
+    // Use the widest possible selection (the longest tier name gets the
+    // brackets) so the flat decision is stable as the selection moves — the
+    // row must never flip between flat and carousel as the user cycles.
+    let widest = levels
+        .iter()
+        .map(|l| flat_selector_width(levels, l))
+        .max()
+        .unwrap_or(0);
+    widest <= body_width
+}
+
+/// Build the segmented-ladder line(s) for the effort selector. `flat` selects
+/// the one-row form (selector + trailing caption); the wrapped form emits a
+/// selector row and a separate caption row. `focused` highlights the selected
+/// tier in the brand tone (and, for `max`, the ignition accent).
+fn effort_block_lines(
+    current: &str,
+    levels: &[String],
+    flat: bool,
+    body_width: usize,
+    focused: bool,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let label = format!(" {:<8}", "Effort");
+    let caption = effort_caption(current);
+    let selected_fg = if focused { theme.brand() } else { theme.fg() };
+    // Width the caption may occupy after the selector on a flat row, or the
+    // full body width on its own wrapped row. Zero hides the caption entirely.
+    let caption_budget = if flat {
+        body_width.saturating_sub(flat_selector_width(levels, current) + 3)
+    } else {
+        body_width.saturating_sub(EFFORT_LABEL_W)
+    };
+    let caption = truncate_ellipsis(caption, caption_budget);
+
+    // Compact carousel fallback: unknown ladder, or too narrow to lay flat.
+    // `< current >` with a position pip for each rung so the depth still reads.
+    if levels.is_empty() || !flat {
+        let value_style = Style::default()
+            .fg(if focused { theme.brand() } else { theme.fg() })
+            .add_modifier(Modifier::BOLD);
+        let chev_style = Style::default().fg(theme.muted());
+        let mut spans = vec![
+            Span::styled(label, Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::raw(" ".to_string()),
+            Span::styled("< ".to_string(), chev_style),
+            Span::styled(current.to_string(), value_style),
+            Span::styled(" >".to_string(), chev_style),
+        ];
+        // Position pips: one per rung, the current one solid — the depth
+        // direction stays visible even in the carousel form.
+        if !levels.is_empty() {
+            let cur_idx = levels.iter().position(|l| l == current);
+            let pips: String = levels
+                .iter()
+                .enumerate()
+                .map(|(i, _)| if Some(i) == cur_idx { '●' } else { '○' })
+                .collect::<Vec<char>>()
+                .into_iter()
+                .collect();
+            spans.push(Span::raw("  ".to_string()));
+            spans.push(Span::styled(pips, Style::default().fg(theme.muted())));
+        }
+        let mut lines = vec![Line::from(spans)];
+        if !caption.is_empty() {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(EFFORT_LABEL_W)),
+                Span::styled(caption.to_string(), Style::default().fg(theme.muted())),
+            ]));
+        }
+        return lines;
+    }
+
+    // Flat segmented ladder: every tier laid out left-to-right in ascending
+    // depth, the selected one bracketed and bolded. `max` additionally takes
+    // the warning tone so the top rung reads as the ignition tier it is
+    // (mirrors the hint bar's `M A X` celebration).
+    let mut spans = vec![Span::styled(
+        label,
+        Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
+    )];
+    for (i, level) in levels.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  ".to_string()));
+        }
+        let is_sel = level == current;
+        if is_sel {
+            let fg = if level == "max" {
+                theme.warn()
+            } else {
+                selected_fg
+            };
+            spans.push(Span::styled(
+                "[".to_string(),
+                Style::default().fg(theme.muted()),
+            ));
+            spans.push(Span::styled(
+                level.clone(),
+                Style::default().fg(fg).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                "]".to_string(),
+                Style::default().fg(theme.muted()),
+            ));
+        } else {
+            spans.push(Span::styled(
+                level.clone(),
+                Style::default().fg(theme.muted()),
+            ));
+        }
+    }
+    // Trailing caption on the same row, after a gap.
+    if !caption.is_empty() {
+        spans.push(Span::raw("   ".to_string()));
+        spans.push(Span::styled(
+            caption.to_string(),
+            Style::default().fg(theme.muted()),
+        ));
+    }
+    vec![Line::from(spans)]
+}
+
 /// Draw the provider key editor: a single **API key** field. The model is chosen
 /// from the Models picker, so it is not edited here. `input` is the live
 /// API-key value borrowed from the composer line.
@@ -596,24 +758,42 @@ pub fn draw_model_editor(
     // thinking focused. Determines caret row and which field's live text is in
     // `input`.
     focused_field: u8,
-    // `effort`: when `Some`, render an effort-selector row showing the current
-    // level; cycled with ←/→ by the caller. `None` hides.
+    // `effort`: when `Some`, render the effort selector showing the current
+    // level; cycled with ←/→ (or jumped to with a digit) by the caller.
+    // `effort_levels` carries the model's full ladder so every tier can be
+    // laid out flat. `None` effort hides the whole block.
     effort: Option<&str>,
+    // The model's advertised effort ladder (wire strings, ascending). Drives
+    // the segmented flat layout; may be empty when the caller could not
+    // resolve the model, in which case the selector degrades to the compact
+    // carousel form.
+    effort_levels: &[String],
     // `thinking`: when `Some`, render an extended-thinking on/off row showing
-    // on/off; toggled with Space by the caller.
+    // a checkbox; toggled with Space by the caller.
     // `None` hides. Orthogonal to effort.
     thinking: Option<bool>,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
     let geometry = ContentModalSpec::MODEL_EDITOR;
 
-    // Content-driven height: the editor has a fixed, width-independent row
-    // count (1–3), so size the panel to exactly fit them rather than reserving
-    // a fixed 30% slab that left most of the panel empty. We count the rows up
-    // front (the row count never depends on the body width — only the text
-    // within a row does), add the modal chrome, and let `content_modal_area`
-    // clamp the total to a sane viewport fraction.
-    let body_rows = show_key as u16 + effort.is_some() as u16 + thinking.is_some() as u16;
+    // Content-driven height: the editor's row count is width-independent, so
+    // size the panel to exactly fit the rows rather than reserving a fixed 30%
+    // slab that left most of the panel empty. The effort block occupies one
+    // row when it fits flat (the segmented ladder plus a caption that shares
+    // the row) and two rows when it must wrap (selector row + caption row), so
+    // we probe the body width before counting. We add the modal chrome and let
+    // `content_modal_area` clamp the total to a sane viewport fraction.
+    // The probe area shares the final width, so subtract the symmetric inner
+    // padding `modal_frame` applies to recover the exact body width.
+    let body_width = content_modal_probe(frame, geometry)
+        .width
+        .saturating_sub(2 * crate::tui::design::MODAL_INNER_H_PADDING) as usize;
+    let effort_rows = match effort {
+        Some(_) if effort_block_flat(body_width, effort_levels) => 1,
+        Some(_) => 2, // wrapped: selector row + caption row
+        None => 0,
+    };
+    let body_rows = show_key as u16 + effort_rows + thinking.is_some() as u16;
     let desired = body_rows + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -627,9 +807,6 @@ pub fn draw_model_editor(
     let label_style = Style::default()
         .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
-    // Per-row content budget: the body rect width (already inside the modal's
-    // inner padding). Used to right-align the effort/thinking selectors.
-    let body_width = f.body.width as usize;
     // Horizontal-viewport offset for the focused API-key row, so long keys
     // scroll under the caret instead of spilling past the modal edge.
     let mut api_key_off: usize = 0;
@@ -665,50 +842,42 @@ pub fn draw_model_editor(
         api_key_off = key_off;
     }
 
-    // Row 1 (optional): reasoning effort. The value is cycled with ←/→ (not
-    // typed), so the live text is the current selection.
+    // Effort block (optional): the segmented flat ladder when the body is wide
+    // enough, otherwise the compact carousel. Either way the current tier's
+    // caption rides along — flat shares the selector's row, wrapped drops it
+    // onto its own row beneath. The value is cycled with ←/→ or jumped to with
+    // a digit (not typed), so the live text is the current selection.
     if let Some(effort) = effort {
-        let value_style = Style::default()
-            .fg(if focused_field == 1 {
-                theme.brand()
-            } else {
-                theme.fg()
-            })
-            .add_modifier(Modifier::BOLD);
-        let chev_style = Style::default().fg(theme.muted());
-        let label = format!(" {:<8}", "Effort");
-        // Right-align the `< value >` selector to the body's right edge.
-        let selector = format!("< {} >", effort);
-        let pad = body_width.saturating_sub(label.width() + selector.width());
-        body.push(Line::from(vec![
-            Span::styled(label, label_style),
-            Span::raw(" ".repeat(pad)),
-            Span::styled("< ".to_string(), chev_style),
-            Span::styled(effort.to_string(), value_style),
-            Span::styled(" >".to_string(), chev_style),
-        ]));
+        let flat = effort_block_flat(body_width, effort_levels);
+        for line in
+            effort_block_lines(effort, effort_levels, flat, body_width, focused_field == 1, theme)
+        {
+            body.push(line);
+        }
     }
 
-    // Row 2 (optional): extended thinking on/off. Toggled with Space (a
-    // non-text field, so no caret while focused). Orthogonal to effort.
+    // Thinking block (optional): a real on/off checkbox, not a carousel — the
+    // boolean reads as `[x]`/`[ ]` and toggles with Space (a non-text field,
+    // so no caret while focused). Orthogonal to effort.
     if let Some(on) = thinking {
-        let value_style = Style::default()
+        let label = format!(" {:<8}", "Thinking");
+        let box_style = Style::default()
             .fg(if focused_field == 2 {
                 theme.brand()
             } else {
                 theme.fg()
             })
             .add_modifier(Modifier::BOLD);
-        let label = format!(" {:<8}", "Thinking");
-        let selector = format!("< {} >", if on { "on" } else { "off" });
-        let pad = body_width.saturating_sub(label.width() + selector.width());
-        let chev_style = Style::default().fg(theme.muted());
+        let word_style = Style::default().fg(if on { theme.ok() } else { theme.muted() });
+        let checkbox = if on { "[x]" } else { "[ ]" };
+        let word = if on { "on" } else { "off" };
+        let tail = format!("{checkbox} {word}");
+        let pad = body_width.saturating_sub(label.width() + tail.width());
         body.push(Line::from(vec![
             Span::styled(label, label_style),
             Span::raw(" ".repeat(pad)),
-            Span::styled("< ".to_string(), chev_style),
-            Span::styled(if on { "on" } else { "off" }.to_string(), value_style),
-            Span::styled(" >".to_string(), chev_style),
+            Span::styled(checkbox.to_string(), box_style),
+            Span::styled(format!(" {word}"), word_style),
         ]));
     }
 
@@ -716,13 +885,15 @@ pub fn draw_model_editor(
     render_body(frame, body_rect, body, &mut 0, None, 0, false, theme);
 
     if let Some(fo) = f.footer {
-        let mut hints: Vec<FooterHint> = Vec::with_capacity(5);
+        let mut hints: Vec<FooterHint> = Vec::with_capacity(6);
         hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
         if effort.is_some() || thinking.is_some() {
             hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
         }
         if effort.is_some() {
+            // ←/→ steps one rung; a digit jumps straight to that tier.
             hints.push(FooterHint::secondary(keyvocab::ARROWS_LR, "effort"));
+            hints.push(FooterHint::secondary("1-7", "jump"));
         }
         if thinking.is_some() {
             hints.push(FooterHint::secondary(keyvocab::SPACE, "thinking"));
@@ -731,10 +902,10 @@ pub fn draw_model_editor(
         render_modal_footer(frame, fo, &hints, theme);
     }
 
-    // Place the caret on the focused row, after its label. The effort row has
-    // no editable caret position (it's a cycled value), so when it's focused we
-    // park the cursor at the end of its value. The thinking row is a toggle
-    // (no text), so we hide the caret entirely while it's focused.
+    // Place the caret on the focused row, after its label. The effort selector
+    // is a cycled / jumped value (no editable caret position), so when it's
+    // focused we park the cursor just past its label. The thinking row is a
+    // toggle (no text), so we hide the caret entirely while it's focused.
     if focused_field != 2 {
         let prefix = if focused_field == 1 {
             format!(" {:<8}", "Effort")
@@ -1229,6 +1400,57 @@ pub fn draw_custom_provider_editor(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Render the whole frame buffer back to a single string (rows joined by
+    /// `\n`), the standard readback helper for layout-level modal assertions.
+    fn buffer_text(terminal: &neenee_tui_engine::TestTerminal) -> String {
+        let buf = terminal.buffer();
+        let area = buf.area();
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Render the per-model settings editor (effort + thinking, no API key)
+    /// into a terminal of the given size and read back the buffer text.
+    fn render_settings_editor(
+        width: u16,
+        height: u16,
+        effort: Option<&str>,
+        levels: &[String],
+        thinking: Option<bool>,
+    ) -> String {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, height);
+        terminal.draw(|f| {
+            draw_model_editor(
+                f,
+                "claude-opus-4-8",
+                effort.unwrap_or(""),
+                0,
+                false,
+                1,
+                effort,
+                levels,
+                thinking,
+                &theme,
+            );
+        });
+        buffer_text(&terminal)
+    }
+
+    fn levels(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
     /// The reasoning-tag decision from `model_list_body`, factored out for a
     /// direct unit test (the row renderer is layout machinery; the policy is
     /// what matters).
@@ -1239,6 +1461,90 @@ mod tests {
             (None, Some(effort)) => effort.to_string(),
             _ => String::new(),
         }
+    }
+
+    #[test]
+    fn effort_selector_lays_the_ladder_flat_when_wide() {
+        // Wide enough: every tier is spelled out on one row, ascending, with
+        // the selected one bracketed — the whole ladder is visible at a glance.
+        let full = levels(&["low", "medium", "high", "xhigh", "max"]);
+        let text = render_settings_editor(120, 24, Some("high"), &full, None);
+        let effort_row = text
+            .lines()
+            .find(|l| l.contains("Effort"))
+            .expect("effort row");
+        for tier in ["low", "medium", "high", "xhigh", "max"] {
+            assert!(effort_row.contains(tier), "missing tier: {effort_row:?}");
+        }
+        assert!(
+            effort_row.contains("[high]"),
+            "selected tier bracketed: {effort_row:?}"
+        );
+        // Depth order is left-to-right ascending.
+        let low = effort_row.find("low").unwrap();
+        let max = effort_row.find("max").unwrap();
+        assert!(low < max, "ladder must ascend left→right: {effort_row:?}");
+        // The carousel affordance is gone in the flat form.
+        assert!(!effort_row.contains('<'), "no carousel chevrons: {effort_row:?}");
+    }
+
+    #[test]
+    fn effort_selector_wraps_to_carousel_when_narrow() {
+        // Too narrow for the ladder: the compact `< current >` carousel shows,
+        // with one position pip per rung and the current rung solid so the
+        // depth direction still reads.
+        let full = levels(&["low", "medium", "high", "xhigh", "max"]);
+        let text = render_settings_editor(56, 24, Some("high"), &full, None);
+        let effort_row = text
+            .lines()
+            .find(|l| l.contains("Effort"))
+            .expect("effort row");
+        assert!(effort_row.contains("< high >"), "carousel: {effort_row:?}");
+        assert!(
+            effort_row.contains("○○●○○"),
+            "position pips, current solid: {effort_row:?}"
+        );
+    }
+
+    #[test]
+    fn effort_caption_rides_along_in_both_forms() {
+        // The current tier's caption shows under the selector — truncated to
+        // the available width rather than dropped or wrapped awkwardly.
+        let full = levels(&["low", "medium", "high", "xhigh", "max"]);
+        let wide = render_settings_editor(120, 24, Some("high"), &full, None);
+        assert!(
+            wide.contains("deep reasoning"),
+            "flat caption present: {wide:?}"
+        );
+        let narrow = render_settings_editor(56, 24, Some("high"), &full, None);
+        assert!(
+            narrow.contains("deep reasoning"),
+            "carousel caption present: {narrow:?}"
+        );
+    }
+
+    #[test]
+    fn thinking_renders_as_a_checkbox_not_a_carousel() {
+        // The boolean is `[x]`/`[ ]`, never `< on >` — the control's shape
+        // finally matches its semantics.
+        let on = render_settings_editor(100, 24, None, &[], Some(true));
+        assert!(on.contains("[x] on"), "checked: {on:?}");
+        assert!(!on.contains("< on >"), "no carousel for a bool: {on:?}");
+        let off = render_settings_editor(100, 24, None, &[], Some(false));
+        assert!(off.contains("[ ] off"), "unchecked: {off:?}");
+    }
+
+    #[test]
+    fn effort_block_flat_uses_widest_selection_for_stability() {
+        // The flat decision must not flip as the user cycles: it is computed
+        // for the widest bracketed selection. A 3-tier ladder fits a modest
+        // body; a 6-tier ladder needs more room.
+        let common = levels(&["low", "medium", "high"]);
+        assert!(effort_block_flat(40, &common), "3-tier fits 40");
+        let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh"]);
+        assert!(!effort_block_flat(40, &openai), "6-tier overflows 40");
+        // An unknown ladder can never lay flat.
+        assert!(!effort_block_flat(80, &[]), "empty ladder → carousel");
     }
 
     #[test]

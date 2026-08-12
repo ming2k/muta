@@ -13,7 +13,8 @@ expression: film
           Style
           Which error handling crate?
 
-             anyhow                                    ▼
+             anyhow
+               Simple                                  ▼
 
           ↑↓ navigate  Enter submit  Esc cancel
 
@@ -24,7 +25,8 @@ expression: film
 
           Question
 
-                                                       ▲
+          Which error handling crate?                  ▲
+
              anyhow
                Simple
              thiserror                                 ▼
@@ -38,7 +40,8 @@ expression: film
 
           Question
 
-               Simple                                  ▲
+             anyhow                                    ▲
+               Simple
              thiserror
                Structured
              Other

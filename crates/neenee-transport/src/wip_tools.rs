@@ -5,31 +5,43 @@
 //! conflicting WIP would make meaningless.
 //!
 //! These live in `neenee-transport` (not `neenee-agent`) because they drive
-//! the daemon's [`SessionRegistry`] — the coordination registry is
-//! daemon-level state, and only the transport layer holds it. They are
-//! advisory by design: `check_wip` never blocks, and an absent coordinator
-//! yields a clean "proceed" verdict so a session is never broken by the
-//! coordination layer being down.
+//! the daemon's coordination state — only the transport layer holds it.
+//! They are advisory by design: `check_wip` never blocks, and an absent
+//! coordinator yields a clean "proceed" verdict so a session is never broken
+//! by the coordination layer being down.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
 
-use neenee_core::{Tool, ToolOutput};
+use neenee_core::Tool;
 
-use crate::registry::SessionRegistry;
+use crate::registry::{WipRegistry, clear_wip_on, declare_wip_on};
 
-/// Shared handle injected into the three WIP tools: the session they belong
-/// to plus the daemon's registry (which owns the coordination state).
+/// The boxed future a [`CheckWipQuery`] returns.
+pub type CheckWipFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = (Vec<neenee_core::WipConflict>, neenee_core::WipAdvice)>
+            + Send,
+    >,
+>;
+
+/// The `check_wip` query a session's tool drives: given the query's paths and
+/// concern, answer with the conflicting WIPs and the advice. Bound to one
+/// session by the registry (which owns the sessions index the answer needs).
+pub type CheckWipQuery = Arc<dyn Fn(Vec<String>, Option<String>) -> CheckWipFuture + Send + Sync>;
+
+/// Shared handle injected into `declare_wip`/`wip_done`: the session they
+/// belong to plus the daemon's WIP-coordination registry.
 #[derive(Clone)]
 pub struct WipToolContext {
-    registry: Arc<SessionRegistry>,
+    registry: WipRegistry,
     session_id: String,
 }
 
 impl WipToolContext {
-    pub fn new(registry: Arc<SessionRegistry>, session_id: String) -> Self {
+    pub fn new(registry: WipRegistry, session_id: String) -> Self {
         Self {
             registry,
             session_id,
@@ -94,7 +106,7 @@ impl Tool for DeclareWipTool {
         })
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
+    async fn call(&self, arguments: &str) -> Result<String, String> {
         #[derive(serde::Deserialize)]
         struct Arguments {
             paths: Vec<String>,
@@ -115,15 +127,20 @@ impl Tool for DeclareWipTool {
         if summary.is_empty() {
             return Err("declare_wip needs a non-empty summary.".to_string());
         }
-        self.context
-            .registry
-            .declare_wip(&self.context.session_id, paths.clone(), summary.clone())
-            .await;
-        Ok(ToolOutput::text(format!(
+        declare_wip_on(
+            &self.context.registry,
+            &self.context.session_id,
+            neenee_core::WipStatus {
+                paths: paths.clone(),
+                summary: summary.clone(),
+            },
+        )
+        .await;
+        Ok(format!(
             "WIP declared on {} path(s): {}",
             paths.len(),
             summary
-        )))
+        ))
     }
 }
 
@@ -152,23 +169,23 @@ impl Tool for WipDoneTool {
         json!({ "type": "object", "properties": {} })
     }
 
-    async fn call_structured(&self, _arguments: &str) -> Result<ToolOutput, String> {
-        self.context
-            .registry
-            .clear_wip(&self.context.session_id)
-            .await;
-        Ok(ToolOutput::text("WIP cleared.".to_string()))
+    async fn call(&self, _arguments: &str) -> Result<String, String> {
+        clear_wip_on(&self.context.registry, &self.context.session_id).await;
+        Ok("WIP cleared.".to_string())
     }
 }
 
 /// `check_wip`: consult the coordination registry for conflicting peer WIP.
+/// Unlike the two mutations, the answer needs the registry's *sessions index*
+/// (which peers share the workspace), so it goes through an injected query
+/// closure rather than the shared handle.
 pub struct CheckWipTool {
-    context: WipToolContext,
+    query: CheckWipQuery,
 }
 
 impl CheckWipTool {
-    pub fn new(context: WipToolContext) -> Self {
-        Self { context }
+    pub fn new(query: CheckWipQuery) -> Self {
+        Self { query }
     }
 }
 
@@ -199,7 +216,7 @@ impl Tool for CheckWipTool {
         })
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
+    async fn call(&self, arguments: &str) -> Result<String, String> {
         #[derive(serde::Deserialize)]
         struct Arguments {
             #[serde(default)]
@@ -209,20 +226,12 @@ impl Tool for CheckWipTool {
         }
         let parsed: Arguments =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
-        let (conflicts, advice) = self
-            .context
-            .registry
-            .check_wip(
-                &self.context.session_id,
-                &parsed.paths,
-                parsed.concern.as_deref(),
-            )
-            .await;
+        let (conflicts, advice) = (self.query)(parsed.paths, parsed.concern).await;
 
         if conflicts.is_empty() {
-            return Ok(ToolOutput::text(
+            return Ok(
                 "No conflicting WIP. advice=proceed — global verification is fine.".to_string(),
-            ));
+            );
         }
         let mut out = String::new();
         for c in &conflicts {
@@ -233,7 +242,10 @@ impl Tool for CheckWipTool {
                 c.paths.join(", ")
             ));
             if !c.overlap.is_empty() {
-                out.push_str(&format!("  overlaps your paths: {}\n", c.overlap.join(", ")));
+                out.push_str(&format!(
+                    "  overlaps your paths: {}\n",
+                    c.overlap.join(", ")
+                ));
             }
         }
         out.push_str(&format!("advice={advice}"));
@@ -246,20 +258,112 @@ impl Tool for CheckWipTool {
             ),
             neenee_core::WipAdvice::Proceed => {}
         }
-        Ok(ToolOutput::text(out))
+        Ok(out)
     }
 }
 
-/// Install the three WIP-coordination tools onto a session's toolset. Called
-/// once per hosted session, after the daemon's registry and the session id
-/// are both known (the tools need both to address the coordination registry).
-pub fn install_wip_tools(
-    toolset: &mut neenee_core::ToolSet,
-    registry: Arc<SessionRegistry>,
+/// Build the three WIP-coordination tools for one session. Called once per
+/// hosted session by the registry, with the shared coordination handle, the
+/// session id, and the session-bound `check_wip` query.
+pub fn build_wip_tools(
+    registry: WipRegistry,
     session_id: String,
-) {
+    check_query: CheckWipQuery,
+) -> Vec<Arc<dyn Tool>> {
     let context = WipToolContext::new(registry, session_id);
-    toolset.upsert(Arc::new(DeclareWipTool::new(context.clone())));
-    toolset.upsert(Arc::new(WipDoneTool::new(context.clone())));
-    toolset.upsert(Arc::new(CheckWipTool::new(context)));
+    vec![
+        Arc::new(DeclareWipTool::new(context.clone())),
+        Arc::new(WipDoneTool::new(context)),
+        Arc::new(CheckWipTool::new(check_query)),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry() -> WipRegistry {
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()))
+    }
+
+    #[tokio::test]
+    async fn declare_then_clear_updates_the_shared_registry() {
+        let reg = registry();
+        let ctx = WipToolContext::new(reg.clone(), "sess-1".to_string());
+        let declare = DeclareWipTool::new(ctx.clone());
+        let out = declare
+            .call(r#"{"paths":["src/a.rs"],"summary":"refactoring retry"}"#)
+            .await
+            .unwrap();
+        assert!(out.contains("WIP declared"), "{out}");
+        {
+            let guard = reg.lock().await;
+            let wip = guard.get("sess-1").expect("wip registered");
+            assert_eq!(wip.paths, vec!["src/a.rs".to_string()]);
+            assert_eq!(wip.summary, "refactoring retry");
+        }
+        let done = WipDoneTool::new(ctx);
+        let out = done.call("{}").await.unwrap();
+        assert!(out.contains("cleared"), "{out}");
+        assert!(reg.lock().await.get("sess-1").is_none());
+    }
+
+    #[tokio::test]
+    async fn declare_rejects_empty_paths_and_summary() {
+        let ctx = WipToolContext::new(registry(), "s".to_string());
+        let declare = DeclareWipTool::new(ctx);
+        assert!(declare.call(r#"{"paths":[],"summary":"x"}"#).await.is_err());
+        assert!(
+            declare
+                .call(r#"{"paths":["a"],"summary":"  "}"#)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn check_wip_surfaces_conflicts_and_advice() {
+        // A query closure that reports one overlapping conflict.
+        let query: CheckWipQuery = Arc::new(|_paths, _concern| {
+            Box::pin(async {
+                (
+                    vec![neenee_core::WipConflict {
+                        session: "peer-session-xyz".to_string(),
+                        paths: vec!["src".to_string()],
+                        summary: "mid-refactor".to_string(),
+                        overlap: vec!["src/a.rs".to_string()],
+                    }],
+                    neenee_core::WipAdvice::Defer,
+                )
+            })
+        });
+        let tool = CheckWipTool::new(query);
+        let out = tool
+            .call(r#"{"paths":["src/a.rs"],"concern":"run tests"}"#)
+            .await
+            .unwrap();
+        assert!(out.contains("WIP conflict"), "{out}");
+        assert!(out.contains("mid-refactor"), "{out}");
+        assert!(out.contains("src/a.rs"), "{out}");
+        assert!(out.contains("advice=defer"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn check_wip_clean_verdict_reads_as_proceed() {
+        let query: CheckWipQuery =
+            Arc::new(|_p, _c| Box::pin(async { (Vec::new(), neenee_core::WipAdvice::Proceed) }));
+        let tool = CheckWipTool::new(query);
+        let out = tool.call(r#"{}"#).await.unwrap();
+        assert!(out.contains("No conflicting WIP"), "{out}");
+        assert!(out.contains("advice=proceed"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn build_wip_tools_installs_three_named_tools() {
+        let query: CheckWipQuery =
+            Arc::new(|_p, _c| Box::pin(async { (Vec::new(), neenee_core::WipAdvice::Proceed) }));
+        let tools = build_wip_tools(registry(), "sess".to_string(), query);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["declare_wip", "wip_done", "check_wip"]);
+    }
 }

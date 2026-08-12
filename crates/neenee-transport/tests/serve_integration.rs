@@ -90,6 +90,7 @@ async fn prehosted(
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker,
             sync_buffer,
+            created_at: std::time::Instant::now(),
         })
         .await;
     (registry, req_rx, bc_tx)
@@ -748,4 +749,131 @@ async fn uds_serves_same_protocol_without_token() {
     handle.cancel.cancel();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!uds.exists(), "socket file removed on shutdown");
+}
+
+// ── Idle-empty session reaper ─────────────────────────────────────────────
+
+/// Construct and host a bare session with no broadcast-tap subscriber, so the
+/// only potential event receiver is one the test adds explicitly. Unlike
+/// [`prehosted`] this leaves `events.receiver_count() == 0`, which is what the
+/// reaper's "no attached client" probe keys on.
+async fn host_bare(
+    session: Arc<SessionStore>,
+    created_at: std::time::Instant,
+) -> (Arc<SessionRegistry>, broadcast::Sender<AgentResponse>, String) {
+    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let base = idle_base(session.id().await);
+    let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+        base,
+        neenee_core::SessionStatus::Idle,
+    )));
+    let id = session.id().await;
+    registry
+        .host(HostedSession {
+            project_root: std::env::temp_dir().join("neenee-reaper-project"),
+            session,
+            req_tx,
+            events: bc_tx.clone(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tracker,
+            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            created_at,
+        })
+        .await;
+    (registry, bc_tx, id)
+}
+
+/// A fresh project dir + SessionStore that has never persisted (empty).
+fn fresh_empty_store(tag: &str) -> (std::path::PathBuf, Arc<SessionStore>) {
+    let dir = std::env::temp_dir().join(format!("neenee-reaper-{tag}-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(SessionStore::load_for_project(dir.clone()));
+    (dir, store)
+}
+
+/// Snapshot the set of currently hosted session ids.
+async fn hosted_ids(registry: &SessionRegistry) -> std::collections::HashSet<String> {
+    registry
+        .monitor_snapshot(MonitorAction {
+            watch: false,
+            include_idle: true,
+        })
+        .await
+        .sessions
+        .into_iter()
+        .map(|r| r.id)
+        .collect()
+}
+
+#[tokio::test]
+async fn reaper_removes_idle_never_persisted_session() {
+    let (_dir, store) = fresh_empty_store("idle");
+    // Old enough to exceed any TTL we pass; no client ever attaches.
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, _tx, id) = host_bare(store, old).await;
+    assert!(hosted_ids(&registry).await.contains(&id));
+
+    let reaped = registry
+        .reap_idle_empty_sessions_with(Duration::from_secs(60))
+        .await;
+    assert_eq!(reaped, vec![id.clone()], "the idle empty session is reaped");
+    assert!(
+        !hosted_ids(&registry).await.contains(&id),
+        "reaped session is gone from the registry"
+    );
+}
+
+#[tokio::test]
+async fn reaper_keeps_empty_session_within_ttl() {
+    let (_dir, store) = fresh_empty_store("fresh");
+    // Brand-new: created just now, so a 60s TTL must leave it alone.
+    let (registry, _tx, id) = host_bare(store, std::time::Instant::now()).await;
+
+    let reaped = registry
+        .reap_idle_empty_sessions_with(Duration::from_secs(60))
+        .await;
+    assert!(reaped.is_empty(), "a fresh empty session is not yet idle");
+    assert!(hosted_ids(&registry).await.contains(&id));
+}
+
+#[tokio::test]
+async fn reaper_keeps_empty_session_with_attached_client() {
+    let (_dir, store) = fresh_empty_store("watched");
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, tx, id) = host_bare(store, old).await;
+    // An attached client holds an event subscription open.
+    let _client_rx = tx.subscribe();
+
+    let reaped = registry
+        .reap_idle_empty_sessions_with(Duration::from_secs(60))
+        .await;
+    assert!(
+        reaped.is_empty(),
+        "an empty session someone is watching is never reaped"
+    );
+    assert!(hosted_ids(&registry).await.contains(&id));
+}
+
+#[tokio::test]
+async fn reaper_keeps_session_once_it_has_content() {
+    let (dir, store) = fresh_empty_store("content");
+    // Give the session real content: this persists it, so it is user history
+    // and must never be reaped no matter how idle.
+    store
+        .replace_messages(vec![neenee_core::Message::new(
+            neenee_core::Role::User,
+            "hello",
+        )])
+        .await
+        .unwrap();
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, _tx, id) = host_bare(store, old).await;
+
+    let reaped = registry
+        .reap_idle_empty_sessions_with(Duration::from_secs(60))
+        .await;
+    assert!(reaped.is_empty(), "a persisted session is never reaped");
+    assert!(hosted_ids(&registry).await.contains(&id));
+    let _ = std::fs::remove_dir_all(dir);
 }

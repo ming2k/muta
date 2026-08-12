@@ -821,7 +821,7 @@ impl TranscriptMessage {
             | EnvoyEvent::InputRequest(_) => *awaiting = true,
             EnvoyEvent::ToolCall { .. }
             | EnvoyEvent::ToolResult { .. }
-            | EnvoyEvent::StreamStart
+            | EnvoyEvent::StreamStart { .. }
             | EnvoyEvent::StreamDelta(_)
             | EnvoyEvent::StreamEnd(_) => *awaiting = false,
             _ => {}
@@ -834,8 +834,14 @@ impl TranscriptMessage {
             EnvoyEvent::Started { profile: name } => {
                 *profile = Some(name.clone());
             }
-            EnvoyEvent::StreamStart => {
-                children.push(TranscriptMessage::new(Role::Assistant, ""));
+            EnvoyEvent::StreamStart { round, turn } => {
+                children.push(
+                    TranscriptMessage::new(Role::Assistant, "")
+                        .with_round(*round)
+                        // `turn` is the envoy's 0-indexed model-request
+                        // position; the transcript's `turn` is 1-indexed.
+                        .with_turn((*turn as u64) + 1),
+                );
             }
             EnvoyEvent::StreamDelta(delta) => {
                 if let Some(last) = children
@@ -861,12 +867,14 @@ impl TranscriptMessage {
                 id,
                 name,
                 arguments,
+                round,
+                turn,
             } => {
-                children.push(TranscriptMessage::tool_step(
-                    id.clone(),
-                    name.clone(),
-                    arguments.clone(),
-                ));
+                children.push(
+                    TranscriptMessage::tool_step(id.clone(), name.clone(), arguments.clone())
+                        .with_round(*round)
+                        .with_turn((*turn as u64) + 1),
+                );
             }
             EnvoyEvent::ToolResult {
                 id,
@@ -1069,15 +1077,21 @@ impl TranscriptMessage {
         }
     }
 
-    /// Short label for the envoy, shown in the envoy view's navigation
-    /// bar. Prefixed with the role (`explore` / `plan` / `verify` / …) when
-    /// the `Started` event has identified it, so the bar reads e.g.
-    /// `plan · write the implementation plan` rather than a bare description.
-    pub fn envoy_label(&self) -> String {
-        let MessageKind::ToolStep {
-            arguments, profile, ..
-        } = &self.kind
-        else {
+    /// The envoy's role (`explore` / `plan` / `verify` / …), identified by
+    /// the `Started` event. `None` for non-task steps and before the role is
+    /// known. The Envoy page header renders this as the `[ROLE]` tag between
+    /// the `ENVOY` identity and the task title.
+    pub fn envoy_role(&self) -> Option<String> {
+        match &self.kind {
+            MessageKind::ToolStep { profile, .. } => profile.clone(),
+            _ => None,
+        }
+    }
+
+    /// The envoy's task description (the `description` argument), truncated
+    /// for display. Shown as the title of the Envoy page header.
+    pub fn envoy_description(&self) -> String {
+        let MessageKind::ToolStep { arguments, .. } = &self.kind else {
             return "Envoy".to_string();
         };
         let label = parse_arguments_kv(arguments)
@@ -1085,11 +1099,7 @@ impl TranscriptMessage {
             .find(|(k, _)| k == "description")
             .map(|(_, v)| v)
             .unwrap_or_else(|| "Envoy".to_string());
-        let label = truncate(&label, 48);
-        match profile {
-            Some(role) => format!("{} · {}", role, label),
-            None => label,
-        }
+        truncate(&label, 48)
     }
 
     /// One-line live "peek" at the envoy's current activity, e.g.
@@ -2746,7 +2756,8 @@ mod tests {
         assert!(task.is_envoy_task());
         assert_eq!(task.tool_step_call_id(), Some("call_42"));
         assert_eq!(task.envoy_children().map(|c| c.len()), Some(0));
-        assert_eq!(task.envoy_label(), "explore src");
+        assert_eq!(task.envoy_description(), "explore src");
+        assert_eq!(task.envoy_role(), None);
 
         // A regular tool step is not an envoy task.
         let read = TranscriptMessage::tool_step("call_1", "read_text", r#"{"path":"a"}"#);
@@ -2757,18 +2768,19 @@ mod tests {
     #[test]
     fn envoy_started_event_labels_step_by_role() {
         // A `Started` event stamps the bound profile name on the step so the
-        // nav bar / collapsed summary read by role (`plan · …`) instead of a
-        // generic "Envoy".
+        // page header can read the role out as its `[ROLE]` tag.
         let mut task = TranscriptMessage::tool_step(
             "call_7",
             "envoy",
             r#"{"description":"write the plan","prompt":"..."}"#,
         );
-        assert_eq!(task.envoy_label(), "write the plan");
+        assert_eq!(task.envoy_description(), "write the plan");
+        assert_eq!(task.envoy_role(), None);
         assert!(task.push_envoy_event(&neenee_core::EnvoyEvent::Started {
             profile: "explore".to_string()
         }));
-        assert_eq!(task.envoy_label(), "explore · write the plan");
+        assert_eq!(task.envoy_role().as_deref(), Some("explore"));
+        assert_eq!(task.envoy_description(), "write the plan");
         // The collapsed header carries only the description — the role is
         // shown by the renderer's `[PROFILE]` badge in front of it.
         let header = task.tool_step_summary().expect("summary");
@@ -2785,7 +2797,7 @@ mod tests {
         assert!(running.starts_with("starting"), "got: {running}");
 
         // Streaming assistant text => the peek row reports `thinking`.
-        task.push_envoy_event(&EnvoyEvent::StreamStart);
+        task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
         task.push_envoy_event(&EnvoyEvent::StreamDelta("partial".into()));
         let thinking = task.envoy_status_line().expect("thinking status");
         assert!(thinking.starts_with("thinking"), "got: {thinking}");
@@ -2795,6 +2807,8 @@ mod tests {
             id: "inner".into(),
             name: "grep".into(),
             arguments: r#"{"pattern":"foo"}"#.into(),
+            round: 1,
+            turn: 0,
         });
         let running = task.envoy_status_line().expect("running status");
         assert!(running.contains("Grep"), "got: {running}");
@@ -2829,6 +2843,8 @@ mod tests {
             id: "i".into(),
             name: "bash".into(),
             arguments: "{}".into(),
+            round: 1,
+            turn: 0,
         });
         // The envoy failure is now signalled by the structured `failed`
         // flag on `ToolOutput::Envoy`, not by an "Error:" text prefix.
@@ -2857,6 +2873,8 @@ mod tests {
             id: "i".into(),
             name: "bash".into(),
             arguments: r#"{"command":"rm -rf x"}"#.into(),
+            round: 1,
+            turn: 0,
         });
         // The in-flight tool normally drives the peek row…
         let peek = task.envoy_status_line().unwrap();
@@ -2886,7 +2904,7 @@ mod tests {
             output: "done".into(),
             duration_ms: 3,
         });
-        task.push_envoy_event(&EnvoyEvent::StreamStart);
+        task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
         task.push_envoy_event(&EnvoyEvent::StreamDelta("…".into()));
         let peek = task.envoy_status_line().unwrap();
         assert!(peek.starts_with("thinking"), "got: {peek}");
@@ -2900,6 +2918,8 @@ mod tests {
             id: "i".into(),
             name: "read_text".into(),
             arguments: "{}".into(),
+            round: 1,
+            turn: 0,
         });
         task.push_envoy_event(&EnvoyEvent::ToolResult {
             id: "i".into(),
@@ -3071,6 +3091,8 @@ mod tests {
             id: "inner".into(),
             name: "grep".into(),
             arguments: r#"{"pattern":"foo"}"#.into(),
+            round: 1,
+            turn: 0,
         });
         let children = task.envoy_children().expect("has children");
         assert_eq!(

@@ -56,7 +56,7 @@ neenee 作为客户端连接到一个用户级**会话 daemon**，由它持有�
 neenee                   # 接入 daemon（首次使用自动拉起）
 neenee serve             # 前台运行 daemon
 neenee serve --detach    # …或后台运行
-neenee serve --expose    # 同时通过 TCP+token 开放给局域网客户端
+neenee serve --public    # 同时监听所有接口（TCP+token），开放给局域网客户端
 neenee attach [id]       # 驱动某个 daemon 持有的会话
 neenee status            # 一次性表格：需要注意的会话
 neenee status --watch    # 实时表格，每次变化自动刷新
@@ -64,11 +64,11 @@ neenee status --json     # 原始监控帧（即中控面板的 API）
 neenee dashboard         # 直接从 shell 进入全屏仪表盘
 ```
 
-在 TUI 内按 **`/dashboard`** 打开会话仪表盘：一个全屏实时视图，左侧会话列表、右侧选中会话的详情（当前工具、活动、上下文、进度）。回车 attach 到某个会话——TUI 会先 detach 再 attach，所以你离开的会话**会在 daemon 里继续运行**。在同一界面还能 `i` 打断、`p` 发任务、`n` 新建会话。关闭 TUI 不会中断正在跑的轮次，随时 `neenee attach <id>` 接回。（`/host` 保留为隐藏别名。）
+在 TUI 内按 **`/dashboard`** 打开会话仪表盘：一个全屏实时视图，上方是 console 区（选中会话的实时状态：当前工具、活动、上下文、进度），底部会话坞里每个会话一张卡片。回车打开只读预览；按 `a` attach 到某个会话——TUI 会先 detach 再 attach，所以你离开的会话**会在 daemon 里继续运行**。在同一界面还能 `i` 打断、`p` 发任务、`n` 新建会话。关闭 TUI 不会中断正在跑的轮次，随时 `neenee attach <id>` 接回。（`/host` 保留为隐藏别名。）
 
-**`neenee dashboard`** 直接从 shell 进入同一个全屏仪表盘——无需先进入会话。它只把 daemon 上最近活跃的会话当作底层载体，在其之上升起仪表盘：Esc 退出，回车选中行则 attach 进入该会话。与 `neenee status` 一样，它不会拉起 daemon，因此需要一个已在运行且至少有一个会话的宿主。
+**`neenee dashboard`** 直接从 shell 进入同一个全屏仪表盘——无需先进入会话。它只把 daemon 上最近活跃的会话当作底层载体，在其之上升起仪表盘：Esc 退出，选中卡片按 `a` 则 attach 进入该会话。与 `neenee status` 一样，它不会拉起 daemon，因此需要一个已在运行且至少有一个会话的宿主。
 
-daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创建、发提示、打断、批准、终止，外加监控流），`--expose` 时同时走 TCP+token——这正是 Web 中控面板直接消费的东西。详见[如何用会话宿主跟踪会话](docs/how-to/track-sessions-with-a-session-host.md)与 [ADR-0096](docs/adr/0096-unified-session-daemon.md)。
+daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创建、发提示、打断、批准、终止，外加监控流），`--public` 时同时走 TCP+token——这正是 Web 中控面板直接消费的东西。详见[如何用会话宿主跟踪会话](docs/how-to/track-sessions-with-a-session-host.md)与 [ADR-0096](docs/adr/0096-unified-session-daemon.md)。
 
 ## 快捷键
 

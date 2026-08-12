@@ -24,6 +24,7 @@ expression: film
 
 
 
+
            ↑↓ navigate  Enter submit  Esc cancel
 
 === down → highlight 'b' ===
@@ -41,6 +42,7 @@ expression: film
              [ ] b
              [ ] c
              [ ] Other
+
 
 
 
@@ -70,6 +72,7 @@ expression: film
 
 
 
+
            ↑↓ navigate  Enter submit  Esc cancel
 
 === '1' → select 'a' ===
@@ -87,6 +90,7 @@ expression: film
              [x] b
              [ ] c
              [ ] Other
+
 
 
 
@@ -111,6 +115,7 @@ expression: film
              [ ] c
              [x] Other
                 cust
+
 
 
 

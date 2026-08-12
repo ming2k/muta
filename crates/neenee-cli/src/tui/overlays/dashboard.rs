@@ -294,8 +294,7 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
     let title_width = title.len();
     let context_width = 1 + context.len(); // leading space separator
     let summary_width = summary.len();
-    let gap = (header.width as usize)
-        .saturating_sub(title_width + context_width + summary_width);
+    let gap = (header.width as usize).saturating_sub(title_width + context_width + summary_width);
 
     let line = Line::from(vec![
         Span::styled(

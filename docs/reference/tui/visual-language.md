@@ -32,7 +32,7 @@ TODOS 1/8 · write the docs   Ctrl+T expand   ↔↔   R3 segment: wide whitespa
 |------|------|--------------|--------|--------|
 | **R0** | Atomic | Parts of one value | No symbol — 0–1 space | `24.1 KB`, `3 tool calls`, `round 1`, `F3 block` |
 | **R1** | Modify | Trailing token is a state / measure / attribute of the leading one | ` · ` (space, middle dot, space) | `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`, `[Image #1 · 1.5 KB]`, `· blocked` |
-| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `F3 block  F2 expand` |
+| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `F4 insert  F3 block  F2 expand` |
 | **R3** | Segment | Cross-group boundary (content vs keycap legend, panel identity vs preview) | Plain whitespace, wide | `BAR_LEGEND_GAP_MIN` (6 cols) |
 | **↑** | Hierarchy | Container → member, tree parent → child | ` › ` inline breadcrumb; `↳` + indent for tree nesting | `round 3 › turn 2`, `Connections › keybindings` |
 
@@ -66,7 +66,7 @@ equal gaps are what make the group read as a list.
 
 - `turn 2  sonnet` (turn header: anchor  model)
 - `/skills  /repeat  /help` (empty-state suggestions)
-- `F3 block  F2 expand` (queue-bar legend: two independent affordances)
+- `F4 insert  F3 block  F2 expand` (queue-bar legend: three independent affordances)
 - `type filter  ↑↓ navigate  Enter activate` (modal footer hints)
 - `v1.2.3  local  #rust #tui` (skill metadata: version, source, tags)
 
@@ -78,7 +78,7 @@ keycap legend, so a truncated preview's `…` never butts against a key.
 
 ```
 TODOS 1/8 · write the docs   Ctrl+T expand
-QUEUE 2                     F3 block  F2 expand
+QUEUE 2  fix the flaky test   F4 insert  F3 block  F2 expand
 ```
 
 ### Hierarchy — never `·`
@@ -136,14 +136,15 @@ Conforming surfaces (R1 modifiers, kept):
 - Tool-step summaries — `Thinking · 120 chars · 0.5s`,
   `↳ Completed · 3 calls · 1.2s`.
 - Todo bar identity — `TODOS 1/8 · write the docs`.
-- Activity bar interrupt hint — `(23s · Esc Esc to interrupt)`.
+- Activity bar interrupt hint — `(23s · Esc Esc interrupt)`.
 - Attachment chips — `[Image #1 · 24.1 KB]`.
 - Page header — `Side conversation · main needs approval`.
-- History/queue modal titles and state tags — `Queue · 3 · blocked`.
+- History modal title and state tags. The Queue modal title stays plain
+  (`Queue`) — count and blocked state already live in the queue bar.
 
 Migrated to whitespace / breadcrumb:
 
-- Queue-bar legend: `F3 block  F2 expand` (R2).
+- Queue-bar legend: `F4 insert  F3 block  F2 expand` (R2).
 - Modal footer hints: `type filter  ↑↓ navigate  Enter activate` (R2).
 - Empty-state suggestions: `/skills  /repeat  /help` (R2).
 - Help copy: `copy  clear input  quit (×2)` (R2).

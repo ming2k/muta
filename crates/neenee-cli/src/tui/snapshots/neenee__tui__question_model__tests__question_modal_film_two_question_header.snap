@@ -15,6 +15,7 @@ expression: film
              x
              Other
 
+
           ↑↓ navigate  Enter next  Esc cancel
 
 === Enter → Question 2/2 ===
@@ -27,7 +28,8 @@ expression: film
           second?
 
              y
-             z                                         ▼
+             z
+             Other
 
           ↑↓ navigate  Enter submit  Esc cancel
 
@@ -42,5 +44,6 @@ expression: film
 
              x
              Other
+
 
           ↑↓ navigate  Enter next  Esc cancel

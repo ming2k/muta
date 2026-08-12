@@ -17,7 +17,7 @@ and for day-to-day use see
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
 │      ├─ Unix socket  (default; file permissions are the auth boundary)
-│      └─ TCP + token  (--expose; for LAN clients and the web panel)
+│      └─ TCP + token  (--public; for LAN clients and the web panel)
 │
 └─ clients ───────────────────────── all speak the control plane
      TUI (/host, attach)   neenee status   a web control panel   scripts
@@ -69,9 +69,11 @@ Two transports carry it:
 - **Unix domain socket** (default, `$XDG_RUNTIME_DIR/neenee/daemon.sock`) —
   the local channel for the CLI and TUI. `0600` in a `0700` runtime dir;
   the filesystem *is* the authentication, so no token.
-- **TCP + bearer token** (`--expose`) — for LAN clients and the web panel.
-  Exposing is always an explicit opt-in that carries a token (ADR-0054's
-  model); TLS is fronted by a reverse proxy.
+- **TCP + bearer token** (`neenee serve --public`; `--expose` on the
+  `neenee-server` binary) — for LAN clients and the web panel. Exposing is
+  always an explicit opt-in that carries a token (ADR-0054's model); TLS is
+  fronted by a reverse proxy. See
+  [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 
 A web control panel is therefore a static page that opens the monitor stream
 and calls control verbs — no web-specific server exists or is needed.
@@ -82,7 +84,7 @@ and calls control verbs — no web-specific server exists or is needed.
    (`daemon.json`) and spawns `neenee-server` detached; or you run
    `neenee serve [--detach]` yourself.
 2. The daemon binds the UDS (always) and a TCP port (loopback by default,
-   exposed with `--expose`), writes the global discovery record, and waits.
+   exposed with `--public`), writes the global discovery record, and waits.
 3. Sessions are created on demand (a client's attach, or a control
    `create_session`) and assembled lazily from disk on first attach.
 4. Clients observe via `status` / `/host`, drive via attach, manage via the

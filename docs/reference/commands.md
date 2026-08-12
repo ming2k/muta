@@ -15,7 +15,7 @@ Project and user-defined commands are covered under
 | `/connections` | Manage LLM provider connections |
 | `/mcp` | Manage MCP servers (enable/disable, reconnect) |
 | `/compact` | Compact older complete rounds now |
-| `/clear` | Clear the conversation history |
+| `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
 | `/principal <code\|architect\|reviewer\|security>` | Switch the principal role — changes persona and capability scope |
@@ -23,7 +23,7 @@ Project and user-defined commands are covered under
 | `/search <query>` | Semantic search over the project's session history |
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
 | `/sessions` | Browse past sessions |
-| `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session, with attach / interrupt / prompt / create (ADR-0096). `/host` is a hidden alias |
+| `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
 | `/btw` | Open a side conversation that runs alongside the main session |
 | `/resume [id]` | Resume the most recent or selected session |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
@@ -46,6 +46,23 @@ Several interactive management commands, including `/models`, `/connections`,
 `/permissions`, `/tools`, `/mcp`, `/skills`, and `/config`, are handled in the
 TUI. Commands that mutate agent or session state are dispatched to the
 backend.
+
+### Trigger-word suggestions ("did you mean …")
+
+Retired commands and common synonyms are not executable — there is no
+`/clear`, `/reset`, or `/continue`. Typing one pins a suggestion row on top of
+the completion popup pointing at the supported command, and accepting the row
+rewrites the input to it:
+
+| You type | Suggested | Why |
+|----------|-----------|-----|
+| `/clear` | `/new` | Clearing the transcript in place was removed; a fresh session keeps the old one on disk |
+| `/reset` | `/new` | Same fresh-session semantics |
+| `/continue` | `/resume` | Picks a session up where it left off |
+
+The mapping is presentation-only and lives in one table
+(`TRIGGER_WORD_SUGGESTIONS` in `neenee-transport/src/startup.rs`); adding a
+row extends the steering without growing the executable command surface.
 
 ### `/serve`
 

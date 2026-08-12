@@ -22,20 +22,26 @@ use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP}
 /// `FooterHint`, so a footer's key + label both come from one place.
 pub(crate) use super::keymap::keyvocab;
 
-/// Global viewport margin. Only vertical breathing room (1 cell top and
-/// bottom) is reserved; horizontally every component spans the full terminal
-/// width.
+/// Global viewport margins. One row of breathing room is reserved at the
+/// top; horizontally every component spans the full terminal width. The
+/// bottom margin is 0: the hint bar pins flush against the terminal's bottom
+/// edge — an empty `app_bg` row below it only wasted a transcript row.
 pub(crate) const VIEWPORT_H_MARGIN: u16 = 0;
-pub(crate) const VIEWPORT_V_MARGIN: u16 = 1;
+pub(crate) const VIEWPORT_TOP_MARGIN: u16 = 1;
+pub(crate) const VIEWPORT_BOTTOM_MARGIN: u16 = 0;
 
-/// The usable area after reserving the global viewport margins (1 cell top
-/// and bottom). The full `frame.size()` is only used to paint the app
+/// The usable area after reserving the global viewport margins (1 cell top,
+/// 0 bottom). The full `frame.area()` is only used to paint the app
 /// background and the modal backdrop.
 pub(crate) fn viewport_rect(frame: &Frame) -> Rect {
-    frame.area().inner(neenee_tui_engine::Margin {
-        horizontal: VIEWPORT_H_MARGIN,
-        vertical: VIEWPORT_V_MARGIN,
-    })
+    let area = frame.area();
+    Rect::new(
+        area.x + VIEWPORT_H_MARGIN,
+        area.y + VIEWPORT_TOP_MARGIN,
+        area.width.saturating_sub(2 * VIEWPORT_H_MARGIN),
+        area.height
+            .saturating_sub(VIEWPORT_TOP_MARGIN + VIEWPORT_BOTTOM_MARGIN),
+    )
 }
 
 pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

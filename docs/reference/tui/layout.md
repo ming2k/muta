@@ -10,20 +10,21 @@ table.
 
 Every frame is first filled with `theme.surface()` (`app_bg`) so the TUI
 owns every cell rather than leaving gaps at the terminal emulator's default
-color. Components then render inside the **viewport**: `frame.size()`
-inset by `VIEWPORT_V_MARGIN = 1` row top and bottom (`VIEWPORT_H_MARGIN = 0`,
-so components span the full terminal width). The two margin rows are the
-only cells kept as pure `app_bg` on every frame.
+color. Components then render inside the **viewport**: `frame.area()`
+inset by `VIEWPORT_TOP_MARGIN = 1` row at the top only
+(`VIEWPORT_BOTTOM_MARGIN = 0`, `VIEWPORT_H_MARGIN = 0`), so components span
+the full terminal width and the hint bar pins flush against the terminal's
+bottom edge. The top margin row is the only cell row kept as pure `app_bg`
+on every frame.
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │app_bg  (top viewport margin, 1 row — outside every chunk)    │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│                   viewport (everything below)                │
+│          viewport (everything below, flush to the            │
+│               terminal's bottom edge)                        │
 │                                                              │
-├──────────────────────────────────────────────────────────────┤
-│app_bg  (bottom viewport margin, 1 row — outside every chunk)│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,9 +55,8 @@ The default. A two-chunk vertical split inside `draw_transcript`:
 │  Input box (grows with text, capped)               │          │
 │  Hint bar (1 row, persistent)                      │          │
 │  Status bar (1 row, persistent)                   ┘          │
-├──────────────────────────────────────────────────────────────┤
-│app_bg  (bottom viewport margin, 1 row)                       │
 └──────────────────────────────────────────────────────────────┘
+  (bottom edge: the hint bar pins flush — no bottom viewport margin)
 ```
 
 The top of every view carries a **head row** — a single-row identity strip.
@@ -75,7 +75,7 @@ box and hint bar are persistent (when chrome is visible):
 |-----|--------|--------------|
 | Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
-| Queue bar | `QUEUE_BAR_ROWS = 2` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · key legend (`F3` block/resume, `F2` expand, row 1) and a one-line preview of the next item to pop (row 2). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
+| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`F4` insert into the running round, `F3` block/resume, `F2` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/`@instance`/reasoning/context cluster (right). |
 
@@ -83,8 +83,8 @@ box and hint bar are persistent (when chrome is visible):
 ┌─────────────────────────────────────────────────────────────┐
 │ SESSION b3c4 ~/projects/xx                       autopilot │  ← head row
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
-│ QUEUE 1    {next item preview…}         F3 block  F2 expand │  ← queue bar (2 rows)
-│ ● making edits (23s · Esc Esc to interrupt)                 │  ← activity bar
+│ QUEUE 1  {next item preview…}  F4 insert  F3 block  F2 expand │  ← queue bar
+│ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
 │ Enter send         Kimi K3 max @kimi-code  89.2k (8%)       │  ← hint bar
 └─────────────────────────────────────────────────────────────┘
@@ -134,9 +134,8 @@ not the root conversation.
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │  Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← envoy bar
-├──────────────────────────────────────────────────────────────┤
-│app_bg  (bottom viewport margin, 1 row)                       │
 └──────────────────────────────────────────────────────────────┘
+  (bottom edge: the envoy bar pins flush — no bottom viewport margin)
 ```
 
 | Region | Constraint | Height |
@@ -226,13 +225,14 @@ with the transcript content above.
 
 | Measurement | Value | Where |
 |------------|-------|-------|
-| Top/bottom viewport margin | 1 row each (`app_bg`) | `VIEWPORT_V_MARGIN` |
+| Top viewport margin | 1 row (`app_bg`) | `VIEWPORT_TOP_MARGIN` |
+| Bottom viewport margin | 0 rows — chrome pins flush to the terminal's bottom edge | `VIEWPORT_BOTTOM_MARGIN` |
 | Left/right viewport margin | 0 cols | `VIEWPORT_H_MARGIN` |
 | Left/right gutter (all content) | 2 cols `app_bg` | `TRANSCRIPT_H_INSET`, applied via `transcript_band_rect` (steps) / explicit spans (user panel, code block) / wrap-width slack (markdown) |
 | Footer side inset | 2 cols (matches `TRANSCRIPT_H_INSET`) | `FOOTER_H_INSET` |
 | Activity bar height | 1 row | `ACTIVITY_BAR_ROWS` |
 | Todo bar height | 1 row | `TODO_BAR_ROWS` |
-| Queue bar height | 2 rows | `QUEUE_BAR_ROWS` |
+| Queue bar height | 1 row | `QUEUE_BAR_ROWS` |
 | Hint bar height | 1 row | `HINT_BAR_ROWS` |
 | Status bar height | 1 row | `STATUS_BAR_ROWS` |
 | Envoy bar height | 1 row | `ENVOY_BAR_ROWS` |

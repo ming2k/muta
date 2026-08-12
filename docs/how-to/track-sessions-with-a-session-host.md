@@ -25,12 +25,13 @@ CLI, web) talks to it over one control-plane protocol (ADR-0096).
 ```bash
 neenee serve              # foreground; prints the control-plane endpoints
 neenee serve --detach     # background (auto-started on first `neenee` anyway)
-neenee serve --expose     # also listen on TCP with a mandatory bearer token
+neenee serve --public     # also listen on all interfaces with a mandatory bearer token
 ```
 
 You usually never run this yourself — any `neenee` or `neenee attach` spawns
 the daemon when none is running. Run it explicitly to keep it under
-systemd/tmux, or to expose the control plane to other machines.
+systemd/tmux, or to expose the control plane to other machines — see
+[How to expose the daemon to LAN clients](expose-the-daemon-to-lan-clients.md).
 
 ## 2. Work as usual — everything is a client
 
@@ -58,31 +59,40 @@ neenee status --json       # raw monitor frames (scripts / a web panel)
 ```
 
 Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
-view over every daemon session — status, round/turn, output tokens, current
-tool — with a detail pane for the selected row. Enter attaches to that session
-**without killing the one you leave**: the TUI detaches and re-attaches, so
-both sessions stay alive in the daemon. The same surface interrupts (`i`),
-prompts (`p`), and creates (`n`) sessions.
+view over every daemon session. The surface has two zones (ADR-0097 §3): a
+**console** up top — the AI-interaction region carrying the selected session's
+live monitor read-out (status, round/turn, output tokens, current tool,
+blocking reason) — and a **sessions dock** along the bottom, one compact card
+per session (sequence number, workspace name, uptime, status). The keyboard
+opens on the console; **Tab** drops to the dock. On a dock selection **Enter
+opens a read-only preview** and **`a` attaches** to that session **without
+killing the one you leave**: the TUI detaches and re-attaches, so both
+sessions stay alive in the daemon. The same surface interrupts (`i`), prompts
+(`p`), and creates (`n`) sessions via the control plane.
 
 Or open it straight from the shell with **`neenee dashboard`** — no need to
 enter a session first. It attaches to the daemon's most-recently-active
 session only as the underlying carrier and raises the dashboard over it:
-**Esc quits**, **Enter** on a row attaches into that session. Like
+**Esc quits**, **`a`** on a card attaches into that session. Like
 `neenee status`, it never spawns a daemon, so it needs a running host with at
 least one session.
 
 ```text
-neenee dashboard — all projects — 2 session(s) needing attention
-  SESSION    STATUS         ROUND      OUT ELAPSED   DETAIL
-  8e439942   running        3 › 1      512 1m23s     tool bash · waiting for model · ctx 48.2k
-  c71af03d   needs-approval 2          128 45s       permission: write_file
+ DASHBOARD all projects                    2 session(s) · 1 running · 1 need attention
+┌ Console ──────────────────────────────────────────────────────────┐
+│ #2 fix the flaky parser test — running · round 3 › turn 1         │
+│ 512 out · 1m23s · tool bash · waiting for model · ctx 48.2k       │
+└───────────────────────────────────────────────────────────────────┘
+┌ Sessions ─────────────────────────────────────────────────────────┐
+│ #1 api-docs   45s   needs-approval   #2 parser-fix 1m23s running  │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
-- **STATUS** is derived per session: `running`, `needs-approval`,
-  `needs-input`, `interrupted`, `failed`, or `idle` (hidden by default).
-  Blocked rows name the blocker in DETAIL.
-- **ROUND `3 › 1`** = round 3, model-request 1. **OUT** = output tokens this
-  round; **ELAPSED** freezes when the round ends.
+- Card **status** is derived per session: `running`, `needs-approval`,
+  `needs-input`, `interrupted`, `failed`, or `idle`. Blocked sessions name
+  the blocker (e.g. `permission: write_file`) in the console read-out.
+- **ROUND `3 › 1`** = round 3, model-request 1. Output tokens and elapsed
+  time are this-round figures; elapsed freezes when the round ends.
 
 ## 4. Act from the control plane
 

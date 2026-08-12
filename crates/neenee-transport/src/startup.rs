@@ -61,7 +61,7 @@ define_builtin_commands! {
     Tools       = "/tools"        : "Manage session tools (enable/disable)",
     Mcp         = "/mcp"          : "Manage MCP servers (enable/disable, reconnect)",
     Compact     = "/compact"      : "Compact older complete rounds now",
-    Clear       = "/clear"        : "Clear the conversation history",
+    New         = "/new"          : "Start a new session, keeping the current one in history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
     Config      = "/config"       : "Open user configuration",
     Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on|off; no argument toggles)",
@@ -101,6 +101,56 @@ impl BuiltinCmd {
     }
 }
 
+/// Trigger-word → command suggestions ("did you mean …"), the
+/// **presentation-only** counterpart of [`BuiltinCmd::from_alias`].
+///
+/// Each row is `(trigger, target_slash, reason)`:
+///
+/// - `trigger` — a bare word the user might type after `/` (no slash, no
+///   arguments). It is **never parsed as a command**: unlike a `from_alias`
+///   alias it does not dispatch, does not accept arguments, and is invisible
+///   to every consumer of [`BuiltinCmd::ALL`] — it only produces a completion
+///   popup row pointing at the real command.
+/// - `target_slash` — the canonical built-in (leading slash) the suggestion
+///   accepts to; it must resolve through [`BuiltinCmd::from_slash`].
+/// - `reason` — the one-line hint shown next to the target in the popup.
+///
+/// This is the place to catch retired commands, common synonyms, and foreign
+/// idioms and steer them onto the supported vocabulary without growing the
+/// executable surface. Adding a row here is all it takes: completion reads
+/// the table through [`suggest_for_trigger`].
+pub const TRIGGER_WORD_SUGGESTIONS: &[(&str, &str, &str)] = &[
+    // `/clear` used to wipe the live transcript in place — a destructive,
+    // data-losing gesture. It is retired in favour of `/new`, which opens a
+    // fresh session and keeps the old one on disk. Steer the muscle memory.
+    (
+        "clear",
+        "/new",
+        "Clearing in place is gone: /new starts a fresh session and keeps this one",
+    ),
+    (
+        "reset",
+        "/new",
+        "/new starts a fresh session, keeping the current one in history",
+    ),
+    (
+        "continue",
+        "/resume",
+        "/resume picks the session up where it left off",
+    ),
+];
+
+/// Resolve a bare word typed after `/` into a "did you mean" suggestion from
+/// [`TRIGGER_WORD_SUGGESTIONS`]. Returns `(target_slash, reason)` for an exact
+/// match, `None` otherwise. Exact-match only: a partial trigger (`/cle`) is
+/// still prose-in-progress, and a non-trigger word is an unknown command.
+pub fn suggest_for_trigger(word: &str) -> Option<(&'static str, &'static str)> {
+    TRIGGER_WORD_SUGGESTIONS
+        .iter()
+        .find(|(trigger, _, _)| *trigger == word)
+        .map(|(_, target, reason)| (*target, *reason))
+}
+
 /// Split `/<name> <arguments>` into `(name_without_slash, arguments_trimmed)`.
 /// A bare `/name` with no arguments yields an empty arguments string.
 pub fn split_custom_command(input: &str) -> (&str, &str) {
@@ -121,7 +171,7 @@ pub enum StartupMode {
     Picker,
     Doctor,
     /// Attach the TUI to an already-running session server for this project
-    /// (`neenee --attach [id]`). The id is the session to attach to; `None`
+    /// (`neenee attach [id]`). The id is the session to attach to; `None`
     /// attaches to whatever the server hosts. Purely client-side: the caller
     /// must intercept this variant BEFORE invoking `bootstrap::assemble` — no
     /// local harness is assembled in attach mode.
@@ -397,6 +447,58 @@ mod tests {
                 .iter()
                 .any(|(name, _)| *name == "/dashboard")
         );
+    }
+
+    #[test]
+    fn trigger_words_never_execute() {
+        // The retired `/clear` and friends are steering words, not commands:
+        // none of them parse through dispatch, land in completion's canonical
+        // list, or collide with a real built-in.
+        for (trigger, _, _) in crate::startup::TRIGGER_WORD_SUGGESTIONS {
+            let slashed = format!("/{trigger}");
+            assert!(
+                BuiltinCmd::from_slash(&slashed).is_none(),
+                "trigger word {slashed} must not resolve to a command"
+            );
+            assert!(
+                !BuiltinCmd::ALL.iter().any(|(name, _)| *name == slashed),
+                "trigger word {slashed} must not shadow a built-in"
+            );
+        }
+        // …and `/clear` in particular is gone from the executable surface.
+        assert!(BuiltinCmd::from_slash("/clear").is_none());
+    }
+
+    #[test]
+    fn trigger_word_suggestions_point_at_real_commands() {
+        // Every suggestion target must resolve to a listed built-in and carry
+        // an explanation, so the popup never steers to a dead or cryptic row.
+        for (trigger, target, reason) in crate::startup::TRIGGER_WORD_SUGGESTIONS {
+            assert!(
+                BuiltinCmd::from_slash(target).is_some(),
+                "suggestion target {target} for trigger /{trigger} is not a command"
+            );
+            assert!(
+                BuiltinCmd::ALL.iter().any(|(name, _)| name == target),
+                "suggestion target {target} for trigger /{trigger} is not a listed built-in"
+            );
+            assert!(
+                !reason.is_empty(),
+                "trigger /{trigger} must explain the steer"
+            );
+        }
+        // The lookup itself: exact, bare-word only.
+        assert_eq!(
+            crate::startup::suggest_for_trigger("clear").map(|(t, _)| t),
+            Some("/new")
+        );
+        assert_eq!(
+            crate::startup::suggest_for_trigger("continue").map(|(t, _)| t),
+            Some("/resume")
+        );
+        assert!(crate::startup::suggest_for_trigger("cle").is_none());
+        assert!(crate::startup::suggest_for_trigger("new").is_none());
+        assert!(crate::startup::suggest_for_trigger("").is_none());
     }
 
     #[test]

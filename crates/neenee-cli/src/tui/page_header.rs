@@ -1,9 +1,13 @@
-//! Contextual first-row header for every transcript page.
+//! Contextual first-row header for every transcript page — plus the Envoy
+//! page's permanent key-legend footer.
 //!
 //! Every view — Main (session), `/btw`, Envoy, and future focused pages —
-//! shares one layout rule: identity and page-specific context on the left,
-//! mode / navigation actions on the right. Keeping this outside disclosure
-//! rendering also leaves one clear extension point for future focused pages.
+//! shares one layout rule for the head row: identity and page-specific
+//! context on the left, mode / index metadata on the right. Navigation
+//! shortcuts do **not** live on the head row; the Envoy page carries them on
+//! its permanent three-row footer ([`draw_envoy_footer`]) instead. Keeping
+//! this outside disclosure rendering also leaves one clear extension point
+//! for future focused pages.
 
 use neenee_tui_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -38,6 +42,9 @@ struct HeaderContent {
     /// The identity tail that sits right after the title (session-id tail,
     /// dimmed). Empty when the variant has none.
     tag: String,
+    /// Optional `[ROLE]`-style tag rendered in the brand tone right after the
+    /// identity tag (the Envoy page's role). Empty when absent.
+    badge: String,
     primary: String,
     meta: String,
     action: String,
@@ -61,6 +68,7 @@ pub(crate) fn draw_page_header(
         PageHeader::Session(head) => HeaderContent {
             title: " SESSION ",
             tag: id_tail(head.session_id),
+            badge: String::new(),
             primary: head.workspace.to_string(),
             meta: String::new(),
             action: if head.autopilot {
@@ -73,19 +81,30 @@ pub(crate) fn draw_page_header(
         PageHeader::Btw(status) => HeaderContent {
             title: " /btw ",
             tag: String::new(),
+            badge: String::new(),
             primary: "Side conversation".to_string(),
             meta: parent_status_label(*status).to_string(),
             action: "Esc back ".to_string(),
         },
+        // The Envoy head shares the Session head's shape: uppercase identity
+        // + `[ROLE]` tag + task title on the left, and pure index metadata on
+        // the right — the sibling count `(i/n)`, shown only when there is
+        // more than one sibling. Navigation shortcuts moved to the Envoy
+        // page's permanent footer (see `draw_envoy_footer`).
         PageHeader::Envoy(bar) => HeaderContent {
-            title: " Envoy ",
+            title: " ENVOY ",
             tag: String::new(),
+            badge: bar
+                .role
+                .as_ref()
+                .map(|role| format!("[{}]", role.to_uppercase()))
+                .unwrap_or_default(),
             primary: bar.label.clone(),
-            meta: format!("{} of {}", bar.index, bar.total),
-            action: if bar.total > 1 && full_width >= 64 {
-                "Esc back   [ prev   ] next ".to_string()
+            meta: String::new(),
+            action: if bar.total > 1 {
+                format!("({}/{}) ", bar.index, bar.total)
             } else {
-                "Esc back ".to_string()
+                String::new()
             },
         },
     };
@@ -94,11 +113,12 @@ pub(crate) fn draw_page_header(
     let fill = Style::default().bg(bg);
     let title_style = fill.fg(theme.fg()).add_modifier(Modifier::BOLD);
     let tag_style = fill.fg(theme.dim());
+    let badge_style = fill.fg(theme.brand()).add_modifier(Modifier::BOLD);
     let primary_style = fill.fg(theme.brand());
     let meta_style = fill.fg(theme.muted());
     // The session mode flag (`autopilot`) reads as a persistent safety state,
-    // so it takes the warning tone; every other variant's action is a quiet
-    // navigation affordance.
+    // so it takes the warning tone; every other variant's right side is quiet
+    // metadata (the `/btw` return hint, the Envoy sibling count).
     let action_style = if matches!(header, PageHeader::Session(_)) {
         fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
     } else {
@@ -108,21 +128,31 @@ pub(crate) fn draw_page_header(
     let title_width = content.title.width();
     // The tag renders as `<tag> ` (tag + one trailing space) right after the
     // title — the title already ends with a space, so the tag needs no
-    // leading separator.
+    // leading separator. The badge (`[ROLE]`) follows the same rule.
     let tag_width = if content.tag.is_empty() {
         0
     } else {
         content.tag.width() + 1
     };
+    let badge_width = if content.badge.is_empty() {
+        0
+    } else {
+        content.badge.width() + 1
+    };
     let action_width = content.action.width();
-    let left_budget = full_width.saturating_sub(title_width + tag_width + action_width + 1);
+    let left_budget =
+        full_width.saturating_sub(title_width + tag_width + badge_width + action_width + 1);
     let left = fit_context(&content.primary, &content.meta, left_budget);
     let left_width: usize = left.iter().map(|(text, _)| text.width()).sum();
-    let gap = full_width.saturating_sub(title_width + tag_width + left_width + action_width);
+    let gap = full_width
+        .saturating_sub(title_width + tag_width + badge_width + left_width + action_width);
 
     let mut spans = vec![Span::styled(content.title, title_style)];
     if !content.tag.is_empty() {
         spans.push(Span::styled(format!("{} ", content.tag), tag_style));
+    }
+    if !content.badge.is_empty() {
+        spans.push(Span::styled(format!("{} ", content.badge), badge_style));
     }
     for (text, tone) in left {
         let style = match tone {
@@ -138,6 +168,95 @@ pub(crate) fn draw_page_header(
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
+
+/// Draw the Envoy page's permanent three-row footer. The band fills the
+/// page-body background (`theme.body()`, the same tone the head row uses)
+/// across its full width; the middle row is the actual content area carrying
+/// the page's key shortcuts, and the top/bottom rows are blank padding, so
+/// the legend reads as one continuous surface pinned to the terminal's
+/// bottom edge.
+///
+/// The legend always leads with the Envoy-specific navigation — `Esc back`,
+/// and `[ prev` / `] next` when the focused envoy has siblings — followed by
+/// the global `F1 help` affordance when the row is wide enough to keep it
+/// legible. Content is horizontally centered with a minimum left margin.
+pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarInfo, theme: &Theme) {
+    if rect.height == 0 || (rect.width as usize) < STEP_MIN_WIDTH {
+        return;
+    }
+
+    let bg = theme.body();
+    let fill = Style::default().bg(bg);
+    let key_style = crate::tui::components::keycap::keycap_style(theme).bg(bg);
+    let hint_style = fill.fg(theme.muted());
+
+    // Build the legend as keycap + label pairs joined by a wide gap, leading
+    // with the page's own navigation (back, siblings) and ending with the
+    // global help affordance. On narrow rows the help pair drops first; the
+    // sibling pair drops next (it is already absent when `total < 2`); the
+    // back action never drops — it is the page's single exit.
+    let has_siblings = info.total > 1;
+    let mut pairs: Vec<(&'static str, &'static str)> = vec![("Esc", "back")];
+    if has_siblings {
+        pairs.push(("[", "prev"));
+        pairs.push(("]", "next"));
+    }
+    pairs.push(("F1", "help"));
+
+    let width = rect.width as usize;
+    let content: Vec<(&'static str, &'static str)> = {
+        let mut chosen = pairs.clone();
+        loop {
+            let pairs_width: usize = chosen
+                .iter()
+                .map(|(key, label)| key.width() + 1 + label.width())
+                .sum();
+            let needed = pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
+            if needed <= width.saturating_sub(2 * ENVOY_FOOTER_MARGIN_MIN) || chosen.len() == 1 {
+                break;
+            }
+            // Drop the last pair (the least Envoy-specific one) and retry.
+            chosen.pop();
+        }
+        chosen
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (idx, (key, label)) in content.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
+        }
+        spans.push(Span::styled(key.to_string(), key_style));
+        spans.push(Span::styled(format!(" {label}"), hint_style));
+    }
+
+    let used: usize = spans.iter().map(|span| span.content.width()).sum();
+    let margin = width.saturating_sub(used) / 2;
+    let mut row = vec![Span::styled(" ".repeat(margin), fill)];
+    row.extend(spans);
+    row.push(Span::styled(
+        " ".repeat(width.saturating_sub(margin + used)),
+        fill,
+    ));
+
+    // The middle row carries the legend; every other row of the band is blank
+    // padding so the footer reads as one solid surface.
+    let mid = rect.y + rect.height / 2;
+    let blank = Line::from(Span::styled(" ".repeat(width), fill));
+    for y in rect.y..rect.y + rect.height {
+        let line = if y == mid {
+            Line::from(row.clone())
+        } else {
+            blank.clone()
+        };
+        frame.render_widget(Paragraph::new(line), Rect::new(rect.x, y, rect.width, 1));
+    }
+}
+
+/// Gap between adjacent keycap+label pairs in the Envoy footer legend.
+const ENVOY_FOOTER_PAIR_GAP: usize = 4;
+/// Minimum left/right margin the legend keeps even on narrow rows.
+const ENVOY_FOOTER_MARGIN_MIN: usize = 2;
 
 /// The last four characters of a persistent session id — the short,
 /// glanceable tag that disambiguates sessions without exposing the full id.
@@ -263,29 +382,129 @@ mod tests {
     }
 
     #[test]
-    fn envoy_header_keeps_context_and_sibling_navigation_on_wide_rows() {
+    fn envoy_header_shows_identity_role_title_and_sibling_index() {
         let info = EnvoyBarInfo {
+            role: Some("explore".to_string()),
             label: "inspect the renderer".to_string(),
-            index: 2,
-            total: 3,
+            index: 1,
+            total: 2,
         };
         let row = rendered_row(80, PageHeader::Envoy(&info));
-        assert!(row.starts_with(" Envoy inspect the renderer · 2 of 3"));
-        assert!(row.ends_with("Esc back   [ prev   ] next "));
+        assert_eq!(
+            row,
+            " ENVOY [EXPLORE] inspect the renderer                                     (1/2) "
+        );
     }
 
     #[test]
-    fn narrow_header_preserves_identity_metadata_and_back_action() {
+    fn envoy_header_omits_role_tag_until_known_and_index_when_single() {
         let info = EnvoyBarInfo {
+            role: None,
+            label: "a task without a role yet".to_string(),
+            index: 1,
+            total: 1,
+        };
+        let row = rendered_row(48, PageHeader::Envoy(&info));
+        assert!(row.starts_with(" ENVOY a task without a role yet"));
+        assert!(!row.contains('['));
+        assert!(!row.contains("(1/1)"));
+        assert_eq!(row.width(), 48);
+    }
+
+    #[test]
+    fn narrow_envoy_header_preserves_identity_and_sibling_index() {
+        let info = EnvoyBarInfo {
+            role: Some("plan".to_string()),
             label: "a very long envoy task description that cannot fit".to_string(),
             index: 12,
             total: 24,
         };
         let row = rendered_row(36, PageHeader::Envoy(&info));
-        assert!(row.starts_with(" Envoy "));
-        assert!(row.contains("12 of 24"));
-        assert!(row.ends_with("Esc back "));
+        assert!(row.starts_with(" ENVOY [PLAN] "));
+        assert!(row.contains("(12/24)"));
         assert_eq!(row.width(), 36);
+    }
+
+    #[test]
+    fn envoy_footer_centers_legend_on_a_solid_three_row_band() {
+        let theme = Theme::default();
+        let info = EnvoyBarInfo {
+            role: Some("explore".to_string()),
+            label: "inspect the renderer".to_string(),
+            index: 1,
+            total: 2,
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(40, 3);
+        terminal.draw(|frame| {
+            draw_envoy_footer(frame, frame.area(), &info, &theme);
+        });
+        let buffer = terminal.buffer();
+        let width = buffer.area().width as usize;
+        let row_text = |row: usize| -> String {
+            buffer.content[row * width..(row + 1) * width]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
+        };
+        // The legend lives on the middle row only; the padding rows are blank.
+        assert_eq!(row_text(0), " ".repeat(40));
+        let mid = row_text(1);
+        // Width 40 fits back + siblings but not `F1 help` (dropped first).
+        assert!(mid.trim() == "Esc back    [ prev    ] next", "{mid:?}");
+        let lead = mid.len() - mid.trim_start().len();
+        let trail = mid.len() - mid.trim_end().len();
+        assert!(
+            lead >= 2 && (lead as isize - trail as isize).abs() <= 1,
+            "centered with a minimum margin: {mid:?}"
+        );
+        assert_eq!(row_text(2), " ".repeat(40));
+        // The whole band — padding rows included — paints the page-body
+        // background so the footer reads as one solid surface.
+        for cell in &buffer.content {
+            assert_eq!(cell.bg, theme.body());
+        }
+    }
+
+    #[test]
+    fn envoy_footer_drops_affordances_as_the_row_narrows() {
+        let theme = Theme::default();
+        let footer_text = |width: u16, total: usize| -> String {
+            let info = EnvoyBarInfo {
+                role: None,
+                label: String::new(),
+                index: 1,
+                total,
+            };
+            let mut terminal = neenee_tui_engine::TestTerminal::new(width, 3);
+            terminal.draw(|frame| {
+                draw_envoy_footer(frame, frame.area(), &info, &theme);
+            });
+            let width = terminal.buffer().area().width as usize;
+            terminal.buffer().content[width..2 * width]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect()
+        };
+        // No siblings: the prev/next pair never renders.
+        let single = footer_text(40, 1);
+        assert!(
+            single.contains("Esc back") && single.contains("F1 help"),
+            "{single:?}"
+        );
+        assert!(
+            !single.contains("prev") && !single.contains("next"),
+            "{single:?}"
+        );
+        // Narrow: help drops first, then the sibling pair; back never drops.
+        let narrow = footer_text(28, 2);
+        assert!(
+            narrow.contains("Esc back") && narrow.contains("[ prev"),
+            "{narrow:?}"
+        );
+        assert!(!narrow.contains("F1"), "{narrow:?}");
+        let tiny = footer_text(16, 2);
+        assert!(tiny.contains("Esc back"), "{tiny:?}");
+        assert!(!tiny.contains("prev"), "{tiny:?}");
     }
 
     #[test]

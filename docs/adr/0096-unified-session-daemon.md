@@ -100,8 +100,10 @@ backend is added.
 
 - `neenee serve [--expose [addr]] [--detach]` — the daemon verb.
 - `neenee attach [id]`, `neenee status [--watch/--json/--all]`,
-  `neenee dashboard`, `neenee sessions` — clients of the control plane.
-  `status` shows every project; `--project <path>` filters.
+  `neenee dashboard` — clients of the control plane.
+  `status` shows every project; `--project <path>` filters. (A `neenee
+  sessions` listing verb was sketched here but not implemented; the
+  dashboard and `status` cover the listing role.)
 - **`/host` in the TUI** — the in-terminal control panel (ADR-0093's
   deferred follow-up, now enabled): a live view over the daemon's sessions
   with per-row status/preview; Enter attaches to the selected session

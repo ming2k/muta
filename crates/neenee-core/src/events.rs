@@ -336,6 +336,9 @@ pub enum AgentResponse {
     /// provider picker. Supersedes `ProviderKeys` for the picker's needs;
     /// `ProviderKeys` is retained for the header key-readiness summary.
     ProviderPicker(ProviderPickerSnapshot),
+    /// Blank the visible transcript and zero the round counter: the harness
+    /// switched to a brand-new empty session (`/new`, `/session new`). The
+    /// previous session is untouched on disk — nothing was deleted.
     ConversationCleared,
     /// Replace the visible transcript (dialogue messages) AND the command
     /// ledger (ADR-0091) with another session's state, after `/session open`,
@@ -988,17 +991,26 @@ pub enum EnvoyEvent {
     Started { profile: String },
     /// A user-visible notice from the envoy.
     Notice(AgentNotice),
-    /// The envoy started a new response stream.
-    StreamStart,
+    /// The envoy started a new response stream. `round`/`turn` carry the
+    /// envoy's own ReAct position (1-indexed user round, 0-indexed
+    /// model-request position within it, mirroring
+    /// [`AgentEvent::ModelRequestStarted`]) so the TUI can stamp the child
+    /// message and group the zoomed envoy view into turn bands exactly like
+    /// the main session view.
+    StreamStart { round: u64, turn: usize },
     /// New text token from the envoy.
     StreamDelta(String),
     /// The envoy response stream finished with the final accumulated text.
     StreamEnd(String),
-    /// The envoy invoked a tool.
+    /// The envoy invoked a tool. `round`/`turn` identify the envoy's own
+    /// ReAct position (see [`EnvoyEvent::StreamStart`]) so the child tool
+    /// step joins the same turn band as its sibling calls.
     ToolCall {
         id: String,
         name: String,
         arguments: String,
+        round: u64,
+        turn: usize,
     },
     /// A tool invoked by the envoy returned a result.
     ToolResult {

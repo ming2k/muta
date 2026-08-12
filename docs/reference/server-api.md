@@ -46,12 +46,15 @@ the unified daemon; the protocol below is the daemon's control plane.
 
 | Mode | Bind | Auth | Use |
 |------|------|------|-----|
-| default (loopback) | `127.0.0.1` | none | local co-process on the same machine |
-| `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
+| default (Unix socket) | `$XDG_RUNTIME_DIR/neenee/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) are the boundary | local CLI / TUI |
+| default (TCP loopback) | `127.0.0.1` | none | local co-process on the same machine |
+| `--public` (`neenee serve`) / `--expose` (`neenee-server` binary) | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
 
-Because the default binds loopback, a casual host exposes nothing beyond this
-machine. Exposure is an explicit opt-in that cannot happen without a token.
-See ADR-0054 for the rationale.
+Because the default binds a Unix socket plus loopback, a casual host exposes
+nothing beyond this machine. Exposure is an explicit opt-in that cannot
+happen without a token. See ADR-0054 for the rationale. For a remote client
+walkthrough see
+[How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 
 ## Attach: drive a session
 

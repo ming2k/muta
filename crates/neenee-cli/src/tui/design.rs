@@ -64,14 +64,20 @@ pub(crate) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS
 pub(crate) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(crate) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
-/// Gap row between the bottom of the composer panel and the hint bar. When
-/// the composer's top/bottom edges were half-block `▄`/`▀` glyphs the panel
-/// floated a half row off the app background, which read as built-in
-/// separation from the bar below. Now that those edges are full panel-bg
-/// rows, the panel sits flush against the hint bar with zero breathing room;
-/// one `surface`-colored row restores the visual break without reintroducing
-/// font-dependent glyphs.
-pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 1;
+/// Gap rows between the bottom of the composer panel and the hint bar. The
+/// composer already pads itself with full panel-bg top/bottom chrome rows
+/// (`COMPOSER_VERTICAL_CHROME_ROWS`), which read as built-in separation from
+/// the bar below — an extra `surface` gap row on top of that just burns a
+/// transcript row for no visual gain, so the hint bar sits flush against the
+/// composer's bottom edge.
+pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 0;
+
+/// Gap rows between the activity bar and the top of the composer panel.
+/// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the composer's top
+/// panel-bg padding row already separates its text from the live status line,
+/// so the activity bar sits flush against the composer with zero extra
+/// breathing room.
+pub(crate) const ACTIVITY_COMPOSER_GAP_ROWS: u16 = 0;
 
 /// Hint bar: a single-line strip pinned directly below the input box that
 /// surfaces only the next input action (left) plus the model and context-usage
@@ -110,7 +116,7 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Minimum gap between a footer bar's left content and its right-pinned
 /// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
-/// `F3 block  F2 expand`). Deliberately wider than the 2-col inter-cluster
+/// `F4 insert  F3 block  F2 expand`). Deliberately wider than the 2-col inter-cluster
 /// gap used by the hint bar: a legend is a keyboard affordance, not
 /// prose, so it needs real visual distance from the content — especially when
 /// content truncates to fill the row, where a small gap would let a `…` butt
@@ -140,15 +146,16 @@ pub(crate) const JOIN_MODIFY: &str = " · ";
 pub(crate) const JOIN_ENUMERATE_COLS: usize = 2;
 /// Container › member breadcrumb for inline hierarchy (`round 3 › turn 2`).
 pub(crate) const JOIN_BREADCRUMB: &str = " › ";
-/// Queue bar: a two-line persistent region pinned directly below the todo bar
+/// Queue bar: a one-line persistent region pinned directly below the todo bar
 /// (and above the transient activity bar) that always surfaces the pending
-/// outbox (a count, the send time of the next item to pop, key affordances,
-/// and a preview of that item's text). Always two rows tall when visible
-/// (hidden only while an overlay modal replaces the chrome, or inside an envoy
-/// zoom). It is the permanent home for queue affordances, so the hint bar no
-/// longer needs to embed outbox counts. Rendered on the plain surface (no
-/// raised tint, no glyph) so it stays quiet, matching the todo bar above it.
-pub(crate) const QUEUE_BAR_ROWS: u16 = 2;
+/// outbox (the `QUEUE` identity + count, an inline preview of the next item
+/// to pop, and the key affordances). Always one row tall when visible
+/// (hidden only while an overlay modal replaces the chrome, inside an envoy
+/// zoom, or when the outbox is empty). It is the permanent home for queue
+/// affordances, so the hint bar no longer needs to embed outbox counts.
+/// Rendered on the plain surface (no raised tint, no glyph) so it stays
+/// quiet, matching the todo bar above it.
+pub(crate) const QUEUE_BAR_ROWS: u16 = 1;
 /// Permanent breathing room between the transcript and footer chrome. Keeping
 /// this row even while the activity bar is idle prevents the latest response
 /// from visually running into the composer when the active row appears or
@@ -158,6 +165,12 @@ pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 1;
 /// (session identity + workspace + mode), `/btw`, Envoy, and future focused
 /// pages all share this single chrome slot.
 pub(crate) const PAGE_HEADER_ROWS: u16 = 1;
+
+/// Height of the Envoy page's permanent key-legend footer. Three rows on the
+/// page background: a top and bottom blank padding row around a middle row
+/// that carries the actual shortcuts (`Esc back`, `[ prev`, `] next` —
+/// plus `F1 help` when there is room).
+pub(crate) const ENVOY_FOOTER_ROWS: u16 = 3;
 
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;
@@ -296,8 +309,9 @@ pub(crate) const PANEL_BAR_INSET: u16 = 1;
 pub(crate) const MIN_TERMINAL_COLS: u16 = 40;
 
 /// Minimum terminal height (rows) for a usable layout. Accounts for the
-/// viewport's top/bottom margin (2 rows), the minimum footer chrome (a
-/// permanent gap, the composer minimum, and the hint bar, totalling 5 rows —
+/// viewport's top margin (1 row; the bottom margin is 0 — the hint bar pins
+/// flush to the terminal's bottom edge), the minimum footer chrome (the
+/// permanent transcript/footer gap, the composer minimum, and the hint bar —
 /// the activity bar and queue bar appear only while active/pending), and at
 /// least a couple of transcript rows.
 pub(crate) const MIN_TERMINAL_ROWS: u16 = 12;

@@ -461,6 +461,11 @@ impl Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::F(3),
     };
+    /// F4 (insert into the running round) — surfaced in the queue legend.
+    pub const F4: Key = Key {
+        modifiers: KeyModifiers::NONE,
+        code: KeyCode::F(4),
+    };
 }
 
 /// The precondition under which a binding is active.
@@ -501,6 +506,11 @@ pub enum Action {
     /// Toggle the user block on the viewed session's outbox. While blocked, no
     /// queued message auto-drains (not even after the round completes).
     ToggleQueueBlock,
+    /// Insert the composed message into the currently running round — it is
+    /// admitted as a visible user steer at the agent's next safe turn boundary
+    /// instead of waiting in the outbox for a fresh round. A no-op while idle
+    /// or with an empty composer.
+    InsertIntoRound,
     /// Copy the current selection (or clear input / arm quit — resolved by the
     /// app loop).
     CopyOrClear,
@@ -551,6 +561,15 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             gate: Gate::NoModal,
             action: Action::ToggleQueueBlock,
             description: "block/resume queue",
+        },
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::F(4),
+            },
+            gate: Gate::NoModal,
+            action: Action::InsertIntoRound,
+            description: "insert into running round",
         },
         Binding {
             key: Key {
@@ -659,6 +678,7 @@ impl Registry {
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
+                Action::InsertIntoRound => InputAction::InsertIntoRound,
                 Action::CopyOrClear => InputAction::CtrlC,
                 Action::CopySelection => InputAction::CopySelection,
             });
@@ -747,6 +767,20 @@ mod tests {
         // other modals treat it as a no-op.)
         let registry = Registry::new();
         let action = registry.resolve(key(KeyCode::F(3), KeyModifiers::NONE), Modal::Help);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn f4_inserts_into_the_running_round_from_top_level() {
+        // F4 is the global binding for the mid-round steer: the composed text
+        // is inserted into the running round instead of staged for the next
+        // one. It is gated NoModal — inside a modal the composer is borrowed,
+        // so the contextual arm treats F4 as a no-op.
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::F(4), KeyModifiers::NONE), Modal::None);
+        assert_eq!(action, Some(InputAction::InsertIntoRound));
+
+        let action = registry.resolve(key(KeyCode::F(4), KeyModifiers::NONE), Modal::Queue);
         assert_eq!(action, None);
     }
 

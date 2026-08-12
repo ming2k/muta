@@ -325,7 +325,7 @@ pub fn model_editor() -> io::Result<()> {
             let title = " key editor · API key  q/Ctrl+C=quit".to_string();
             let hint = " type to edit  Enter save  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                draw_model_editor(f, "OpenAI", &s.input, s.cursor, true, 0, None, None, &theme);
+                draw_model_editor(f, "OpenAI", &s.input, s.cursor, true, 0, None, &[], None, &theme);
             });
         },
         |s, key| -> ShowAction {
@@ -739,6 +739,110 @@ pub fn toast() -> io::Result<()> {
                 ShowAction::Continue
             }
             KeyCode::Esc => ShowAction::Exit,
+            _ => ShowAction::Continue,
+        },
+    )
+}
+
+// ─────────────────────────── effort ignition ──────────────────────────────
+
+/// Live demo of the effort-ignition celebration (the codex `ultra` port):
+/// selecting Kimi K3's `max` tier sweeps two fire waves across the composer
+/// band, converges a `M A X` label on the hint bar, tints the `›` prompt
+/// toward the fire accent, and lands a `✦ → ✧` spark. Press `Space` to
+/// re-ignite.
+pub fn effort_ignition() -> io::Result<()> {
+    use std::time::Instant;
+
+    use crate::tui::effort_ignition::{self, ignition_finished};
+    use crate::tui::model::selection::SelectionState;
+    use crate::tui::view::{HintBarView, draw_composer_igniting, draw_hint_bar};
+
+    let theme = Theme::default();
+    struct State {
+        epoch: Option<Instant>,
+        draft: String,
+    }
+    let mut state = State {
+        epoch: Some(Instant::now()),
+        draft: "refactor the scheduler to batch dispatches".to_string(),
+    };
+
+    common::run_showcase(
+        &mut state,
+        |f, s| {
+            let area = f.area();
+            let width = area.width;
+            // Composer occupies the middle band; the hint bar sits one row
+            // below it, mirroring the live footer's stacking.
+            let composer_height = 5u16;
+            let composer_y = area.height.saturating_sub(composer_height + 2).max(1);
+            let composer_rect = neenee_tui_engine::Rect::new(0, composer_y, width, composer_height);
+            let hint_rect =
+                neenee_tui_engine::Rect::new(0, composer_y + composer_height + 1, width, 1);
+
+            common::draw_app_background(f, &theme);
+
+            let elapsed_ms = s.epoch.map(|e| e.elapsed().as_millis());
+            let mut layout_map = LayoutMap::new();
+            let mut input_scroll = 0usize;
+            draw_composer_igniting(
+                f,
+                composer_rect,
+                &s.draft,
+                s.draft.len(),
+                true,
+                false,
+                &theme,
+                &mut layout_map,
+                false,
+                &mut input_scroll,
+                &SelectionState::None,
+                0,
+                0,
+                (true, elapsed_ms),
+            );
+            draw_hint_bar(
+                f,
+                hint_rect,
+                HintBarView {
+                    current_model: "k3",
+                    provider_name: Some("kimi-code"),
+                    messages: &[],
+                    reasoning_effort: Some("max"),
+                    shell_active: false,
+                    busy: false,
+                    context_tokens: Some(12_400),
+                    ignition_elapsed_ms: elapsed_ms,
+                },
+                &theme,
+            );
+
+            // The wave + spark overlay: paints over the composer and hint bar
+            // after both have rendered, exactly like the live event loop.
+            if let Some(ms) = elapsed_ms
+                && !ignition_finished(ms)
+            {
+                effort_ignition::paint_ignition_bands(f, composer_rect, Some(hint_rect.y), ms);
+            }
+
+            // Title line at the top.
+            f.put(
+                1,
+                0,
+                neenee_tui_engine::Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(neenee_tui_engine::Modifier::BOLD),
+                "effort ignition · Kimi K3 max",
+            );
+        },
+        |s, key| match key.code {
+            KeyCode::Esc => ShowAction::Exit,
+            KeyCode::Char(' ') => {
+                // Re-arm the celebration.
+                s.epoch = Some(Instant::now());
+                ShowAction::Continue
+            }
             _ => ShowAction::Continue,
         },
     )

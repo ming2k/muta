@@ -77,6 +77,22 @@ impl Effort {
         Self::ORDER.iter().position(|e| *e == self).unwrap_or(2)
     }
 
+    /// A short, human-facing description of the tier, shown next to the
+    /// segmented effort selector in the model-settings editor so each rung of
+    /// the ladder reads as a meaningful choice rather than a bare label. Keep
+    /// each to one line — the picker renders it as a caption under the row.
+    pub const fn description(self) -> &'static str {
+        match self {
+            Effort::None => "reasoning off — direct answers only",
+            Effort::Minimal => "barely thinks — fastest, simplest tasks",
+            Effort::Low => "light reasoning — quick, cheap, simple work",
+            Effort::Medium => "balanced — moderate reasoning depth",
+            Effort::High => "deep reasoning — the default for real work",
+            Effort::Xhigh => "very deep — extended exploration for hard problems",
+            Effort::Max => "maximum depth — no cap; correctness over cost",
+        }
+    }
+
     /// Parse a lowercase effort string (`"none"`/`"minimal"`/`"low"`/
     /// `"medium"`/`"high"`/`"xhigh"`/`"max"`) into the typed [`Effort`].
     /// Returns `None` for
@@ -192,6 +208,19 @@ mod tests {
         }
         assert_eq!(Effort::parse("nonsense"), None);
         assert_eq!(Effort::parse("  HIGH "), Some(Effort::High));
+    }
+
+    #[test]
+    fn every_tier_has_a_nonempty_description() {
+        for e in Effort::ORDER {
+            assert!(
+                !e.description().is_empty(),
+                "{:?} is missing a picker caption",
+                e
+            );
+        }
+        // None must read as the explicit off state, distinct from the tiers.
+        assert!(Effort::None.description().contains("off"));
     }
 
     #[test]

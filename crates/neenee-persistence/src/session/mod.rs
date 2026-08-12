@@ -199,6 +199,37 @@ impl Default for SessionData {
     }
 }
 
+impl SessionData {
+    /// The single authority for "this session has no substantive content yet"
+    /// (ADR-0018). A session is empty while it carries neither dialogue
+    /// (active `model_window` or `archived_transcript`), nor a command-ledger
+    /// entry, nor any *substantive* piece of session state — a non-empty todo
+    /// list, at least one scheduled job, a non-empty disabled-tool mask, or a
+    /// started round counter. Any one of those is a real user action worth
+    /// durably recording, so it materialises the session.
+    ///
+    /// Two kinds of state deliberately do **not** count on their own, matching
+    /// the long-standing lazy contract: the **title** (a title on an
+    /// otherwise-empty session is still an empty record in the picker) and the
+    /// **provider selection** (pinning `/models` must not surface a
+    /// never-used session). Both ride along once anything else has made the
+    /// session real.
+    ///
+    /// Every guarded write path consults this (via
+    /// [`SessionStore::should_skip_persist`]) instead of re-deriving the
+    /// condition inline, so the "what makes a session real" rule lives in
+    /// exactly one place and cannot drift between setters.
+    fn is_user_facing_empty(&self) -> bool {
+        self.model_window.is_empty()
+            && self.archived_transcript.is_empty()
+            && self.commands.is_empty()
+            && self.todos.is_empty()
+            && self.scheduled_jobs.is_empty()
+            && self.disabled_tools.is_empty()
+            && self.round_counter == 0
+    }
+}
+
 /// Serde default for [`SessionData::project_root`]. Resolves to the current
 /// process cwd so legacy snapshots (which predate the field) load with the
 /// closest-to-correct project binding on first deserialisation.
@@ -661,6 +692,13 @@ struct SessionState {
     /// In-memory session, authoritative between writes; the event log is the
     /// durable authority across restarts.
     data: SessionData,
+    /// `true` only for a **fresh** primary session (`pin_fresh`): defer the
+    /// first durable write until the session gains user-facing content, so
+    /// starting and exiting without a round leaves no empty-file litter
+    /// (ADR-0018). `false` for an explicitly pinned path (`for_path`, and any
+    /// store loaded from an existing snapshot): there the caller has already
+    /// materialised the session, so every write persists eagerly.
+    defer_persist: bool,
 }
 
 pub struct SessionStore {
@@ -721,6 +759,10 @@ impl SessionStore {
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
         let data = load_or_seed(&path, &event_log_path, &blob_store, &project_root);
         let event_log = EventLog::new(event_log_path);
+        // Defer only while the pinned snapshot does not exist yet: a `for_path`
+        // into a never-written file is a fresh, content-less session (lazy,
+        // ADR-0018); opening an existing snapshot is already materialised.
+        let defer_persist = !path.exists();
         Self {
             project_root,
             sessions_dir,
@@ -729,6 +771,7 @@ impl SessionStore {
                 path,
                 event_log,
                 data,
+                defer_persist,
             }),
         }
     }
@@ -754,6 +797,8 @@ impl SessionStore {
                 path,
                 event_log,
                 data,
+                // Fresh primary session: defer until it gains real content.
+                defer_persist: true,
             }),
         }
     }
@@ -766,6 +811,30 @@ impl SessionStore {
 
     pub async fn id(&self) -> String {
         self.state.lock().await.data.id.clone()
+    }
+
+    /// `true` while this session has never been persisted **and** still holds
+    /// no user-facing content in memory (see
+    /// [`SessionData::is_user_facing_empty`]). Such a session is "deferred":
+    /// it exists only in memory so that opening one and exiting without any
+    /// real interaction leaves no record behind (ADR-0018). The transport
+    /// layer's idle reaper uses this probe to reclaim never-persisted hosted
+    /// sessions; a persisted session (even one whose messages were later
+    /// replaced with an empty window) is never reported empty here.
+    pub async fn is_empty_unpersisted(&self) -> bool {
+        let state = self.state.lock().await;
+        Self::should_skip_persist(&state)
+    }
+
+    /// Lock-held core of [`Self::is_empty_unpersisted`] and of every guarded
+    /// setter: the post-mutation state is checked against the on-disk marker
+    /// (`path.exists()`) plus the user-facing-emptiness rule. Callers must hold
+    /// the session lock and pass the just-mutated state, so the decision and
+    /// the event-log append it gates are atomic. The check applies only to a
+    /// deferred (fresh primary) session — an explicitly pinned store
+    /// (`defer_persist == false`) always persists.
+    fn should_skip_persist(state: &SessionState) -> bool {
+        state.defer_persist && !state.path.exists() && state.data.is_user_facing_empty()
     }
 
     /// The authoritative model-visible message window (ADR-0048). This is the
@@ -798,10 +867,10 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.todos = todos.clone();
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty()
-                && todos.is_empty();
+            // The guard reads the post-mutation state: a non-empty list makes
+            // the session substantive and persists; clearing the list on a
+            // never-persisted empty session stays in memory.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::TodosSet { todos })?;
@@ -834,10 +903,10 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.scheduled_jobs = jobs.clone();
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty()
-                && jobs.is_empty();
+            // Adding at least one job is a substantive action that persists the
+            // session (the post-mutation state is non-empty); clearing the
+            // schedule on a never-persisted empty session stays in memory.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state
@@ -882,9 +951,7 @@ impl SessionStore {
             // title is set: a session with a title but no messages is still
             // empty content, and writing it would surface it in the picker as
             // empty-session litter.
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty();
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state
@@ -924,10 +991,9 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.disabled_tools = tools.clone();
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty()
-                && tools.is_empty();
+            // A non-empty mask is substantive and persists; an empty mask on a
+            // never-persisted empty session stays in memory.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state
@@ -957,10 +1023,9 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.round_counter = counter;
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty()
-                && counter == 0;
+            // A non-zero counter marks a started round and persists; writing 0
+            // to a never-persisted empty session stays in memory.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state
@@ -1057,9 +1122,7 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             state.data.provider_selection = selection.clone();
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty();
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state
@@ -1085,10 +1148,8 @@ impl SessionStore {
             // sending any content must not create a record. The guard checks
             // the POST-replacement state, so the first real message (or a
             // command echo via `mutate_messages`) does persist, while a no-op
-            // `/clear` on a brand-new session does not.
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty();
+            // empty-window replace on a brand-new session does not.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::MessagesReplaced {
@@ -1129,9 +1190,7 @@ impl SessionStore {
             // A real command echo (the primary `mutate_messages` caller) makes
             // the session non-empty, so it DOES persist — exactly the "first
             // command persists the session" contract.
-            let empty_unpersisted = !state.path.exists()
-                && state.data.model_window.is_empty()
-                && state.data.archived_transcript.is_empty();
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::MessagesReplaced {
@@ -1174,7 +1233,12 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             f(&mut state.data.commands);
             state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = !state.path.exists() && state.data.commands.is_empty();
+            // The empty-session deferral mirrors `mutate_messages`: a brand-new
+            // session that is still empty after the mutation stays in memory. A
+            // real command record makes the session non-empty, so it DOES
+            // persist — preserving the "first command persists the session"
+            // contract that ADR-0050's command echo used to carry.
+            let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
                 state.event_log.append(SessionEvent::CommandsReplaced {
@@ -1330,8 +1394,10 @@ impl SessionStore {
         state.path = path;
         state.event_log = event_log;
         state.data = data;
-        // Do not persist an empty snapshot or event log — a session that never gains
+        // Fresh again: defer until the new session gains content. Do not
+        // persist an empty snapshot or event log — a session that never gains
         // content leaves no empty-file litter (see ADR-0018).
+        state.defer_persist = true;
         Ok(id)
     }
 
@@ -1452,6 +1518,8 @@ impl SessionStore {
                 path: side_path,
                 event_log,
                 data,
+                // An already-materialised side session persists eagerly.
+                defer_persist: false,
             }),
         })
     }
@@ -1489,6 +1557,8 @@ impl SessionStore {
         state.path = path;
         state.event_log = EventLog::new(event_log_path);
         state.data = data;
+        // The opened session is already materialised on disk; persist eagerly.
+        state.defer_persist = false;
         Ok(())
     }
 
@@ -3720,8 +3790,8 @@ mod tests {
         // gains real content (a user message OR a command echo) leaves NO
         // record on disk — opening and exiting must not pollute the session
         // history. Metadata-only mutations on a brand-new empty session
-        // (title, provider, /clear to empty) stay in memory; the first real
-        // message or command does persist.
+        // (title, provider, a no-op empty-window replace) stay in memory; the
+        // first real message or command does persist.
         let directory =
             std::env::temp_dir().join(format!("neenee-empty-deferred-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
@@ -3736,7 +3806,7 @@ mod tests {
             }))
             .await
             .unwrap();
-        store.replace_messages(Vec::new()).await.unwrap(); // a no-op /clear-style replace
+        store.replace_messages(Vec::new()).await.unwrap(); // a no-op empty-window replace
         assert!(
             !path.exists(),
             "metadata/no-op mutations on an empty session must not persist a snapshot"
@@ -3754,6 +3824,63 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(directory);
+    }
+
+    /// The unified `is_user_facing_empty` rule (ADR-0018), pinned end-to-end
+    /// through the public store: substantive state (todos / scheduled jobs /
+    /// tool mask / round counter) materialises a fresh session, while the two
+    /// picker-litter offenders (title, provider selection) never do on their
+    /// own. This is the single definition every setter consults, so the test
+    /// guards against the per-setter drift the predicate was extracted to fix.
+    #[tokio::test]
+    async fn substantive_state_materialises_but_title_and_provider_do_not() {
+        // Title + provider selection alone stay unpersisted.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-unified-guard-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store.set_title(Some("t".into()), true).await.unwrap();
+        store
+            .set_provider_selection(Some(ProviderSelection {
+                provider: "anthropic".into(),
+                model: None,
+            }))
+            .await
+            .unwrap();
+        assert!(store.is_empty_unpersisted().await);
+        assert!(!path.exists(), "title/provider alone never materialise");
+
+        // A substantive todo list materialises the same session.
+        let mut todos = neenee_core::TodoList::new();
+        todos.reconcile(&[("Task".to_string(), neenee_core::TodoStatus::Pending)], 1000, 1);
+        store.set_todos(todos).await.unwrap();
+        assert!(!store.is_empty_unpersisted().await);
+        assert!(path.exists(), "a substantive todo list materialises");
+        let _ = fs::remove_dir_all(directory);
+
+        // A scheduled job likewise materialises a fresh session on its own.
+        let directory2 = std::env::temp_dir().join(format!(
+            "neenee-unified-guard2-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path2 = directory2.join("session.json");
+        let store2 = SessionStore::for_path(path2.clone());
+        let now = chrono::Utc::now();
+        let job = neenee_core::ScheduledJob::cron(
+            "j1".into(),
+            "* * * * *".into(),
+            "ping".into(),
+            now,
+        )
+        .expect("a valid cron expression yields a job");
+        store2.set_scheduled_jobs(vec![job]).await.unwrap();
+        assert!(
+            path2.exists(),
+            "a scheduled job is substantive and materialises the session"
+        );
+        let _ = fs::remove_dir_all(directory2);
     }
 
     #[tokio::test]

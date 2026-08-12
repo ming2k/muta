@@ -44,11 +44,11 @@ pub async fn run(
     bootstrap::ensure_app_roots();
     // One global registry: HostParams no longer pins a project (ADR-0096);
     // each session records its own project root.
-    let registry = SessionRegistry::new(HostParams {
+    let registry = Arc::new(SessionRegistry::new(HostParams {
         identity,
         principal,
         ui,
-    });
+    }));
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -65,8 +65,11 @@ pub async fn run(
             #[cfg(unix)]
             uds_path,
         },
-        Arc::new(registry),
+        Arc::clone(&registry),
     );
+    // Reclaim abandoned never-persisted sessions so create-then-disconnect
+    // churn cannot grow the registry unboundedly. Stops on server shutdown.
+    registry.spawn_idle_reaper(handle.cancel.clone());
     let port = handle.port.await?;
     #[cfg(unix)]
     let bound_uds = handle.uds_ready.await.ok().flatten();

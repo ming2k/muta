@@ -77,7 +77,7 @@ pub fn draw_history_panel(
     theme: &Theme,
 ) -> Option<Rect> {
     // Compute the panel footprint: it grows upward from the top edge of the
-    // composer. The activity bar sits directly above the composer, so reserve
+    // composer. The activity bar sits flush above the composer, so reserve
     // its rows: the dropdown's ceiling is the activity bar's top edge, never
     // the composer's top edge — it must never paint over the live status bar
     // above it. Height tracks the actual content (one row per entry) floored

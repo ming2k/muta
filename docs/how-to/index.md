@@ -12,4 +12,5 @@ with the relevant reference material.
 | [How to use sub2api relays](use-sub2api.md) | Configure OpenAI, Anthropic, and Google-compatible sub2api relays |
 | [How to write a skill](write-a-skill.md) | Author a `SKILL.md` skill: frontmatter, policy, explicit vs implicit invocation, reload |
 | [How to track sessions with a session host](track-sessions-with-a-session-host.md) | Run many sessions under one daemon, watch them all, and manage them via the control plane |
+| [How to expose the daemon to LAN clients](expose-the-daemon-to-lan-clients.md) | Start the daemon with `--public`, hand out the bearer token, and connect a remote monitor/control client |
 | [How to avoid Copilot provider pitfalls](copilot-provider-pitfalls.md) | Diagnose why GitHub Copilot shows fewer models than expected and pick the right OAuth client/token type |

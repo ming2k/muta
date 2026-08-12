@@ -420,6 +420,11 @@ impl Grid {
         self.dirty_row_lo = Some(self.dirty_row_lo.map(|lo| lo.min(y)).unwrap_or(y));
         self.dirty_row_hi = Some(self.dirty_row_hi.map(|hi| hi.max(y)).unwrap_or(y));
     }
+
+    /// The grid's rows as per-row cell slices (test/debug inspection).
+    pub fn rows(&self) -> Vec<&[Cell]> {
+        self.content.chunks(self.width as usize).collect()
+    }
 }
 
 impl std::ops::Index<(u16, u16)> for Grid {

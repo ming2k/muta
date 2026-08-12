@@ -2,7 +2,7 @@
 //! agent background task's `match req { … }` dispatch.
 //!
 //! This is the largest handler — it fans the parsed command out across every
-//! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/clear`,
+//! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/new`,
 //! `/permissions`, `/autopilot`, `/review`, `/search`, `/resume`,
 //! `/session`, `/sessions`, `/btw`, `/repeat`, `/schedule`, `/init`,
 //! `/skills`, `/skill`, `/export`, `/debug`, `/help`, `/exit`) plus the
@@ -63,6 +63,66 @@ async fn supersede_for_session_switch(
     agent.reject_pending_inputs();
     let _ = resp_tx.send(AgentResponse::PermissionsCleared);
     lifecycle.cancel_current().await;
+}
+
+/// Start a brand-new empty session and switch the live session to it — the
+/// shared body of `/new` and `/session new`.
+///
+/// The outgoing session's file is left untouched on disk (nothing is wiped;
+/// it stays resumable via `/sessions` / `/session open`). `SessionStore::reset`
+/// mints a fresh id and defers persistence so an unused fresh session leaves
+/// no empty file behind. Any in-flight round and pending prompts are
+/// superseded, the live round counter is rebased to the fresh store, and the
+/// provider falls back to the global default (a fresh session carries no
+/// provider pin, C6). The frontend is told through `ConversationCleared`
+/// (blank transcript, zeroed round count) plus a `TodosUpdated` reset, and
+/// the confirmation lands in the new session's command ledger.
+#[allow(clippy::too_many_arguments)]
+async fn start_fresh_session(
+    session: &Arc<SessionStore>,
+    config: &Config,
+    agent: &Arc<Agent>,
+    lifecycle: &Arc<RoundLifecycle>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
+    provider_usage: &mut ProviderUsage,
+    name: &str,
+    args: &str,
+) {
+    supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+    agent.clear_todos();
+    match session.reset().await {
+        Ok(id) => {
+            agent.restore_round_count(session.round_counter().await);
+            // C6: a fresh session has no provider pin, so the live provider
+            // falls back to the global default.
+            crate::handlers_provider::reapply_session_selection(
+                config,
+                agent,
+                provider_for_task,
+                session,
+                resp_tx,
+                provider_usage,
+            )
+            .await;
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
+            ));
+            let _ = resp_tx.send(AgentResponse::ConversationCleared);
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!("Started new session: {}", id)),
+            )
+            .await;
+        }
+        Err(error) => {
+            record_error(session, resp_tx, name, args, error).await;
+        }
+    }
 }
 
 /// Full session-scoped runtime restore, run after the session store has been
@@ -708,40 +768,18 @@ pub async fn dispatch(
                 }
             }
             "new" => {
-                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
-                agent.clear_todos();
-                match session.reset().await {
-                    Ok(id) => {
-                        agent.restore_round_count(session.round_counter().await);
-                        // C6: a fresh session has no provider pin, so the live
-                        // provider falls back to the global default.
-                        crate::handlers_provider::reapply_session_selection(
-                            config,
-                            agent,
-                            provider_for_task,
-                            session,
-                            resp_tx,
-                            provider_usage,
-                        )
-                        .await;
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
-                        ));
-                        let _ = resp_tx.send(AgentResponse::ConversationCleared);
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!("Started new session: {}", id)),
-                        )
-                        .await;
-                    }
-                    Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
-                    }
-                }
+                start_fresh_session(
+                    session,
+                    config,
+                    agent,
+                    lifecycle,
+                    resp_tx,
+                    provider_for_task,
+                    provider_usage,
+                    name,
+                    args,
+                )
+                .await;
             }
             other => {
                 record_error(
@@ -1419,28 +1457,23 @@ pub async fn dispatch(
                 }
             }
         }
-        Some(BuiltinCmd::Clear) => {
-            let _ = session.replace_messages(Vec::new()).await;
-            agent.clear_todos();
-            let _ = session.set_todos(neenee_core::TodoList::default()).await;
-            let _ = resp_tx.send(AgentResponse::ConversationCleared);
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
-            ));
-            record_command(
+        Some(BuiltinCmd::New) => {
+            // `/new` never wipes anything in place: it starts a fresh session
+            // and leaves the current one on disk (resumable via `/sessions`
+            // or `/session open`). The retired `/clear` resolves here through
+            // the alias table, so old muscle memory gets the safe semantics.
+            start_fresh_session(
                 session,
+                config,
+                agent,
+                lifecycle,
                 resp_tx,
+                provider_for_task,
+                provider_usage,
                 name,
                 args,
-                CommandResult::Text("Conversation history cleared.".to_string()),
             )
             .await;
-            // `/clear` removes transcript content but deliberately preserves
-            // the session's monotonic round counter. Re-publish it after the
-            // generic ConversationCleared reset so the frontend does not
-            // mistake clearing history for starting a new session.
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Export) => {
             let messages = session.model_window().await;

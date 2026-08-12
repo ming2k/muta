@@ -178,7 +178,7 @@ impl Default for TuiConfig {
 /// ```toml
 /// [input_history]
 /// dedup = true              # one row per prompt text, across sessions
-/// record_commands = false   # don't persist `/model`, `/clear`, …
+/// record_commands = false   # don't persist `/model`, `/new`, …
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -192,7 +192,7 @@ pub struct InputHistoryConfig {
     /// `false`, identity is `(text, session_id)`: the same words typed in two
     /// sessions stay as two entries, each with its own origin.
     pub dedup: bool,
-    /// Record `/slash` command invocations (`/model`, `/clear`, `/repeat`, …)
+    /// Record `/slash` command invocations (`/model`, `/new`, `/repeat`, …)
     /// into the input history.
     ///
     /// Default `false`: commands are UI gestures, not prompts — they are

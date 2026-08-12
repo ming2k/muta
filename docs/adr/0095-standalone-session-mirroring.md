@@ -89,7 +89,7 @@ when absent), connect, reconnect (500ms backoff), and shutdown. Properties:
   panel — folded state is never discarded for lack of a host.
 - **In-process session switches re-adopt.** `ConversationReplaced` (the
   harness's authoritative "the TUI now drives another session" signal,
-  emitted by `/session open`, `/clear`, fork) triggers a rebind: the tap
+  emitted by `/session open`, `/new`, fork) triggers a rebind: the tap
   reseeds its tracker and the supervisor sends a fresh `MirrorHello` on the
   live connection, which removes the old row and adopts the new identity. No
   ghost rows across session switches.

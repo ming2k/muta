@@ -200,6 +200,30 @@ the admission axis for the orchestrator side; on the session side these
 two tools are ordinary builtins gated by the session's own model-visible
 toolset, exactly like `todo`/`websearch`.
 
+**Implementation status (first slice, done)**:
+
+- Core types `WipStatus`/`WipConflict`/`WipAdvice` and a
+  `MonitoredSession.wip` projection field live in
+  `crates/neenee-core/src/monitor.rs`; the registry owns the in-memory
+  coordination registry and the `declare_wip`/`check_wip`/`clear_wip`
+  semantics in `crates/neenee-transport/src/registry.rs` (with the
+  `overlap_paths` prefix-overlap rules), and `MonitorTracker::set_wip`
+  projects a session's declared WIP onto its dashboard row.
+- The three session tools live in
+  `crates/neenee-transport/src/wip_tools.rs` and are published per hosted
+  session via `Agent::dynamic_tool_sink().replace("wip-coordination", …)`
+  in `registry.rs::assemble_hosted` — so every daemon-hosted session's
+  model can declare/consult WIP. `declare`/`wip_done` mutate through the
+  shared `WipRegistry` handle; `check_wip` goes through a session-bound
+  query closure because the answer needs the registry's sessions index.
+- Cleanup is wired: `kill_session` clears the session's WIP. (Natural
+  `Idle` settle does not yet auto-clear — a declaration persists across
+  rounds until `wip_done`, matching "a multi-round edit stays declared".)
+- Not yet done: the orchestrator *agent* answering `check_wip` with
+  judgement (today the verdict is computed deterministically from the
+  registry's facts, no LLM in the loop), the push-half overlap nudges, and
+  WIP persistence across daemon restarts (in-memory by design, §5).
+
 ### 6. Role-scoped model selection: `[orchestrator]` and `[summarizer]`
 
 Config gains two role tables shaped exactly like `ProviderSelection`

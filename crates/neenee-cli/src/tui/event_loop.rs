@@ -322,6 +322,13 @@ pub(super) enum OutboxSignal {
         session_id: String,
         input_id: String,
     },
+    /// A mid-round steer (`InsertUserInput`, `F4`) was admitted at a safe
+    /// turn boundary; the transcript listener already appended the visible
+    /// user message. The loop drops the shadow outbox item.
+    Inserted {
+        session_id: String,
+        input_id: String,
+    },
     RoundCompleted {
         session_id: String,
     },
@@ -434,6 +441,38 @@ fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputActi
     }
 }
 
+/// The active model's effective reasoning effort, resolved the same way the
+/// hint bar resolves it (per-protocol gating included — ADR-0046): Anthropic
+/// effort counts only while thinking is opted in, OpenAI effort whenever the
+/// channel reports one, Google never. Shared by the hint-bar render and the
+/// effort-ignition triggers so both agree on whether `max` is live.
+fn effective_reasoning_effort(app: &App) -> Option<&str> {
+    app.provider_picker
+        .rows
+        .iter()
+        .find(|row| row.id == app.current_provider)
+        .and_then(|row| row.model_info.iter().find(|m| m.model == app.current_model))
+        .and_then(|m| {
+            let show = match m.protocol.as_str() {
+                "anthropic" => m.thinking == Some(true),
+                "openai" => m.effort.is_some(),
+                _ => false,
+            };
+            if show { m.effort.as_deref() } else { None }
+        })
+}
+
+/// Fire the effort-ignition celebration when the effective effort just
+/// reached the model's top tier (`max`) — codex's Ultra-ignition port, timed
+/// against a wall-clock epoch so the wave cadence is cadence-stable. A
+/// no-op while an ignition is already running, so a redundant switch can't
+/// restart a wave mid-flight.
+fn arm_effort_ignition_if_max(app: &mut App) {
+    if effective_reasoning_effort(app) == Some("max") && app.effort_ignition_epoch.is_none() {
+        app.effort_ignition_epoch = Some(std::time::Instant::now());
+    }
+}
+
 /// Activate a (provider, model) pair picked in the Connections or Models
 /// picker. Key-ready → `AgentRequest::SwitchProvider` + restore the parked
 /// draft + close; a no-key OAuth provider → `AgentRequest::ConnectProvider` +
@@ -450,6 +489,7 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
             api_key: None,
             base_url: None,
         });
+        arm_effort_ignition_if_max(app);
         app.restore_model_draft();
         app.active_modal = Modal::None;
     } else if app.provider_row_auth(&id).is_oauth() {
@@ -1191,7 +1231,21 @@ pub(super) async fn run_app_loop(
                 OutboxSignal::Unavailable {
                     session_id,
                     input_id,
-                } => app.requeue_dispatch(&session_id, &input_id),
+                } => {
+                    // The round closed before this insert could be admitted:
+                    // the item returns to `Waiting` as a paused next-round
+                    // entry (also the `ChatToSession` failure path).
+                    app.requeue_dispatch(&session_id, &input_id);
+                }
+                OutboxSignal::Inserted {
+                    session_id,
+                    input_id,
+                } => {
+                    // The steer crossed a safe turn boundary and the listener
+                    // already committed it to the transcript — drop the shadow
+                    // outbox item.
+                    app.remove_dispatch(&session_id, &input_id);
+                }
                 OutboxSignal::RoundCompleted { session_id } => {
                     app.naturally_completed_sessions.insert(session_id);
                 }
@@ -1282,6 +1336,13 @@ pub(super) async fn run_app_loop(
         // rendering work instead of ~10 full relayouts per second. While a turn
         // runs (or a toast/armed timer is live) `animating` keeps the spinner
         // and timers advancing at the existing poll cadence.
+        // Drop a finished ignition before the animating check so the final
+        // frame (wave fully faded) is the last one the epoch drives.
+        if let Some(epoch) = app.effort_ignition_epoch
+            && crate::tui::effort_ignition::ignition_finished(epoch.elapsed().as_millis())
+        {
+            app.effort_ignition_epoch = None;
+        }
         let animating = runtime.is_responding.load(Ordering::SeqCst)
             || app.round_started_at.is_some()
             || app.copy_toast_until.is_some()
@@ -1289,6 +1350,7 @@ pub(super) async fn run_app_loop(
             || app.ctrl_c_armed()
             || app.esc_armed_ticks > 0
             || !app.pending_images.is_empty()
+            || app.effort_ignition_epoch.is_some()
             || copy_pending.load(Ordering::SeqCst) > 0;
         // `swap` consumes the listener's signal exactly once. Folded in: input
         // handled last iteration, background clipboard results this one, and one
@@ -1487,7 +1549,8 @@ pub(super) async fn run_app_loop(
                         message.tool_step_call_id() == Some(current.call_id.as_str())
                     })?;
                     Some(view::EnvoyBarInfo {
-                        label: tasks.get(idx)?.envoy_label(),
+                        role: tasks.get(idx)?.envoy_role(),
+                        label: tasks.get(idx)?.envoy_description(),
                         index: idx + 1,
                         total: tasks.len(),
                     })
@@ -1512,7 +1575,18 @@ pub(super) async fn run_app_loop(
                     .map(|item| view::QueueItemView {
                         queued_at_ms: item.queued_at_ms,
                         text: item.text.clone(),
+                        steering: item.state == crate::tui::app::QueuedDispatchState::Inserting,
                     })
+                    .collect();
+                // The Queue modal's selectable range excludes in-flight
+                // steers (`Inserting` items are already with the running
+                // round), so its index space is the Waiting slice — kept in
+                // sync with `App::{recall_queued_at, remove_queued_at,
+                // move_queued}`.
+                let queue_modal_items: Vec<view::QueueItemView> = queue_items
+                    .iter()
+                    .filter(|item| !item.steering)
+                    .cloned()
                     .collect();
 
                 let transcript_render = view::draw_transcript(
@@ -1599,18 +1673,7 @@ pub(super) async fn run_app_loop(
                     // instance's display name, so identical models served by
                     // different instances stay attributable.
                     let hint_instance = active_provider_row.map(|row| row.name.as_str());
-                    let hint_reasoning = active_provider_row
-                        .and_then(|row| {
-                            row.model_info.iter().find(|m| m.model == app.current_model)
-                        })
-                        .and_then(|m| {
-                            let show = match m.protocol.as_str() {
-                                "anthropic" => m.thinking == Some(true),
-                                "openai" => m.effort.is_some(),
-                                _ => false,
-                            };
-                            if show { m.effort.as_deref() } else { None }
-                        });
+                    let hint_reasoning = effective_reasoning_effort(app);
                     app.hint_context_rect = view::draw_hint_bar(
                         f,
                         hint_rect,
@@ -1624,6 +1687,9 @@ pub(super) async fn run_app_loop(
                                 && app.input.starts_with('!'),
                             busy: app.running_sessions.contains(&viewed_session_id),
                             context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
+                            ignition_elapsed_ms: app
+                                .effort_ignition_epoch
+                                .map(|epoch| epoch.elapsed().as_millis()),
                         },
                         &app.theme,
                     );
@@ -1712,6 +1778,12 @@ pub(super) async fn run_app_loop(
                         // the normal text color.
                         let slash_len =
                             resolved_slash_command_len(&app.input, &app.custom_commands);
+                        // Effort-ignition prompt tint: a color-only accent on
+                        // the `›` prompt while the wave runs (the glyph never
+                        // changes). `None` once the animation has finished.
+                        let prompt_accent = app
+                            .effort_ignition_epoch
+                            .map(|epoch| (true, Some(epoch.elapsed().as_millis())));
                         match slash_len {
                             Some(len) => view::draw_composer_highlighted(
                                 f,
@@ -1729,21 +1801,39 @@ pub(super) async fn run_app_loop(
                                 app.pending_images.len(),
                                 app.pending_text_pastes.len(),
                             ),
-                            None => view::draw_composer(
-                                f,
-                                input_rect,
-                                &app.input,
-                                app.byte_cursor(),
-                                !step_focused,
-                                show_caret,
-                                &app.theme,
-                                &mut layout_map,
-                                true,
-                                &mut app.input_scroll,
-                                &app.selection,
-                                app.pending_images.len(),
-                                app.pending_text_pastes.len(),
-                            ),
+                            None => match prompt_accent {
+                                Some(accent) => view::draw_composer_igniting(
+                                    f,
+                                    input_rect,
+                                    &app.input,
+                                    app.byte_cursor(),
+                                    !step_focused,
+                                    show_caret,
+                                    &app.theme,
+                                    &mut layout_map,
+                                    true,
+                                    &mut app.input_scroll,
+                                    &app.selection,
+                                    app.pending_images.len(),
+                                    app.pending_text_pastes.len(),
+                                    accent,
+                                ),
+                                None => view::draw_composer(
+                                    f,
+                                    input_rect,
+                                    &app.input,
+                                    app.byte_cursor(),
+                                    !step_focused,
+                                    show_caret,
+                                    &app.theme,
+                                    &mut layout_map,
+                                    true,
+                                    &mut app.input_scroll,
+                                    &app.selection,
+                                    app.pending_images.len(),
+                                    app.pending_text_pastes.len(),
+                                ),
+                            },
                         }
                     }
                 }
@@ -1817,6 +1907,22 @@ pub(super) async fn run_app_loop(
                             &app.theme,
                         );
                     }
+                }
+
+                // Effort-ignition overlay: tint the composer panel and hint
+                // bar with the sweeping fire waves. Runs after the composer /
+                // hint bar / completion popup have painted so the glow sits
+                // on top of every footer surface, and before the modal recess
+                // so an open modal still dims the celebration with the rest
+                // of the background. Text is never touched — only cell
+                // backgrounds are blended (codex's text-safe `Canvas::tint`).
+                if !chrome_hidden && let Some(epoch) = app.effort_ignition_epoch {
+                    let elapsed_ms = epoch.elapsed().as_millis();
+                    let hint_row = (hint_rect.height > 0 && app.active_modal != Modal::Permission)
+                        .then_some(hint_rect.y);
+                    crate::tui::effort_ignition::paint_ignition_bands(
+                        f, input_rect, hint_row, elapsed_ms,
+                    );
                 }
 
                 // Recess the live surface for the open modal: darken it in place
@@ -1944,6 +2050,18 @@ pub(super) async fn run_app_loop(
                         let effort = app
                             .editor_model_settings_only
                             .then_some(app.editor_effort.as_str());
+                        // The model's advertised ladder drives the segmented
+                        // flat layout; an unresolved model passes an empty
+                        // slice so the selector degrades to the carousel.
+                        let effort_levels: Vec<String> = if app.editor_model_settings_only {
+                            neenee_core::resolve_model(&app.editor_model)
+                                .effort_levels
+                                .iter()
+                                .map(|e| e.as_str().to_string())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         let thinking = app
                             .editor_model_settings_only
                             .then_some(app.editor_thinking)
@@ -1956,6 +2074,7 @@ pub(super) async fn run_app_loop(
                             !app.editor_model_settings_only,
                             app.editor_field,
                             effort,
+                            &effort_levels,
                             thinking,
                             &app.theme,
                         ))
@@ -2240,12 +2359,7 @@ pub(super) async fn run_app_loop(
                     Modal::Queue => Some(view::draw_queue_modal(
                         f,
                         view::QueueModalView {
-                            items: &queue_items,
-                            paused: app.pending_count(&viewed_session_id) > 0
-                                && app.idle_sessions.contains(&viewed_session_id)
-                                && !app
-                                    .naturally_completed_sessions
-                                    .contains(&viewed_session_id),
+                            items: &queue_modal_items,
                             blocked: app.pending_count(&viewed_session_id) > 0
                                 && app.is_queue_blocked(&viewed_session_id),
                         },
@@ -2313,7 +2427,7 @@ pub(super) async fn run_app_loop(
                     view::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
                 }
                 if app.esc_armed_ticks > 0 {
-                    view::draw_armed_toast(f, "press Esc again to interrupt", &app.theme);
+                    view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
                 }
 
                 app.layout_map = layout_map;
@@ -2669,8 +2783,9 @@ pub(super) async fn run_app_loop(
                             // Busy sends live in the fixed outbox, not the
                             // scrollback. A staged message always waits for the
                             // running round to finish naturally before starting a
-                            // new one (next-round only); there is no mid-round
-                            // insert path.
+                            // new one (next-round only). The mid-round insert
+                            // path is the explicit `F4` gesture below, not a
+                            // busy Enter.
                             let id = uuid::Uuid::new_v4().to_string();
                             let queued_at_ms = now_epoch_ms();
                             app.pending_dispatch
@@ -2767,6 +2882,55 @@ pub(super) async fn run_app_loop(
                                 }
                             }
                         }
+                    }
+                }
+                input::InputAction::InsertIntoRound => {
+                    // `F4` at the top level: steer the composed text into the
+                    // *running* round instead of staging it for the next one.
+                    // The registry resolved a data-less action, so take the
+                    // composer here — exactly like `SendChat` does.
+                    let text = std::mem::take(&mut app.input);
+                    app.cursor_position = 0;
+                    app.input_scroll = 0;
+                    app.suggestion_index = None;
+                    let images = std::mem::take(&mut app.pending_images);
+                    let text_pastes = std::mem::take(&mut app.pending_text_pastes);
+                    let busy = app.running_sessions.contains(&viewed_session_id);
+                    if !busy || (text.is_empty() && images.is_empty()) {
+                        // Nothing to steer into (idle) or nothing to say:
+                        // restore the composer verbatim so a stray F4 never
+                        // eats the draft.
+                        app.input = text;
+                        app.pending_images = images;
+                        app.pending_text_pastes = text_pastes;
+                        app.set_cursor_end();
+                    } else {
+                        let expanded =
+                            composer_attachments::expand_paste_chips(&text, &text_pastes);
+                        let expanded =
+                            composer_attachments::strip_orphan_image_chips(&expanded, images.len());
+                        let id = app.stage_insert_dispatch(
+                            &viewed_session_id,
+                            text.clone(),
+                            images.clone(),
+                            text_pastes.clone(),
+                        );
+                        app.record_input_history(text.clone(), images, text_pastes);
+                        // The draft now lives in the outbox as an in-flight
+                        // steer — it is no longer the unsent slot.
+                        app.clear_history_draft();
+                        app.follow_bottom = true;
+                        app.pin_summary_line = None;
+                        let _ = app.tx.send(AgentRequest::InsertUserInput {
+                            session_id: viewed_session_id.clone(),
+                            input: neenee_core::QueuedUserInput {
+                                id,
+                                text: expanded,
+                                display_text: Some(text),
+                                images: Vec::new(),
+                                sent_at_ms: Some(now_epoch_ms()),
+                            },
+                        });
                     }
                 }
                 input::InputAction::SendSlash(cmd) => {
@@ -2937,6 +3101,7 @@ pub(super) async fn run_app_loop(
                                             neenee_core::SessionStatus::Idle,
                                         ),
                                     )),
+                                    created_at: std::time::Instant::now(),
                                 })
                                 .await;
                             let handle = neenee_transport::serve::start_server(opts, registry);
@@ -3274,8 +3439,18 @@ pub(super) async fn run_app_loop(
                             app.editor_model_settings_only = true;
                             app.editor_target_is_builtin = is_builtin;
                             app.editor_key.clear();
-                            app.editor_effort =
-                                row.effort.clone().unwrap_or_else(|| "medium".to_string());
+                            // Default the effort to the model's own configured
+                            // value, else `medium` clamped onto the model's
+                            // ladder — a ladder without `medium` (e.g. Kimi
+                            // K3's low/high/max) must still open with a rung
+                            // the segmented selector can highlight.
+                            app.editor_effort = row.effort.clone().unwrap_or_else(|| {
+                                let model = neenee_core::resolve_model(&row.model);
+                                neenee_core::effort::Effort::Medium
+                                    .clamp_to(model.effort_levels)
+                                    .as_str()
+                                    .to_string()
+                            });
                             app.editor_thinking_available = row.thinking.is_some();
                             // ADR-0046: reasoning is opt-in where a separate
                             // thinking switch exists. OpenAI GPT effort has no
@@ -3390,6 +3565,19 @@ pub(super) async fn run_app_loop(
                     app.input = app.editor_effort.clone();
                     app.set_cursor_end();
                 }
+                input::InputAction::ModelEditorEffortJump { index } => {
+                    // Jump straight to a ladder rung (digit on the effort
+                    // field). Out-of-range digits are ignored so a 7-rung key
+                    // on a 3-rung ladder is a no-op, never a clamp that would
+                    // surprise. Mirrors `editor_effort` into `app.input` like
+                    // the cycle path so the renderer shows the live value.
+                    let model = neenee_core::resolve_model(&app.editor_model);
+                    if let Some(level) = model.effort_levels.get(index) {
+                        app.editor_effort = level.as_str().to_string();
+                        app.input = app.editor_effort.clone();
+                        app.set_cursor_end();
+                    }
+                }
                 input::InputAction::ModelEditorThinkingToggle => {
                     // Toggle extended thinking on/off (Space). Orthogonal to
                     // effort — the two knobs are independent on the wire.
@@ -3451,6 +3639,7 @@ pub(super) async fn run_app_loop(
                             app.model_search = false;
                             app.model_modal_follow = true;
                             app.active_modal = app.editor_return_to;
+                            arm_effort_ignition_if_max(app);
                             continue;
                         }
                         // Key editor (not model-settings-only): this is a
@@ -5430,9 +5619,10 @@ pub(super) async fn run_app_loop(
                     {
                         // Click anywhere on the persistent queue bar → expand
                         // the full Queue modal. Selection starts at the front
-                        // (the next item to pop). Auto-blocks the outbox for
-                        // safe editing (mirrors the F2 open path); closing the
-                        // modal resumes.
+                        // (the next manageable item — in-flight steers are not
+                        // listed). Auto-blocks the outbox for safe editing
+                        // (mirrors the F2 open path); closing the modal
+                        // resumes.
                         app.active_modal = Modal::Queue;
                         app.modal_keymap_open = false;
                         app.modal_index = 0;

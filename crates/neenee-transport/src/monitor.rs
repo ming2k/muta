@@ -270,6 +270,21 @@ mod tests {
     }
 
     #[test]
+    fn set_wip_projects_onto_the_row() {
+        let mut t = tracker();
+        assert!(t.row().wip.is_none());
+        t.set_wip(Some(neenee_core::WipStatus {
+            paths: vec!["src".into()],
+            summary: "mid-refactor".into(),
+        }));
+        let wip = t.row().wip.expect("wip projected");
+        assert_eq!(wip.paths, vec!["src".to_string()]);
+        assert_eq!(wip.summary, "mid-refactor");
+        t.set_wip(None);
+        assert!(t.row().wip.is_none());
+    }
+
+    #[test]
     fn fresh_round_flows_running_to_idle_with_summary() {
         let mut t = tracker();
         t.observe(&round_event(RoundEvent::TurnStarted { round: 1, turn: 0 }));

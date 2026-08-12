@@ -38,6 +38,13 @@ pub struct HostedSession {
     /// after it subscribes so it hydrates immediately. Bounded; see
     /// [`ATTACH_SYNC_BUFFER_CAP`].
     pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
+    /// When this hosted session was created (wall-clock, monotonic). Drives
+    /// the idle reaper: a session that stays `is_empty_unpersisted` (no real
+    /// content, never written to disk) past the idle TTL is reclaimed so
+    /// abandoned empty sessions cannot accumulate in memory. `Instant` is
+    /// process-local and never persisted, matching the in-memory-only nature
+    /// of the sessions it guards.
+    pub created_at: std::time::Instant,
 }
 #[derive(Clone)]
 pub struct BoundSession {
@@ -87,6 +94,21 @@ pub struct SessionRegistry {
     /// peers re-declare (never a correctness hazard).
     wip: Arc<Mutex<HashMap<String, WipStatus>>>,
 }
+
+/// Shared handle on the WIP-coordination registry (ADR-0097 §5), injected
+/// into the per-session `declare_wip`/`wip_done` tools so they mutate the
+/// daemon's coordination state without holding the whole registry.
+pub type WipRegistry = Arc<Mutex<HashMap<String, WipStatus>>>;
+
+/// How long a never-persisted (empty) hosted session may sit idle before the
+/// reaper reclaims it. Five minutes is comfortably longer than any legitimate
+/// create→attach→first-prompt gap, so an empty session a user is about to
+/// type into is never swept from under them.
+const IDLE_EMPTY_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How often the idle-empty reaper sweeps. One minute keeps abandoned empty
+/// sessions bounded without meaningfully waking the daemon.
+const IDLE_REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 impl SessionRegistry {
     pub fn new(params: HostParams) -> Self {
         Self::with_meta(Some(params))
@@ -242,7 +264,107 @@ impl SessionRegistry {
         Ok(())
     }
 
+    /// One pass of the idle-empty reaper: remove every hosted session that is
+    /// still `is_empty_unpersisted` (no user-facing content, never written to
+    /// disk) **and** has been hosted longer than [`IDLE_EMPTY_SESSION_TTL`]
+    /// **and** currently has no attached client. Returns the reclaimed ids.
+    ///
+    /// Only never-persisted sessions are eligible — a session that has real
+    /// content (however brief) is user history and is never reaped. The
+    /// `receiver_count() == 0` probe treats any live event subscriber as an
+    /// attached client, so a session someone is actively watching is left
+    /// alone even while still empty. This is the in-memory counterpart of the
+    /// persistence layer's lazy-materialisation guard (ADR-0018): that guard
+    /// keeps empty sessions off disk, this one keeps them from piling up in
+    /// the daemon's memory when clients create-then-abandon them.
+    pub async fn reap_idle_empty_sessions(&self) -> Vec<String> {
+        self.reap_idle_empty_sessions_with(IDLE_EMPTY_SESSION_TTL)
+            .await
+    }
+
+    /// TTL-parameterised core of [`Self::reap_idle_empty_sessions`], split out
+    /// so tests can sweep immediately instead of waiting out the real TTL.
+    #[doc(hidden)]
+    pub async fn reap_idle_empty_sessions_with(&self, ttl: std::time::Duration) -> Vec<String> {
+        // Snapshot candidates under the lock, then probe + kill outside it so
+        // we never hold the map lock across an `await` on a session's state.
+        let candidates: Vec<(String, Arc<HostedSession>)> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, e)| (id.clone(), Arc::clone(e)))
+            .collect();
+        let mut reaped = Vec::new();
+        for (id, entry) in candidates {
+            let idle_long_enough = entry.created_at.elapsed() >= ttl;
+            let no_clients = entry.events.receiver_count() == 0;
+            if !idle_long_enough || !no_clients {
+                continue;
+            }
+            if !entry.session.is_empty_unpersisted().await {
+                continue;
+            }
+            // Guard against the id-key stability hazard: an in-session
+            // `/session open` or `/new` may have repointed the store to a
+            // *different*, now persisted session while the map key still holds
+            // the original id.
+            // Only kill when the store is still on the entry's original id —
+            // otherwise the entry has been repurposed and must be left alone.
+            if entry.session.id().await != id {
+                continue;
+            }
+            if self.kill_session(&id).await.is_ok() {
+                tracing::info!(session_id = %id, "reaped idle never-persisted session");
+                reaped.push(id);
+            }
+        }
+        reaped
+    }
+
+    /// Spawn the background idle-empty reaper, sweeping every
+    /// [`IDLE_REAPER_INTERVAL`] until `cancel` fires. The daemon calls this
+    /// once at startup; the task stops cleanly on shutdown.
+    pub fn spawn_idle_reaper(self: &Arc<Self>, cancel: CancellationToken) {
+        let registry = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(IDLE_REAPER_INTERVAL);
+            // `interval` fires immediately on creation; skip the first tick so
+            // a just-started daemon does not reap sessions still being set up.
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        tracing::info!("idle-session reaper: shutdown");
+                        break;
+                    }
+                    _ = tick.tick() => {
+                        registry.reap_idle_empty_sessions().await;
+                    }
+                }
+            }
+        });
+    }
+
     // ── WIP coordination (ADR-0097 §5) ────────────────────────────────────
+
+    /// The shared WIP-coordination handle, for injecting into the session
+    /// tools (ADR-0097 §5).
+    pub fn wip_registry_handle(&self) -> WipRegistry {
+        Arc::clone(&self.wip)
+    }
+
+    /// A `check_wip` closure bound to one session, for injecting into the
+    /// `check_wip` tool. It clones the registry so the tool can query
+    /// against the live sessions index without holding a registry borrow.
+    fn check_wip_closure(&self, session_id: String) -> crate::wip_tools::CheckWipQuery {
+        let registry = self.clone();
+        Arc::new(move |paths: Vec<String>, concern: Option<String>| {
+            let registry = registry.clone();
+            let sid = session_id.clone();
+            Box::pin(async move { registry.check_wip(&sid, &paths, concern.as_deref()).await })
+        })
+    }
 
     /// Register (or replace) a session's declared WIP and project it onto the
     /// session's monitor row so peers and the dashboard see it.
@@ -307,7 +429,9 @@ impl SessionRegistry {
         let declared = self.wip.lock().await;
         let mut conflicts = Vec::new();
         for peer in peers {
-            let Some(wip) = declared.get(&peer) else { continue };
+            let Some(wip) = declared.get(&peer) else {
+                continue;
+            };
             let overlap = overlap_paths(query_paths, &wip.paths);
             // A peer whose WIP doesn't intersect the query at all is not a
             // conflict for this concern (when the query named paths).
@@ -435,11 +559,26 @@ impl SessionRegistry {
             project_root: Some(project_root.clone()),
             autopilot: false,
             single_instance: false,
+            extra_session_tools: None,
         })
         .await
         .map_err(AssembleErr::AssembleFailed)?;
         let session = boot.session.clone();
         let req_tx = boot.req_tx.clone();
+        // WIP-coordination tools (ADR-0097 §5): build them now that the
+        // session id is known, and publish them onto the agent the assemble
+        // built so its model can declare/consult WIP against this daemon's
+        // coordination registry. Done before the driver starts serving
+        // requests so the tools are present from the first turn.
+        let session_id = session.id().await;
+        let wip_tools = crate::wip_tools::build_wip_tools(
+            self.wip_registry_handle(),
+            session_id.clone(),
+            self.check_wip_closure(session_id),
+        );
+        boot.agent
+            .dynamic_tool_sink()
+            .replace("wip-coordination", wip_tools);
         let (events_tx, _) = broadcast::channel::<AgentResponse>(1024);
         let tap = events_tx.clone();
         let mut rr = boot.resp_rx;
@@ -503,6 +642,7 @@ impl SessionRegistry {
             cancel,
             tracker,
             sync_buffer,
+            created_at: std::time::Instant::now(),
         });
         self.publish(MonitorEvent::SessionAdded(
             hosted.tracker.lock().await.row(),
@@ -730,6 +870,17 @@ async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> boo
         .unwrap_or(false)
 }
 
+/// Insert/replace a session's declared WIP into the shared coordination
+/// registry (the half of `declare_wip` the session tools drive directly).
+pub(crate) async fn declare_wip_on(registry: &WipRegistry, session_id: &str, status: WipStatus) {
+    registry.lock().await.insert(session_id.to_string(), status);
+}
+
+/// Remove a session's declared WIP from the shared coordination registry.
+pub(crate) async fn clear_wip_on(registry: &WipRegistry, session_id: &str) {
+    registry.lock().await.remove(session_id);
+}
+
 /// The subset of `wip` paths overlapping the query's `query` paths. Paths are
 /// compared normalized (separators unified, trailing slashes stripped, `.`
 /// resolved); a declared path overlaps a queried path when either is a prefix
@@ -753,11 +904,56 @@ fn overlap_paths(query: &[String], wip: &[String]) -> Vec<String> {
         .filter(|w| {
             let w = norm(w);
             query_norm.iter().any(|q| {
-                w == *q
-                    || w.starts_with(&format!("{q}/"))
-                    || q.starts_with(&format!("{w}/"))
+                w == *q || w.starts_with(&format!("{q}/")) || q.starts_with(&format!("{w}/"))
             })
         })
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod wip_tests {
+    use super::overlap_paths;
+
+    fn v(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn overlap_exact_and_prefix_both_directions() {
+        // Exact match.
+        assert_eq!(
+            overlap_paths(&v(&["src/a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        // WIP dir covers queried file beneath it.
+        assert_eq!(overlap_paths(&v(&["src/a.rs"]), &v(&["src"])), v(&["src"]));
+        // Queried dir covers WIP file beneath it.
+        assert_eq!(
+            overlap_paths(&v(&["src"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        // Disjoint paths don't overlap.
+        assert!(overlap_paths(&v(&["src/a.rs"]), &v(&["docs/b.md"])).is_empty());
+        // Sibling names sharing a prefix string but not a path segment.
+        assert!(overlap_paths(&v(&["src/app"]), &v(&["src/apple"])).is_empty());
+    }
+
+    #[test]
+    fn overlap_normalizes_separators_and_dots() {
+        assert_eq!(
+            overlap_paths(&v(&["./src/a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        assert_eq!(
+            overlap_paths(&v(&["src\\a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        assert_eq!(overlap_paths(&v(&["src/"]), &v(&["src"])), v(&["src"]));
+    }
+
+    #[test]
+    fn overlap_empty_query_means_no_specific_paths() {
+        assert!(overlap_paths(&[], &v(&["src"])).is_empty());
+    }
 }

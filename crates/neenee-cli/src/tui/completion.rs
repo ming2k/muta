@@ -548,10 +548,26 @@ impl App {
         }
 
         if current.starts_with('/') {
-            return BuiltinCmd::ALL
-                .iter()
-                .filter(|(cmd, _)| cmd.starts_with(&current))
-                .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            // Trigger-word steering ("did you mean …"): when the whole token
+            // is a known trigger (`/clear`, `/reset`, `/continue`, …) pin the
+            // suggested command on top of the popup — ahead of any real
+            // command the trigger merely prefixes (e.g. a future `/restart`
+            // must not outrank `/reset`'s steer to `/new`). The trigger
+            // itself is never executable: accepting the row rewrites the
+            // input to the target command. Only the bare top-level token is
+            // consulted, so subcommand arguments (`/permissions clear`) never
+            // trigger it.
+            let suggestion = crate::startup::suggest_for_trigger(&current[1..])
+                .map(|(target, reason)| Completion::whole_input(target, reason, self.input.len()));
+            return suggestion
+                .into_iter()
+                .chain(BuiltinCmd::ALL.iter().filter_map(|(cmd, desc)| {
+                    if cmd.starts_with(&current) {
+                        Some(Completion::whole_input(cmd, desc, self.input.len()))
+                    } else {
+                        None
+                    }
+                }))
                 .chain(self.custom_commands.iter().filter_map(|(command, desc)| {
                     if command.starts_with(&current) {
                         Some(Completion::whole_input(

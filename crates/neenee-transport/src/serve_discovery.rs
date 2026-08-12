@@ -1,17 +1,18 @@
 //! Discovery file: how co-process clients find a live session server's
 //! endpoint.
 //!
-//! Once the OS has assigned a port, the serving process (the `neenee-server`
-//! binary today; any [`crate::serve::start_server`] host tomorrow) writes one
-//! small JSON record into a well-known per-project location; on clean
-//! shutdown it removes it. Clients (an attaching `neenee --attach` TUI, a
-//! browser launcher) read the record to attach to the already-running session
-//! host instead of spawning a second one. The module lives in this crate —
-//! not in either binary — so writer and reader share one definition of the
-//! record and of the path-resolution rule.
+//! Since ADR-0096 the record that matters is **global**: the unified daemon
+//! (`neenee-server`, run by `neenee serve`) writes one `daemon.json` per user
+//! ([`global_discovery_path`], in `$XDG_RUNTIME_DIR/neenee/` when a runtime
+//! dir exists) once its port is bound, and removes it on clean shutdown.
+//! Clients (an attaching `neenee attach` TUI, `neenee status`, the
+//! dashboard) read that record to reach the already-running daemon instead of
+//! spawning a second one. The module lives in this crate — not in either
+//! binary — so writer and reader share one definition of the record and of
+//! the path-resolution rule.
 //!
-//! Path resolution reuses [`neenee_persistence::paths`] so a client resolving
-//! the same project root lands on the same file:
+//! The per-project path resolution below is the **legacy** pre-ADR-0096
+//! scheme, retained for reading (and cleaning up) old records:
 //!
 //! - `$XDG_RUNTIME_DIR/neenee/serve/<bucket>.json` when a runtime dir exists
 //!   ([`paths::Dirs::runtime_dir`]) — ephemeral tmpfs is the right home for a
