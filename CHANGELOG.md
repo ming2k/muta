@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.5] - 2026-08-13
+
+### Added
+
+- **DeepSeek migrated to the OpenAI Responses API.** The built-in `deepseek`
+  template now seeds the Responses endpoint (`api.deepseek.com/v1/responses`)
+  instead of chat completions, and adds the `deepseek-v4-pro-0813` model (Pro
+  gained the Responses surface with the 0813 release; Flash 0731 GA already
+  had it). A new API-key `openai-responses` transport path carries the channel
+  `effort` override onto DeepSeek's `reasoning.effort`, and Responses parsing
+  surfaces DeepSeek's raw chain-of-thought via `reasoning_text` parts.
+
+### Changed
+
+- **Reasoning-effort abstraction unified.** `Effort` is now documented as the
+  single provider-independent depth concept, in two explicit layers: the
+  *abstraction* (`Effort` → each public API specification's depth field) and the
+  *baseline value-sets* (the `EFFORT_*` consts). Every `EFFORT_*` const now
+  states whether upstream advertises tiers (Kimi K3, Copilot — live-discovered,
+  the const is a pre-fetch seed) or advertises nothing (OpenAI/xAI/DeepSeek/Z.AI
+  /Google — the const *is* the effective ladder, sourced from prose docs), with
+  citations. This makes the precedence chain — live discovery → static baseline
+  → `&[]` — explicit instead of implicit. Added DeepSeek, GLM-5.2, and Gemini
+  (`thinkingLevel` for 3.x / `thinkingBudget` for 2.5) effort ladders; merged the
+  byte-identical Kimi-K3 / DeepSeek consts into the shared `EFFORT_LOW_HIGH_MAX`.
+  New reference: [docs/reference/effort.md](docs/reference/effort.md).
+
+### Fixed
+
+- **Gemini 2.5 `thinkingBudget` doc bug.** `gemini_thinking_budget` documented
+  `High` as returning `-1` (dynamic); it actually pins the model's full cap (a
+  deliberate request is never "let the server decide"). Doc corrected to match
+  the code.
+- **ADR-0065 / Copilot fitting discrepancy.** The ADR claimed fitting was
+  enabled for "only `kimi-code`", but `copilot-oauth` also sets `fitting: true`
+  (it advertises `supports.reasoning_effort`). ADR updated to name both.
+- **Release workflow cross-compile target install.** The `rust-toolchain.toml`
+  pin must carry the cross target; installing it into `stable` via the action's
+  `targets` input left the build toolchain without it (E0463).
+
 ## [0.22.4] - 2026-08-13
 
 ### Added
@@ -124,11 +164,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries the provider instance's display name so identical models served by
   different instances stay attributable (mirroring the `· <provider>` suffix
   in the Models picker); it drops before the context meter on narrow
-  terminals. Kimi K3's registry entry now advertises its single `max` effort
-  tier (`EFFORT_KIMI_K3`), so requests pin `reasoning_effort: "max"` (the
-  platform's `default_effort`) and the effort tag shows for it; models whose
-  effort ladder tops out below `high` now default to their deepest tier
-  instead of an unsupported `high`.
+  terminals. Kimi K3's registry entry advertises its `low`/`high`/`max` effort
+  ladder (the shared `EFFORT_LOW_HIGH_MAX` const; refreshed live from the
+  platform's `think_efforts.valid_efforts`), so requests pin
+  `reasoning_effort` and the effort tag shows for it; models whose effort
+  ladder tops out below `high` now default to their deepest tier instead of an
+  unsupported `high`.
 
 - **Unified session daemon and the control plane (ADR-0096).** neenee is now  a client of one user-level daemon (`neenee serve`, or the `neenee-server`
   binary) that owns **every session across every project**. The daemon
@@ -2669,7 +2710,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.4...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.5...HEAD
+[0.22.5]: https://github.com/ming2k/neenee/releases/tag/v0.22.5
 [0.22.4]: https://github.com/ming2k/neenee/releases/tag/v0.22.4
 [0.22.3]: https://github.com/ming2k/neenee/releases/tag/v0.22.3
 [0.22.2]: https://github.com/ming2k/neenee/releases/tag/v0.22.2
