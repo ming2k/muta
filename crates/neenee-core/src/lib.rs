@@ -53,7 +53,7 @@ pub mod catalog;
 pub mod channelauth;
 pub mod effort;
 pub use effort::{
-    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
+    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort, EffortLevel,
 };
 pub mod thinking;
 pub use thinking::{ThinkingMode, ThinkingSupport};

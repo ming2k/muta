@@ -63,7 +63,7 @@ pub enum GoogleThinking {
 /// level-only model.
 pub fn resolve_thinking(
     effort: Option<neenee_core::Effort>,
-    effort_levels: &[neenee_core::Effort],
+    effort_levels: &[neenee_core::EffortLevel],
     max_budget: u32,
 ) -> Option<GoogleThinking> {
     // A model that does not advertise a depth ladder has no thinking surface to
@@ -74,11 +74,18 @@ pub fn resolve_thinking(
         return None;
     }
     let requested = effort?;
-    let clamped = requested.clamp_to(effort_levels);
+    // Gemini's ladders are always compiled-in known rungs, so extract the known
+    // subset for ranking; `Other` (a provider tier outside the vocabulary) has
+    // no Gemini surface to map onto and is ignored here.
+    let known: Vec<neenee_core::Effort> = effort_levels
+        .iter()
+        .filter_map(neenee_core::EffortLevel::as_known)
+        .collect();
+    let clamped = requested.clamp_to(&known);
     // Decide the surface from the ladder's deepest rung: the budget ladder tops
     // out at `max`, the level ladder at `high`. This keeps the model-specific
     // choice in one place and never inspects the free-form model id string.
-    let is_budget = effort_levels.contains(&neenee_core::Effort::Max);
+    let is_budget = known.contains(&neenee_core::Effort::Max);
     Some(if is_budget {
         GoogleThinking::Budget(clamped.gemini_thinking_budget(max_budget))
     } else {
@@ -609,21 +616,23 @@ mod tests {
         // Gemini 3.x uses a level ladder; each rung maps to thinkingLevel,
         // clamping down from unsupported depths.
         use neenee_core::effort::{EFFORT_GEMINI_LEVEL, Effort};
+        let level: Vec<neenee_core::EffortLevel> =
+            EFFORT_GEMINI_LEVEL.iter().copied().map(Into::into).collect();
         assert_eq!(
-            resolve_thinking(Some(Effort::High), EFFORT_GEMINI_LEVEL, 0),
+            resolve_thinking(Some(Effort::High), &level, 0),
             Some(GoogleThinking::Level(Effort::High))
         );
         // max/xhigh clamp down to high (Gemini 3.x has no deeper rung).
         assert_eq!(
-            resolve_thinking(Some(Effort::Max), EFFORT_GEMINI_LEVEL, 0),
+            resolve_thinking(Some(Effort::Max), &level, 0),
             Some(GoogleThinking::Level(Effort::High))
         );
         assert_eq!(
-            resolve_thinking(Some(Effort::Minimal), EFFORT_GEMINI_LEVEL, 0),
+            resolve_thinking(Some(Effort::Minimal), &level, 0),
             Some(GoogleThinking::Level(Effort::Minimal))
         );
         // No override → server default.
-        assert_eq!(resolve_thinking(None, EFFORT_GEMINI_LEVEL, 0), None);
+        assert_eq!(resolve_thinking(None, &level, 0), None);
     }
 
     #[test]
@@ -631,17 +640,19 @@ mod tests {
         // Gemini 2.5 uses a budget ladder; rungs map to token buckets against
         // the model's max (Flash: 24576).
         use neenee_core::effort::{EFFORT_GEMINI_BUDGET, Effort};
+        let budget: Vec<neenee_core::EffortLevel> =
+            EFFORT_GEMINI_BUDGET.iter().copied().map(Into::into).collect();
         assert_eq!(
-            resolve_thinking(Some(Effort::Medium), EFFORT_GEMINI_BUDGET, 24576),
+            resolve_thinking(Some(Effort::Medium), &budget, 24576),
             Some(GoogleThinking::Budget(12288))
         );
         assert_eq!(
-            resolve_thinking(Some(Effort::Max), EFFORT_GEMINI_BUDGET, 24576),
+            resolve_thinking(Some(Effort::Max), &budget, 24576),
             Some(GoogleThinking::Budget(24576))
         );
         // Pro's larger cap scales the bucket.
         assert_eq!(
-            resolve_thinking(Some(Effort::Medium), EFFORT_GEMINI_BUDGET, 32768),
+            resolve_thinking(Some(Effort::Medium), &budget, 32768),
             Some(GoogleThinking::Budget(16384))
         );
     }

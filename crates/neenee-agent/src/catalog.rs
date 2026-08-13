@@ -954,10 +954,31 @@ pub fn sync_fitted_model_registry(config: &Config) {
                     reasoning: info.reasoning,
                     vision: info.vision,
                     format,
+                    // The fitted overlay feeds the `Copy` static `Model`
+                    // registry, which can hold only the known `Effort`
+                    // vocabulary — so extract the known rungs and warn about
+                    // any provider-advertised tier outside the vocabulary.
+                    // Unknown tiers are NOT lost: they survive in the
+                    // per-channel `RemoteModelMetadata` runtime path
+                    // (`ModelCapabilities`), which carries `EffortLevel` and
+                    // stamps `Other` tiers through to the wire. This bridge
+                    // only narrows for the vetted static baseline.
                     effort_levels: info
                         .efforts
                         .iter()
-                        .filter_map(|level| Effort::parse(level))
+                        .filter_map(|level| match Effort::parse(level) {
+                            Some(e) => Some(e),
+                            None => {
+                                tracing::warn!(
+                                    level = level,
+                                    model = %id,
+                                    "effort tier outside the known vocabulary; \
+                                     preserved on the channel but not the static \
+                                     baseline"
+                                );
+                                None
+                            }
+                        })
                         .collect(),
                 }
             })

@@ -45,9 +45,7 @@
 
 use std::time::Duration;
 
-use neenee_core::{
-    Effort, RemoteModelEndpoint, RemoteModelMetadata, SecretString, ThinkingSupport,
-};
+use neenee_core::{RemoteModelEndpoint, RemoteModelMetadata, SecretString, ThinkingSupport};
 use serde_json::Value;
 
 /// The protocol a discovery request speaks. Kept as a string (not the
@@ -225,9 +223,13 @@ impl DiscoveredModel {
             tool_call: self.tool_call,
             vision: self.vision,
             effort_levels: self.effort_levels.as_ref().map(|levels| {
+                // Non-dropping parse: a known rung becomes Known, anything else
+                // becomes Other carrying the raw wire string — a provider tier
+                // outside the vocabulary is preserved verbatim (ADR-0065)
+                // rather than silently dropped.
                 levels
                     .iter()
-                    .filter_map(|level| Effort::parse(level))
+                    .map(|level| neenee_core::EffortLevel::parse(level))
                     .collect()
             }),
         }
@@ -904,7 +906,11 @@ mod tests {
         assert_eq!(remote.endpoint, Some(RemoteModelEndpoint::Messages));
         assert_eq!(
             remote.effort_levels,
-            Some(vec![Effort::Low, Effort::Medium, Effort::High])
+            Some(vec![
+                neenee_core::EffortLevel::Known(neenee_core::Effort::Low),
+                neenee_core::EffortLevel::Known(neenee_core::Effort::Medium),
+                neenee_core::EffortLevel::Known(neenee_core::Effort::High)
+            ])
         );
         assert_eq!(remote.thinking, Some(ThinkingSupport::AnthropicAdaptive));
 

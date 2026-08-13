@@ -65,6 +65,15 @@
 //! duplicated brand alias — split into per-family consts only when the sets
 //! actually diverge (YAGNI).
 //!
+//! **The vocabulary is open, not closed.** The seven rungs are the words
+//! providers use, not a ceiling: a provider may advertise a tier the vocabulary
+//! does not name. [`EffortLevel`] is the open companion type — `Known(Effort)`
+//! or `Other(String)` — carried on the runtime view
+//! ([`crate::model::ModelCapabilities`]) so a live-advertised tier is preserved
+//! and stamped through verbatim rather than dropped. [`Effort`] itself stays
+//! `Copy` and closed (the static registry depends on that); openness lives only
+//! where live discovery lands. See [`EffortLevel`] below.
+//!
 //! This module is the implementation; the prose reference for users and
 //! contributors lives in `docs/reference/effort.md`.
 
@@ -191,6 +200,53 @@ impl Effort {
             })
     }
 
+    /// Resolve this known requested effort against a channel's **open** effort
+    /// ladder ([`EffortLevel`], which may carry provider-advertised tiers the
+    /// vocabulary does not name). Returns the wire string to stamp.
+    ///
+    /// Known rungs clamp by rank exactly as [`clamp_to`](Self::clamp_to) does.
+    /// [`EffortLevel::Other`] rungs cannot be ranked, so they participate only
+    /// by **exact name match**: if the request's wire string equals an `Other`
+    /// rung, it passes through verbatim (the provider named it, so the provider
+    /// honors it); otherwise `Other` rungs are invisible to the ranking. When
+    /// no ranked rung fits, the ladder's shallowest **known** rung is used
+    /// (`Other` is never a fallback default — its depth is unknowable).
+    ///
+    /// This keeps the flexibility honest: a tier outside the vocabulary reaches
+    /// the wire when the request names it, but never pretends to a rank it
+    /// cannot have. A request for an `Other` tier is expressed via
+    /// [`EffortLevel`] directly, not through a known [`Effort`].
+    pub fn clamp_to_levels(self, allowed: &[EffortLevel]) -> EffortLevel {
+        // Exact-name passthrough: a request whose wire string an `Other` rung
+        // matches wins verbatim. (The request is a known Effort, so this only
+        // fires when an `Other` rung happens to reuse a known name — rare, but
+        // keeps the contract total.)
+        let req_str = self.as_str();
+        for level in allowed {
+            if let EffortLevel::Other(s) = level
+                && s == req_str
+            {
+                return EffortLevel::Other(s.clone());
+            }
+        }
+        // Ranked clamp over the known rungs only.
+        let req = self.rank();
+        let known: Vec<Effort> = allowed.iter().filter_map(EffortLevel::as_known).collect();
+        let clamped = known
+            .iter()
+            .copied()
+            .filter(|e| e.rank() <= req)
+            .max_by_key(|e| e.rank())
+            .unwrap_or_else(|| {
+                known
+                    .iter()
+                    .copied()
+                    .min_by_key(|e| e.rank())
+                    .unwrap_or(Effort::High)
+            });
+        EffortLevel::Known(clamped)
+    }
+
     /// Translate this depth into a Google Gemini 2.5 `thinkingBudget` integer,
     /// the form Gemini 2.5 (Flash/Pro) accepts instead of an enum. Gemini 2.5
     /// takes a token budget in a model-specific range (`max_budget`):
@@ -228,6 +284,90 @@ impl Effort {
             // resolves to the same cap regardless.
             Effort::High | Effort::Xhigh | Effort::Max => max_budget as i64,
         }
+    }
+}
+
+/// A reasoning-depth level **as a channel knows it** — either a known rung of
+/// the [`Effort`] vocabulary or an opaque wire string a provider advertises that
+/// neenee has no name for yet.
+///
+/// This is the **open** companion to the closed [`Effort`] enum. [`Effort`] is
+/// the ordered vocabulary clamp/UI/config key off of; it must stay small and
+/// `Copy` (the static `Model` registry is `Copy`). But a provider's live
+/// `/models` may advertise a tier the vocabulary does not name (e.g. a future
+/// `"turbo"`), and [ADR-0065] makes that advertisement authoritative. Dropping
+/// it would silently downgrade a live capability — so the runtime, per-channel
+/// view ([`crate::model::ModelCapabilities`] / [`crate::model::RemoteModelMetadata`])
+/// carries [`EffortLevel`] to preserve unknown tiers verbatim and stamp them
+/// through to the wire.
+///
+/// ### Where each type lives
+///
+/// | Type | Lifetime | Carries unknowns? |
+/// |------|----------|-------------------|
+/// | `Effort` (`&'static [Effort]`) | static registry (`Model`, `Copy`) | **no** — vetted compile-time vocabulary |
+/// | `EffortLevel` (`Vec<EffortLevel>`) | runtime view (`ModelCapabilities`, `Clone`) | **yes** — live-advertised tiers preserved |
+///
+/// ### Ordering
+///
+/// [`Effort::clamp_to`] orders by the known ladder; an [`EffortLevel::Other`]
+/// has **no rank**. When a request resolves to `Other`, the clamp cannot
+/// compare it and passes it through verbatim (the provider named it, so the
+/// provider honors it); the request path logs the unranked passthrough rather
+/// than silently snapping. A `Known` level clamps against `Known` rungs as
+/// before. This keeps the flexibility honest: a tier outside the vocabulary
+/// reaches the wire, but never pretends to a depth it cannot be ranked at.
+///
+/// [ADR-0065]: ../adr/0065-runtime-fitted-model-capability-overlay.md
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum EffortLevel {
+    /// A rung of the known [`Effort`] vocabulary. Serializes as its wire
+    /// string (`"high"`), so existing persisted TOML round-trips unchanged.
+    Known(Effort),
+    /// A provider-advertised wire string the vocabulary does not name.
+    /// Serialized as the raw string and stamped through to the wire verbatim.
+    Other(String),
+}
+
+impl EffortLevel {
+    /// The wire string to stamp onto the request (`"high"`, or the opaque
+    /// provider string for [`Other`](Self::Other)).
+    pub fn as_str(&self) -> &str {
+        match self {
+            EffortLevel::Known(e) => e.as_str(),
+            EffortLevel::Other(s) => s,
+        }
+    }
+
+    /// The known rung, when this is one. `None` for [`Other`](Self::Other).
+    pub fn as_known(&self) -> Option<Effort> {
+        match self {
+            EffortLevel::Known(e) => Some(*e),
+            EffortLevel::Other(_) => None,
+        }
+    }
+
+    /// `true` when this is a known rung of the vocabulary.
+    pub const fn is_known(&self) -> bool {
+        matches!(self, EffortLevel::Known(_))
+    }
+
+    /// Parse a wire string into a level: a known rung when the vocabulary
+    /// names it, else [`Other`](Self::Other) carrying the raw string. This is
+    /// the **non-dropping** parse — unlike [`Effort::parse`], it never returns
+    /// `None`, so a provider-advertised tier is always preserved.
+    pub fn parse(s: &str) -> EffortLevel {
+        match Effort::parse(s) {
+            Some(e) => EffortLevel::Known(e),
+            None => EffortLevel::Other(s.trim().to_string()),
+        }
+    }
+}
+
+impl From<Effort> for EffortLevel {
+    fn from(e: Effort) -> EffortLevel {
+        EffortLevel::Known(e)
     }
 }
 
@@ -449,5 +589,81 @@ mod tests {
         assert_eq!(Effort::High.gemini_thinking_budget(32768), 32768);
         // A floor of 1 is guaranteed even on a tiny max budget.
         assert_eq!(Effort::Minimal.gemini_thinking_budget(5), 1);
+    }
+
+    #[test]
+    fn effort_level_parse_never_drops() {
+        // Known rungs parse to Known.
+        assert_eq!(EffortLevel::parse("high"), EffortLevel::Known(Effort::High));
+        assert_eq!(EffortLevel::parse("  MAX "), EffortLevel::Known(Effort::Max));
+        // An unknown provider tier is preserved verbatim as Other — the whole
+        // point: a live-advertised tier outside the vocabulary is not lost.
+        assert_eq!(EffortLevel::parse("turbo"), EffortLevel::Other("turbo".to_string()));
+        assert_eq!(EffortLevel::parse("draft"), EffortLevel::Other("draft".to_string()));
+    }
+
+    #[test]
+    fn effort_level_round_trips_through_serde() {
+        // Known serializes as its wire string (back-compat with persisted TOML).
+        let high = EffortLevel::Known(Effort::High);
+        assert_eq!(serde_json::to_string(&high).unwrap(), "\"high\"");
+        assert_eq!(
+            serde_json::from_str::<EffortLevel>("\"high\"").unwrap(),
+            EffortLevel::Known(Effort::High)
+        );
+        // Other serializes as the raw string and round-trips.
+        let turbo = EffortLevel::Other("turbo".to_string());
+        assert_eq!(serde_json::to_string(&turbo).unwrap(), "\"turbo\"");
+        assert_eq!(
+            serde_json::from_str::<EffortLevel>("\"turbo\"").unwrap(),
+            EffortLevel::Other("turbo".to_string())
+        );
+    }
+
+    #[test]
+    fn clamp_to_levels_ranks_known_and_passes_through_other() {
+        // Known request against a ladder with an Other rung: Other is invisible
+        // to ranking; the request clamps among known rungs.
+        let ladder = vec![
+            EffortLevel::Known(Effort::Low),
+            EffortLevel::Other("turbo".to_string()),
+            EffortLevel::Known(Effort::High),
+        ];
+        // xhigh (above the known max of high) clamps down to high; turbo is not
+        // a ranking target.
+        assert_eq!(
+            Effort::Xhigh.clamp_to_levels(&ladder),
+            EffortLevel::Known(Effort::High)
+        );
+        // A request shallower than the floor snaps up to the shallowest known.
+        assert_eq!(
+            Effort::Minimal.clamp_to_levels(&ladder),
+            EffortLevel::Known(Effort::Low)
+        );
+    }
+
+    #[test]
+    fn clamp_to_levels_exact_name_match_passes_through() {
+        // If an Other rung reuses a known request's wire string, it passes
+        // through verbatim (provider named it, provider honors it).
+        let ladder = vec![EffortLevel::Other("high".to_string())];
+        assert_eq!(
+            Effort::High.clamp_to_levels(&ladder),
+            EffortLevel::Other("high".to_string())
+        );
+    }
+
+    #[test]
+    fn clamp_to_levels_other_is_never_a_default() {
+        // When no ranked rung fits, the fallback is the shallowest KNOWN rung —
+        // never an Other tier, whose depth is unknowable.
+        let ladder = vec![
+            EffortLevel::Other("turbo".to_string()),
+            EffortLevel::Known(Effort::High),
+        ];
+        assert_eq!(
+            Effort::Minimal.clamp_to_levels(&ladder),
+            EffortLevel::Known(Effort::High)
+        );
     }
 }

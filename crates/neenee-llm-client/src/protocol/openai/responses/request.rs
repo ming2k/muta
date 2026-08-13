@@ -180,7 +180,7 @@ pub fn body_with_capabilities(
     {
         reasoning.insert(
             "effort".to_string(),
-            json!(effort.clamp_to(&capabilities.effort_levels).as_str()),
+            json!(effort.clamp_to_levels(&capabilities.effort_levels).as_str()),
         );
     }
     body["reasoning"] = Value::Object(reasoning);

@@ -79,6 +79,25 @@ request-schema enum in its docs, not from any runtime call. Kimi K3, by
 contrast, advertises the same set live, so its baseline is just the seed before
 the first fetch.
 
+### An open vocabulary, not a closed one
+
+The seven rungs above are the **vocabulary** — the words providers actually use.
+They are not a ceiling. A provider may advertise a tier the vocabulary does not
+name (a future `"turbo"`, say). Such a tier is **preserved**, not dropped:
+
+- The static registry (`Model`, `Copy`) holds the vetted `[Effort]` vocabulary —
+  only known rungs, compile-time.
+- The runtime, per-channel view (`ModelCapabilities`) holds `[EffortLevel]`,
+  where `EffortLevel` is either `Known(Effort)` or `Other(String)`. A
+  live-advertised tier outside the vocabulary rides through as `Other` and is
+  stamped onto the wire verbatim.
+
+This split is deliberate: the `Copy` static registry cannot hold heap strings,
+but the `Clone` runtime view can — so openness lives exactly where live
+discovery lands, and the vetted baseline stays cheap and closed. A provider
+adding a tier needs no neenee release for that tier to reach the wire; it only
+needs a release to gain a *ranked* clamp and a picker caption.
+
 ### Clamp semantics
 
 A requested rung a model does not support is clamped, never sent raw (the

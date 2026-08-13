@@ -133,9 +133,12 @@ pub struct RemoteModelMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
     /// Endpoint-advertised reasoning effort values. An empty vector explicitly
-    /// means that the model accepts no effort control.
+    /// means that the model accepts no effort control. Carries
+    /// [`EffortLevel`](crate::effort::EffortLevel) so a provider-advertised tier
+    /// the vocabulary does not name is preserved verbatim and stamped through
+    /// (ADR-0065), rather than silently dropped.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub effort_levels: Option<Vec<crate::Effort>>,
+    pub effort_levels: Option<Vec<crate::effort::EffortLevel>>,
 }
 
 /// Effective capabilities for one provider channel.
@@ -153,7 +156,11 @@ pub struct ModelCapabilities {
     pub thinking: ThinkingSupport,
     pub tool_call: bool,
     pub vision: bool,
-    pub effort_levels: Vec<crate::Effort>,
+    /// The effort ladder this channel honors, as [`EffortLevel`] so a
+    /// provider-advertised tier outside the [`Effort`] vocabulary is preserved
+    /// and stamped through (ADR-0065). Built in `for_channel` from the remote
+    /// advertisement over the static baseline.
+    pub effort_levels: Vec<crate::effort::EffortLevel>,
 }
 
 impl ModelCapabilities {
@@ -184,7 +191,7 @@ impl ModelCapabilities {
             vision: remote.vision.unwrap_or(baseline.vision),
             effort_levels: remote
                 .effort_levels
-                .unwrap_or_else(|| baseline.effort_levels.to_vec()),
+                .unwrap_or_else(|| baseline.effort_levels.iter().copied().map(Into::into).collect()),
         }
     }
 

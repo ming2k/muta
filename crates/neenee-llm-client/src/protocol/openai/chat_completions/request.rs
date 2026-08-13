@@ -218,7 +218,8 @@ pub fn body_with_capabilities(
     if let Some(effort) = reasoning_effort
         && !capabilities.effort_levels.is_empty()
     {
-        body["reasoning_effort"] = json!(effort.clamp_to(&capabilities.effort_levels).as_str());
+        body["reasoning_effort"] =
+            json!(effort.clamp_to_levels(&capabilities.effort_levels).as_str());
     }
     if let Some(specs) = tool_specs {
         body["tools"] = specs;

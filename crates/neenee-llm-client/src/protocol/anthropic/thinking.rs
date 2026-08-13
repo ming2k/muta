@@ -69,18 +69,31 @@ impl ThinkingConfig {
         self
     }
 
-    /// Resolve this config against a concrete model's `effort_levels`,
-    /// returning a new config whose explicit effort (if any) is clamped to the
-    /// model's supported levels. The mode and the effort's explicit/implicit
-    /// distinction are honored unchanged. An empty `effort_levels` disables
-    /// clamping. This is what `request::stamp_thinking` calls.
-    pub(super) fn resolve_for(self, effort_levels: &[Effort]) -> Self {
+    /// Resolve this config against a concrete model's `effort_levels` (the
+    /// open [`EffortLevel`] ladder, which may carry provider-advertised tiers
+    /// the vocabulary does not name), returning a new config whose explicit
+    /// effort (if any) is clamped to the model's supported levels. The mode and
+    /// the effort's explicit/implicit distinction are honored unchanged. An
+    /// empty `effort_levels` disables clamping. This is what `request::stamp_thinking`
+    /// calls.
+    ///
+    /// The request effort is always a *known* [`Effort`] (it comes from a
+    /// channel/config override), so it clamps against the **known** rungs of
+    /// the open ladder; provider-advertised `Other` tiers are not eligible
+    /// ranking targets for a known request (their depth is unknowable), though
+    /// an exact-name passthrough is honored via [`Effort::clamp_to_levels`].
+    pub(super) fn resolve_for(self, effort_levels: &[neenee_core::EffortLevel]) -> Self {
         if effort_levels.is_empty() {
             return self;
         }
+        // Clamp a known request against the known rungs of the open ladder.
+        let known: Vec<Effort> = effort_levels
+            .iter()
+            .filter_map(neenee_core::EffortLevel::as_known)
+            .collect();
         Self {
             mode: self.mode,
-            effort: self.effort.map(|e| e.clamp_to(effort_levels)),
+            effort: self.effort.map(|e| e.clamp_to(&known)),
         }
     }
 

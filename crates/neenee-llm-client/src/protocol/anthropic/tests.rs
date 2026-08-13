@@ -464,13 +464,23 @@ fn non_default_effort_is_stamped_into_output_config() {
 #[test]
 fn effort_clamps_to_model_support_levels() {
     let cfg = ThinkingConfig::default().with_effort(Effort::Xhigh);
-    let resolved = cfg.resolve_for(neenee_core::EFFORT_COMMON);
+    let common: Vec<neenee_core::EffortLevel> = neenee_core::EFFORT_COMMON
+        .iter()
+        .copied()
+        .map(Into::into)
+        .collect();
+    let resolved = cfg.resolve_for(&common);
     assert_eq!(
         resolved.effort,
         Some(Effort::High),
         "xhigh clamps to high on a common-only model"
     );
-    let resolved_claude = cfg.resolve_for(neenee_core::EFFORT_CLAUDE_FULL);
+    let claude: Vec<neenee_core::EffortLevel> = neenee_core::EFFORT_CLAUDE_FULL
+        .iter()
+        .copied()
+        .map(Into::into)
+        .collect();
+    let resolved_claude = cfg.resolve_for(&claude);
     assert_eq!(resolved_claude.effort, Some(Effort::Xhigh));
 }
 
