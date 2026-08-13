@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.4] - 2026-08-13
+
+### Added
+
+- **Google Antigravity OAuth subscription provider.** A new
+  `antigravity-oauth` channel exposes Google-native models over native Google
+  REST, resolving the live OAuth access token from `auth.toml` (key
+  `google-antigravity`) and refreshing it at activate/switch time. Registered
+  with a public client id and an offline-access consent scope, it uses the
+  browser login flow by default. The OAuth bearer resolution in the agent
+  catalog and model discovery was collapsed from three per-provider match arms
+  into a single `oauth_provider_id()`-driven lookup, so future OAuth channels
+  no longer need bespoke resolution code; a matching `antigravity-oauth`
+  template appears in the TUI provider picker with the correct labels.
+
 ## [0.22.3] - 2026-08-12
 
 ### Added
@@ -2654,7 +2669,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.3...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.4...HEAD
+[0.22.4]: https://github.com/ming2k/neenee/releases/tag/v0.22.4
 [0.22.3]: https://github.com/ming2k/neenee/releases/tag/v0.22.3
 [0.22.2]: https://github.com/ming2k/neenee/releases/tag/v0.22.2
 [0.22.1]: https://github.com/ming2k/neenee/releases/tag/v0.22.1
