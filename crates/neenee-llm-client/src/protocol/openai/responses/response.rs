@@ -72,18 +72,23 @@ pub fn message(output: &Value) -> Message {
                     }
                 }
                 "reasoning" => {
-                    if let Some(summary) = item["summary"].as_array() {
-                        for part in summary {
-                            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                                let cleaned = strip_reasoning_placeholder(text);
-                                if cleaned.trim().is_empty() {
-                                    continue;
-                                }
-                                if !reasoning.is_empty() {
-                                    reasoning.push('\n');
-                                }
-                                reasoning.push_str(&cleaned);
+                    // ChatGPT carries the summarized CoT in `summary` parts;
+                    // third-party Responses providers (DeepSeek V4) carry the
+                    // raw CoT as `reasoning_text` parts in `content`. Read
+                    // both — any part with a `text` string contributes.
+                    let parts = item["summary"].as_array().into_iter().chain(
+                        item["content"].as_array().into_iter(),
+                    );
+                    for part in parts.flatten() {
+                        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                            let cleaned = strip_reasoning_placeholder(text);
+                            if cleaned.trim().is_empty() {
+                                continue;
                             }
+                            if !reasoning.is_empty() {
+                                reasoning.push('\n');
+                            }
+                            reasoning.push_str(&cleaned);
                         }
                     }
                 }
@@ -149,8 +154,11 @@ impl ResponsesStream {
                     events.push(ProviderStreamEvent::TextDelta(delta.to_string()));
                 }
             }
-            "response.reasoning_summary_text.delta" => {
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 if let Some(delta) = value["delta"].as_str() {
+                    // `reasoning_summary_text` is the ChatGPT backend's
+                    // summarized CoT; `reasoning_text` is the raw CoT stream
+                    // used by third-party Responses providers (DeepSeek V4).
                     // The ChatGPT Responses backend emits an empty `<!-- -->`
                     // HTML comment as the body placeholder for header-only
                     // reasoning-summary parts (a part's full text is e.g.
@@ -279,6 +287,32 @@ mod tests {
             &ev[0],
             ProviderStreamEvent::ReasoningDelta(t) if t == "thinking"
         ));
+    }
+
+    #[test]
+    fn parses_raw_reasoning_text_delta() {
+        // Third-party Responses providers (DeepSeek V4) stream the raw CoT as
+        // `reasoning_text` deltas rather than ChatGPT's summary stream.
+        let mut s = ResponsesStream::new();
+        let ev = s.parse(r#"{"type":"response.reasoning_text.delta","delta":"pondering"}"#);
+        assert_eq!(ev.len(), 1);
+        assert!(matches!(
+            &ev[0],
+            ProviderStreamEvent::ReasoningDelta(t) if t == "pondering"
+        ));
+    }
+
+    #[test]
+    fn non_streaming_message_reads_reasoning_content_parts() {
+        // DeepSeek's reasoning item carries plain-text `content` parts rather
+        // than ChatGPT's `summary` parts.
+        let output = serde_json::json!([
+            {"type":"reasoning","content":[{"type":"reasoning_text","text":"step by step"}]},
+            {"type":"message","content":[{"type":"output_text","text":"done"}]},
+        ]);
+        let msg = message(&output);
+        assert_eq!(msg.content, "done");
+        assert_eq!(msg.reasoning_content.as_deref(), Some("step by step"));
     }
 
     #[test]

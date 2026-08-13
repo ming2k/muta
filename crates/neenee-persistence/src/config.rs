@@ -428,6 +428,13 @@ pub enum UserTransport {
     #[default]
     #[serde(alias = "OpenAiCompat", alias = "openai")]
     OpenAi,
+    /// OpenAI **Responses** API (`/responses` endpoint) over an ordinary API
+    /// key — e.g. DeepSeek V4's native surface. Distinct from
+    /// [`OpenAi`](Self::OpenAi) (chat completions) in transport only. OAuth
+    /// Responses channels (ChatGPT) resolve their transport from
+    /// [`ChannelAuth`](neenee_core::ChannelAuth) instead.
+    #[serde(alias = "openai-responses", alias = "openai_responses")]
+    OpenAiResponses,
     /// Anthropic-compatible `/messages` endpoint. Used by opencode-go's
     /// MiniMax/Qwen models and any Anthropic-format relay.
     Anthropic,
@@ -457,8 +464,8 @@ pub struct UserChannelConfig {
     /// Wire model id sent in the request body. Falls back to the model id.
     #[serde(default)]
     pub model: Option<String>,
-    /// Full chat-completions URL (OpenAI-compatible) or `/messages` URL
-    /// (Anthropic).
+    /// Full chat-completions URL (OpenAI-compatible), `/responses` URL
+    /// (OpenAI Responses), or `/messages` URL (Anthropic).
     #[serde(default)]
     pub base_url: Option<String>,
     /// `User-Agent` header (OpenAI-compatible only).

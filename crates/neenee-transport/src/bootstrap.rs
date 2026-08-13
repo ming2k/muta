@@ -199,6 +199,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     {
         tracing::warn!(?error, "could not persist provider instance migration");
     }
+    // Move official-endpoint DeepSeek channels onto the Responses transport
+    // (V4 Flash 0731+ / Pro 0813+ natively speak it) before reconciliation
+    // reseeds anything from the template.
+    if catalog::migrate_deepseek_channels_to_responses(&mut config)
+        && let Err(error) = config.save()
+    {
+        tracing::warn!(?error, "could not persist DeepSeek Responses migration");
+    }
     // Reconcile template-sourced instances before building the picker: Fixed
     // instances mirror their template, while Api instances retain their last
     // discovered client-supported subset. Pure-custom instances (no

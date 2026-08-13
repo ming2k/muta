@@ -56,7 +56,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_KIMI_K3,
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "kimi-k2.7-code",

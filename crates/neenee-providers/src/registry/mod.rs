@@ -117,8 +117,12 @@ pub struct ProviderTemplateSpec {
     /// `neenee_core`'s baseline registry at link time; the reconciliation
     /// layer intersects live-discovered ids against this local table.
     pub baselines: &'static [neenee_core::Model],
-    /// Wire protocol the template's channels speak: `"openai"` | `"anthropic"`
-    /// | `"google"` (the legacy `"gemini"` label is still accepted).
+    /// Wire protocol the template's channels speak: `"openai"` |
+    /// `"openai-responses"` | `"anthropic"` | `"google"` (the legacy `"gemini"`
+    /// label is still accepted). `"openai-responses"` is the OpenAI Responses
+    /// API (`/responses` endpoint) over an ordinary API key — distinct from
+    /// `"openai"` (chat completions) in transport only; model metadata and
+    /// live discovery stay on the OpenAI shape.
     pub protocol: &'static str,
     /// The model ids the template initially seeds, in display/activation order.
     /// Fixed instances continue to mirror this list.
@@ -234,6 +238,7 @@ pub fn build_provider_for_channel(
         Transport::Google {
             base_url,
             user_agent,
+            effort,
         } => {
             let capabilities = channel.capabilities();
             Arc::new(
@@ -243,6 +248,7 @@ pub fn build_provider_for_channel(
                     base_url,
                     user_agent,
                 )
+                .with_reasoning_effort(*effort)
                 .with_model_capabilities(capabilities)
                 .with_id(entry_id.to_string()),
             )

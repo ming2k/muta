@@ -186,6 +186,8 @@ pub async fn add(
     let transport = match protocol.as_str() {
         "anthropic" => UserTransport::Anthropic,
         "google" | "gemini" => UserTransport::Google,
+        // The OpenAI Responses API over an API key (e.g. DeepSeek V4).
+        "openai-responses" => UserTransport::OpenAiResponses,
         // Default (and explicit "openai"): the OpenAI-compatible chat surface.
         _ => UserTransport::OpenAi,
     };
@@ -335,6 +337,7 @@ pub async fn edit(
     let transport = match protocol.as_str() {
         "anthropic" => UserTransport::Anthropic,
         "google" | "gemini" => UserTransport::Google,
+        "openai-responses" => UserTransport::OpenAiResponses,
         _ => UserTransport::OpenAi,
     };
     let trimmed_url = base_url.trim();
@@ -469,7 +472,8 @@ pub async fn edit_model(
             channel.effort = valid_effort;
             channel.thinking = thinking;
         }
-        neenee_persistence::config::UserTransport::OpenAi => {
+        neenee_persistence::config::UserTransport::OpenAi
+        | neenee_persistence::config::UserTransport::OpenAiResponses => {
             channel.effort = valid_effort;
             channel.thinking = None;
         }

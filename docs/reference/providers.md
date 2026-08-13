@@ -71,13 +71,18 @@ env vars are data in that table, not hard-coded per struct.
 | `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | `openai_api_key` config field / `credentials.toml` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
 | `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `anthropic_api_key` config field / `credentials.toml` | `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
 | `google` | `GoogleProvider` | `{google_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GOOGLE_BASE_URL`, then `config.google_base_url`; legacy `GEMINI_BASE_URL` alias) | `google_api_key` config field (legacy alias `gemini_api_key`) / `credentials.toml` | `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
-| `deepseek` | `OpenAiChatCompletionsProvider` | `https://api.deepseek.com/v1/chat/completions` | `deepseek_api_key` config field / `credentials.toml` | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro` (1M context; thinking + non-thinking modes) |
+| `deepseek` | `OpenAiResponsesProvider` | `https://api.deepseek.com/v1/responses` | `deepseek_api_key` config field / `credentials.toml` | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro`, `deepseek-v4-pro-0813` (1M context; thinking + non-thinking modes) |
 
 Notes:
 
 - `deepseek` is a multi-model catalog entry: `deepseek-v4-flash` and
   `deepseek-v4-pro` share one API key (`DEEPSEEK_API_KEY`) and one endpoint.
   It is materialized by the catalog layer, not by `OPENAI_PROVIDER_SPECS`.
+  Both V4 models natively speak the OpenAI **Responses API** (Flash since the
+  0731 GA, Pro since 0813), so the channels use the Responses transport; a
+  startup migration repoints any channel still on the official
+  chat-completions URL. The dated ids (`-0731` / `-0813`) pin a snapshot; the
+  bare ids float with the upstream latest.
 - `zai-code` targets the Z.AI (Zhipu) coding-plan platform and serves the
   GLM-5 family; it sends a `opencode/1.17.10` User-Agent so the platform
   recognises a coding agent.

@@ -262,10 +262,13 @@ pub fn models_endpoint_for(
     // a path like `/v1/chat/completions` keeps its `/v1` root.
     let root = match protocol {
         DiscoveryProtocol::OpenAi => {
-            // Accept both `…/chat/completions` and a bare `…/v1` root.
+            // Accept a `…/chat/completions` or `…/responses` endpoint and a
+            // bare `…/v1` root alike.
             trimmed
                 .strip_suffix("/chat/completions")
                 .or_else(|| trimmed.strip_suffix("/chat/completions/"))
+                .or_else(|| trimmed.strip_suffix("/responses"))
+                .or_else(|| trimmed.strip_suffix("/responses/"))
                 .unwrap_or(trimmed)
         }
         DiscoveryProtocol::Anthropic => trimmed
@@ -624,6 +627,15 @@ mod tests {
             )
             .unwrap(),
             "https://relay.example.com/v1/models"
+        );
+        // A Responses-API endpoint (DeepSeek V4) resolves to the same root.
+        assert_eq!(
+            models_endpoint_for(
+                DiscoveryProtocol::OpenAi,
+                "https://api.deepseek.com/v1/responses"
+            )
+            .unwrap(),
+            "https://api.deepseek.com/v1/models"
         );
     }
 
@@ -1008,6 +1020,11 @@ mod tests {
         );
         assert_eq!(
             DiscoveryProtocol::from_template_protocol("openai"),
+            DiscoveryProtocol::OpenAi
+        );
+        // Responses-API templates discover over the same OpenAI GET /models.
+        assert_eq!(
+            DiscoveryProtocol::from_template_protocol("openai-responses"),
             DiscoveryProtocol::OpenAi
         );
         // Unknown → OpenAI (most common relay shape), never an error.

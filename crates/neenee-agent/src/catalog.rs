@@ -104,6 +104,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                     .user_agent
                     .clone()
                     .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+                effort: uc.effort.as_deref().and_then(Effort::parse),
             },
             UserTransport::Anthropic => {
                 // ADR-0046: reasoning is opt-in. A custom Anthropic relay channel
@@ -147,6 +148,21 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
                     .clone()
                     .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
                 effort: uc.effort.as_deref().and_then(Effort::parse),
+                copilot: false,
+            },
+            // API-key Responses channel (e.g. DeepSeek V4): same shape as the
+            // ChatGPT OAuth Responses transport minus the account-id header.
+            UserTransport::OpenAiResponses => Transport::OpenAiResponses {
+                base_url: uc
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8080/v1/responses".to_string()),
+                user_agent: uc
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| NEENEE_USER_AGENT.to_string()),
+                effort: uc.effort.as_deref().and_then(Effort::parse),
+                account_id: None,
                 copilot: false,
             },
         },
@@ -338,8 +354,8 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         config,
         "deepseek",
         "DeepSeek",
-        UserTransport::OpenAi,
-        "https://api.deepseek.com/v1/chat/completions",
+        UserTransport::OpenAiResponses,
+        DEEPSEEK_RESPONSES_URL,
         None,
         DEEPSEEK_BUILTIN_MODELS,
         deepseek_key,
@@ -443,6 +459,57 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         changed = true;
     }
 
+    changed
+}
+
+/// The official DeepSeek endpoints: the Responses URL the template seeds
+/// today, and the legacy chat-completions URL existing instances may still
+/// carry from before the Responses migration.
+pub const DEEPSEEK_RESPONSES_URL: &str = "https://api.deepseek.com/v1/responses";
+const DEEPSEEK_CHAT_COMPLETIONS_URL: &str = "https://api.deepseek.com/v1/chat/completions";
+
+/// One-time transport migration: point every channel that targets the
+/// *official* DeepSeek chat-completions endpoint at the official Responses
+/// endpoint instead, flipping it to the Responses transport. DeepSeek V4
+/// natively speaks the Responses API (Flash since the 0731 GA, Pro since
+/// 0813), and the `deepseek` template now seeds it — this brings
+/// already-created instances along.
+///
+/// Only the official default URL (or an unset URL on a deepseek-template
+/// channel) is rewritten: a channel aimed at a custom relay keeps its
+/// chat-completions transport, since the relay may not proxy `/responses`.
+/// Returns true when `config` changed and should be saved.
+pub fn migrate_deepseek_channels_to_responses(config: &mut Config) -> bool {
+    let mut changed = false;
+    for provider in &mut config.providers {
+        let is_deepseek_template = provider.template_id.as_deref() == Some("deepseek");
+        for channel in &mut provider.channels {
+            if channel.auth.is_oauth() {
+                continue;
+            }
+            let on_official_endpoint = match channel.base_url.as_deref() {
+                Some(url) => {
+                    let url = url.trim().trim_end_matches('/');
+                    url == DEEPSEEK_CHAT_COMPLETIONS_URL
+                        || url == "https://api.deepseek.com/chat/completions"
+                }
+                // An unset URL on a deepseek-template channel resolves to the
+                // official endpoint at build time — migrate it too.
+                None => is_deepseek_template,
+            };
+            if !on_official_endpoint {
+                continue;
+            }
+            if channel.transport != UserTransport::OpenAiResponses {
+                channel.transport = UserTransport::OpenAiResponses;
+                changed = true;
+            }
+            if channel.base_url.as_deref() != Some(DEEPSEEK_RESPONSES_URL) {
+                channel.base_url = Some(DEEPSEEK_RESPONSES_URL.to_string());
+                changed = true;
+            }
+        }
+    }
     changed
 }
 
@@ -777,6 +844,7 @@ fn supported_models_for_template(spec: &ProviderTemplateSpec) -> Vec<&'static st
             matches!(
                 (spec.protocol, model.format),
                 ("openai", WireFormat::OpenAi)
+                    | ("openai-responses", WireFormat::OpenAi)
                     | ("anthropic", WireFormat::AnthropicCompat)
                     | ("google", WireFormat::Google)
                     | ("gemini", WireFormat::Google) // legacy label
@@ -936,12 +1004,14 @@ fn matching_template(
 }
 
 /// Map a template wire protocol to its `UserTransport`. The template registry
-/// speaks in protocol strings ("openai"/"anthropic"/"google"); channels carry
-/// the richer `UserTransport` enum. This is the single bridge between the two.
+/// speaks in protocol strings ("openai"/"openai-responses"/"anthropic"/
+/// "google"); channels carry the richer `UserTransport` enum. This is the
+/// single bridge between the two.
 fn transport_for_protocol(protocol: &str) -> UserTransport {
     match protocol {
         "anthropic" => UserTransport::Anthropic,
         "google" | "gemini" => UserTransport::Google,
+        "openai-responses" => UserTransport::OpenAiResponses,
         _ => UserTransport::OpenAi,
     }
 }
@@ -1252,11 +1322,18 @@ fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth
 
 /// Map a channel's transport to the `(protocol_wire_id, base_url)` pair the TUI
 /// edit form pre-fills from. `base_url` is empty for the keyless native Google
-/// transport (it has no configurable endpoint).
+/// transport (it has no configurable endpoint). An API-key Responses channel
+/// round-trips as `"openai-responses"` so saving the edit form restores the
+/// Responses transport instead of downgrading it to chat completions; OAuth
+/// Responses channels (ChatGPT/Copilot) skip the transport fields in the
+/// editor, so the label never reaches them.
 fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
-        Transport::OpenAiResponses { base_url, .. } => ("openai".to_string(), base_url.clone()),
+        Transport::OpenAiResponses { base_url, copilot, .. } => {
+            let protocol = if *copilot { "openai" } else { "openai-responses" };
+            (protocol.to_string(), base_url.clone())
+        }
         Transport::Anthropic { base_url, .. } => ("anthropic".to_string(), base_url.clone()),
         Transport::Google { base_url, .. } => ("google".to_string(), base_url.clone()),
     }
@@ -1316,7 +1393,15 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             let effective = if model.effort_levels.is_empty() {
                 None
             } else {
-                Some((*effort).unwrap_or(Effort::Medium).as_str().to_string())
+                // Same default rule as the chat-completions arm: GPT defaults
+                // to `medium`; every other Responses-speaking model (DeepSeek
+                // V4) defaults to `high` clamped to its ladder.
+                let default = if model.family == "gpt" {
+                    Effort::Medium
+                } else {
+                    Effort::High.clamp_to(model.effort_levels)
+                };
+                Some((*effort).unwrap_or(default).as_str().to_string())
             };
             ProviderModelInfo {
                 model: channel.model.clone(),
@@ -1419,6 +1504,120 @@ mod tests {
         // session lands on the model the user last switched to.
         assert_eq!(config.default_model.as_deref(), Some("k3"));
         assert_eq!(config.default_provider, "kimi-code");
+    }
+
+    #[test]
+    fn deepseek_channels_migrate_to_the_responses_transport() {
+        let mut config = bare_config();
+        // An existing deepseek-template instance still on the official
+        // chat-completions endpoint, plus a custom-relay deepseek channel and
+        // an unrelated provider that must both stay untouched.
+        config.providers.push(UserProviderConfig {
+            id: "deepseek".to_string(),
+            channels: vec![
+                UserChannelConfig {
+                    label: "deepseek-v4-flash".to_string(),
+                    transport: UserTransport::OpenAi,
+                    model: Some("deepseek-v4-flash".to_string()),
+                    base_url: Some(
+                        "https://api.deepseek.com/v1/chat/completions".to_string(),
+                    ),
+                    ..Default::default()
+                },
+                UserChannelConfig {
+                    label: "deepseek-v4-pro".to_string(),
+                    transport: UserTransport::OpenAi,
+                    model: Some("deepseek-v4-pro".to_string()),
+                    base_url: Some("https://relay.example.com/v1/chat/completions".to_string()),
+                    ..Default::default()
+                },
+            ],
+            template_id: Some("deepseek".to_string()),
+            ..Default::default()
+        });
+
+        assert!(migrate_deepseek_channels_to_responses(&mut config));
+        let channels = &config.providers[0].channels;
+        // The official-endpoint channel flips to the Responses transport + URL.
+        assert_eq!(channels[0].transport, UserTransport::OpenAiResponses);
+        assert_eq!(
+            channels[0].base_url.as_deref(),
+            Some("https://api.deepseek.com/v1/responses")
+        );
+        // A custom relay keeps chat completions — it may not proxy /responses.
+        assert_eq!(channels[1].transport, UserTransport::OpenAi);
+        assert_eq!(
+            channels[1].base_url.as_deref(),
+            Some("https://relay.example.com/v1/chat/completions")
+        );
+        // Idempotent: a second pass changes nothing.
+        assert!(!migrate_deepseek_channels_to_responses(&mut config));
+    }
+
+    #[test]
+    fn deepseek_responses_migration_covers_untracked_official_channels() {
+        // Even a pure-custom instance aimed at the official DeepSeek
+        // chat-completions URL migrates — the URL unambiguously identifies the
+        // official endpoint, which natively speaks Responses.
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "my-deepseek".to_string(),
+            channels: vec![UserChannelConfig {
+                label: "deepseek-v4-pro".to_string(),
+                transport: UserTransport::OpenAi,
+                model: Some("deepseek-v4-pro".to_string()),
+                base_url: Some("https://api.deepseek.com/v1/chat/completions".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert!(migrate_deepseek_channels_to_responses(&mut config));
+        let channel = &config.providers[0].channels[0];
+        assert_eq!(channel.transport, UserTransport::OpenAiResponses);
+        assert_eq!(
+            channel.base_url.as_deref(),
+            Some("https://api.deepseek.com/v1/responses")
+        );
+    }
+
+    #[test]
+    fn api_key_responses_channel_round_trips_its_protocol_label() {
+        // The edit form pre-fills `protocol` from the picker row and the save
+        // handler maps it back to a transport. An API-key Responses channel
+        // must round-trip as "openai-responses" — plain "openai" would
+        // silently downgrade the channel to chat completions on save.
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "deepseek".to_string(),
+            channels: vec![UserChannelConfig {
+                label: "deepseek-v4-pro".to_string(),
+                transport: UserTransport::OpenAiResponses,
+                api_key: Some("sk-test".into()),
+                model: Some("deepseek-v4-pro".to_string()),
+                base_url: Some("https://api.deepseek.com/v1/responses".to_string()),
+                ..Default::default()
+            }],
+            template_id: Some("deepseek".to_string()),
+            ..Default::default()
+        });
+        let picker = build_picker_state(&config, &ProviderUsage::default());
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.id == "deepseek")
+            .expect("deepseek row");
+        assert_eq!(row.protocol, "openai-responses");
+        assert_eq!(row.base_url, "https://api.deepseek.com/v1/responses");
+        // The per-model info still reports the OpenAI surface so the picker's
+        // effort gating treats it like any OpenAI-family channel.
+        let info = row
+            .model_info
+            .iter()
+            .find(|info| info.model == "deepseek-v4-pro")
+            .expect("model info");
+        assert_eq!(info.protocol, "openai");
+        assert_eq!(info.effort.as_deref(), Some("high"));
     }
 
     /// A provider instance created from a template, pre-stamped with its
@@ -2278,8 +2477,8 @@ mod tests {
     #[test]
     #[ignore = "legacy behavior: built-in providers are now user-added templates"]
     fn deepseek_hosts_flash_and_pro_as_one_provider() {
-        // The two DeepSeek models are now channels of one `deepseek` provider,
-        // both over the OpenAI-compatible transport at the DeepSeek endpoint.
+        // The DeepSeek models are now channels of one `deepseek` provider,
+        // all over the Responses transport at the official DeepSeek endpoint.
         let entries = build_catalog(&bare_config());
         let entry = entries
             .iter()
@@ -2288,12 +2487,13 @@ mod tests {
         assert!(entry.offers_model("deepseek-v4-flash"));
         assert!(entry.offers_model("deepseek-v4-flash-0731"));
         assert!(entry.offers_model("deepseek-v4-pro"));
+        assert!(entry.offers_model("deepseek-v4-pro-0813"));
         let flash = entry.channel_for_model("deepseek-v4-flash").unwrap();
         match &flash.transport {
-            Transport::OpenAi { base_url, .. } => {
-                assert_eq!(base_url, "https://api.deepseek.com/v1/chat/completions");
+            Transport::OpenAiResponses { base_url, .. } => {
+                assert_eq!(base_url, "https://api.deepseek.com/v1/responses");
             }
-            other => panic!("deepseek must be OpenAi, got {other:?}"),
+            other => panic!("deepseek must be OpenAiResponses, got {other:?}"),
         }
     }
 

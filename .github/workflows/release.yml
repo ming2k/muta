@@ -48,8 +48,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins the build toolchain (channel = "1.95.0"), and
+      # that directory override wins over the action's `stable`. Install the
+      # cross target into the pinned toolchain; adding it to `stable` via the
+      # action's `targets` input leaves the build toolchain without it (E0463).
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}

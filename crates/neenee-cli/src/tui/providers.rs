@@ -158,16 +158,16 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "deepseek",
         label: "DeepSeek",
-        description: "DeepSeek V4 Flash (0731) + Pro over OpenAI chat completions",
-        protocol: "openai",
+        description: "DeepSeek V4 Flash (0731) + Pro (0813) over the OpenAI Responses API",
+        protocol: "openai-responses",
         models: neenee_providers::DEEPSEEK_BUILTIN_MODELS,
         // Official endpoint: the base URL is fixed and pre-filled from
         // `default_url`, so the editor hides the Base URL field — the user
         // only supplies a name and token.
         needs_url: false,
-        url_hint: "https://api.deepseek.com/v1/chat/completions",
+        url_hint: "https://api.deepseek.com/v1/responses",
         needs_model: false,
-        default_url: Some("https://api.deepseek.com/v1/chat/completions"),
+        default_url: Some("https://api.deepseek.com/v1/responses"),
         user_agent: None,
         auth: neenee_core::ChannelAuth::ApiKey,
     },
