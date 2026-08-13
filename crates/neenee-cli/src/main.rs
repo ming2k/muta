@@ -54,6 +54,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (startup, project_override, autopilot_at_start, single_instance) =
         parse_args(std::env::args().skip(1).collect());
 
+    // `--version` is pure metadata: print and exit before any harness, lock,
+    // or network work — exactly like the `doctor` short-circuit below.
+    if matches!(startup, StartupMode::Version) {
+        println!("neenee {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     #[cfg(debug_assertions)]
     if let StartupMode::Showcase(component) = &startup {
         return showcase::run(component);

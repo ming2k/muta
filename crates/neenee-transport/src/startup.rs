@@ -203,6 +203,10 @@ pub enum StartupMode {
     /// it), while Enter on a row attaches to that session as usual. Like
     /// `status` it never spawns a daemon — observing requires a running host.
     Dashboard,
+    /// `--version` / `-V`: print the binary's name and version to stdout and
+    /// exit 0. Pure metadata — the caller short-circuits before any harness,
+    /// lock, or network work, exactly like `doctor`.
+    Version,
     /// Render a single UI component in isolation for interactive development
     /// (`neenee showcase <component>`). No agent, no session, no network —
     /// just the component's model + renderer wired to a real terminal so you
@@ -216,6 +220,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
     let mut project: Option<PathBuf> = None;
     let mut autopilot = false;
     let mut single_instance = false;
+    let mut version = false;
     // `Some(inner)` once `--attach` is seen; `inner` is the optional session id.
     let mut attach: Option<Option<String>> = None;
     let mut rest = Vec::new();
@@ -239,9 +244,18 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             autopilot = true;
         } else if arg == "--single-instance" {
             single_instance = true;
+        } else if arg == "--version" || arg == "-V" {
+            version = true;
         } else {
             rest.push(arg);
         }
+    }
+
+    // `--version` short-circuits every other mode (clap convention): the
+    // caller prints it before any harness work, so it wins even over an
+    // explicit subcommand or `--attach`.
+    if version {
+        return (StartupMode::Version, project, autopilot, single_instance);
     }
 
     if let Some(id) = attach {
@@ -348,7 +362,7 @@ pub fn parse_args(args: Vec<String>) -> (StartupMode, Option<PathBuf>, bool, boo
             #[cfg(not(debug_assertions))]
             let showcase_line = "";
             eprintln!(
-                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee serve [--port <n>] [--public] [--detach]\n                          run the session daemon (foreground, or background with --detach)\n  neenee attach [id]      attach the TUI to a session the host serves (spawning one if none is running)\n  neenee status [--watch] [--json] [--all]\n                          show the host's sessions needing attention\n  neenee dashboard        open the full-screen session dashboard\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)",
+                "Unknown command '{}'. Usage:\n  neenee                  start a fresh session\n  neenee resume [id]      resume a session (picker when no id)\n  neenee serve [--port <n>] [--public] [--detach]\n                          run the session daemon (foreground, or background with --detach)\n  neenee attach [id]      attach the TUI to a session the host serves (spawning one if none is running)\n  neenee status [--watch] [--json] [--all]\n                          show the host's sessions needing attention\n  neenee dashboard        open the full-screen session dashboard\n  neenee doctor           verify stored session integrity\n{showcase_line}\nOptions:\n  --project <path>        operate on the project at <path>\n  --autopilot            run without human intervention (no confirmations, no questions) this session\n  --single-instance       require exclusive per-project lock (pre-ADR-0018 default)\n  --version, -V           print the version and exit",
                 cmd
             );
             std::process::exit(2);
@@ -508,6 +522,17 @@ mod tests {
         assert!(project.is_none());
         assert!(!autopilot);
         assert!(!single);
+    }
+
+    #[test]
+    fn version_flags_short_circuit_to_version_mode() {
+        let (mode, ..) = parse_args(args(&["--version"]));
+        assert!(matches!(mode, StartupMode::Version));
+        let (mode, ..) = parse_args(args(&["-V"]));
+        assert!(matches!(mode, StartupMode::Version));
+        // Version wins even over an explicit subcommand.
+        let (mode, ..) = parse_args(args(&["--version", "resume"]));
+        assert!(matches!(mode, StartupMode::Version));
     }
 
     #[test]

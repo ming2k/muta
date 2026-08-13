@@ -13,10 +13,10 @@
 //! [`AgentIdentity`], the [`PrincipalProfile`], and the [`UiBridge`] as
 //! parameters. Nothing here names a product or a principal.
 //!
-//! `StartupMode::Doctor`, `StartupMode::Attach`, and `StartupMode::Showcase`
-//! are **not** handled here: they are purely local (or client-side)
-//! short-circuits and must be dispatched by the caller before invoking
-//! [`assemble`].
+//! `StartupMode::Version`, `StartupMode::Doctor`, `StartupMode::Attach`, and
+//! `StartupMode::Showcase` are **not** handled here: they are purely local
+//! (or client-side) short-circuits and must be dispatched by the caller
+//! before invoking [`assemble`].
 
 use crate::commands::{CustomCommand, discover_commands_trusted};
 use neenee_agent::catalog;
@@ -316,6 +316,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         StartupMode::Attach(_) => unreachable!("attach returns before this match"),
         StartupMode::Serve { .. } => unreachable!("serve returns before this match"),
         StartupMode::Status { .. } => unreachable!("status returns before this match"),
+        StartupMode::Version => unreachable!("--version returns before this match"),
         // `neenee dashboard` is a pure attach-mode surface: it never assembles
         // a local harness (the caller intercepts it before `assemble`, exactly
         // like `status`/`attach`).
