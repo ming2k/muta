@@ -2090,6 +2090,7 @@ pub(super) async fn run_app_loop(
                             neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
                             neenee_core::ChannelAuth::CopilotOAuth => "Copilot",
                             neenee_core::ChannelAuth::XaiOAuth => "xAI",
+                            neenee_core::ChannelAuth::AntigravityOAuth => "Google Antigravity",
                             neenee_core::ChannelAuth::ApiKey => "OAuth",
                         };
                         Some(view::draw_oauth_pending(

@@ -29,13 +29,12 @@ pub enum ChannelAuth {
     ChatGptOAuth,
     /// GitHub Copilot subscription: resolve the live OAuth access token from
     /// `auth.toml` (key `"copilot"`) and route inference to the Copilot
-    /// Responses backend (`https://api.githubcopilot.com/responses`). The token
-    /// is the GitHub OAuth access token from the RFC 8628 device flow; it does
-    /// not expire on a schedule, so the refresh path is a no-op until the user
-    /// revokes the app. Copilot-specific request headers
-    /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`) are injected by
-    /// the Responses provider when it detects this auth mode.
+    /// Responses backend (`https://api.githubcopilot.com/responses`).
     CopilotOAuth,
+    /// Google Antigravity subscription: resolve the live OAuth access token from
+    /// `auth.toml` (key `"google-antigravity"`), refreshed at activate/switch
+    /// time. Connects Google Antigravity models over native Google REST.
+    AntigravityOAuth,
 }
 
 impl ChannelAuth {
@@ -44,7 +43,10 @@ impl ChannelAuth {
     pub fn is_oauth(self) -> bool {
         matches!(
             self,
-            ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth | ChannelAuth::CopilotOAuth
+            ChannelAuth::XaiOAuth
+                | ChannelAuth::ChatGptOAuth
+                | ChannelAuth::CopilotOAuth
+                | ChannelAuth::AntigravityOAuth
         )
     }
 
@@ -55,16 +57,12 @@ impl ChannelAuth {
             ChannelAuth::XaiOAuth => Some("xai"),
             ChannelAuth::ChatGptOAuth => Some("chatgpt"),
             ChannelAuth::CopilotOAuth => Some("copilot"),
+            ChannelAuth::AntigravityOAuth => Some("google-antigravity"),
             ChannelAuth::ApiKey => None,
         }
     }
 
-    /// The default login flow for this OAuth provider. **Device flow is the
-    /// default** for every subscription provider: it works headless (SSH, VPS,
-    /// Docker) and needs no registered browser callback URL, so it cannot hit
-    /// "redirect_uri is not associated with this application". The browser flow
-    /// remains available as an opt-in only when the provider's callback is
-    /// registered and the user is on a desktop with a reachable loopback port.
+    /// The default login flow for this OAuth provider.
     ///
     /// Returns `None` for API-key channels (no OAuth login to run).
     pub fn default_login_method(self) -> Option<LoginMethod> {
@@ -72,6 +70,7 @@ impl ChannelAuth {
             ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth | ChannelAuth::CopilotOAuth => {
                 Some(LoginMethod::Device)
             }
+            ChannelAuth::AntigravityOAuth => Some(LoginMethod::Browser),
             ChannelAuth::ApiKey => None,
         }
     }

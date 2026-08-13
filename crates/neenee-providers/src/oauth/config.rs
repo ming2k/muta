@@ -170,13 +170,34 @@ pub const COPILOT: OAuthConfig = OAuthConfig {
     device_redirect_uri: "",
 };
 
+/// Google Antigravity OAuth client config. Public Client ID registered for Google Antigravity / Cloud SDK.
+pub const GOOGLE_ANTIGRAVITY: OAuthConfig = OAuthConfig {
+    provider_id: "google-antigravity",
+    client_id: "1070200057404-36h00infrjh2h81p4g0t47a98v1a21qg.apps.googleusercontent.com",
+    authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
+    token_url: "https://oauth2.googleapis.com/token",
+    device_authorization_url: "https://oauth2.googleapis.com/device/code",
+    grant_type_device: "urn:ietf:params:oauth:grant-type:device_code",
+    scope: "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email openid profile offline_access",
+    extra_authorize_params: &[("access_type", "offline"), ("prompt", "consent")],
+    oauth_host: "127.0.0.1",
+    oauth_port: 51121,
+    oauth_path: "/oauth/callback",
+    redirect_host: "127.0.0.1",
+    send_nonce: false,
+    device_flow: DeviceFlow::Rfc8628,
+    device_token_url: "https://oauth2.googleapis.com/token",
+    device_redirect_uri: "",
+};
+
 /// Resolve a config by its `auth.toml` provider-id key (`"xai"` / `"chatgpt"`
-/// / `"copilot"`).
+/// / `"copilot"` / `"google-antigravity"`).
 pub fn config_by_provider_id(id: &str) -> Option<&'static OAuthConfig> {
     match id {
         "xai" => Some(&XAI),
         "chatgpt" => Some(&CHATGPT),
         "copilot" => Some(&COPILOT),
+        "google-antigravity" | "antigravity" => Some(&GOOGLE_ANTIGRAVITY),
         _ => None,
     }
 }
@@ -215,6 +236,14 @@ mod tests {
         assert_eq!(
             config_by_provider_id("copilot").unwrap().provider_id,
             "copilot"
+        );
+        assert_eq!(
+            config_by_provider_id("google-antigravity").unwrap().provider_id,
+            "google-antigravity"
+        );
+        assert_eq!(
+            config_by_provider_id("antigravity").unwrap().provider_id,
+            "google-antigravity"
         );
         assert!(config_by_provider_id("nope").is_none());
     }

@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod anthropic;
+mod antigravity_oauth;
 mod antigravity_sub2api;
 mod chatgpt;
 mod copilot;
@@ -169,6 +170,7 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
     anthropic::SUB2API_TEMPLATE_SPEC,
     openai_sub2api::TEMPLATE_SPEC,
     antigravity_sub2api::TEMPLATE_SPEC,
+    antigravity_oauth::TEMPLATE_SPEC,
 ];
 
 /// Look up a template spec by its stable id. Exact match only.

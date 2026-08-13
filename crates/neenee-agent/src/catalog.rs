@@ -60,41 +60,18 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
     // OAuth channels resolve their bearer from auth.toml. ChatGPT also yields
     // the chatgpt_account_id (carried on the Responses transport); xAI has none.
     // Activate/switch refreshes the token first (handlers_provider).
-    let (api_key, account_id) = match uc.auth {
-        neenee_core::ChannelAuth::ChatGptOAuth => {
-            let store = neenee_providers::oauth::AuthStore::load();
-            let tokens = store.get("chatgpt");
-            (
-                tokens.map(|t| t.access.clone()).unwrap_or_default(),
-                tokens.and_then(|t| t.account_id.clone()),
-            )
-        }
-        neenee_core::ChannelAuth::CopilotOAuth => {
-            // Copilot's bearer is the GitHub OAuth access token; there is no
-            // account id (unlike ChatGPT's chatgpt_account_id claim).
-            let store = neenee_providers::oauth::AuthStore::load();
-            (
-                store
-                    .get("copilot")
-                    .map(|tokens| tokens.access.clone())
-                    .unwrap_or_default(),
-                None,
-            )
-        }
-        neenee_core::ChannelAuth::XaiOAuth => {
-            let store = neenee_providers::oauth::AuthStore::load();
-            (
-                store
-                    .get("xai")
-                    .map(|tokens| tokens.access.clone())
-                    .unwrap_or_default(),
-                None,
-            )
-        }
-        neenee_core::ChannelAuth::ApiKey => (
+    let (api_key, account_id) = if let Some(oauth_id) = uc.auth.oauth_provider_id() {
+        let store = neenee_providers::oauth::AuthStore::load();
+        let tokens = store.get(oauth_id);
+        (
+            tokens.map(|t| t.access.clone()).unwrap_or_default(),
+            tokens.and_then(|t| t.account_id.clone()),
+        )
+    } else {
+        (
             env_or_config(uc.api_key_env.as_deref(), uc.api_key.clone()).unwrap_or_default(),
             None,
-        ),
+        )
     };
     let model = uc
         .model
@@ -657,29 +634,14 @@ pub async fn discover_provider_models(config: &mut Config) -> DiscoveryOutcome {
         // OAuth auth modes; API-key channels keep using the stored key.
         let resolved_bearer: SecretString;
         let no_key = SecretString::default();
-        let api_key: &SecretString = match channel.auth {
-            neenee_core::ChannelAuth::ApiKey => channel.api_key.as_ref().unwrap_or(&no_key),
-            neenee_core::ChannelAuth::CopilotOAuth => {
-                resolved_bearer = neenee_providers::oauth::AuthStore::load()
-                    .get("copilot")
-                    .map(|tokens| tokens.access.clone())
-                    .unwrap_or_default();
-                &resolved_bearer
-            }
-            neenee_core::ChannelAuth::ChatGptOAuth => {
-                resolved_bearer = neenee_providers::oauth::AuthStore::load()
-                    .get("chatgpt")
-                    .map(|tokens| tokens.access.clone())
-                    .unwrap_or_default();
-                &resolved_bearer
-            }
-            neenee_core::ChannelAuth::XaiOAuth => {
-                resolved_bearer = neenee_providers::oauth::AuthStore::load()
-                    .get("xai")
-                    .map(|tokens| tokens.access.clone())
-                    .unwrap_or_default();
-                &resolved_bearer
-            }
+        let api_key: &SecretString = if let Some(oauth_id) = channel.auth.oauth_provider_id() {
+            resolved_bearer = neenee_providers::oauth::AuthStore::load()
+                .get(oauth_id)
+                .map(|tokens| tokens.access.clone())
+                .unwrap_or_default();
+            &resolved_bearer
+        } else {
+            channel.api_key.as_ref().unwrap_or(&no_key)
         };
         let user_agent = channel.user_agent.as_deref();
         let protocol = neenee_providers::DiscoveryProtocol::from_template_protocol(spec.protocol);

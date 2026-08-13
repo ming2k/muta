@@ -2157,6 +2157,7 @@ impl App {
         let default_name = match self.custom_auth {
             neenee_core::ChannelAuth::ChatGptOAuth => "ChatGPT",
             neenee_core::ChannelAuth::CopilotOAuth => "Copilot",
+            neenee_core::ChannelAuth::AntigravityOAuth => "Google Antigravity",
             _ => "xAI",
         };
         self.custom_name = default_name.to_string();
