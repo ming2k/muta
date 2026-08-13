@@ -1,15 +1,72 @@
-//! Reasoning-effort control — the per-model "how hard should I think before
-//! answering" knob, provider-independent.
+//! Reasoning **depth** — "how hard should the model think before answering?"
 //!
-//! This is the canonical home for [`Effort`] because effort is a **model
-//! capability**, not a transport detail: which effort levels a model honors
-//! (e.g. `xhigh` is Opus-4.7+/Fable only) is an intrinsic property of the
-//! model, so it belongs next to [`crate::model::Model`] (which carries the
-//! per-model `effort_levels` slice). Protocol layers translate a chosen
-//! [`Effort`] into their wire field (`reasoning_effort` for OpenAI chat
-//! completions, `output_config.effort` for Anthropic Messages); the chosen value
-//! can live on a channel as a user *override*, but the *capability set* lives
-//! here.
+//! neenee models every provider's reasoning-depth control as a single
+//! provider-independent abstraction: the [`Effort`] enum. This keeps two
+//! concerns separate that are easy to conflate, and each lives on its own
+//! layer:
+//!
+//! # Layer A — the abstraction (this module): `Effort` → public API specs
+//!
+//! [`Effort`] is the **only** depth concept in the codebase. The protocol layer
+//! in `neenee-llm-client` translates a chosen [`Effort`] onto each **public API
+//! specification** a provider speaks — not onto "a brand", but onto the wire
+//! shape the spec defines:
+//!
+//! | API specification | wire field | form | `Effort` → wire |
+//! |-------------------|-----------|------|-----------------|
+//! | OpenAI Responses | `reasoning.effort` | enum string | `effort.as_str()` |
+//! | OpenAI chat completions | `reasoning_effort` | enum string | `effort.as_str()` |
+//! | Anthropic Messages | `output_config.effort` | enum string | `effort.as_str()` |
+//! | Google generateContent | `thinkingConfig.thinkingLevel` / `.thinkingBudget` | enum string / int tokens | level / a derived bucket |
+//!
+//! xAI (Grok), Moonshot (Kimi), DeepSeek and Z.AI (GLM) ride these specs too —
+//! they implement the OpenAI Responses / chat-completions specification, so
+//! they reuse the OpenAI translation verbatim. Google is the outlier that does
+//! not use the word "effort" or the standard ladder, yet it is abstracted here
+//! all the same: a Gemini model declares an [`Effort`] ladder like any other,
+//! and the Google protocol maps each rung onto `thinkingLevel` (3.x) or a
+//! `thinkingBudget` bucket (2.5). No caller outside this module ever sees a
+//! provider-specific depth shape — they see [`Effort`].
+//!
+//! [`Effort`] controls **depth only** and is orthogonal to the reasoning on/off
+//! switch ([`crate::thinking::ThinkingMode`]); see [`crate::thinking`].
+//!
+//! # Layer B — baseline value-sets (the `EFFORT_*` consts below)
+//!
+//! [`Effort`] is the *vocabulary*; a model still needs to know *which rungs it
+//! accepts*. That per-model ladder is a **capability**, and — like every other
+//! capability (context window, reasoning, vision) — it resolves through one
+//! precedence chain (ADR-0065):
+//!
+//! ```text
+//! live discovery (a fitting-enabled provider's GET /models)
+//!        ↓  only Kimi & Copilot advertise tiers here
+//! static baseline  ←  the EFFORT_* consts in this module
+//!        ↓  the compiled-in fallback when upstream advertises nothing
+//! &[]  (non-reasoning model, or a protocol with no depth field)
+//! ```
+//!
+//! **The consts are baselines, never the authority when upstream advertises.**
+//! Only two providers advertise effort tiers in their live `/models`
+//! (`think_efforts.valid_efforts` for Kimi K3, `supports.reasoning_effort` for
+//! Copilot); for them the live list wins and the const is just the seed before
+//! the first fetch. Every other provider's `/models` is a bare `{id, object,
+//! owned_by}` list with **no capability fields** — for them the const *is* the
+//! effective ladder, sourced from that provider's prose docs. A const's doc
+//! states which case applies, with a citation, so a maintainer never mistakes a
+//! baseline for a live-advertised authority.
+//!
+//! The consts are named by the **family whose models share a value-set**
+//! (`EFFORT_CLAUDE_FULL`, `EFFORT_OPENAI_GPT_5_6`, `EFFORT_GEMINI_LEVEL` …)
+//! because the value-set genuinely varies per family even within one API spec
+//! (GPT ≤5.5 tops out at `xhigh`, GPT-5.6 adds `max`; Gemini 3.x is enum-based,
+//! Gemini 2.5 is budget-based). A rung-set shared unchanged across families
+//! gets a rung-set name (`EFFORT_LOW_HIGH_MAX`, `EFFORT_COMMON`) rather than a
+//! duplicated brand alias — split into per-family consts only when the sets
+//! actually diverge (YAGNI).
+//!
+//! This module is the implementation; the prose reference for users and
+//! contributors lives in `docs/reference/effort.md`.
 
 /// How much reasoning effort a model should spend before answering.
 ///
@@ -133,18 +190,80 @@ impl Effort {
                     .unwrap_or(Effort::High)
             })
     }
+
+    /// Translate this depth into a Google Gemini 2.5 `thinkingBudget` integer,
+    /// the form Gemini 2.5 (Flash/Pro) accepts instead of an enum. Gemini 2.5
+    /// takes a token budget in a model-specific range (`max_budget`):
+    /// `gemini-2.5-flash` tops out at `24576`; `gemini-2.5-pro` at `32768`.
+    ///
+    /// A chosen [`Effort`] **pins** the budget — it is a deliberate request,
+    /// never "let the server decide". (Gemini's own "dynamic" is `-1`, the
+    /// server default when the field is *omitted*; neenee reaches that by not
+    /// stamping the field at all — an unset channel effort — not by mapping any
+    /// rung to `-1`.) `minimal` ~10%,
+    /// `low` ~25%, `medium` ~50% of `max_budget`; `high`/`xhigh`/`max` all pin
+    /// to the model's full cap (`xhigh` is not a native Gemini rung — the
+    /// protocol layer clamps it down to `high` first — and `max` differs from
+    /// `high` only in intent: it explicitly names the cap).
+    ///
+    /// `None` maps to `0`, the only way to turn thinking off — but Gemini 2.5
+    /// Pro rejects `0` (its floor is `128`), so callers must only honor
+    /// [`Effort::None`] when the model actually supports an off budget.
+    pub const fn gemini_thinking_budget(self, max_budget: u32) -> i64 {
+        match self {
+            // 0 = off. Only honored by models whose floor is 0 (Flash/Lite);
+            // Pro rejects it (floor 128), so the protocol layer must skip
+            // stamping None there.
+            Effort::None => 0,
+            // The floor of 1 guarantees a nonzero bucket even on a tiny max
+            // budget; `core::cmp::max` is not const-stable yet, so the helper
+            // spells the clamp out. `max(1)` matters only for unrealistically
+            // small `max_budget` values, but keeps the contract honest.
+            Effort::Minimal => nonzero(max_budget as u64 / 10),
+            Effort::Low => nonzero(max_budget as u64 / 4),
+            Effort::Medium => nonzero(max_budget as u64 / 2),
+            // A deliberate request pins the budget to the model's full cap —
+            // never dynamic (`-1`). `xhigh` is not native to Gemini; the
+            // protocol layer clamps it to `high` before reaching here, and it
+            // resolves to the same cap regardless.
+            Effort::High | Effort::Xhigh | Effort::Max => max_budget as i64,
+        }
+    }
 }
 
-/// `low`/`medium`/`high` — the conservative effort set assumed for any model
-/// whose higher tiers (`xhigh`/`max`) are not known (third-party
-/// Anthropic-compatible relays serving non-Claude models). Sending an unknown
-/// tier to such an upstream risks a 400, so the safe subset is the default.
+/// `≥ 1` floor for a Gemini budget bucket. `core::cmp::max` is not yet
+/// const-stable, so [`Effort::gemini_thinking_budget`] spells the clamp through
+/// this helper. Kept private: only the budget translation needs it.
+const fn nonzero(tokens: u64) -> i64 {
+    if tokens < 1 {
+        1
+    } else {
+        tokens as i64
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Baseline value-sets (Layer B).
+//
+// Each const is the **seed ladder** for the model family named in its doc.
+// The precedence is live discovery → these baselines → `&[]` (see the module
+// doc). The first doc line of each const states whether upstream advertises
+// tiers (so the baseline is just a pre-fetch seed) or advertises nothing (so
+// the baseline *is* the effective ladder, sourced from prose docs).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// **Upstream advertises nothing** — effective ladder, sourced from prose.
+/// `low`/`medium`/`high`: the conservative set for any model whose higher
+/// tiers (`xhigh`/`max`) are unknown — third-party Anthropic-compatible relays
+/// serving non-Claude models. Sending an unadvertised tier to such an upstream
+/// risks a 400, so this safe subset is the default.
 pub const EFFORT_COMMON: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
 
-/// The full `low..=max` range including `xhigh`, honored by the models that
-/// accept every tier: Claude Opus 4.8 and Opus 4.7 (and Fable 5 / Mythos 5).
-/// `xhigh` is *not* universal — Opus/Sonnet 4.6 reject it (use
-/// [`EFFORT_CLAUDE_NO_XHIGH`]).
+/// **Upstream advertises nothing** — effective ladder, sourced from Anthropic's
+/// `output_config.effort` docs (platform.claude.com/docs/effort). The full
+/// `low..=max` range including `xhigh`, honored by the models that accept every
+/// tier: Claude Opus 4.8 / 4.7 (and Fable 5 / Mythos 5). `xhigh` is *not*
+/// universal — Opus/Sonnet 4.6 reject it (use [`EFFORT_CLAUDE_NO_XHIGH`]).
 pub const EFFORT_CLAUDE_FULL: &[Effort] = &[
     Effort::Low,
     Effort::Medium,
@@ -153,16 +272,17 @@ pub const EFFORT_CLAUDE_FULL: &[Effort] = &[
     Effort::Max,
 ];
 
-/// `low`/`medium`/`high`/`max` — the effort range for Claude models that honor
-/// `max` but **not** `xhigh`: Claude Sonnet 4.6 and Opus 4.6. (`xhigh` is
-/// limited to Opus 4.8 / 4.7 and the Fable/Mythos line.) Requesting `xhigh`
-/// here clamps down to `high`.
+/// **Upstream advertises nothing** — effective ladder, sourced from Anthropic's
+/// effort docs. `low`/`medium`/`high`/`max`: Claude Sonnet 4.6 and Opus 4.6,
+/// which honor `max` but **not** `xhigh` (that is limited to Opus 4.8 / 4.7 and
+/// the Fable/Mythos line). Requesting `xhigh` here clamps down to `high`.
 pub const EFFORT_CLAUDE_NO_XHIGH: &[Effort] =
     &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
 
-/// OpenAI GPT reasoning-effort range exposed by chat-completions compatible
-/// relays. `xhigh` is available on the high-depth GPT reasoning tier; `max` is
-/// not an OpenAI chat-completions effort value.
+/// **Upstream advertises nothing** — effective ladder, sourced from OpenAI's
+/// reasoning guide (developers.openai.com/api/docs/guides/reasoning). GPT ≤5.5:
+/// `none`/`minimal`/`low`/`medium`/`high`/`xhigh`. `max` is **not** a value this
+/// tier accepts — GPT-5.6 ([`EFFORT_OPENAI_GPT_5_6`]) is the first to add it.
 pub const EFFORT_OPENAI_GPT: &[Effort] = &[
     Effort::None,
     Effort::Minimal,
@@ -172,9 +292,9 @@ pub const EFFORT_OPENAI_GPT: &[Effort] = &[
     Effort::Xhigh,
 ];
 
-/// GPT-5.6 (Sol/Terra/Luna) effort range. GPT-5.6 is the first OpenAI
-/// chat-completions family to expose the `max` reasoning-effort level.
-/// Earlier GPT-5.x (`EFFORT_OPENAI_GPT`) top out at `xhigh` and reject `max`.
+/// **Upstream advertises nothing** — effective ladder, sourced from OpenAI's
+/// reasoning guide. GPT-5.6 (Sol/Terra/Luna): the first OpenAI family to expose
+/// `max`. Earlier GPT-5.x ([`EFFORT_OPENAI_GPT`]) top out at `xhigh`.
 pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
     Effort::None,
     Effort::Minimal,
@@ -185,17 +305,68 @@ pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
     Effort::Max,
 ];
 
-/// xAI Grok effort ladder (`none` / `low` / `medium` / `high`).
+/// **Upstream advertises nothing** — effective ladder, sourced from xAI's
+/// reasoning docs (docs.x.ai/developers/model-capabilities/text/reasoning).
+/// Grok 4.x: `none`/`low`/`medium`/`high` (4.3 honors `none`; 4.5+ cannot
+/// disable reasoning).
 pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medium, Effort::High];
 
-/// Kimi K3's effort ladder (`low` / `high` / `max`). The platform's docs
-/// (kimi.com/code/docs/models) and live `GET /models` advertise
-/// `think_efforts: { valid_efforts: ["low","high","max"], default_effort:
-/// "high" }` for the `k3` id — K3 always reasons, but the depth is tunable.
-/// An earlier snapshot advertised only `["max"]`, so this baseline may lag a
-/// platform update; `register_fitted_models` refreshes a baseline's ladder
-/// from the live list (ADR-0065) without touching its other vetted fields.
-pub const EFFORT_KIMI_K3: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+/// `low`/`high`/`max` — a rung set shared unchanged across two families, so it
+/// gets a rung-set name rather than a duplicated brand alias (split into
+/// per-family consts only if the sets ever diverge). The two families differ in
+/// **how their ladders are resolved**:
+///
+/// - **Moonshot Kimi K3** (`k3`) — **upstream advertises** tiers via
+///   `think_efforts.valid_efforts` on its live `/models`
+///   (platform.kimi.ai/docs/api/models-overview). This const is the pre-fetch
+///   **seed**; `register_fitted_models` (ADR-0065) refreshes it from the live
+///   list at startup, and an empty live list never wipes the seed. K3 always
+///   reasons; depth is tunable (default `max`).
+/// - **DeepSeek** (`deepseek-v4-pro` / `-flash`) — **upstream advertises
+///   nothing**: its `/models` is a bare `{id, object, owned_by}` list
+///   (api-docs.deepseek.com/api/list-models), so this const *is* the effective
+///   ladder, sourced from the chat-completions request-schema enum
+///   (api-docs.deepseek.com/api/create-chat-completion: `low`/`high`/`max`,
+///   default `high`; `medium`/`xhigh` are compat aliases that remap to `high`).
+pub const EFFORT_LOW_HIGH_MAX: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+
+/// **Upstream advertises nothing** — effective ladder, sourced from Z.AI's
+/// chat-completion reference (docs.z.ai/api-reference/llm/chat-completion).
+/// GLM-5.2 — the only GLM model that honors `reasoning_effort` (default `max`);
+/// GLM-4.x uses a `thinking` on/off object with no depth field, so they keep an
+/// empty ladder. Z.AI maps compat rungs (`low`/`medium`→`high`, `xhigh`→`max`,
+/// `none`/`minimal`→skip thinking), making `low`/`high`/`xhigh`/`max` the
+/// effective depth set.
+pub const EFFORT_GLM_5: &[Effort] = &[Effort::Low, Effort::High, Effort::Xhigh, Effort::Max];
+
+/// **Upstream advertises nothing** — effective ladder, sourced from Google's
+/// thinking docs (ai.google.dev/gemini-api/docs/generate-content/thinking).
+/// Gemini **3.x** maps onto `thinkingConfig.thinkingLevel`: exactly
+/// `minimal`/`low`/`medium`/`high` — no `none`/`xhigh`/`max`, and it cannot
+/// fully disable thinking (`minimal` is the floor; Gemini 3.1 Pro does not even
+/// support `minimal`, clamping up to `low`). A `max`/`xhigh` request clamps
+/// down to `high`.
+pub const EFFORT_GEMINI_LEVEL: &[Effort] = &[
+    Effort::Minimal,
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+];
+
+/// **Upstream advertises nothing** — effective ladder, sourced from Google's
+/// thinking docs. Gemini **2.5** maps onto a `thinkingConfig.thinkingBudget`
+/// integer bucket (Flash: `0`–`24576`, Pro: `128`–`32768`, `-1` = dynamic),
+/// translated from each [`Effort`] rung by [`Effort::gemini_thinking_budget`].
+/// `None` is deliberately excluded: `0` (off) is honored by Flash but rejected
+/// by Pro (floor `128`), so off is model-specific and handled in the protocol
+/// layer rather than advertised here.
+pub const EFFORT_GEMINI_BUDGET: &[Effort] = &[
+    Effort::Minimal,
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Max,
+];
 
 #[cfg(test)]
 mod tests {
@@ -237,11 +408,46 @@ mod tests {
     fn clamp_snaps_up_to_shallowest_supported_tier() {
         // Kimi K3's ladder skips `medium`: a legacy `medium` override snaps
         // up to `low` rather than emitting an unsupported wire value.
-        assert_eq!(Effort::Medium.clamp_to(EFFORT_KIMI_K3), Effort::Low);
+        assert_eq!(Effort::Medium.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Low);
         // high is on K3's ladder and stays; max is honored too.
-        assert_eq!(Effort::High.clamp_to(EFFORT_KIMI_K3), Effort::High);
-        assert_eq!(Effort::Max.clamp_to(EFFORT_KIMI_K3), Effort::Max);
+        assert_eq!(Effort::High.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::High);
+        assert_eq!(Effort::Max.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Max);
         // An empty ladder keeps the historical wire-default fallback.
         assert_eq!(Effort::Low.clamp_to(&[]), Effort::High);
+    }
+
+    #[test]
+    fn gemini_level_ladder_clamps_deep_rungs_down() {
+        // Gemini 3.x tops out at `high`; xhigh/max clamp down, never escape.
+        assert_eq!(Effort::Max.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
+        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
+        // minimal is the floor on most 3.x models and is honored.
+        assert_eq!(Effort::Minimal.clamp_to(EFFORT_GEMINI_LEVEL), Effort::Minimal);
+    }
+
+    #[test]
+    fn deepseek_and_glm_ladders_clamp() {
+        // DeepSeek maps medium→high (its ladder skips medium), xhigh→high.
+        assert_eq!(Effort::Medium.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Low);
+        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::High);
+        // GLM-5.2 honors xhigh (Z.AI maps xhigh→max, but xhigh is on-ladder).
+        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_GLM_5), Effort::Xhigh);
+        assert_eq!(Effort::Medium.clamp_to(EFFORT_GLM_5), Effort::Low);
+    }
+
+    #[test]
+    fn gemini_thinking_budget_buckets_within_range() {
+        // Gemini 2.5 Flash: 0–24576. Each rung is a fraction of the cap.
+        assert_eq!(Effort::None.gemini_thinking_budget(24576), 0);
+        assert_eq!(Effort::Minimal.gemini_thinking_budget(24576), 2457);
+        assert_eq!(Effort::Low.gemini_thinking_budget(24576), 6144);
+        assert_eq!(Effort::Medium.gemini_thinking_budget(24576), 12288);
+        assert_eq!(Effort::High.gemini_thinking_budget(24576), 24576);
+        assert_eq!(Effort::Max.gemini_thinking_budget(24576), 24576);
+        // Gemini 2.5 Pro: 128–32768. Buckets scale by the larger cap.
+        assert_eq!(Effort::Medium.gemini_thinking_budget(32768), 16384);
+        assert_eq!(Effort::High.gemini_thinking_budget(32768), 32768);
+        // A floor of 1 is guaranteed even on a tiny max budget.
+        assert_eq!(Effort::Minimal.gemini_thinking_budget(5), 1);
     }
 }

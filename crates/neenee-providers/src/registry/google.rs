@@ -1,5 +1,6 @@
 //! The built-in `google` provider template: the native Google API, one key.
 
+use neenee_core::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use neenee_core::thinking::ThinkingSupport;
 use neenee_core::{Model, WireFormat};
 
@@ -45,7 +46,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-pro-preview",
@@ -57,7 +58,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-flash-preview",
@@ -69,7 +70,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.1-pro-preview",
@@ -81,7 +82,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_LEVEL,
     },
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
@@ -94,7 +95,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-2.5-flash",
@@ -106,7 +107,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-pro",
@@ -118,7 +119,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-flash-lite",

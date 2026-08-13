@@ -42,9 +42,11 @@ order and an explicit trust gate:
    of provider-advertised ids).
 3. **Trust is a per-template decision.** `ProviderTemplateSpec` gains a
    `fitting` flag, enabled only for official first-party endpoints whose
-   `/models` advertises real capability fields — today only `kimi-code`.
-   Relays and sub2api templates keep the historical registry-intersection
-   behavior: their advertised ids are never trusted with capability metadata.
+   `/models` advertises real capability fields — today `kimi-code` (which
+   publishes `think_efforts.valid_efforts`) and `copilot-oauth` (which
+   publishes `supports.reasoning_effort`). Relays and sub2api templates keep
+   the historical registry-intersection behavior: their advertised ids are
+   never trusted with capability metadata.
 4. **Persist what was fitted.** Discovery stores the fitted subset as
    `UserProviderConfig.fitted_models` (ids absent from the registry only), so
    the overlay repopulates at startup from disk (`sync_fitted_model_registry`)
@@ -92,9 +94,10 @@ order and an explicit trust gate:
 - The static registry stays the single source of truth for every id it knows;
   fitting only ever fills the unknown-id gap, and the conservative fallback
   still covers everything else.
-- Only `kimi-code` instances change behavior at startup: a background
-  `GET /models` refresh (with the snapshot as fallback) and a one-time
-  `Fixed → Api` source upgrade, persisted on first reconcile.
+- `kimi-code` and `copilot-oauth` instances change behavior at startup: a
+  background `GET /models` refresh (with the snapshot as fallback) and, for
+  `kimi-code`, a one-time `Fixed → Api` source upgrade, persisted on first
+  reconcile.
 - `kimi-code` instances now expose the platform-native ids
   (`kimi-for-coding`, `kimi-for-coding-highspeed`) as first-class channels;
   the `kimi-k2.7-code` alias remains registered (it is also the opencode-go

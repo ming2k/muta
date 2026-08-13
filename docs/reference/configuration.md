@@ -143,7 +143,7 @@ default_channel = 0
   model = "acme-7b"
   base_url = "https://relay.example.com/v1"
   api_key_env = "ACME_API_KEY"  # env var name; wins over api_key
-  effort = "high"               # optional for OpenAI/Anthropic reasoning models
+  effort = "high"               # optional reasoning-depth override (clamped to the model's levels)
 ```
 
 | `favorites` | Default | Meaning |
@@ -187,12 +187,17 @@ variant a model receives for a capability with several implementations.
 ## Per-model reasoning settings
 
 Reasoning controls are **per model**, not per provider. `effort` is the
-reasoning-depth throttle. `thinking` is an Anthropic-only on/off switch.
+reasoning-depth throttle; `thinking` is an Anthropic-only on/off switch. See
+[Reasoning effort](effort.md) for the full per-provider mapping and how a
+model's effective ladder resolves; this section covers configuration only.
 
-OpenAI GPT reasoning models use the channel-level `effort` field on
-`OpenAi` channels. Valid values are clamped to the model's supported
-levels; GPT models can expose `none`, `minimal`, `low`, `medium`, `high`, and
-`xhigh`.
+`effort` applies to any reasoning model whose protocol exposes a depth field —
+OpenAI (Responses and chat), Anthropic, xAI Grok, Kimi K3, DeepSeek, GLM-5.2,
+and Gemini. Valid values are clamped to the model's supported levels at
+request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
+GPT models expose a subset). For OpenAI / xAI / Google / Z.AI / DeepSeek
+channels it is the channel-level `effort` field; for first-party Anthropic
+models it lives in the `[model_reasoning]` table below.
 
 Anthropic extended thinking is **opt-in** (ADR-0046). A model does not reason
 unless you have configured it to. The two Anthropic knobs live in the

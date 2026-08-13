@@ -87,7 +87,7 @@ Per-channel fields:
 | `api_key` | Inline key, used when `api_key_env` is unset or empty |
 | `model` | Wire model id; falls back to the entry `id` when omitted |
 | `user_agent` | OpenAI-compatible and native Google |
-| `effort` | Optional reasoning depth for OpenAI or Anthropic reasoning models; clamped to the model's supported levels |
+| `effort` | Optional reasoning-depth override (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); applies to any reasoning model whose protocol exposes a depth field, clamped to the model's supported levels. See [Reasoning effort](../reference/effort.md) |
 | `thinking` | Optional Anthropic thinking on/off switch; ignored by OpenAI and Google |
 
 An entry whose `id` matches a built-in replaces it entirely; a new `id` is

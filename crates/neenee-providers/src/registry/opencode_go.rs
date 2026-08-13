@@ -1,6 +1,7 @@
 //! The `opencode-go` provider template: the opencode.ai/zen/go relay's
 //! curated OpenAI-compatible catalogue.
 
+use neenee_core::effort::{EFFORT_LOW_HIGH_MAX, EFFORT_GLM_5};
 use neenee_core::thinking::ThinkingSupport;
 use neenee_core::{Model, WireFormat};
 
@@ -58,7 +59,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-flash-0731",
@@ -70,7 +71,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-pro",
@@ -82,7 +83,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "glm-5",
@@ -119,7 +120,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GLM_5,
     },
     Model {
         id: "kimi-k2.5",

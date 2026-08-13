@@ -49,6 +49,11 @@ pub struct GoogleProvider {
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: neenee_core::ModelCapabilities,
+    /// Channel-scoped reasoning-effort override. `None` leaves the model's
+    /// server-default thinking level in place; `Some(e)` pins it, translated
+    /// onto `thinkingConfig` (`thinkingLevel` for Gemini 3.x, a
+    /// `thinkingBudget` bucket for Gemini 2.5) at request-build time.
+    pub reasoning_effort: Option<neenee_core::Effort>,
 }
 
 impl GoogleProvider {
@@ -85,6 +90,7 @@ impl GoogleProvider {
             last_thought_signatures: Arc::new(Mutex::new(Map::new())),
             last_text_thought_signature: Arc::new(Mutex::new(None)),
             capabilities,
+            reasoning_effort: None,
         }
     }
 
@@ -98,6 +104,16 @@ impl GoogleProvider {
     /// Attach the effective provider-channel capability view.
     pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
         self.capabilities = capabilities;
+        self
+    }
+
+    /// Set the channel-scoped reasoning-effort override. `None` leaves the
+    /// server default in place. Clamped to the resolved model's supported
+    /// `effort_levels` at request-build time, then translated onto Google's
+    /// `thinkingConfig` (`thinkingLevel` for Gemini 3.x, a `thinkingBudget`
+    /// bucket for Gemini 2.5).
+    pub fn with_reasoning_effort(mut self, effort: Option<neenee_core::Effort>) -> Self {
+        self.reasoning_effort = effort;
         self
     }
 
@@ -175,12 +191,18 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = self.capabilities.reasoning();
+        let thinking = request::resolve_thinking(
+            self.reasoning_effort,
+            &self.capabilities.effort_levels,
+            request::max_thinking_budget(&self.endpoint.model),
+        );
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,
             request::BodyInput {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 include_thoughts,
+                thinking,
             },
         );
 
@@ -224,12 +246,18 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = self.capabilities.reasoning();
+        let thinking = request::resolve_thinking(
+            self.reasoning_effort,
+            &self.capabilities.effort_levels,
+            request::max_thinking_budget(&self.endpoint.model),
+        );
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,
             request::BodyInput {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 include_thoughts,
+                thinking,
             },
         );
 
@@ -265,12 +293,18 @@ impl Provider for GoogleProvider {
         );
 
         let include_thoughts = self.capabilities.reasoning();
+        let thinking = request::resolve_thinking(
+            self.reasoning_effort,
+            &self.capabilities.effort_levels,
+            request::max_thinking_budget(&self.endpoint.model),
+        );
         let (messages, tool_specs) = request.into_parts();
         let body = request::body(
             messages,
             request::BodyInput {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 include_thoughts,
+                thinking,
             },
         );
 

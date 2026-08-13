@@ -36,7 +36,7 @@ the corresponding value.
 | Context window and output limit | Replaces the baseline value when present |
 | Reasoning representation | Replaces the baseline thinking type when present |
 | Tool calling and vision | An explicit `true` or `false` replaces the baseline |
-| Effort levels | A present list replaces the baseline; an empty list disables effort control |
+| Effort levels | A present list replaces the baseline; an empty list disables effort control. See [Reasoning effort](effort.md) for the per-provider ladder and resolution chain |
 | Endpoint | Selects the provider channel's inference surface only |
 
 An omitted remote field is not a negative capability. It retains the static

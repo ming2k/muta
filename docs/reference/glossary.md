@@ -133,6 +133,8 @@ before the round runs.
 | **provider** | An LLM backend implementing the `Provider` trait; selected at startup and on `/models` switch. [Providers](providers.md) |
 | **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`Channel`** | The fully resolved materialization of a provider id: credentials, model id, transport, and optional provider-scoped remote metadata; one per `[[providers.channels]]` entry. [Model Metadata](model-metadata.md) |
+| **effort** | Reasoning **depth** — the per-model "how hard should it think" knob (`none`…`max`), abstracted from every provider's depth field onto one ladder. Orthogonal to thinking on/off. [Reasoning effort](effort.md) |
+| **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Model Metadata](model-metadata.md#thinking-support) |
 | **transport** | The wire protocol a channel uses (`OpenAi`, `Anthropic`, `Google`). [Configuration](configuration.md) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[NEENEE_RETRYABLE]`. [Providers](providers.md) |

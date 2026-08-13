@@ -20,7 +20,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GLM_5,
     },
     Model {
         id: "glm-5.1",
@@ -79,7 +79,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_KIMI_K3,
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "kimi-k2.7-code",
@@ -391,7 +391,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-pro-preview",
@@ -403,7 +403,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-flash-preview",
@@ -415,7 +415,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.1-pro-preview",
@@ -427,7 +427,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
@@ -440,7 +440,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
     },
     // ── sub2api / antigravity relay models ────────────────────────────────
     // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
@@ -495,7 +495,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-pro",
@@ -507,7 +507,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-flash-lite",
@@ -544,7 +544,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-flash-0731",
@@ -556,7 +556,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-pro",
@@ -568,7 +568,19 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+    },
+    Model {
+        id: "deepseek-v4-pro-0813",
+        name: "DeepSeek V4 Pro (0813)",
+        family: "deepseek",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
     },
     // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
     Model {
@@ -761,7 +773,7 @@ const PRE_MIGRATION: &[Model] = &[
 
 #[test]
 fn resolve_matches_the_pre_migration_registry_for_every_model() {
-    assert_eq!(PRE_MIGRATION.len(), 56, "snapshot covers every known model");
+    assert_eq!(PRE_MIGRATION.len(), 57, "snapshot covers every known model");
     for expected in PRE_MIGRATION {
         let m = resolve_model(expected.id);
         assert_eq!(m.id, expected.id, "id");

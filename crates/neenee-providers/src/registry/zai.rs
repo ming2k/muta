@@ -1,6 +1,7 @@
 //! The `zai-code` provider template and its legacy registry preset: Z.AI
 //! (Zhipu) coding-plan platform (`api.z.ai/api/coding/paas/v4`).
 
+use neenee_core::effort::EFFORT_GLM_5;
 use neenee_core::thinking::ThinkingSupport;
 use neenee_core::{Model, WireFormat};
 
@@ -40,7 +41,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: &[],
+        effort_levels: EFFORT_GLM_5,
     },
     Model {
         id: "glm-5.1",

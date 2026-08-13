@@ -69,9 +69,17 @@ pub enum Transport {
     /// versioned base (default `https://generativelanguage.googleapis.com/v1beta`);
     /// the provider appends `/models/{model}:generateContent` (or the `:stream`
     /// variant), so a 中转站/relay supplies its host with the `/v1beta` prefix.
+    ///
+    /// `effort`, when set, is the reasoning-depth override — the same
+    /// provider-independent [`Effort`] the other transports carry, translated
+    /// onto Google's `thinkingConfig` at request-build time: Gemini 3.x maps it
+    /// to `thinkingLevel` (`minimal`/`low`/`medium`/`high`); Gemini 2.5 maps it
+    /// to a `thinkingBudget` token bucket. So effort reaches Google the same
+    /// way it reaches every other provider — through the single abstraction.
     Google {
         base_url: String,
         user_agent: String,
+        effort: Option<crate::Effort>,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
     /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by
