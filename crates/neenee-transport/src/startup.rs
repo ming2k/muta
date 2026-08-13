@@ -45,7 +45,7 @@ macro_rules! define_builtin_commands {
             ///
             /// Canonical names are matched against the declarative list;
             /// backward-compatible aliases (renamed commands) are then matched
-            /// by [`BuiltinCmd::from_alias`] so old invocations keep working
+            /// by `BuiltinCmd::from_alias` so old invocations keep working
             /// without appearing in completion / `/help`.
             pub fn from_slash(input: &str) -> Option<Self> {
                 $( if input == $name { return Some(BuiltinCmd::$variant); } )+
@@ -102,7 +102,7 @@ impl BuiltinCmd {
 }
 
 /// Trigger-word → command suggestions ("did you mean …"), the
-/// **presentation-only** counterpart of [`BuiltinCmd::from_alias`].
+/// **presentation-only** counterpart of `BuiltinCmd::from_alias`.
 ///
 /// Each row is `(trigger, target_slash, reason)`:
 ///

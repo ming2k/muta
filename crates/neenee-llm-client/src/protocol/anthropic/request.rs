@@ -17,7 +17,7 @@
 //! - Prompt caching: up to 4 `cache_control: {"type":"ephemeral"}` breakpoints
 //!   stamped across `tools → system → messages` (last tool, last system block,
 //!   and the two newest messages) so the stable prefix is cached at 0.1× input
-//!   cost. See [`stamp_cache_control`] and friends.
+//!   cost. See `stamp_cache_control` and friends.
 
 use neenee_core::{Message, Role, ThinkingSupport};
 use serde_json::{Value, json};

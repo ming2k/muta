@@ -3,7 +3,7 @@
 //!
 //! Formerly the standalone `neenee-mcp` crate, now co-located with the agent
 //! (matching kimi-code's layout, where MCP clients and the ToolManager live in
-//! the same `agent-core` package). The agent owns a [`McpRuntime`] and publishes
+//! the same `agent-core` package). The agent owns a [`crate::mcp::McpRuntime`] and publishes
 //! discovered tools through a core [`DynamicToolSink`](neenee_core::DynamicToolSink);
 //! the rest of the agent never sees MCP protocol or transport details.
 //!

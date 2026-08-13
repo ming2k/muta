@@ -225,7 +225,7 @@ impl SystemPromptSection for FileEditingGuidance {
 }
 
 /// Build the registry with the default system-prompt sections, in rank
-/// order. Called by [`Agent::builder`]; an embedding may add, reorder, or
+/// order. Called by [`crate::Agent::builder`]; an embedding may add, reorder, or
 /// disable sections on [`crate::AgentBuilder`] before freezing the agent.
 ///
 /// Note: skills are deliberately *not* injected into the system prompt. The

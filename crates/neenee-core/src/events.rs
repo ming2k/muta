@@ -462,7 +462,7 @@ impl AgentNotice {
     ///
     /// A command acknowledgment is a *session-scoped* notice: emit it wrapped
     /// in [`crate::RoundEvent::Notice`] (via `round_response`), not as a
-    /// top-level [`AgentResponse::Notice`]. Wrapping it routes the toast to the
+    /// top-level `AgentResponse::Notice`. Wrapping it routes the toast to the
     /// frontend over the session's broadcast tap so every attached client (the
     /// in-process TUI, `neenee attach`, `/serve`) sees the same confirmation,
     /// and it is what the TUI's toast drain actually listens for.

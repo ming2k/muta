@@ -156,8 +156,8 @@ pub struct ModelCapabilities {
     pub thinking: ThinkingSupport,
     pub tool_call: bool,
     pub vision: bool,
-    /// The effort ladder this channel honors, as [`EffortLevel`] so a
-    /// provider-advertised tier outside the [`Effort`] vocabulary is preserved
+    /// The effort ladder this channel honors, as [`crate::EffortLevel`] so a
+    /// provider-advertised tier outside the [`crate::Effort`] vocabulary is preserved
     /// and stamped through (ADR-0065). Built in `for_channel` from the remote
     /// advertisement over the static baseline.
     pub effort_levels: Vec<crate::effort::EffortLevel>,

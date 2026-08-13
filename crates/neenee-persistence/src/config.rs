@@ -432,7 +432,7 @@ pub enum UserTransport {
     /// key — e.g. DeepSeek V4's native surface. Distinct from
     /// [`OpenAi`](Self::OpenAi) (chat completions) in transport only. OAuth
     /// Responses channels (ChatGPT) resolve their transport from
-    /// [`ChannelAuth`](neenee_core::ChannelAuth) instead.
+    /// [`neenee_core::ChannelAuth`] instead.
     #[serde(alias = "openai-responses", alias = "openai_responses")]
     OpenAiResponses,
     /// Anthropic-compatible `/messages` endpoint. Used by opencode-go's

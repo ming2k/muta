@@ -214,12 +214,12 @@ pub(super) struct UiRuntime {
     /// is active.
     pub side_messages: Arc<Versioned<Vec<TranscriptMessage>>>,
     /// Coarse primary-session status, written by the listener from
-    /// [`AgentResponse::ParentStatus`] and read into [`App::parent_status`]
+    /// [`neenee_core::AgentResponse::ParentStatus`] and read into [`App::parent_status`]
     /// for the side banner (ADR-0017).
     pub parent_status: Arc<Mutex<ParentStatus>>,
     /// One-shot side-view transition (ADR-0017): `Opened` when the harness
-    /// emits [`AgentResponse::SideViewOpened`] (the loop calls
-    /// [`App::enter_side_view`]), `Closed` on [`AgentResponse::SideViewClosed`]
+    /// emits [`neenee_core::AgentResponse::SideViewOpened`] (the loop calls
+    /// [`App::enter_side_view`]), `Closed` on [`neenee_core::AgentResponse::SideViewClosed`]
     /// ([`App::exit_side_view`]). Drained each frame.
     pub side_view_signal: Arc<Mutex<Option<SideViewSignal>>>,
     pub key_status: Arc<Mutex<HashMap<String, bool>>>,
@@ -234,12 +234,12 @@ pub(super) struct UiRuntime {
     /// clone dominated the loop and made the picker hitch on every redraw.
     pub sessions_overview_rev: Arc<std::sync::atomic::AtomicU64>,
     /// Latest full detail for one session, written by the listener from
-    /// [`AgentResponse::SessionDetail`] and read into [`App::session_detail`]
+    /// [`neenee_core::AgentResponse::SessionDetail`] and read into [`App::session_detail`]
     /// for the session-info sub-view.
     pub session_detail: Arc<Mutex<Option<neenee_core::SessionDetail>>>,
     /// Latest token-source report fetched from the harness for the viewed
     /// session (attach mode: the ledger is daemon-side). Written by the
-    /// listener from [`AgentResponse::TokenUsageReport`] and read into
+    /// listener from [`neenee_core::AgentResponse::TokenUsageReport`] and read into
     /// [`App::token_report`]. In the standalone path the local ledger
     /// ([`App::token_ledger`]) is the source instead and this stays `None`.
     pub token_report: Arc<Mutex<Option<neenee_core::TokenSourceReport>>>,

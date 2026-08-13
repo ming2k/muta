@@ -24,7 +24,7 @@ pub enum CallbackOutcome {
 }
 
 /// The single in-flight callback we are waiting for. Only one authorize flow
-/// runs at a time; a new [`start`] supersedes any prior pending one.
+/// runs at a time; a new [`CallbackServer::start_for`] supersedes any prior pending one.
 struct Pending {
     state: String,
     tx: oneshot::Sender<CallbackOutcome>,
@@ -38,7 +38,7 @@ pub struct CallbackServer {
 
 impl CallbackServer {
     /// Bind the provider's registered loopback host:port and start accepting.
-    /// Returns a server whose [`wait_for_code`] resolves once the provider
+    /// Returns a server whose [`Self::wait_for_code`] resolves once the provider
     /// redirects back with a matching `state`. Dropping the server stops
     /// accepting.
     pub async fn start_for(cfg: &OAuthConfig) -> Result<Self, std::io::Error> {

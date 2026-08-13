@@ -125,7 +125,7 @@ impl TrustedProjects {
 ///
 /// `start` is treated as a directory; if a file path is passed its parent is
 /// used. Symlinks are *not* canonicalized here — the caller canonicalizes the
-/// final answer via [`TrustedProjects::canon`] before storage/lookup.
+/// final answer via `TrustedProjects::canon` before storage/lookup.
 pub fn resolve_trust_root(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_dir() {
         Some(start)

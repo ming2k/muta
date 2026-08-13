@@ -815,7 +815,7 @@ impl SessionStore {
 
     /// `true` while this session has never been persisted **and** still holds
     /// no user-facing content in memory (see
-    /// [`SessionData::is_user_facing_empty`]). Such a session is "deferred":
+    /// `SessionData::is_user_facing_empty`). Such a session is "deferred":
     /// it exists only in memory so that opening one and exiting without any
     /// real interaction leaves no record behind (ADR-0018). The transport
     /// layer's idle reaper uses this probe to reclaim never-persisted hosted

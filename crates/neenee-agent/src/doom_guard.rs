@@ -4,7 +4,7 @@
 //!
 //! # Why a separate guard
 //!
-//! [`crate::loop_guard::ReadLoopGuard`] is read-only, post-hoc, and defaults
+//! `crate::loop_guard::ReadLoopGuard` is read-only, post-hoc, and defaults
 //! to off: it observes a turn *after* the tools have executed, nudges the
 //! model, and only hard-blocks on the *next* recurrence. That means the
 //! repeating call's result is already in context when the nudge lands — the
@@ -33,7 +33,7 @@
 //!
 //! # Relation to `NudgeConfig`
 //!
-//! The doom guard is gated by [`NudgeConfig::enabled`] for consistency with the
+//! The doom guard is gated by `NudgeConfig::enabled` for consistency with the
 //! read-loop guard: when nudging is off, neither guard runs. Envoy and review
 //! paths disable nudging, so they stay unobstructed.
 
@@ -126,7 +126,7 @@ pub fn doom_signature(name: &str, args: &str) -> String {
 
 /// The pre-dispatch doom-loop detector.
 ///
-/// One lives per user round in `RoundState` (see [`crate::agent::RoundState`]) and is
+/// One lives per user round in `RoundState` (see `crate::agent::RoundState`) and is
 /// dropped when the round ends, so state never leaks across rounds. The window
 /// is a sliding record of the last `config.window` watched tool-call
 /// signatures; a signature that has already appeared in the window trips the guard

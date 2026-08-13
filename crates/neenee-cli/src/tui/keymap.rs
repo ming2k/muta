@@ -52,7 +52,7 @@
 //!
 //! 1. Add a variant to [`Action`] (or reuse an existing one) and dispatch it
 //!    in the event loop.
-//! 2. Push a [`Binding`] into [`Registry::build`] with its [`Key`], gate, the
+//! 2. Push a [`Binding`] into [`GLOBAL_BINDINGS`] with its [`Key`], gate, the
 //!    [`Action`] it maps to, and a short human description (shown in Help).
 //!
 //! The Help modal and the resolver pick it up with no further wiring.
@@ -238,7 +238,7 @@ fn display_token(code: KeyCode) -> &'static str {
 }
 
 /// The lowercase modifier prefix for a chord (`ctrl+`, `alt+`, …), or `""` for
-/// none. Shared by [`Key::chord`] and [`Key::display_prefix`] so the modifier
+/// none. Shared by [`Key::chord`] and `Key::display_prefix` so the modifier
 /// vocabulary is owned once.
 fn chord_prefix(modifiers: KeyModifiers) -> &'static str {
     if modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {

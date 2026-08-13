@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// undercount every cached turn. OpenAI / Gemini / Moonshot auto-cache (or
 /// session-key cache) and surface the hit as a single read count — their
 /// `cache_creation_input_tokens` stays zero. The shared parser lives in
-/// [`crate::cache`](crate::cache); see [`crate::CachePolicy`].
+/// [`crate::cache`]; see [`crate::CachePolicy`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: i64,

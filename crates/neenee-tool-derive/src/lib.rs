@@ -1,6 +1,6 @@
 //! Procedural macros for the neenee tool system.
 //!
-//! [`tool_schema`] (used as `#[derive(ToolSchema)]`) generates a
+//! [`tool_schema_derive`] (used as `#[derive(ToolSchema)]`) generates a
 //! `parameters_schema() -> serde_json::Value` method on a struct that returns
 //! the draft-07 JSON Schema the model sees for a tool's parameters — derived
 //! from the struct's fields, so the schema and the parsed type can never drift

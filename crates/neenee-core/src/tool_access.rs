@@ -15,7 +15,7 @@
 //!    not "read-only on everything". A tool returning `none()` is freely
 //!    parallelizable with *anything*, which is the correct default for pure
 //!    tools (todo, skill lookups, ask_user).
-//! 2. **Any `All` conflicts with everything.** [`ToolAccess::all`] is the
+//! 2. **Any `All` conflicts with everything.** [`ToolAccess::All`] is the
 //!    global-exclusive marker — a tool that mutates unbounded state (e.g.
 //!    `select_tools`, which injects a schema message into conversation
 //!    history) declares it to serialize with the whole batch.

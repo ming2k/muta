@@ -7,7 +7,7 @@
 //! `Arc<dyn Provider>`. The chat dispatch in `neenee-transport` checks
 //! [`NoProvider::ID`] up-front and refuses the send with a user-facing
 //! notification, so a [`NoProvider`] should never actually be invoked — its
-//! [`Provider`][neenee_core::Provider] impl is a defensive backstop that
+//! [`neenee_core::Provider`] impl is a defensive backstop that
 //! returns a clear error if it ever is.
 
 use async_trait::async_trait;

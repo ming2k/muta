@@ -466,7 +466,7 @@ impl RoundState {
     /// Build a fresh per-round guard state with the standard guard set, tuned
     /// by `config`. Whether the guard is *enabled* (allowed to inject) is
     /// controlled by `config.enabled`, checked at the turn boundary in
-    /// [`Agent::apply_guard_actions`] — so the guard state is always present
+    /// `Agent::apply_guard_actions` — so the guard state is always present
     /// even when disabled (it just never fires). It lives and dies with this
     /// `RoundState`, so loop state never crosses user rounds.
     fn guards_default(config: neenee_core::DoomGuardConfig) -> crate::loop_guard::RoundGuardState {

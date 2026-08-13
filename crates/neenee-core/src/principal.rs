@@ -17,7 +17,7 @@
 //! principal, but the quant *role description* lived on the envoy side).
 //!
 //! `PrincipalProfile` closes the gap: a principal role is a value the embedding
-//! binds via [`crate::agent::Agent::apply_principal_profile`] (re-exported
+//! binds via `Agent::apply_principal_profile` (re-exported
 //! through the agent crate), exactly as `EnvoyTool` binds an
 //! [`crate::EnvoyProfile`]. Both live in core as vocabulary so the engine stays
 //! role-agnostic and ADR-0042's role taxonomy is declared in one place.
@@ -62,7 +62,7 @@ pub struct PrincipalRuntimeConfig {
 /// principal-side mirror of [`crate::EnvoyProfile`] (ADR-0053).
 ///
 /// A profile is a value the embedding binds after constructing the agent via
-/// [`crate::agent::Agent::apply_principal_profile`] (re-exported through the
+/// `Agent::apply_principal_profile` (re-exported through the
 /// agent crate). The built-in coding principal lives in the application layer
 /// (`neenee`'s `identity` module, `principal_code()` — ADR-0054); a future
 /// quant/research/ops principal is another value.
@@ -75,7 +75,7 @@ pub struct PrincipalRuntimeConfig {
 ///
 /// [`AgentIdentity`] feeds the system-prompt preamble and is immutable past the
 /// `Agent` constructor, so it is passed to `Agent::new` / `from_toolset`, not
-/// set by [`crate::agent::Agent::apply_principal_profile`]. A role whose
+/// set by `Agent::apply_principal_profile`. A role whose
 /// identity should differ per instance (side conversations, group chat) composes
 /// the profile with [`Self::with_identity`] before construction.
 #[derive(Debug, Clone)]

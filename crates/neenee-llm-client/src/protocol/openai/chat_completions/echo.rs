@@ -87,7 +87,7 @@ impl ToolCallEchoFilter {
 
     /// Observe a stream event, updating bookkeeping and returning any
     /// [`ProviderStreamEvent::TextDelta`] safe to emit now. Text deltas are fed
-    /// through [`feed`](Self::feed); reasoning/tool-call/usage deltas pass
+    /// through `feed`; reasoning/tool-call/usage deltas pass
     /// through untouched (the latter two flip the "had native tool calls" flag
     /// so a trailing echo is dropped at [`finish`](Self::finish)).
     pub fn observe(&mut self, event: ProviderStreamEvent) -> Vec<ProviderStreamEvent> {

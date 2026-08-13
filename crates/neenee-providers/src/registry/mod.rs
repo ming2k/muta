@@ -76,7 +76,7 @@ pub struct OpenAiProviderSpec {
 
 /// The single registry of OpenAI-compatible providers — the source of truth for
 /// their endpoints, default models, and environment variables. The entries
-/// live beside their provider's other data ([`kimi`], [`zai`]).
+/// live beside their provider's other data (`kimi`, `zai`).
 pub const OPENAI_PROVIDER_SPECS: &[OpenAiProviderSpec] = &[
     kimi::PROVIDER_SPEC,
     // DeepSeek V4 (Flash + Pro) is served as one multi-model `deepseek` provider

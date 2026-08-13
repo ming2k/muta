@@ -31,7 +31,7 @@ context. The envoy cannot modify files — you perform any edits after \
 reviewing its findings.";
 
 /// Description of the write-capable `envoy_code` dispatch tool (bound to the
-/// [`neenee_core::CODE`] profile). Distinct from [`ENVOY_TOOL_DESCRIPTION`] so
+/// [`neenee_core::CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
 /// the model understands this is the delegation path for *implementation*
 /// work, not exploration, and that every write/command the envoy makes is
 /// user-approved. Paired with the code-profile system prompt, it frames the
@@ -111,7 +111,7 @@ pub struct EnvoyTool {
     profile: &'static EnvoyProfile,
     /// The tool name the model calls this dispatch tool by. The default (set by
     /// [`EnvoyTool::new`]) is `"envoy"` for the read-only research role; a
-    /// second instance bound to a write-capable profile (e.g. [`CODE`]) takes a
+    /// second instance bound to a write-capable profile (e.g. [`neenee_core::CODE`]) takes a
     /// distinct name like `"envoy_code"` so it registers as its own capability
     /// alongside the read-only `envoy`, instead of colliding on the name.
     tool_name: &'static str,

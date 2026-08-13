@@ -32,7 +32,7 @@ pub use neenee_core::ThinkingMode;
 ///   choice is honored verbatim — "what you set is what you send".
 ///
 /// The chosen effort is clamped to the model's `effort_levels` at request-build
-/// time (see [`Self::resolve_for`]).
+/// time (see `Self::resolve_for`).
 #[derive(Debug, Clone, Copy)]
 pub struct ThinkingConfig {
     pub mode: ThinkingMode,
@@ -62,7 +62,7 @@ impl ThinkingConfig {
     }
 
     /// Resolve this config against a concrete model's `effort_levels` (the
-    /// open [`EffortLevel`] ladder, which may carry provider-advertised tiers
+    /// open [`neenee_core::EffortLevel`] ladder, which may carry provider-advertised tiers
     /// the vocabulary does not name), returning a new config whose explicit
     /// effort (if any) is clamped to the model's supported levels. The mode and
     /// the effort's explicit/implicit distinction are honored unchanged. An

@@ -1208,7 +1208,7 @@ pub fn build_provider_for_model(
 /// For multi-model providers, the active model is `config.default_model` when
 /// set (and served by the provider); otherwise the entry's default-channel
 /// model. (Does not consult usage telemetry — startup paths that only know
-/// the config use this; the picker uses [`active_model_id_for_entry`].)
+/// the config use this; the picker uses `active_model_id_for_entry`.)
 pub fn resolved_model_name(config: &Config, id: &str) -> Option<String> {
     resolved_model_name_inner(config, id, &ProviderUsage::default())
 }

@@ -161,7 +161,7 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
 /// Question-modal "Other" field paste. Unlike the readline modals, this field
 /// owns its own buffer (`QuestionModel::other_text`) rather than borrowing
 /// `App::input`, so it can't reuse [`apply_modal_field_paste`]. The text is
-/// spliced through the model's pure `update` as a [`QuestionAction::Paste`],
+/// spliced through the model's pure `update` as a [`crate::tui::question_model::QuestionAction::Paste`],
 /// which appends it to the current question's "Other" field (newlines stripped
 /// first). A no-op if the modal was closed or a real option is highlighted by
 /// the time the (async) read lands. Images are rejected with a toast since the

@@ -71,7 +71,7 @@ pub enum Transport {
     /// variant), so a 中转站/relay supplies its host with the `/v1beta` prefix.
     ///
     /// `effort`, when set, is the reasoning-depth override — the same
-    /// provider-independent [`Effort`] the other transports carry, translated
+    /// provider-independent [`crate::Effort`] the other transports carry, translated
     /// onto Google's `thinkingConfig` at request-build time: Gemini 3.x maps it
     /// to `thinkingLevel` (`minimal`/`low`/`medium`/`high`); Gemini 2.5 maps it
     /// to a `thinkingBudget` token bucket. So effort reaches Google the same

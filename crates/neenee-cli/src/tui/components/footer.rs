@@ -16,7 +16,7 @@ use super::keycap::keycap_style;
 ///
 /// This enum covers the common cases. For a finer-grained priority (e.g. a
 /// destructive action that must outlive a plain secondary), use
-/// [`FooterHint::new`] with an explicit numeric band.
+/// [`FooterHint::with_band`] with an explicit numeric band.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FooterPriority {
     /// Dismiss / cancel (`Esc`). Highest survival.

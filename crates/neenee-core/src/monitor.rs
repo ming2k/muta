@@ -5,7 +5,7 @@
 //! These types are the read-only control-plane counterpart of the
 //! session-scoped `AgentRequest`/`AgentResponse` protocol: a control panel (or
 //! any other observer) connects, selects `Monitor`, receives one
-//! [`MonitorEvent::Snapshot`], and then follows [`MonitorEvent::Diff`]s. They
+//! [`MonitorEvent::Snapshot`], and then follows `MonitorEvent::Diff`s. They
 //! carry **no conversation content** — only ids, titles/previews, status, and
 //! accounting — so a dashboard never deserializes a transcript.
 //!
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonitorAction {
-    /// Keep the connection open and stream [`MonitorEvent::Diff`]s after the
+    /// Keep the connection open and stream `MonitorEvent::Diff`s after the
     /// initial snapshot (`neenee status --watch`, live control panels). When
     /// `false` the server sends the snapshot and closes the connection.
     #[serde(default)]

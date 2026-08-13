@@ -840,7 +840,7 @@ pub async fn connect(
 }
 
 /// Shared OAuth body for any provider: browser loopback (PKCE) or device-code,
-/// parameterized by the provider's [`OAuthConfig`]. Persists the resulting token
+/// parameterized by the provider's [`neenee_providers::oauth::OAuthConfig`]. Persists the resulting token
 /// set (plus the ChatGPT account id, when present) under the provider's
 /// `auth.toml` key.
 async fn run_oauth(

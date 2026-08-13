@@ -4,8 +4,8 @@
 //! the same mechanics — PKCE browser flow, token exchange, refresh, JWT-exp
 //! freshness — and differ only in their registered client constants
 //! (`client_id`, endpoints, scopes, redirect port). [`OAuthConfig`] captures
-//! those constants as a compile-time value so the generic flows in [`token`],
-//! [`browser`], and [`device`] can serve any provider from one implementation.
+//! those constants as a compile-time value so the generic flows in [`crate::oauth::token`],
+//! [`crate::oauth::browser`], and [`crate::oauth::device`] can serve any provider from one implementation.
 //!
 //! The ChatGPT device flow is structurally distinct from RFC 8628 (JSON bodies,
 //! a two-step authorization_code → token exchange), so [`DeviceFlow`] lets the

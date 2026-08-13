@@ -356,7 +356,7 @@ fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Th
     );
 }
 
-/// Build the **Connections** provider list body via the shared [`ListRow`]
+/// Build the **Connections** provider list body via the shared [`crate::tui::components::row::ListRow`]
 /// standard. Each row is a two-column layout: column 1 (fixed, after the
 /// gutter) is the instance name (bold, fuzzy-highlighted in search); column 2
 /// (midpoint) is the provider *type* label (dim), anchored at the horizontal
@@ -441,7 +441,7 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
     ]
 }
 
-/// Build the **Models** flat model list body via the shared [`ListRow`]
+/// Build the **Models** flat model list body via the shared [`crate::tui::components::row::ListRow`]
 /// standard. Each row is a two-column layout spread across the width:
 /// - a status group (fixed): the `●` current-state dot and the `★` favorite
 ///   star;

@@ -422,7 +422,7 @@ pub fn model_context_window(model: &str) -> usize {
     resolve_model(model).context_window
 }
 
-/// One selectable row in the **flat model picker** ([`Modal::Models`]
+/// One selectable row in the **flat model picker** ([`crate::tui::modal::Modal::Models`]
 /// equivalent): a single (provider, model) pair drawn from anywhere in the
 /// snapshot. Built by [`models_flat_filtered_from`]; the picker browses,
 /// searches, and activates these directly — there is no drill-in stage.

@@ -31,7 +31,7 @@ pub struct MonitorTracker {
     note: Option<String>,
     /// The session's declared WIP (ADR-0097 §5). Set by the registry's WIP
     /// coordination registry (not folded from the event stream), so it lives
-    /// beside the tracked fields and is projected onto the row by [`row`].
+    /// beside the tracked fields and is projected onto the row by [`Self::row`].
     wip: Option<WipStatus>,
 }
 
@@ -64,7 +64,7 @@ impl MonitorTracker {
     }
 
     /// Set or clear the session's declared WIP (ADR-0097 §5). Called by the
-    /// registry's WIP coordination registry; the next [`row`] projection
+    /// registry's WIP coordination registry; the next [`Self::row`] projection
     /// carries it to the dashboard.
     pub fn set_wip(&mut self, wip: Option<WipStatus>) {
         self.wip = wip;

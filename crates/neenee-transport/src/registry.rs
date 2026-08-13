@@ -35,7 +35,7 @@ pub struct HostedSession {
     /// cannot reconstruct (active provider/model, picker snapshot, key
     /// readiness). Filled by the broadcast-tap; drained into each new client
     /// after it subscribes so it hydrates immediately. Bounded; see
-    /// [`ATTACH_SYNC_BUFFER_CAP`].
+    /// `ATTACH_SYNC_BUFFER_CAP`.
     pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
     /// When this hosted session was created (wall-clock, monotonic). Drives
     /// the idle reaper: a session that stays `is_empty_unpersisted` (no real
@@ -282,7 +282,7 @@ impl SessionRegistry {
 
     /// One pass of the idle-empty reaper: remove every hosted session that is
     /// still `is_empty_unpersisted` (no user-facing content, never written to
-    /// disk) **and** has been hosted longer than [`IDLE_EMPTY_SESSION_TTL`]
+    /// disk) **and** has been hosted longer than `IDLE_EMPTY_SESSION_TTL`
     /// **and** currently has no attached client. Returns the reclaimed ids.
     ///
     /// Only never-persisted sessions are eligible — a session that has real
@@ -339,7 +339,7 @@ impl SessionRegistry {
     }
 
     /// Spawn the background idle-empty reaper, sweeping every
-    /// [`IDLE_REAPER_INTERVAL`] until `cancel` fires. The daemon calls this
+    /// `IDLE_REAPER_INTERVAL` until `cancel` fires. The daemon calls this
     /// once at startup; the task stops cleanly on shutdown.
     pub fn spawn_idle_reaper(self: &Arc<Self>, cancel: CancellationToken) {
         let registry = Arc::clone(self);

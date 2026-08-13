@@ -1,4 +1,4 @@
-//! Agent identity: who an [`Agent`](crate::agent) (re-exported by the agent
+//! Agent identity: who an `Agent` (re-exported by the agent
 //! crate) is and what it is for. Pure domain vocabulary — three strings and a
 //! formatter — with no agent-layer dependencies, so it lives in core alongside
 //! the role profiles ([`crate::PrincipalProfile`], [`crate::EnvoyProfile`]).

@@ -996,7 +996,7 @@ fn flat_attempts<'a>(report: &'a TokenSourceReport, round: u64) -> Vec<FlatAttem
 }
 
 /// Label for one flattened attempt row. A turn with a single attempt reads as
-/// a bare ordinal ("1st"); a retried turn reads as "<turn> - <attempt>"
+/// a bare ordinal ("1st"); a retried turn reads as `<turn> - <attempt>`
 /// ("1st - 2nd").
 fn attempt_label(turn: u32, attempt: u32) -> String {
     if attempt > 1 {

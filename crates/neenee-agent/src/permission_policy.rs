@@ -43,7 +43,7 @@
 //! 6. **One prompt per call.** Both the bash confirm gate and the broker emit
 //!    [`PolicyDecision::Ask`]; the caller parks once, emits one prompt, and
 //!    awaits one decision. A bash command is never prompted twice (the old
-//!    chain-external re-evaluation is gone). An `Ask`'s [`PermissionRequest`]
+//!    chain-external re-evaluation is gone). An `Ask`'s [`neenee_core::PermissionRequest`]
 //!    carries `elevation` (out-of-scope, ADR-0028) and `one_off` (the bash
 //!    dangerous-command confirm: an `Always` reply is honoured but not
 //!    persisted) so the caller and the TUI handle both uniformly.
@@ -305,7 +305,7 @@ impl PermissionPolicy for SchemaPolicy {
 /// the broker: the right to decide out-of-scope calls is handed to the user.
 ///
 /// A call whose [`ScopeTarget`] falls outside the agent's granted
-/// [`OperationScope`] is not hard-blocked. Instead:
+/// [`neenee_core::OperationScope`] is not hard-blocked. Instead:
 /// - **Attended** (a human is reachable, `ctx.autopilot == false`) → `Pass`, so
 ///   the call falls through to the next gate — the [`BrokerPolicy`], which
 ///   surfaces the standard approve / always-allow / reject prompt. The user, not
