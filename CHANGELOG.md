@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.6] - 2026-08-13
+
+### Changed
+
+- **Effort vocabulary is now open, not closed.** The seven `Effort` rungs are
+  the words providers use, not a ceiling. A new `EffortLevel` type
+  (`Known(Effort)` | `Other(String)`) lives on the runtime per-channel view
+  (`ModelCapabilities` / `RemoteModelMetadata`) so a provider-advertised tier
+  the vocabulary does not name is **preserved and stamped through to the wire
+  verbatim**, rather than silently dropped. The closed `Effort` enum stays
+  `Copy` on the static registry; openness lives only where live discovery lands.
+  This honors ADR-0065 (live discovery is authoritative) end-to-end: a provider
+  adding a tier reaches the wire with no neenee release.
+
+### Fixed
+
+- **`Effort::parse` no longer silently drops unknown upstream tiers.** Live
+  discovery (Kimi K3, Copilot) advertised effort values were filtered through
+  the closed enum and any unknown tier vanished without a trace. The ingress
+  now uses the non-dropping `EffortLevel::parse`; the fitted-overlay →
+  static-registry bridge (which must narrow to the `Copy` `Effort` vocabulary)
+  logs any tier it cannot carry instead of dropping it quietly. Unknown tiers
+  still survive on the channel's runtime metadata path.
+
 ## [0.22.5] - 2026-08-13
 
 ### Added
@@ -2710,7 +2734,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.5...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.6...HEAD
+[0.22.6]: https://github.com/ming2k/neenee/releases/tag/v0.22.6
 [0.22.5]: https://github.com/ming2k/neenee/releases/tag/v0.22.5
 [0.22.4]: https://github.com/ming2k/neenee/releases/tag/v0.22.4
 [0.22.3]: https://github.com/ming2k/neenee/releases/tag/v0.22.3
