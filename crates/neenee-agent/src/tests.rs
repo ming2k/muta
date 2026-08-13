@@ -30,7 +30,10 @@ impl Provider for TestProvider {
         &self,
         _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        Ok(Box::pin(stream::empty()))
+        // The default `stream_chat_events` wraps this into a single
+        // `TextDelta("done")`, so the streaming ReAct loop sees the same
+        // terminal answer as `chat()`.
+        Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
     }
 }
 
@@ -57,40 +60,31 @@ impl Provider for HintProvider {
 #[async_trait]
 impl Provider for PermissionTestProvider {
     async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
-        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(Message {
-                role: Role::Assistant,
-                content: String::new(),
-                content_blob: None,
-                display_content: None,
-                reasoning_content: None,
-                provider_meta: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call".to_string(),
-                    name: "write_test".to_string(),
-                    arguments: "{}".to_string(),
-                }]),
-                tool_call_id: None,
-                images: None,
-                provider: None,
-                model: None,
-                hidden: false,
-                children: None,
-                envoy_meta: None,
-                origin: None,
-                timestamp: None,
-                sent_at_ms: None,
-            })
-        } else {
-            Ok(Message::new(Role::Assistant, "done"))
-        }
+        unreachable!("streaming path should be used")
     }
 
     async fn stream_chat(
         &self,
         _request: neenee_core::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        Ok(Box::pin(stream::empty()))
+        unreachable!("stream_chat_events should be called directly")
+    }
+
+    async fn stream_chat_events(
+        &self,
+        _request: neenee_core::ModelRequest,
+    ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            vec![Ok(ProviderStreamEvent::ToolCallDelta {
+                index: 0,
+                id: Some("call".to_string()),
+                name: Some("write_test".to_string()),
+                arguments: "{}".to_string(),
+            })]
+        } else {
+            vec![Ok(ProviderStreamEvent::TextDelta("done".to_string()))]
+        };
+        Ok(Box::pin(stream::iter(events)))
     }
 }
 
@@ -199,12 +193,12 @@ impl Tool for ShadowTodoTool {
     }
 }
 
-fn agent() -> Agent {
-    Agent::new(
+fn agent() -> Arc<Agent> {
+    Arc::new(Agent::new(
         Arc::new(TestProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    )
+    ))
 }
 
 #[test]
@@ -351,7 +345,7 @@ async fn queued_user_input_is_admitted_as_visible_user_steer() {
     let mut events = Vec::new();
 
     agent
-        .run_with_events(&mut messages, &CancellationToken::new(), |event| {
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |event| {
             events.push(event)
         })
         .await
@@ -514,11 +508,11 @@ fn retry_metadata_is_not_exposed_as_public_error_text() {
 #[tokio::test]
 async fn streaming_tool_deltas_are_reassembled_and_executed() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(StreamingToolProvider(AtomicUsize::new(0))),
         vec![Arc::new(StreamingReadTool(calls.clone()))],
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "run")];
     let mut events = Vec::new();
 
@@ -562,11 +556,11 @@ async fn turn_persist_fires_at_each_react_turn_boundary() {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen_lengths: Arc<std::sync::Mutex<Vec<usize>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(StreamingToolProvider(AtomicUsize::new(0))),
         vec![Arc::new(StreamingReadTool(calls.clone()))],
         crate::AgentIdentity::default(),
-    );
+    ));
     let seen_for_cb = Arc::clone(&seen_lengths);
     agent.set_turn_persist(Arc::new(move |messages: &[Message]| {
         let len = messages.len();
@@ -624,11 +618,11 @@ async fn stalled_provider_stream_times_out_as_retryable() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(StalledStreamProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "hello")];
 
     let result = agent
@@ -675,11 +669,11 @@ async fn stream_ending_mid_tool_call_is_retryable() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(TruncatedToolCallProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "hello")];
 
     let result = agent
@@ -735,11 +729,11 @@ async fn stream_with_truncated_tool_arguments_is_retryable() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(TruncatedArgumentsProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "hello")];
 
     let result = agent
@@ -770,14 +764,14 @@ async fn stream_with_truncated_tool_arguments_is_retryable() {
 async fn zero_argument_tool_call_survives_stream_finalization() {
     let tool = RecordingTool::read("alpha", "A-out");
     let calls = tool.calls_handle();
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "alpha", "")]),
             text_turn("done"),
         ])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "go")];
 
     let outcome = agent
@@ -814,11 +808,11 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(PendingProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_thread_id("interrupt-session");
     agent.bump_round();
     let ledger = neenee_core::TokenSourceLedger::shared();
@@ -880,11 +874,11 @@ async fn stream_request_that_never_resolves_times_out() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(PendingStreamProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "hello")];
 
     let result = agent
@@ -894,44 +888,6 @@ async fn stream_request_that_never_resolves_times_out() {
     assert!(
         matches!(result, Err(HarnessError::Retryable { .. })),
         "a stream request that never resolves should time out as retryable; got: {result:?}"
-    );
-}
-
-/// A provider whose non-streaming `chat()` never resolves simulates a stalled
-/// endpoint during the non-streaming ReAct path (used by `Agent::run` and
-/// compaction). Without a timeout the call blocks forever.
-#[tokio::test(start_paused = true)]
-async fn non_streaming_chat_that_never_resolves_times_out() {
-    use std::future::pending;
-
-    struct PendingChatProvider;
-    #[async_trait]
-    impl Provider for PendingChatProvider {
-        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
-            pending().await
-        }
-        async fn stream_chat(
-            &self,
-            _: neenee_core::ModelRequest,
-        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-            Ok(Box::pin(stream::empty()))
-        }
-    }
-
-    let agent = Agent::new(
-        Arc::new(PendingChatProvider),
-        Vec::new(),
-        crate::AgentIdentity::default(),
-    );
-    let mut messages = vec![Message::new(Role::User, "hello")];
-
-    let result = agent
-        .run_with_events(&mut messages, &CancellationToken::new(), |_| {})
-        .await;
-
-    assert!(
-        matches!(result, Err(HarnessError::Retryable { .. })),
-        "a non-streaming chat that never resolves should time out as retryable; got: {result:?}"
     );
 }
 
@@ -965,11 +921,11 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
         }
     }
 
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ReasoningOnlyProvider),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
         ..neenee_core::DoomGuardConfig::default()
@@ -1018,13 +974,13 @@ async fn cancelling_during_tool_execution_emits_tool_cancelled() {
 
     let started = Arc::new(Notify::new());
     let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(StreamingToolProvider(AtomicUsize::new(0))),
         vec![Arc::new(BlockingTool {
             started: started.clone(),
         })],
         crate::AgentIdentity::default(),
-    );
+    ));
     let token = CancellationToken::new();
     let mut messages = vec![Message::new(Role::User, "run")];
     let events_for_run = events.clone();
@@ -1304,14 +1260,31 @@ async fn execute_tool_evented_drains_interrupted_envoy() {
 
 #[tokio::test]
 async fn headless_run_rejects_write_tools_without_hanging() {
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(PermissionTestProvider(AtomicUsize::new(0))),
         vec![Arc::new(WriteTestTool)],
         crate::AgentIdentity::default(),
-    );
+    ));
     let mut messages = vec![Message::new(Role::User, "write something")];
 
-    let outcome = agent.run(&mut messages).await.unwrap();
+    // Non-interactive event handling: permission requests are rejected and
+    // user questions get an empty answer, so nothing can park on a human.
+    let outcome = agent
+        .run_streaming_with_events(
+            &mut messages,
+            &CancellationToken::new(),
+            |event| match event {
+                AgentEvent::PermissionRequest(request) => {
+                    agent.reply_permission(&request.id, PermissionDecision::Reject);
+                }
+                AgentEvent::UserQuestionRequest(request) => {
+                    agent.reply_user_question(&request.id, Vec::new());
+                }
+                _ => {}
+            },
+        )
+        .await
+        .unwrap();
 
     // Permission rejection now terminates the turn instead of letting the
     // model continue, so the final assistant message is empty.
@@ -1637,7 +1610,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
 /// Drive one full round, auto-answering any permission prompt with `decision`
 /// so write-capable tools don't deadlock the loop.
 async fn run_golden_round(
-    agent: &Agent,
+    agent: &Arc<Agent>,
     prompt: &str,
     decision: PermissionDecision,
 ) -> (Vec<AgentEvent>, Result<RoundOutcome, HarnessError>) {
@@ -1656,7 +1629,7 @@ async fn run_golden_round(
 
 #[tokio::test]
 async fn golden_native_tool_turn_then_final_text() {
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "alpha", "{\"k\":1}"), ("c2", "beta", "{\"k\":2}")]),
             text_turn("all done"),
@@ -1666,7 +1639,7 @@ async fn golden_native_tool_turn_then_final_text() {
             Arc::new(RecordingTool::read("beta", "B-out")),
         ],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -1690,14 +1663,14 @@ async fn golden_native_tool_turn_then_final_text() {
 
 #[tokio::test]
 async fn golden_text_fallback_tool_call_is_discarded_then_dispatched() {
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             text_turn("{\"tool\":\"alpha\",\"arguments\":{\"k\":1}}"),
             text_turn("finished"),
         ])),
         vec![Arc::new(RecordingTool::read("alpha", "A-out"))],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -1729,7 +1702,7 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     let tool = RecordingTool::read("alpha", "A-out");
     let calls = tool.calls_handle();
     let identical = || turn(&[("c", "alpha", "{}")]);
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             identical(),
             identical(),
@@ -1738,7 +1711,7 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
         ])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
 
     let (_events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
@@ -1763,7 +1736,7 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
     let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(), // 1st: allowed, executes
             cmd(), // 2nd: repeat → blocked before execution
@@ -1771,7 +1744,7 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
         ..neenee_core::DoomGuardConfig::default()
@@ -1832,7 +1805,7 @@ async fn doom_block_is_surgical_across_files() {
     let read_big = || turn(&[("c", "read_text", r#"{"path":"big.rs"}"#)]);
     let read_small = || turn(&[("c", "read_text", r#"{"path":"small.rs"}"#)]);
     let list = || turn(&[("c", "list_dir", r#"{"path":"."}"#)]);
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             read_big(),
             read_big(),
@@ -1842,7 +1815,7 @@ async fn doom_block_is_surgical_across_files() {
         ])),
         vec![Arc::new(reader), Arc::new(lister)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
         enabled: true,
         ..neenee_core::DoomGuardConfig::default()
@@ -1882,7 +1855,7 @@ async fn doom_block_is_surgical_across_files() {
 #[tokio::test]
 async fn doom_guard_suppressed_when_disabled() {
     let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(),
             cmd(),
@@ -1891,7 +1864,7 @@ async fn doom_guard_suppressed_when_disabled() {
         ])),
         vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
     agent.seed_permissions_from_config(&[neenee_persistence::config::PermissionRuleConfig {
         tool: "bash".to_string(),
@@ -1922,14 +1895,14 @@ async fn doom_guard_suppressed_when_disabled() {
 async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
             text_turn("done"),
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.seed_permissions_from_config(&[neenee_persistence::config::PermissionRuleConfig {
         tool: "bash".to_string(),
         scope: "git reset --hard".to_string(),
@@ -1955,14 +1928,14 @@ async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
 async fn bash_policy_user_allow_overrides_builtin_confirm() {
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
             text_turn("done"),
         ])),
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.seed_permissions_from_config(&[neenee_persistence::config::PermissionRuleConfig {
         tool: "bash".to_string(),
         scope: "git reset --hard".to_string(),
@@ -1992,14 +1965,14 @@ async fn bash_policy_user_allow_overrides_builtin_confirm() {
 async fn golden_rejected_write_tool_terminates_round() {
     let tool = RecordingTool::write("writer", "WROTE");
     let calls = tool.calls_handle();
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "writer", "{\"path\":\"x\"}")]),
             text_turn("stopped"),
         ])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -2025,14 +1998,14 @@ async fn golden_rejected_write_tool_terminates_round() {
 
 #[tokio::test]
 async fn golden_reasoning_precedes_text_in_the_same_turn() {
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![vec![
             ProviderStreamEvent::ReasoningDelta("think".to_string()),
             ProviderStreamEvent::TextDelta("answer".to_string()),
         ]])),
         Vec::new(),
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -2064,14 +2037,14 @@ async fn ask_user_tool_blocks_and_returns_selected_answers() {
             "multi_select": false
         }]
     });
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "ask_user", &ask_args.to_string())]),
             text_turn("done"),
         ])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2107,14 +2080,14 @@ async fn ask_user_tool_unblocks_with_a_cancelled_result() {
             "multi_select": false
         }]
     });
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "ask_user", &ask_args.to_string())]),
             text_turn("acknowledged"),
         ])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2150,14 +2123,14 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
             "multi_select": false
         }]
     });
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[("c1", "ask_user", &ask_args.to_string())]),
             text_turn("decided on my own"),
         ])),
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_autopilot(true);
 
     let mut messages = vec![Message::new(Role::User, "choose")];
@@ -2377,11 +2350,11 @@ async fn round_runs_uncapped_until_model_emits_text() {
         }
     }
     turns.push(text_turn("all done"));
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(turns)),
         vec![Arc::new(read), Arc::new(write)],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Always).await;
 
@@ -2489,11 +2462,11 @@ async fn hard_stop_aborts_when_budget_configured() {
     // The third tool-bearing turn trips the budget and the round aborts with the budget in
     // the message.
     let tool = RecordingTool::read("alpha", "A-out");
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(distinct_read_turns(10, None))),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
-    );
+    ));
     agent.set_hard_stop_turns(3);
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -2521,11 +2494,11 @@ async fn review_now_runs_diagnostic_and_returns_verdict() {
     let verdict_json =
         r#"{"verdicts":[{"dimension":"looping","status":"stuck","detail":"re-reading"}]}"#;
     let tool = RecordingTool::read("alpha", "A-out");
-    let agent = Agent::new(
+    let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn(verdict_json)])),
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
-    );
+    ));
 
     // A transcript with one tool-bearing turn so the estimate is meaningful.
     let mut transcript = vec![Message::new(Role::User, "go")];
@@ -2756,5 +2729,321 @@ fn request_pressure_includes_system_prompt_and_tool_schemas() {
     assert!(
         with_schema.total_tokens > plain.total_tokens,
         "an advertised tool schema must increase projected request pressure"
+    );
+}
+
+// ---- ToolScheduler dispatch driver (stage-3 pipeline) ---------------------
+//
+// Contract-level coverage for the scheduler-driven `schedule` stage: result
+// recording stays input-ordered under out-of-order completion, an interrupt
+// preserves drained work while pairing unproduced calls with `ToolCancelled`,
+// and conflicting writes never overlap in flight.
+
+/// A read-tier tool with a configurable per-call delay, used to control the
+/// completion order of a concurrent batch.
+struct DelayedReadTool {
+    name: &'static str,
+    output: String,
+    delay: std::time::Duration,
+}
+
+#[async_trait]
+impl Tool for DelayedReadTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn description(&self) -> &str {
+        "delayed read probe"
+    }
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    async fn call(&self, _arguments: &str) -> Result<String, String> {
+        tokio::time::sleep(self.delay).await;
+        Ok(self.output.clone())
+    }
+}
+
+/// Recording stays input-ordered even when a later call finishes first: the
+/// first call sleeps while the second completes, so the live `ToolResult`
+/// events arrive out of order, but the transcript messages are appended
+/// strictly in call order.
+#[tokio::test]
+async fn scheduler_records_results_in_input_order_despite_completion_order() {
+    let agent = Arc::new(Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            turn(&[("c1", "slow_read", "{}"), ("c2", "fast_read", "{}")]),
+            text_turn("done"),
+        ])),
+        vec![
+            Arc::new(DelayedReadTool {
+                name: "slow_read",
+                output: "S-out".to_string(),
+                delay: std::time::Duration::from_millis(120),
+            }),
+            Arc::new(DelayedReadTool {
+                name: "fast_read",
+                output: "F-out".to_string(),
+                delay: std::time::Duration::ZERO,
+            }),
+        ],
+        crate::AgentIdentity::default(),
+    ));
+    let mut messages = vec![Message::new(Role::User, "go")];
+    let mut events = Vec::new();
+    agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |event| {
+            events.push(event)
+        })
+        .await
+        .expect("round completes");
+
+    // Live events follow completion order: fast before slow.
+    let result_names: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ToolResult { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        result_names,
+        vec!["fast_read", "slow_read"],
+        "live ToolResult events follow completion order"
+    );
+
+    // The recorded transcript is strictly input order: slow (call 1) then
+    // fast (call 2).
+    let recorded: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .map(|m| m.content.as_str())
+        .collect();
+    assert_eq!(recorded.len(), 2, "both results recorded: {recorded:?}");
+    assert!(
+        recorded[0].starts_with("[slow_read result]:\nS-out"),
+        "first recorded message is the first call: {recorded:?}"
+    );
+    assert!(
+        recorded[1].starts_with("[fast_read result]:\nF-out"),
+        "second recorded message is the second call: {recorded:?}"
+    );
+}
+
+/// A turn interrupted mid-batch records the drained envoy's partial result
+/// and pairs the never-produced sibling call with `ToolCancelled` — the
+/// batch-level counterpart of `execute_tool_evented_drains_interrupted_envoy`.
+#[tokio::test]
+async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
+    use std::future::pending;
+
+    struct BlockingTool {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl Tool for BlockingTool {
+        fn name(&self) -> &str {
+            "stream_read"
+        }
+        fn description(&self) -> &str {
+            "blocks until the turn is cancelled"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn call(&self, _arguments: &str) -> Result<String, String> {
+            self.started.notify_one();
+            let _: () = pending().await;
+            unreachable!("the turn is cancelled before this returns")
+        }
+    }
+
+    let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
+    let envoy: Arc<crate::EnvoyTool> = Arc::new(crate::EnvoyTool::new(
+        Arc::new(GatedEnvoyProvider {
+            requests: AtomicUsize::new(0),
+            gate: gate_tx,
+        }),
+        neenee_core::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
+        &neenee_core::EXPLORE,
+    ));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let agent = Arc::new(Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            turn(&[
+                ("c1", "envoy", r#"{"description":"d","prompt":"p"}"#),
+                ("c2", "stream_read", "{}"),
+            ]),
+            text_turn("done"),
+        ])),
+        vec![
+            envoy as Arc<dyn Tool>,
+            Arc::new(BlockingTool {
+                started: started.clone(),
+            }),
+        ],
+        crate::AgentIdentity::default(),
+    ));
+
+    let token = CancellationToken::new();
+    let events: Arc<std::sync::Mutex<Vec<AgentEvent>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events_for_run = events.clone();
+    let mut messages = vec![Message::new(Role::User, "go")];
+    let run_token = token.clone();
+    let handle = tokio::spawn(async move {
+        let outcome = agent
+            .run_streaming_with_events(&mut messages, &run_token, |event| {
+                if let Ok(mut guard) = events_for_run.lock() {
+                    guard.push(event);
+                }
+            })
+            .await;
+        (outcome, messages)
+    });
+
+    // Wait until BOTH calls are genuinely in flight, then interrupt.
+    let mut gate_rx = gate_rx;
+    gate_rx
+        .changed()
+        .await
+        .expect("envoy reached its stalled second request");
+    started.notified().await;
+    token.cancel();
+
+    let (outcome, messages) = handle.await.expect("round task panicked");
+    assert!(
+        matches!(outcome, Err(HarnessError::Interrupted)),
+        "expected the turn to be interrupted, got {outcome:?}"
+    );
+
+    let recorded = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    // The envoy drained within the grace period: its ToolResult landed and no
+    // ToolCancelled was emitted for it.
+    assert!(
+        recorded
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "envoy")),
+        "drained envoy must emit ToolResult"
+    );
+    assert!(
+        !recorded.iter().any(
+            |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "envoy")
+        ),
+        "a produced (drained) call must never be paired with ToolCancelled"
+    );
+    // The never-produced blocking call is paired with ToolCancelled and never
+    // emitted a ToolResult.
+    assert!(recorded.iter().any(
+        |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "stream_read")
+    ));
+    assert!(!recorded.iter().any(
+        |event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "stream_read")
+    ));
+    // The drained work is recorded into the transcript (interrupted
+    // re-anchor); the cancelled call is not recorded.
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content.contains("interrupted mid-task")),
+        "drained envoy result must be recorded: {messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content.starts_with("[stream_read result]")),
+        "an unproduced call must not be recorded: {messages:?}"
+    );
+}
+
+/// Two calls declaring a write access to the same path must never overlap in
+/// flight: the scheduler serializes them even though the batch asks for both
+/// at once.
+#[tokio::test]
+async fn scheduler_serializes_conflicting_writes() {
+    struct WriteProbe {
+        active: Arc<AtomicUsize>,
+        max_concurrent: Arc<AtomicUsize>,
+        log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl Tool for WriteProbe {
+        fn name(&self) -> &str {
+            "probe_write"
+        }
+        fn description(&self) -> &str {
+            "write probe"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
+            let path = serde_json::from_str::<serde_json::Value>(arguments)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "/tmp/probe".to_string());
+            neenee_core::ScopeTarget::Path(std::path::PathBuf::from(path))
+        }
+        async fn call(&self, _arguments: &str) -> Result<String, String> {
+            let prev = self.active.fetch_add(1, Ordering::SeqCst);
+            self.max_concurrent.fetch_max(prev + 1, Ordering::SeqCst);
+            self.log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push("enter");
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            self.log
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push("exit");
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok("wrote".to_string())
+        }
+    }
+
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_concurrent = Arc::new(AtomicUsize::new(0));
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let probe = WriteProbe {
+        active: active.clone(),
+        max_concurrent: max_concurrent.clone(),
+        log: log.clone(),
+    };
+    // Distinct argument signatures but the SAME declared access path, so the
+    // two calls conflict (the default `accesses` derives `read_write_file`
+    // from the Path scope target).
+    let agent = Arc::new(Agent::new(
+        Arc::new(ScriptedProvider::new(vec![
+            turn(&[
+                ("c1", "probe_write", r#"{"path":"/tmp/probe","tag":1}"#),
+                ("c2", "probe_write", r#"{"path":"/tmp/probe","tag":2}"#),
+            ]),
+            text_turn("done"),
+        ])),
+        vec![Arc::new(probe)],
+        crate::AgentIdentity::default(),
+    ));
+    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Once).await;
+    outcome.expect("round completes");
+
+    assert_eq!(
+        max_concurrent.load(Ordering::SeqCst),
+        1,
+        "conflicting writes must never overlap in flight"
+    );
+    assert_eq!(
+        log.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+        ["enter", "exit", "enter", "exit"],
+        "the queued write starts only after the first one exits"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+            .count(),
+        2,
+        "both writes eventually produce a result"
     );
 }

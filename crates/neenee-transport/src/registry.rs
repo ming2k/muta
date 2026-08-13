@@ -2,11 +2,10 @@ use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
 use crate::serve::{ATTACH_SYNC_BUFFER_CAP, AttachAction, is_attach_sync_event};
-use neenee_agent::{AgentIdentity, PrincipalProfile};
+use neenee_agent::{Agent, AgentIdentity, PrincipalProfile};
 use neenee_core::{
-    AgentRequest, AgentResponse, MirrorHello, MonitorAction, MonitorEvent, MonitorSnapshot,
-    MonitoredSession, PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
-    WipStatus,
+    AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
+    PermissionDecision, SessionHosting, SessionOverview, SessionStatus, WipStatus,
 };
 use neenee_persistence::session::SessionStore;
 use std::collections::{HashMap, VecDeque};
@@ -45,6 +44,13 @@ pub struct HostedSession {
     /// process-local and never persisted, matching the in-memory-only nature
     /// of the sessions it guards.
     pub created_at: std::time::Instant,
+    /// Handle on the session's primary agent (the same `Arc` the bootstrap
+    /// hands out as `agent_for_session_end`) so the registry can fire
+    /// SessionEnd hooks (ADR-0025) when the session ends — killed over the
+    /// control plane, reaped, or torn down on daemon shutdown. The driver
+    /// task owns the agent otherwise. `None` only for hand-built test
+    /// entries, which carry no agent and fire nothing.
+    pub agent_for_session_end: Option<Arc<Agent>>,
 }
 #[derive(Clone)]
 pub struct BoundSession {
@@ -81,11 +87,6 @@ pub struct MonitorMeta {
 pub struct SessionRegistry {
     params: Option<HostParams>,
     sessions: Arc<Mutex<HashMap<String, Arc<HostedSession>>>>,
-    /// Mirrored sessions owned by standalone `neenee` processes (ADR-0095):
-    /// status rows arriving over `Wire::Mirror` connections, keyed by session
-    /// id. Hosted sessions always win a collision — a mirrored row is a
-    /// report, a hosted row is the thing itself.
-    mirrors: Arc<Mutex<HashMap<String, MonitoredSession>>>,
     monitor: MonitorBus,
     meta: Arc<Mutex<MonitorMeta>>,
     /// Declared work-in-progress per session id (ADR-0097 §5): the
@@ -121,7 +122,6 @@ impl SessionRegistry {
         Self {
             params,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            mirrors: Arc::new(Mutex::new(HashMap::new())),
             monitor,
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
             wip: Arc::new(Mutex::new(HashMap::new())),
@@ -156,11 +156,6 @@ impl SessionRegistry {
             // (`serve::handle_connection`) and never reach `resolve`.
             AttachAction::Monitor(_) => {
                 ResolveOutcome::Error("monitor connections are served directly".into())
-            }
-            // Mirror connections are likewise handled by the WS layer
-            // (`serve::run_mirror`) and never reach `resolve`.
-            AttachAction::Mirror => {
-                ResolveOutcome::Error("mirror connections are served directly".into())
             }
             AttachAction::Control(_) => {
                 ResolveOutcome::Error("control connections are served directly".into())
@@ -246,7 +241,9 @@ impl SessionRegistry {
     }
 
     /// Control plane (ADR-0096): tear down a hosted session — cancel its
-    /// driver, drop it from the registry, and tell monitors it is gone.
+    /// driver, fire its SessionEnd hooks (ADR-0025: a killed session is a
+    /// session that ended), drop it from the registry, and tell monitors it
+    /// is gone.
     pub async fn kill_session(&self, session_id: &str) -> Result<(), String> {
         let removed = self.sessions.lock().await.remove(session_id);
         let Some(e) = removed else {
@@ -255,6 +252,11 @@ impl SessionRegistry {
             ));
         };
         e.cancel.cancel();
+        // SessionEnd observers fire best-effort after the driver is cancelled;
+        // the hook context (session id + cwd) does not depend on it.
+        if let Some(agent) = &e.agent_for_session_end {
+            agent.fire_session_end().await;
+        }
         // A killed session's declared WIP goes with it (ADR-0097 §5 cleanup).
         self.clear_wip(session_id).await;
         self.publish(MonitorEvent::SessionRemoved {
@@ -262,6 +264,20 @@ impl SessionRegistry {
         })
         .await;
         Ok(())
+    }
+
+    /// Graceful daemon shutdown (ADR-0096): tear down every hosted session
+    /// via [`Self::kill_session`], so each one's SessionEnd hooks (ADR-0025)
+    /// fire before the process exits. `host::run` calls this on ctrl-c after
+    /// the listeners stop accepting. Best-effort per session: one failure
+    /// does not skip the rest.
+    pub async fn shutdown_all_sessions(&self) {
+        let ids: Vec<String> = self.sessions.lock().await.keys().cloned().collect();
+        for id in ids {
+            if let Err(error) = self.kill_session(&id).await {
+                tracing::warn!(session = %id, %error, "registry: session teardown failed on shutdown");
+            }
+        }
     }
 
     /// One pass of the idle-empty reaper: remove every hosted session that is
@@ -643,6 +659,7 @@ impl SessionRegistry {
             tracker,
             sync_buffer,
             created_at: std::time::Instant::now(),
+            agent_for_session_end: Some(boot.agent_for_session_end),
         });
         self.publish(MonitorEvent::SessionAdded(
             hosted.tracker.lock().await.row(),
@@ -665,32 +682,16 @@ impl SessionRegistry {
         self.monitor.subscribe()
     }
 
-    /// The current monitor snapshot: every hosted session's row plus every
-    /// mirrored row (ADR-0095), newest activity first, honouring the client's
-    /// `include_idle` filter. Hosted rows win id collisions.
+    /// The current monitor snapshot: every hosted session's row, newest
+    /// activity first, honouring the client's `include_idle` filter.
     pub async fn monitor_snapshot(&self, action: MonitorAction) -> MonitorSnapshot {
         let mut sessions = Vec::new();
-        let all_hosted: std::collections::HashSet<String> = {
+        {
             let map = self.sessions.lock().await;
             for hosted in map.values() {
                 let row = hosted.tracker.lock().await.row();
                 if action.include_idle || row.status != SessionStatus::Idle {
                     sessions.push(row);
-                }
-            }
-            // The collision set is built from *all* hosted ids — including
-            // ones the idle filter dropped — so a stale mirror row can never
-            // shadow a hosted session.
-            map.keys().cloned().collect()
-        };
-        {
-            let mirrors = self.mirrors.lock().await;
-            for row in mirrors.values() {
-                if all_hosted.contains(&row.id) {
-                    continue;
-                }
-                if action.include_idle || row.status != SessionStatus::Idle {
-                    sessions.push(row.clone());
                 }
             }
         }
@@ -700,71 +701,6 @@ impl SessionRegistry {
             project_root: meta.project_root.unwrap_or_default(),
             daemon_started_at: meta.started_at,
             sessions,
-        }
-    }
-
-    /// Adopt a mirror connection's identity header (ADR-0095): seeds the
-    /// mirrored row and announces it. A mirrored row for a session this host
-    /// already serves is accepted but never surfaces (hosted wins).
-    pub async fn mirror_adopt(&self, hello: MirrorHello) {
-        let row = MonitoredSession {
-            id: hello.session_id,
-            overview: hello.overview,
-            created_at: hello.created_at,
-            updated_at: now_secs(),
-            // A mirror hello carries no project path; the row's workspace
-            // shows as unknown until a hosted twin wins the id.
-            project_root: String::new(),
-            // A mirror carries no declared WIP.
-            wip: None,
-            message_count: hello.message_count,
-            hosting: SessionHosting::Mirrored,
-            status: SessionStatus::Idle,
-            round: 0,
-            turn: None,
-            output_tokens: 0,
-            elapsed_ms: 0,
-            current_tool: None,
-            activity: None,
-            context_tokens: None,
-            note: None,
-        };
-        self.mirrors
-            .lock()
-            .await
-            .insert(row.id.clone(), row.clone());
-        self.publish(MonitorEvent::SessionAdded(row)).await;
-    }
-
-    /// Apply a mirrored status update. The row's identity fields are pinned
-    /// to the adopted header so the wire copy stays truthful about *which*
-    /// session it describes; the incoming `hosting` is forced to `Mirrored`.
-    pub async fn mirror_upsert(&self, mut row: MonitoredSession) {
-        let mut mirrors = self.mirrors.lock().await;
-        let Some(existing) = mirrors.get_mut(&row.id) else {
-            // An update before any hello (or after a removal) is a protocol
-            // violation; drop it rather than invent an identity.
-            tracing::warn!(session = %row.id, "registry: mirror update for unknown session dropped");
-            return;
-        };
-        row.overview = existing.overview.clone();
-        row.created_at = existing.created_at;
-        row.hosting = SessionHosting::Mirrored;
-        row.updated_at = now_secs();
-        *existing = row.clone();
-        drop(mirrors);
-        self.publish(MonitorEvent::SessionUpdated(row)).await;
-    }
-
-    /// A mirror connection closed: the owning process may still be alive,
-    /// but without its stream the row would go silently stale, so the panel
-    /// drops it (ADR-0095 §—liveness).
-    pub async fn mirror_remove(&self, session_id: &str) {
-        if self.mirrors.lock().await.remove(session_id).is_some() {
-            self.publish(MonitorEvent::SessionRemoved {
-                session_id: session_id.to_string(),
-            })
-            .await;
         }
     }
 
@@ -828,13 +764,6 @@ fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> Monito
         project_root: project_root.display().to_string(),
         wip: None,
     }
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[allow(clippy::collapsible_if)]

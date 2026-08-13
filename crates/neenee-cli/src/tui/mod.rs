@@ -652,11 +652,9 @@ pub async fn run_tui(
                                 message.turn = Some(turn);
                             }
                             msgs.push(message);
-                            if !routes_to_side {
-                                if harness_clone.lock().await.loop_status.is_idle() {
-                                    ir_clone.store(false, Ordering::SeqCst);
-                                    activity_clone.lock().await.clear();
-                                }
+                            if !routes_to_side && harness_clone.lock().await.loop_status.is_idle() {
+                                ir_clone.store(false, Ordering::SeqCst);
+                                activity_clone.lock().await.clear();
                             }
                         }
                         RoundEvent::Activity(status) => {
@@ -1336,7 +1334,11 @@ pub async fn run_tui(
                     // (`/session open|new|fork`). Track the new id so
                     // `TokenUsageReport` replies route correctly, and drop
                     // the previous session's cached report.
-                    if let Some(id) = attach_session_id_clone.lock().unwrap().as_mut() {
+                    if let Some(id) = attach_session_id_clone
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_mut()
+                    {
                         *id = session_id.clone();
                     }
                     *token_report_clone.lock().await = None;
@@ -1359,9 +1361,12 @@ pub async fn run_tui(
                     // belongs to the session the frontend is viewing — a
                     // reply that raced a session switch would otherwise
                     // populate the modal with the previous session's rows.
-                    let viewed = listener_side_id
-                        .clone()
-                        .or_else(|| attach_session_id_clone.lock().unwrap().clone());
+                    let viewed = listener_side_id.clone().or_else(|| {
+                        attach_session_id_clone
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone()
+                    });
                     if viewed.as_deref() == Some(session_id.as_str()) {
                         *token_report_clone.lock().await = Some(report);
                     }

@@ -22,7 +22,7 @@ pub fn str_len(s: &str) -> usize {
 
 /// Alias for [`str_len`] (display columns). Named to match callers that think
 /// in terms of "string display width".
-pub fn str_idth(s: &str) -> usize {
+pub fn str_width(s: &str) -> usize {
     str_len(s)
 }
 
@@ -235,45 +235,30 @@ pub fn wrap(text: &str, max_width: usize) -> Vec<Line> {
     lines
 }
 
-/// A character that must not start a line (CJK closing punctuation, and the
+/// Characters that must not start a line (CJK closing punctuation, and the
 /// ASCII closers so mixed CJK/Latin text also breaks cleanly).
+///
+/// Shared with `neenee-cli`'s markup-aware wrapper so both wrap paths apply
+/// the exact same kinsoku rules.
+pub const PROHIBITED_LINE_START: &[char] = &[
+    '，', '。', '、', '！', '？', '：', '；', '）', '】', '》', '〉', '」', '』', '〕', '”', '’',
+    ',', '.', '!', '?', ':', ';', ')', ']', '}',
+];
+
+/// Characters that must not end a line (CJK opening punctuation, and the
+/// ASCII openers).
+pub const PROHIBITED_LINE_END: &[char] = &[
+    '（', '【', '《', '〈', '「', '『', '〔', '“', '‘', '(', '[', '{',
+];
+
+/// Whether `ch` must not start a line (see [`PROHIBITED_LINE_START`]).
 pub fn prohibited_line_start(ch: char) -> bool {
-    matches!(
-        ch,
-        '，' | '。'
-            | '、'
-            | '！'
-            | '？'
-            | '：'
-            | '；'
-            | '）'
-            | '】'
-            | '》'
-            | '〉'
-            | '」'
-            | '』'
-            | '〕'
-            | '”'
-            | '’'
-            | ','
-            | '.'
-            | '!'
-            | '?'
-            | ':'
-            | ';'
-            | ')'
-            | ']'
-            | '}'
-    )
+    PROHIBITED_LINE_START.contains(&ch)
 }
 
-/// A character that must not end a line (CJK opening punctuation, and the
-/// ASCII openers).
+/// Whether `ch` must not end a line (see [`PROHIBITED_LINE_END`]).
 pub fn prohibited_line_end(ch: char) -> bool {
-    matches!(
-        ch,
-        '（' | '【' | '《' | '〈' | '「' | '『' | '〔' | '“' | '‘' | '(' | '[' | '{'
-    )
+    PROHIBITED_LINE_END.contains(&ch)
 }
 
 #[cfg(test)]

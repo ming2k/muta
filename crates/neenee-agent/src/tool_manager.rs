@@ -53,18 +53,6 @@ pub enum ToolSource {
     Mcp,
 }
 
-impl ToolSource {
-    /// Stable display label for the session modal / `ToolInfo`.
-    #[inline]
-    pub fn as_label(self) -> &'static str {
-        match self {
-            ToolSource::Builtin => "builtin",
-            ToolSource::User => "user",
-            ToolSource::Mcp => "mcp",
-        }
-    }
-}
-
 /// One tool paired with its source bucket.
 #[derive(Clone)]
 pub struct SourcedTool {
@@ -193,12 +181,6 @@ impl ToolManager {
         self.installed().into_iter().find(|s| s.tool.name() == name)
     }
 
-    /// Whether `name` is a known tool in any bucket (before disable filtering).
-    /// Used by the disable-toggle UI to decide if a name is toggle-able.
-    pub(crate) fn contains(&self, name: &str) -> bool {
-        self.installed().iter().any(|s| s.tool.name() == name)
-    }
-
     /// Is `name` disabled by *either* mask? Name-level and uniform across all
     /// sources — disabling `mcp__foo__bar` works the same as disabling `bash`.
     fn is_name_disabled(&self, name: &str) -> bool {
@@ -284,17 +266,17 @@ mod tests {
             vec![],
         );
         let installed = m.installed();
-        let labels: Vec<(&str, &str)> = installed
+        let labels: Vec<(ToolSource, &str)> = installed
             .iter()
-            .map(|s| (s.source.as_label(), s.tool.name()))
+            .map(|s| (s.source, s.tool.name()))
             .collect();
         assert_eq!(
             labels,
             vec![
-                ("builtin", "bash"),
-                ("builtin", "read"),
-                ("user", "my_rpc"),
-                ("mcp", "mcp__srv__x"),
+                (ToolSource::Builtin, "bash"),
+                (ToolSource::Builtin, "read"),
+                (ToolSource::User, "my_rpc"),
+                (ToolSource::Mcp, "mcp__srv__x"),
             ]
         );
     }

@@ -1351,8 +1351,14 @@ fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth
 fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
-        Transport::OpenAiResponses { base_url, copilot, .. } => {
-            let protocol = if *copilot { "openai" } else { "openai-responses" };
+        Transport::OpenAiResponses {
+            base_url, copilot, ..
+        } => {
+            let protocol = if *copilot {
+                "openai"
+            } else {
+                "openai-responses"
+            };
             (protocol.to_string(), base_url.clone())
         }
         Transport::Anthropic { base_url, .. } => ("anthropic".to_string(), base_url.clone()),
@@ -1540,9 +1546,7 @@ mod tests {
                     label: "deepseek-v4-flash".to_string(),
                     transport: UserTransport::OpenAi,
                     model: Some("deepseek-v4-flash".to_string()),
-                    base_url: Some(
-                        "https://api.deepseek.com/v1/chat/completions".to_string(),
-                    ),
+                    base_url: Some("https://api.deepseek.com/v1/chat/completions".to_string()),
                     ..Default::default()
                 },
                 UserChannelConfig {

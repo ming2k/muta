@@ -107,11 +107,11 @@ impl CommandResult {
             CommandResult::Text(text) => text.clone(),
             CommandResult::Error { message, detail } => {
                 let mut out = format!("Error: {message}");
-                if let Some(detail) = detail {
-                    if !detail.trim().is_empty() {
-                        out.push_str("\n");
-                        out.push_str(detail);
-                    }
+                if let Some(detail) = detail
+                    && !detail.trim().is_empty()
+                {
+                    out.push('\n');
+                    out.push_str(detail);
                 }
                 out
             }

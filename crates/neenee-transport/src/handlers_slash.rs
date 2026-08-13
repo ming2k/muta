@@ -1246,7 +1246,7 @@ pub async fn dispatch(
             };
             agent.set_bash_policy(&effective_bash_policy);
             agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
-            agent.set_doom_guard_config(reloaded.principal.nudge.clone());
+            agent.set_doom_guard_config(reloaded.principal.nudge);
             agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
             agent.set_skip_interactive_input(reloaded.principal.skip_interactive_input);
             agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));

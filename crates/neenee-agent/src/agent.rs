@@ -187,15 +187,13 @@ pub struct Agent {
     /// reaches the session store. Auto-restored at the configured
     /// [`neenee_core::RestorePoint`]. See [`ScopedToolDisable`].
     scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
-    /// SDK/RPC-injected tools (the `user` bucket). Empty today; the bucket
-    /// exists so the three-way classification (builtin/user/mcp) and the
-    /// name-clash policy (builtin > user > mcp) are wired now. See
-    /// [`crate::tool_manager`].
-    user_tools: Arc<std::sync::RwLock<Vec<Arc<dyn neenee_core::Tool>>>>,
     /// The unified three-bucket tool manager (kimi-code port). The single
     /// authority for classification, per-turn schema (`loop_tools`), and
     /// dispatch lookup. Shares storage Arcs with the agent's own fields so
-    /// both see the same live state. See [`crate::tool_manager`].
+    /// both see the same live state; it also solely owns the `user` bucket
+    /// (SDK/RPC-injected tools — empty today, wired so the classification
+    /// and name-clash policy are stable from day one). See
+    /// [`crate::tool_manager`].
     tool_manager: crate::tool_manager::ToolManager,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
@@ -476,7 +474,7 @@ impl RoundState {
             .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
     }
 
-    fn remember_completed_tool(&mut self, call: &ToolCall) {
+    pub(crate) fn remember_completed_tool(&mut self, call: &ToolCall) {
         self.completed_tool_calls
             .insert(checkpoint_tool_signature(call));
     }
@@ -486,7 +484,7 @@ impl RoundState {
             .extend(self.completed_tool_calls.iter().cloned());
     }
 
-    fn is_checkpoint_replay(&self, call: &ToolCall) -> bool {
+    pub(crate) fn is_checkpoint_replay(&self, call: &ToolCall) -> bool {
         self.retry_protected_tool_calls
             .contains(&checkpoint_tool_signature(call))
     }
@@ -528,13 +526,13 @@ struct UserInputRound {
 }
 
 /// Result of one tool-execution phase, returned by the cancellation-aware
-/// executors ([`Agent::execute_tools_concurrent`] and
+/// executors ([`Agent::schedule_tool_calls`] and
 /// [`Agent::execute_tool_evented`]). The executors never return
 /// `Err(HarnessError::Interrupted)` themselves anymore: when the user
 /// interrupts a turn they signal cooperatively-cancellable in-flight calls
 /// (envoys), drain them within a bounded grace period, and report
 /// `interrupted: true` with whatever results were recovered. The caller
-/// ([`Agent::dispatch_tool_calls`]) records the recovered results, then
+/// ([`Agent::dispatch_finalize`]) records the recovered results, then
 /// propagates the interruption itself — so an interrupted envoy's partial
 /// transcript survives into the persisted transcript even though the round
 /// ends as interrupted.
@@ -865,15 +863,15 @@ impl Agent {
         let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
         let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
         let scoped_disabled_tools = Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
-        let user_tools = Arc::new(std::sync::RwLock::new(Vec::new()));
         // The unified ToolManager view (kimi-code port) owns the single
         // authority for classification, per-turn schema, and dispatch lookup.
         // It shares the storage Arcs with the agent so both reach the same
-        // live state. See `tool_manager`.
+        // live state. The `user` bucket (empty today) has no other owner:
+        // the manager is its sole authority. See `tool_manager`.
         let tool_manager = crate::tool_manager::ToolManager::new(
             Arc::clone(&resolved_tools),
             Arc::clone(&dynamic_tools),
-            Arc::clone(&user_tools),
+            Arc::new(std::sync::RwLock::new(Vec::new())),
             Arc::clone(&disabled_tools),
             Arc::clone(&scoped_disabled_tools),
         );
@@ -885,7 +883,6 @@ impl Agent {
             dynamic_tools,
             disabled_tools,
             scoped_disabled_tools,
-            user_tools,
             tool_manager,
             todos,
             round_counter,
@@ -1001,7 +998,6 @@ impl Agent {
 
     /// The unified tool manager (kimi-code port). Exposed so the dispatcher /
     /// model-request assembly can call its authoritative methods directly.
-    #[allow(dead_code)]
     pub(crate) fn tool_manager(&self) -> &crate::tool_manager::ToolManager {
         &self.tool_manager
     }
@@ -1253,8 +1249,9 @@ impl Agent {
     ///
     /// `streamed_usage` is the usage reported mid-stream (OpenAI
     /// `include_usage` / Anthropic `message_delta`), if any. When absent, we
-    /// fall back to [`Provider::take_last_usage`] (the non-streaming path) and
-    /// finally to the local char-class estimator.
+    /// fall back to [`Provider::take_last_usage`] (usage reported out-of-band
+    /// instead of as a mid-stream `Usage` event) and finally to the local
+    /// char-class estimator.
     ///
     /// This is the single point that decides whether a turn counts as
     /// **reported** (authoritative) or **estimated** (heuristic), and records
@@ -2069,27 +2066,6 @@ impl Agent {
         !guard.contains(name)
     }
 
-    /// Whether `name` is hidden from the model by *either* mask: the persisted
-    /// session-level mask (user `/tools` toggles) or the in-memory hook-scoped
-    /// mask ([`HookOutcome::ScopeTools`]). This is the model-facing truth —
-    /// `visible_tools` and the dispatch guard both consult it. The pub
-    /// [`Self::is_tool_enabled`] deliberately reports only the user mask so the
-    /// UI's Tools modal is not confused by transient hook scoping.
-    fn is_name_disabled(&self, name: &str) -> bool {
-        let user = self
-            .disabled_tools
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if user.contains(name) {
-            return true;
-        }
-        let scoped = self
-            .scoped_disabled_tools
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        scoped.contains(name)
-    }
-
     /// Apply hook-fired [`HookOutcome::ScopeTools`] disables: record each name
     /// (only known tools, matching the user-mask contract) under its restore
     /// point. Idempotent across repeated fires via refcounting.
@@ -2159,68 +2135,50 @@ impl Agent {
     /// in-memory hook-scoped mask). Used at the schema-build choke points so a
     /// disabled tool's definition never reaches the provider.
     pub(crate) fn visible_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // `ask_user` is reclaimed under autopilot: no human is reachable to
-        // answer, so admitting it would only deadlock a round. Drop its schema
-        // so the model never names it. The dispatch guard also short-circuits
-        // any stale call (a name carried over from an earlier turn's tool
-        // list) — see `execute_tool`.
-        let reclaim_ask_user = self.get_autopilot();
-        self.installed_tools()
-            .into_iter()
-            .filter(|t| !self.is_name_disabled(t.name()))
-            .filter(|t| !(reclaim_ask_user && t.name() == "ask_user"))
-            .collect()
+        // Delegate to the ToolManager's per-turn schema authority
+        // (kimi-code's `loopTools`): `installed` minus both disable masks,
+        // minus `ask_user` under autopilot — no human is reachable to answer,
+        // so admitting it would only deadlock a round. The dispatch guard
+        // also short-circuits any stale call (a name carried over from an
+        // earlier turn's tool list) — see `execute_tool`.
+        self.tool_manager.loop_tools(self.get_autopilot())
     }
 
     /// Structured view of every installed tool, for the session modal's Tools
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
     /// (`builtin`, `envoy`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<neenee_core::ToolInfo> {
-        // Classification mirrors installed_tools()'s three buckets, with the
-        // extra UI affordance that `envoy` is labeled distinctly from other
-        // builtins. The source label is display-only; dispatch treats all
-        // three buckets uniformly via name-clash priority (builtin > user > mcp).
+        // Classification delegates to the ToolManager's three-bucket
+        // authority for the builtin (with envoy broken out for display) and
+        // user buckets; the mcp bucket keeps the publisher-provided dynamic
+        // source id as its label. The source label is display-only; dispatch
+        // treats all three buckets uniformly via name-clash priority
+        // (builtin > user > mcp).
         let disabled = self
             .disabled_tools
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let envoy = ["envoy"];
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = Vec::new();
 
-        // 1. builtin (resolved static), with envoy broken out for display.
-        for tool in self
-            .resolved_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-        {
-            if seen.insert(tool.name().to_string()) {
-                let source = if envoy.contains(&tool.name()) {
-                    "envoy".to_string()
-                } else {
-                    "builtin".to_string()
-                };
-                sourced_tools.push((source, tool));
+        // 1+2. builtin (with envoy broken out) and user, from the manager.
+        for sourced in self.tool_manager.installed() {
+            let label = match sourced.source {
+                crate::tool_manager::ToolSource::Builtin if sourced.tool.name() == "envoy" => {
+                    "envoy"
+                }
+                crate::tool_manager::ToolSource::Builtin => "builtin",
+                crate::tool_manager::ToolSource::User => "user",
+                // Bucket 3 labels by dynamic source id — handled below.
+                crate::tool_manager::ToolSource::Mcp => continue,
+            };
+            if seen.insert(sourced.tool.name().to_string()) {
+                sourced_tools.push((label.to_string(), sourced.tool));
             }
         }
 
-        // 2. user (SDK/RPC-injected).
-        for tool in self
-            .user_tools
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-        {
-            if seen.insert(tool.name().to_string()) {
-                sourced_tools.push(("user".to_string(), tool));
-            }
-        }
-
-        // 3. mcp (dynamic snapshot).
+        // 3. mcp (dynamic snapshot), labeled by the publisher's source id.
         for entry in self.dynamic_tools.snapshot() {
             if seen.insert(entry.tool.name().to_string()) {
                 sourced_tools.push((entry.source, entry.tool));
@@ -2262,199 +2220,9 @@ impl Agent {
             .collect()
     }
 
-    pub async fn run(&self, messages: &mut Vec<Message>) -> Result<RoundOutcome, HarnessError> {
-        // Non-interactive convenience path: not cancellable from the outside.
-        self.run_with_events(messages, &CancellationToken::new(), |event| match event {
-            AgentEvent::PermissionRequest(request) => {
-                self.reply_permission(&request.id, PermissionDecision::Reject);
-            }
-            AgentEvent::UserQuestionRequest(request) => {
-                self.reply_user_question(&request.id, Vec::new());
-            }
-            _ => {}
-        })
-        .await
-    }
-
-    #[tracing::instrument(skip_all, name = "round", fields(streaming = false))]
-    pub async fn run_with_events<F>(
-        &self,
-        messages: &mut Vec<Message>,
-        cancel: &CancellationToken,
-        mut on_event: F,
-    ) -> Result<RoundOutcome, HarnessError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        let round_started_at = std::time::Instant::now();
-        // Reset the human-decision pause accumulator for this round so the
-        // tokens/sec derived at the exit gate excludes only *this* round's
-        // permission/ask_user waits.
-        self.round_paused_ms
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        let mut state = RoundState {
-            guards: RoundState::guards_default(self.doom_guard_config()),
-            ..RoundState::default()
-        };
-        let mut turn_index = 0;
-        // Take the steering inbox receiver for this round (ADR-0029). `None` for
-        // a non-steerable agent (no `install_inbox` call) → `drain_inbox` is a
-        // no-op. Taken once per agent: a re-run after the first returns `None`
-        // too, which is fine for the top-level harness (driven directly) and
-        // for envoys (single run).
-        let mut inbox_rx = self
-            .inbox_rx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        let user_input_generation = self.user_input_generation();
-
-        loop {
-            if cancel.is_cancelled() {
-                return Err(HarnessError::Interrupted);
-            }
-            // Apply any steering ops queued since the last turn (inject a
-            // message, or abort via Interrupt/Shutdown) before requesting the
-            // next completion. Replies (permission/ask_user) do NOT flow here
-            // — they resolve the parked oneshot directly.
-            if !self.drain_inbox(&mut inbox_rx, messages) {
-                return Err(HarnessError::Interrupted);
-            }
-            if self.admit_user_inputs(user_input_generation, messages, false, &mut on_event) > 0 {
-                // User input is an admission boundary just like a tool result:
-                // persist it before the provider can observe it.
-                self.fire_turn_persist(messages).await?;
-            }
-
-            crate::conversation_context::inject_mentioned_skills(&self.skills_registry, messages);
-            // TurnStart hooks (symmetric to the turn-end Turn hooks): inject
-            // any context at the top of this turn's attention, before the
-            // model is asked for its next completion. No-op without a
-            // `[hooks]` config (envoys, tests).
-            self.run_turn_start_hooks(messages, &state, turn_index)
-                .await;
-            let request = self.model_request(messages);
-            let request_projection = Self::estimate_model_request(&request).total_tokens;
-            let request_provider = self.provider.provider_id();
-            let request_model = self.provider.model();
-            let mut request_accounting = RequestAccountingGuard::begin(
-                self,
-                cancel,
-                &request_provider,
-                &request_model,
-                turn_index,
-                request_projection,
-            );
-            on_event(AgentEvent::ModelRequestStarted {
-                round: self.round_count(),
-                turn: turn_index,
-                context_tokens: request_projection,
-            });
-
-            let response = match tokio::time::timeout(
-                CHAT_RESPONSE_TIMEOUT,
-                self.provider.chat(request),
-            )
-            .await
-            {
-                Ok(result) => result?,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        timeout_secs = CHAT_RESPONSE_TIMEOUT.as_secs(),
-                        "non-streaming chat request timed out"
-                    );
-                    return Err(HarnessError::Retryable {
-                        message: format!(
-                            "Provider did not respond within {} seconds.",
-                            CHAT_RESPONSE_TIMEOUT.as_secs()
-                        ),
-                        retry_after_ms: None,
-                    });
-                }
-            };
-            if !valid_assistant_response(&response) {
-                return Err(empty_response_error(&response));
-            }
-            self.book_turn_usage(&mut state, &response, None, &mut request_accounting);
-            messages.push(response.clone());
-
-            // The model produced no text stream, so nothing was shown to the UI
-            // that a fallback tool call would need to retract.
-            if self
-                .dispatch_tool_calls(
-                    &response,
-                    messages,
-                    &mut state,
-                    false,
-                    cancel,
-                    &mut on_event,
-                )
-                .await?
-            {
-                turn_index += 1;
-                if self.check_hard_stop(turn_index).is_break() {
-                    return Err(self.hard_stop_error());
-                }
-                self.project_context_if_needed(messages, cancel).await?;
-                // Mid-turn save point (ADR-0035): see the streaming path.
-                self.fire_turn_persist(messages).await?;
-                self.run_turn_hooks(messages, &state, turn_index).await;
-                // Restore TurnEnd disables now that the ReAct turn is over, so
-                // tools narrowed for one turn come back for the next.
-                // RoundEnd disables survive until the user round
-                // ends (see the return path below).
-                self.restore_scoped_turn_end();
-                continue;
-            }
-
-            // Turn-exit gates. Pursuit may force another turn, and a human
-            // insert queued during the just-finished provider request does the
-            // same. When neither applies, `close_if_empty` atomically closes
-            // admission before this round returns.
-            let duration_ms = round_started_at.elapsed().as_millis() as u64;
-            let mut continue_round = false;
-            if let Some((prompt, kind)) = self.stop_gate(&response).await {
-                messages.push(crate::conversation_context::hidden_user(kind, prompt));
-                continue_round = true;
-            }
-            let admitted = self.admit_user_inputs(
-                user_input_generation,
-                messages,
-                !continue_round,
-                &mut on_event,
-            );
-            if admitted > 0 {
-                continue_round = true;
-            }
-            if continue_round {
-                turn_index += 1;
-                if self.check_hard_stop(turn_index).is_break() {
-                    return Err(self.hard_stop_error());
-                }
-                self.fire_turn_persist(messages).await?;
-                self.run_turn_hooks(messages, &state, turn_index).await;
-                self.restore_scoped_turn_end();
-                continue;
-            }
-
-            // User-round end: clear every scoped disable so the toolset is
-            // fresh for the next user request.
-            self.restore_scoped_round_end();
-            return Ok(RoundOutcome {
-                message: response,
-                token_usage: state.token_usage,
-                duration_ms,
-                generation_ms: state.generation_ms,
-                paused_ms: self
-                    .round_paused_ms
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            });
-        }
-    }
-
     #[tracing::instrument(skip_all, name = "round", fields(streaming = true))]
     pub async fn run_streaming_with_events<F>(
-        &self,
+        self: &Arc<Self>,
         messages: &mut Vec<Message>,
         cancel: &CancellationToken,
         on_event: F,
@@ -2503,7 +2271,7 @@ impl Agent {
     /// per-round state are already present, so the next invocation sends the
     /// same pending provider request instead of executing those tools again.
     pub(crate) async fn resume_streaming_with_events<F>(
-        &self,
+        self: &Arc<Self>,
         messages: &mut Vec<Message>,
         cancel: &CancellationToken,
         round: &mut StreamingRoundState,
@@ -2621,13 +2389,15 @@ impl Agent {
                 tokio::select! {
                     biased;
                     _ = cancel.cancelled() => return Err(HarnessError::Interrupted),
-                    // Guard against a stalled SSE stream: providers use
-                    // `reqwest::Client::new()` with no read timeout, so without
-                    // this bound a connection that stays open but stops sending
-                    // (common with overloaded reasoning-model endpoints) blocks
-                    // the turn forever. The idle clock resets on every chunk,
-                    // so a legitimately slow reasoning model that keeps
-                    // trickling deltas is never cut off.
+                    // Guard against a stalled SSE stream: providers share a
+                    // pooled client whose connect timeout covers the handshake
+                    // but which deliberately sets no read timeout on streaming
+                    // responses, so without this bound a connection that stays
+                    // open but stops sending (common with overloaded
+                    // reasoning-model endpoints) blocks the turn forever. The
+                    // idle clock resets on every chunk, so a legitimately slow
+                    // reasoning model that keeps trickling deltas is never cut
+                    // off.
                     event = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()) => {
                         let event = match event {
                             Ok(Some(event)) => event,
@@ -2817,16 +2587,15 @@ impl Agent {
                 self.fire_turn_persist(messages).await?;
                 self.run_turn_hooks(messages, &round.state, round.turn_index)
                     .await;
-                // Restore TurnEnd-scoped disables (mirror of the non-streaming
-                // path). RoundEnd-scoped disables survive until user-round end.
+                // Restore TurnEnd-scoped disables now that the ReAct turn is
+                // over. RoundEnd-scoped disables survive until user-round end.
                 self.restore_scoped_turn_end();
                 continue;
             }
 
-            // Round-exit gates (mirror of the non-streaming path). The insert
-            // drain happens after the provider response commits, so an input
-            // typed during a would-be final answer can still force one more
-            // turn in this same round.
+            // Round-exit gates. The insert drain happens after the provider
+            // response commits, so an input typed during a would-be final
+            // answer can still force one more turn in this same round.
             let duration_ms = round.started_at.elapsed().as_millis() as u64;
             let mut continue_round = false;
             if let Some((prompt, kind)) = self.stop_gate(&response).await {
@@ -2870,8 +2639,8 @@ impl Agent {
     }
 
     /// Execute any tool calls carried by `response`, emitting events and
-    /// appending tool results to `messages`. Shared by the streaming and
-    /// non-streaming loops so the dispatch contract — repeated-call guard,
+    /// appending tool results to `messages`. The single dispatch point of the
+    /// streaming ReAct loop, so the dispatch contract — repeated-call guard,
     /// up-front `ToolCall` events, concurrent execution with FIFO-ordered
     /// results, and pursuit/mode updates — lives in exactly one place.
     ///
@@ -2888,7 +2657,7 @@ impl Agent {
     /// [`AgentEvent::ToolCall`] is paired with a terminal
     /// [`AgentEvent::ToolCancelled`] before this returns.
     async fn dispatch_tool_calls<F>(
-        &self,
+        self: &Arc<Self>,
         response: &Message,
         messages: &mut Vec<Message>,
         state: &mut RoundState,
@@ -2906,281 +2675,35 @@ impl Agent {
             .as_ref()
             .filter(|calls| !calls.is_empty())
         {
-            // Classify this turn once, for two consumers: the turn-hook axis
-            // (consecutive read-only streak, surfaced to user hooks) and the
-            // round-scoped guard registry (checked at the turn boundary). Any call
-            // whose target is a real Path/Command (i.e. not Unspecified) makes
-            // the turn "progress", resetting both.
-            let all_read = tool_calls
-                .iter()
-                .all(|c| self.tool_target_is_unspecified(&c.name, &c.arguments));
-            if all_read {
-                state.consecutive_readonly_turns =
-                    state.consecutive_readonly_turns.saturating_add(1);
+            // The four-stage pipeline (see `dispatch_pipeline`):
+            //   1. preflight — turn classification, checkpoint-replay scan,
+            //      doom-guard check, up-front ToolCall events, short-circuits;
+            //   2. prepare — the per-call gate sequence, evaluated in-task
+            //      inside `execute_tool` (never serialised across the batch);
+            //   3. schedule — concurrent execution through the ToolScheduler;
+            //   4. finalize — input-ordered recording, post-tool hooks, nudge.
+            let prepared = self.dispatch_preflight(tool_calls, state, on_event);
+            let outcome = if prepared.exec_indices.is_empty() {
+                None
             } else {
-                state.consecutive_readonly_turns = 0;
-            }
-
-            // A provider retry may produce the same tool request again even
-            // though its terminal result is already in the checkpointed
-            // history. Treat exact matches as idempotency replays regardless
-            // of the optional doom-loop setting.
-            let checkpoint_replays: Vec<bool> = tool_calls
-                .iter()
-                .map(|call| state.is_checkpoint_replay(call))
-                .collect();
-            if checkpoint_replays.iter().any(|replayed| *replayed) {
-                on_event(AgentEvent::Notice(
-                    AgentNotice::new(
-                        NoticeKind::ProviderRetry,
-                        NoticeSeverity::Warning,
-                        "Completed tool call not repeated",
-                        NoticeSource::Harness,
-                    )
-                    .with_body(
-                        "The retried model request repeated a tool call that already completed. \
-                         The checkpointed result remains authoritative; the tool was not run again.",
-                    )
-                    .with_surface(NoticeSurface::Toast),
-                ));
-            }
-
-            // Pre-dispatch doom-loop check (the decisive intervention). Before
-            // any tool runs this turn, ask the doom guard whether any call is a
-            // repeat of one already issued this round. A repeat is blocked here
-            // and now — the tool never executes, so its result never enters
-            // context. Unlike the post-hoc read-loop guard, this covers all
-            // watched tools (bash/webfetch/edit/...), not just reads, and trips
-            // on the *first* repeat (threshold = 2). `Block` records the
-            // repeated signatures into the per-round mask, so the per-call
-            // `is_blocked` filter below short-circuits them without re-running
-            // the guard. We surface the guard's message as a notice + a hidden
-            // user message so the model learns the call is refused.
-            let doom_calls: Vec<(&str, &str)> = tool_calls
-                .iter()
-                .zip(&checkpoint_replays)
-                .filter(|(_, replayed)| !**replayed)
-                .map(|(call, _)| (call.name.as_str(), call.arguments.as_str()))
-                .collect();
-            let doom_action = state.guards.check_doom_ahead(&doom_calls);
-            let doom_message: Option<String> = match &doom_action {
-                crate::loop_guard::GuardAction::Block { message, .. } => {
-                    tracing::warn!(
-                        blocked = ?state.guards.blocked_summary(),
-                        "doom guard blocked a repeating tool call before execution"
-                    );
-                    on_event(AgentEvent::Notice(
-                        AgentNotice::new(
-                            NoticeKind::NudgeInjected,
-                            NoticeSeverity::Warning,
-                            "Repeating tool call blocked",
-                            NoticeSource::TurnGuard,
-                        )
-                        .with_body(
-                            "The agent tried to re-run a tool call it already issued this round. \
-                             The call was blocked before it ran — the result it already has is \
-                             unchanged, so re-running it cannot help. The agent must change \
-                             approach (or call `abort`).",
-                        )
-                        .with_surface(NoticeSurface::Toast),
-                    ));
-                    Some(message.clone())
-                }
-                _ => None,
-            };
-
-            // Emit all ToolCall events up front.
-            let call_ids: Vec<String> = tool_calls
-                .iter()
-                .map(|_| format!("call_{}", uuid::Uuid::new_v4()))
-                .collect();
-            tracing::info!(count = tool_calls.len(), "dispatching native tool calls");
-            for (call, id) in tool_calls.iter().zip(&call_ids) {
-                tracing::debug!(tool = %call.name, "tool call");
-                on_event(AgentEvent::ToolCall {
-                    id: id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                });
-            }
-            // Signature-level loop guard (ADR-0036): a call whose canonical
-            // signature is in the per-round block mask — set either by the
-            // read-loop guard (a repeat that escalated past a nudge) or by the
-            // doom guard above (any watched tool's first repeat) — is
-            // short-circuited here, before execution. The model gets an
-            // explanatory error instead of the content/side-effect, so it is
-            // physically unable to re-enter the loop. Blocked calls are split
-            // out so the rest run concurrently exactly as before. Each blocked
-            // call is given the same ToolResult event an executed call would
-            // get, so the UI never sees an orphaned running step.
-            let blocked_output = |name: &str| {
-                ToolOutput::Text(format!(
-                    "[loop guard] This call ({name}) is blocked for the rest of the turn \
-                     because it was a repeat of one already issued this round. Re-running it \
-                     cannot help: the result is already in context above. Act on it now \
-                     (use what you already have, try a *different* command/file/query), or, \
-                     if you cannot proceed, say so explicitly or call `abort`."
-                ))
-            };
-            let checkpoint_output = |name: &str| {
-                ToolOutput::Text(format!(
-                    "[retry checkpoint] This exact {name} call already completed before the \
-                     provider retry. Its result is present earlier in the conversation and \
-                     remains authoritative. The tool was not executed again."
-                ))
-            };
-            let mut results: Vec<Option<(ToolOutput, u64)>> =
-                (0..tool_calls.len()).map(|_| None).collect();
-            let exec_indices: Vec<usize> = tool_calls
-                .iter()
-                .enumerate()
-                .filter(|(idx, c)| {
-                    if checkpoint_replays[*idx] {
-                        tracing::warn!(
-                            tool = %c.name,
-                            args = %c.arguments,
-                            "provider retry repeated a completed tool call"
-                        );
-                        let output = checkpoint_output(&c.name);
-                        let id = &call_ids[*idx];
-                        on_event(AgentEvent::ToolResult {
-                            id: id.clone(),
-                            name: c.name.clone(),
-                            output: output.to_text(),
-                            structured: output.clone(),
-                            duration_ms: 0,
-                        });
-                        results[*idx] = Some((output, 0));
-                        false
-                    } else if state.guards.is_blocked(&c.name, &c.arguments) {
-                        tracing::warn!(
-                            tool = %c.name,
-                            args = %c.arguments,
-                            "tool call blocked by turn-loop guard signature mask"
-                        );
-                        let output = blocked_output(&c.name);
-                        let id = &call_ids[*idx];
-                        // Emit the ToolResult the executed path would have, so
-                        // the UI pairs this call's ToolCall with a terminal
-                        // result instead of leaving it "running".
-                        on_event(AgentEvent::Notice(
-                            AgentNotice::new(
-                                NoticeKind::NudgeInjected,
-                                NoticeSeverity::Warning,
-                                "Blocked repeating tool call",
-                                NoticeSource::TurnGuard,
-                            )
-                            .with_body(format!(
-                                "A tool call ({}) was blocked by the loop guard — it is a \
-                                 repeat of a call already issued this round. Use the result \
-                                 already in context, or try a different call.",
-                                c.name,
-                            ))
-                            .with_surface(NoticeSurface::Toast),
-                        ));
-                        on_event(AgentEvent::ToolResult {
-                            id: id.clone(),
-                            name: c.name.clone(),
-                            output: output.to_text(),
-                            structured: output.clone(),
-                            duration_ms: 0,
-                        });
-                        results[*idx] = Some((output, 0));
-                        false // do not execute
-                    } else {
-                        true // execute
-                    }
-                })
-                .map(|(idx, _)| idx)
-                .collect();
-            if !exec_indices.is_empty() {
-                let exec_calls: Vec<ToolCall> = exec_indices
+                let exec_calls: Vec<ToolCall> = prepared
+                    .exec_indices
                     .iter()
                     .map(|&i| tool_calls[i].clone())
                     .collect();
-                let exec_ids: Vec<String> =
-                    exec_indices.iter().map(|&i| call_ids[i].clone()).collect();
-                let outcome = self
-                    .execute_tools_concurrent(&exec_calls, &exec_ids, cancel, on_event)
-                    .await?;
-                // Destructure so the per-call results can move out by value.
-                let ConcurrentOutcome {
-                    results: recovered,
-                    interrupted,
-                } = outcome;
-                if interrupted {
-                    // The user interrupted this turn mid-flight. Record
-                    // whatever real work drained (an interrupted envoy's
-                    // partial transcript), then end the round as interrupted
-                    // — the caller commits the transcript so the recovered
-                    // work survives into the session. Dropped calls already
-                    // received their terminal `ToolCancelled` event.
-                    for (&idx, recovered) in exec_indices.iter().zip(recovered) {
-                        if let Some((result, duration_ms)) = recovered {
-                            self.record_tool_result(
-                                &tool_calls[idx],
-                                &call_ids[idx],
-                                &result,
-                                duration_ms,
-                                messages,
-                                state,
-                                false,
-                                false,
-                                on_event,
-                            );
-                        }
-                    }
-                    return Err(HarnessError::Interrupted);
-                }
-                for (&idx, recovered) in exec_indices.iter().zip(recovered) {
-                    results[idx] = recovered;
-                    state.remember_completed_tool(&tool_calls[idx]);
-                }
-            }
-            // Flatten back to a positional Vec, matching tool_calls order.
-            let results: Vec<(ToolOutput, u64)> = results
-                .into_iter()
-                .map(|r| {
-                    r.unwrap_or_else(|| (ToolOutput::Text("[loop guard] blocked".to_string()), 0))
-                })
-                .collect();
-            let denied = results
-                .iter()
-                .any(|(result, _)| matches!(result, ToolOutput::PermissionDenied { .. }));
-            for (idx, ((call, id), (result, duration_ms))) in
-                tool_calls.iter().zip(&call_ids).zip(results).enumerate()
-            {
-                self.record_tool_result(
-                    call,
-                    id,
-                    &result,
-                    duration_ms,
-                    messages,
-                    state,
-                    checkpoint_replays[idx],
-                    false,
-                    on_event,
-                );
-                if !checkpoint_replays[idx] {
-                    self.run_post_tool_hooks(call, &result, duration_ms, messages)
-                        .await;
-                }
-            }
-            // If the user denied permission for any call, stop the round here
-            // instead of feeding the (possibly partial) results back to the
-            // model and asking it to continue.
-            // If the doom guard blocked any repeats this round, deliver its
-            // consolidated message as a hidden user note alongside the blocked
-            // tool results, so the model learns *why* its call was refused and
-            // what to do instead. Non-terminating: the turn continues with the
-            // (now masked) signatures hard-blocked for subsequent turns in this round.
-            if let Some(message) = doom_message {
-                messages.push(crate::conversation_context::hidden_user(
-                    InjectionKind::LoopReviewNudge,
-                    message,
-                ));
-            }
-            return Ok(!denied);
+                let exec_ids: Vec<String> = prepared
+                    .exec_indices
+                    .iter()
+                    .map(|&i| prepared.call_ids[i].clone())
+                    .collect();
+                Some(
+                    self.schedule_tool_calls(&exec_calls, &exec_ids, cancel, on_event)
+                        .await?,
+                )
+            };
+            return self
+                .dispatch_finalize(tool_calls, prepared, outcome, messages, state, on_event)
+                .await;
         }
 
         // Text-based fallback: any provider may emit a JSON tool call as text.
@@ -3378,7 +2901,7 @@ impl Agent {
     /// count reflects the per-result state it must thread; grouping it further
     /// would only move the noise to the call sites.
     #[allow(clippy::too_many_arguments)]
-    fn record_tool_result<F>(
+    pub(crate) fn record_tool_result<F>(
         &self,
         call: &ToolCall,
         call_id: &str,
@@ -3496,7 +3019,7 @@ impl Agent {
     /// any injected context as hidden user messages (ADR-0025). No-op when the
     /// registry is empty, which is the common case (envoys, tests, no
     /// `[hooks]` config).
-    async fn run_post_tool_hooks(
+    pub(crate) async fn run_post_tool_hooks(
         &self,
         call: &ToolCall,
         result: &ToolOutput,
@@ -3546,7 +3069,7 @@ impl Agent {
     /// `read_text`, `grep`). Used to classify a turn as read-only for the
     /// turn-hook streak counter. An unknown tool name reads as `true`
     /// (unspecified), matching the trait default.
-    fn tool_target_is_unspecified(&self, name: &str, arguments: &str) -> bool {
+    pub(crate) fn tool_target_is_unspecified(&self, name: &str, arguments: &str) -> bool {
         match self
             .resolved_tools
             .read()
@@ -3920,7 +3443,7 @@ impl Agent {
         StdinPolicy::default()
     }
 
-    async fn execute_tool(
+    pub(crate) async fn execute_tool(
         &self,
         call: &ToolCall,
         call_id: &str,
@@ -4195,223 +3718,13 @@ impl Agent {
         }
     }
 
-    /// Execute multiple tool calls concurrently, forwarding interleaved events
-    /// to the callback in real time. Returns `(result, duration_ms)` pairs in
-    /// the same order as the input calls.
-    ///
-    /// Cancellation-aware: an interrupt signals cooperatively-cancellable
-    /// calls (envoys), drains them within a bounded grace period, and returns
-    /// [`ConcurrentOutcome`] with `interrupted: true` — completed/drained
-    /// results are preserved in the outcome (the caller records them), and
-    /// every call that produced no result is paired with a terminal
-    /// [`AgentEvent::ToolCancelled`]. The caller decides how to end the round.
-    async fn execute_tools_concurrent<F>(
-        &self,
-        calls: &[ToolCall],
-        call_ids: &[String],
-        cancel: &CancellationToken,
-        on_event: &mut F,
-    ) -> Result<ConcurrentOutcome, HarnessError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        // Stage-2 switchover: partition the batch into conflict-free sub-batches
-        // via declarative ToolAccesses (kimi-code model). Calls in the same
-        // sub-batch run concurrently (historical join_all behavior); sub-batches
-        // run strictly in order, so two writes to the same file — or a read and
-        // a write of the same path — never race. Non-conflicting reads still
-        // parallelize. This replaces the previous "join_all everything" which
-        // could let two edits of the same file clobber each other.
-        //
-        // accesses are computed up front from each call's resolved tool (a few
-        // HashMap lookups; negligible vs. the tool call itself). A tool that
-        // can't be resolved gets `none()` (freely parallel) — it will still
-        // produce its "not found" error inside `execute_tool`.
-        let accesses: Vec<neenee_core::ToolAccesses> = calls
-            .iter()
-            .map(|call| self.accesses_for_call(call))
-            .collect();
-        let assignment = neenee_core::tool_access::group_by_conflict(&accesses);
-        let batch_count = assignment.iter().copied().max().map(|m| m + 1).unwrap_or(0);
-
-        // Per-input result slots, filled as batches complete, then flattened in
-        // input order at the end (preserving the dispatcher's order invariant).
-        // On interrupt the slots keep whatever completed before the cancel, so
-        // the caller can record real work even though the round ends.
-        let mut slots: Vec<Option<(ToolOutput, u64)>> = vec![None; calls.len()];
-
-        for batch in 0..batch_count {
-            // Collect this batch's (call_index) members, in input order.
-            let members: Vec<usize> = (0..calls.len())
-                .filter(|&i| assignment[i] == batch)
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
-
-            let (tx, mut rx) = mpsc::unbounded_channel();
-            let futs: Vec<_> = members
-                .iter()
-                .map(|&i| {
-                    let tx = tx.clone();
-                    let name = calls[i].name.clone();
-                    let call_id = call_ids[i].clone();
-                    let call = calls[i].clone();
-                    async move {
-                        let started = std::time::Instant::now();
-                        let result = self.execute_tool(&call, &call_id, &tx).await;
-                        let duration_ms = started.elapsed().as_millis() as u64;
-                        // Emit ToolResult immediately so the TUI transitions
-                        // this step Running→Completed without waiting for
-                        // siblings in the same batch.
-                        let output = result.to_text();
-                        let _ = tx.send(AgentEvent::ToolResult {
-                            id: call_id.clone(),
-                            name: name.clone(),
-                            output,
-                            structured: result.clone(),
-                            duration_ms,
-                        });
-                        (i, result, duration_ms)
-                    }
-                })
-                .collect();
-
-            let batch_fut = join_all(futs);
-            tokio::pin!(batch_fut);
-
-            // Same event loop as before, but bounded to this one batch.
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => {
-                        // Cooperative cancel: if any in-flight call can stop on
-                        // the token (an envoy), signal it and give the batch a
-                        // bounded grace period to drain, so the envoy's partial
-                        // transcript is recovered instead of dropped. Without a
-                        // cancellable member we keep the historical fast path —
-                        // completed results (already in `slots`) are preserved,
-                        // in-flight calls are dropped.
-                        let cancellable: Vec<usize> = members
-                            .iter()
-                            .copied()
-                            .filter(|&i| {
-                                self.tool_manager
-                                    .find(&calls[i].name)
-                                    .is_some_and(|sourced| {
-                                        sourced.tool.supports_cooperative_cancel()
-                                    })
-                            })
-                            .collect();
-                        if cancellable.is_empty() {
-                            while let Ok(event) = rx.try_recv() {
-                                on_event(event);
-                            }
-                            for (i, (id, call)) in
-                                call_ids.iter().zip(calls).enumerate()
-                            {
-                                if slots[i].is_none() {
-                                    on_event(AgentEvent::ToolCancelled {
-                                        id: id.clone(),
-                                        name: call.name.clone(),
-                                    });
-                                }
-                            }
-                            return Ok(ConcurrentOutcome {
-                                results: slots,
-                                interrupted: true,
-                            });
-                        }
-                        for i in &cancellable {
-                            if let Some(sourced) = self.tool_manager.find(&calls[*i].name) {
-                                sourced.tool.request_cancel(&call_ids[*i]);
-                            }
-                        }
-                        let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
-                        tokio::pin!(grace);
-                        loop {
-                            tokio::select! {
-                                biased;
-                                _ = &mut grace => {
-                                    while let Ok(event) = rx.try_recv() {
-                                        on_event(event);
-                                    }
-                                    // Grace expired: drop whatever did not
-                                    // drain. Drained calls already emitted
-                                    // ToolResult; the rest get ToolCancelled.
-                                    for (i, (id, call)) in
-                                        call_ids.iter().zip(calls).enumerate()
-                                    {
-                                        if slots[i].is_none() {
-                                            on_event(AgentEvent::ToolCancelled {
-                                                id: id.clone(),
-                                                name: call.name.clone(),
-                                            });
-                                        }
-                                    }
-                                    return Ok(ConcurrentOutcome {
-                                        results: slots,
-                                        interrupted: true,
-                                    });
-                                }
-                                event = rx.recv() => {
-                                    if let Some(event) = event {
-                                        on_event(event);
-                                    }
-                                }
-                                batch_results = &mut batch_fut => {
-                                    while let Ok(event) = rx.try_recv() {
-                                        on_event(event);
-                                    }
-                                    for (i, result, duration_ms) in batch_results {
-                                        slots[i] = Some((result, duration_ms));
-                                    }
-                                    return Ok(ConcurrentOutcome {
-                                        results: slots,
-                                        interrupted: true,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    event = rx.recv() => {
-                        if let Some(event) = event {
-                            on_event(event);
-                        }
-                    }
-                    batch_results = &mut batch_fut => {
-                        while let Ok(event) = rx.try_recv() {
-                            on_event(event);
-                        }
-                        for (i, result, duration_ms) in batch_results {
-                            slots[i] = Some((result, duration_ms));
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Flatten in input order. Any slot still None means its batch was
-        // never reached (shouldn't happen outside cancel); synthesize a
-        // loop-guard placeholder to keep the contract non-panicking.
-        for slot in slots.iter_mut() {
-            let _ = slot
-                .get_or_insert_with(|| (ToolOutput::Text("[loop guard] blocked".to_string()), 0));
-        }
-        Ok(ConcurrentOutcome {
-            results: slots,
-            interrupted: false,
-        })
-    }
-
     /// Resolve `call`'s tool (resolved → dynamic fallback) and return its
-    /// declared [`ToolAccesses`]. Used by the dispatcher to group calls into
-    /// conflict-free batches. A tool that can't be resolved yields
-    /// [`ToolAccesses::none`] (freely parallel) — it will report its own
-    /// "not found" error inside `execute_tool`; there's no point serializing
-    /// an error.
-    fn accesses_for_call(&self, call: &ToolCall) -> neenee_core::ToolAccesses {
+    /// declared [`ToolAccesses`]. Used by the scheduler to arbitrate which
+    /// calls of a batch may run concurrently. A tool that can't be resolved
+    /// yields [`ToolAccesses::none`] (freely parallel) — it will report its
+    /// own "not found" error inside `execute_tool`; there's no point
+    /// serializing an error.
+    pub(crate) fn accesses_for_call(&self, call: &ToolCall) -> neenee_core::ToolAccesses {
         let tool: Option<Arc<dyn Tool>> = self
             .resolved_tools
             .read()
@@ -4486,6 +3799,92 @@ pub(crate) fn remove_empty_assistant_messages(messages: &mut Vec<Message>) {
     messages.retain(|message| message.role != Role::Assistant || valid_assistant_response(message));
 }
 
+// ---------------------------------------------------------------------------
+// PermissionContext: the agent's implementation of the policy-chain capability
+// trait. Policies reach the agent's async machinery (hooks, bash policy,
+// permission store) through this, keeping permission_policy.rs decoupled from
+// the concrete Agent type.
+// ---------------------------------------------------------------------------
+
+#[async_trait::async_trait]
+impl crate::permission_policy::PermissionContext for Agent {
+    async fn check_pre_tool_use(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> crate::hooks::PreToolUseVerdict {
+        self.hooks()
+            .check_pre_tool_use(
+                tool_name,
+                tool_input,
+                &self.hook_session_id(),
+                self.hook_cwd().as_deref(),
+            )
+            .await
+    }
+
+    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
+        // Delegate to the existing agent method (same signature).
+        Agent::apply_scoped_disables(self, disables);
+    }
+
+    async fn check_bash_policy(
+        &self,
+        command: &str,
+        _arguments: &str,
+    ) -> crate::permission_policy::BashVerdict {
+        // The single source of truth for the chain's BashPolicy gate. Returns
+        // a disjoint Allow / Confirm / Deny verdict so the gate can decide
+        // everything (including the interactive confirm) without the caller
+        // re-evaluating outside the chain.
+        let policy = self
+            .bash_policy
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(decision) = policy.evaluate(command) else {
+            return crate::permission_policy::BashVerdict::Allow;
+        };
+        match decision.action {
+            crate::bash_policy::BashPolicyAction::Deny => {
+                tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
+                crate::permission_policy::BashVerdict::Deny {
+                    output: decision.blocked_output(command),
+                }
+            }
+            crate::bash_policy::BashPolicyAction::Confirm => {
+                // Under autopilot there is no human to confirm, so resolve
+                // silently per `autopilot_confirm_action` (default Deny). The
+                // gate therefore never yields a Confirm Ask under autopilot —
+                // matching the broker's autopilot bypass.
+                if self.get_autopilot() {
+                    match policy.autopilot_confirm_action() {
+                        crate::bash_policy::BashPolicyAction::Allow => {
+                            tracing::warn!(
+                                command = %command,
+                                rule = %decision.name,
+                                "bash policy confirmation bypassed by autopilot_confirm=allow"
+                            );
+                            crate::permission_policy::BashVerdict::Allow
+                        }
+                        _ => crate::permission_policy::BashVerdict::Deny {
+                            output: decision.autopilot_confirm_output(command),
+                        },
+                    }
+                } else {
+                    crate::permission_policy::BashVerdict::Confirm { match_: decision }
+                }
+            }
+            crate::bash_policy::BashPolicyAction::Allow => {
+                crate::permission_policy::BashVerdict::Allow
+            }
+        }
+    }
+
+    fn permissions(&self) -> &crate::permission_store::PermissionStore {
+        &self.permissions
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, envoy_result_text};
@@ -4770,92 +4169,5 @@ mod tests {
             agent.skip_interactive_input(),
             "profile overlay took effect"
         );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PermissionContext: the agent's implementation of the policy-chain capability
-// trait. Policies reach the agent's async machinery (hooks, bash policy,
-// permission store) through this, keeping permission_policy.rs decoupled from
-// the concrete Agent type.
-// ---------------------------------------------------------------------------
-
-#[async_trait::async_trait]
-impl crate::permission_policy::PermissionContext for Agent {
-    async fn check_pre_tool_use(
-        &self,
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-    ) -> crate::hooks::PreToolUseVerdict {
-        self.hooks()
-            .check_pre_tool_use(
-                tool_name,
-                tool_input,
-                &self.hook_session_id(),
-                self.hook_cwd().as_deref(),
-            )
-            .await
-    }
-
-    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
-        // Delegate to the existing agent method (same signature).
-        Agent::apply_scoped_disables(self, disables);
-    }
-
-    async fn check_bash_policy(
-        &self,
-        command: &str,
-        _arguments: &str,
-    ) -> crate::permission_policy::BashVerdict {
-        // The single source of truth for the chain's BashPolicy gate. Returns
-        // a disjoint Allow / Confirm / Deny verdict so the gate can decide
-        // everything (including the interactive confirm) without the caller
-        // re-evaluating outside the chain.
-        let policy = self
-            .bash_policy
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let Some(decision) = policy.evaluate(command) else {
-            return crate::permission_policy::BashVerdict::Allow;
-        };
-        match decision.action {
-            crate::bash_policy::BashPolicyAction::Deny => {
-                tracing::warn!(command = %command, rule = %decision.name, "bash command blocked by policy");
-                crate::permission_policy::BashVerdict::Deny {
-                    output: decision.blocked_output(command),
-                }
-            }
-            crate::bash_policy::BashPolicyAction::Confirm => {
-                // Under autopilot there is no human to confirm, so resolve
-                // silently per `autopilot_confirm_action` (default Deny). The
-                // gate therefore never yields a Confirm Ask under autopilot —
-                // matching the broker's autopilot bypass.
-                if self.get_autopilot() {
-                    match policy.autopilot_confirm_action() {
-                        crate::bash_policy::BashPolicyAction::Allow => {
-                            tracing::warn!(
-                                command = %command,
-                                rule = %decision.name,
-                                "bash policy confirmation bypassed by autopilot_confirm=allow"
-                            );
-                            crate::permission_policy::BashVerdict::Allow
-                        }
-                        _ => crate::permission_policy::BashVerdict::Deny {
-                            output: decision.autopilot_confirm_output(command),
-                        },
-                    }
-                } else {
-                    crate::permission_policy::BashVerdict::Confirm { match_: decision }
-                }
-            }
-            crate::bash_policy::BashPolicyAction::Allow => {
-                crate::permission_policy::BashVerdict::Allow
-            }
-        }
-    }
-
-    fn permissions(&self) -> &crate::permission_store::PermissionStore {
-        &self.permissions
     }
 }

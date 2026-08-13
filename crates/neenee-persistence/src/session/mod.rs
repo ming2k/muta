@@ -3675,16 +3675,18 @@ mod tests {
         // compaction and legacy import rebuild state from `snapshot_to_events`
         // + `apply_events`, not from the snapshot JSON). The seed must emit a
         // `CommandsReplaced` event and replay must restore it.
-        let mut data = SessionData::default();
-        data.commands = vec![
-            neenee_core::CommandRecord::new("search", "foo").with_result(
-                neenee_core::CommandResult::Search {
-                    query: "foo".to_string(),
-                    hits: vec![],
-                },
-            ),
-            neenee_core::CommandRecord::new("shell", "!ls -la"),
-        ];
+        let data = SessionData {
+            commands: vec![
+                neenee_core::CommandRecord::new("search", "foo").with_result(
+                    neenee_core::CommandResult::Search {
+                        query: "foo".to_string(),
+                        hits: vec![],
+                    },
+                ),
+                neenee_core::CommandRecord::new("shell", "!ls -la"),
+            ],
+            ..SessionData::default()
+        };
         let events = snapshot_to_events(&data);
         assert!(
             events
@@ -3835,10 +3837,8 @@ mod tests {
     #[tokio::test]
     async fn substantive_state_materialises_but_title_and_provider_do_not() {
         // Title + provider selection alone stay unpersisted.
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-unified-guard-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-unified-guard-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store.set_title(Some("t".into()), true).await.unwrap();
@@ -3854,27 +3854,25 @@ mod tests {
 
         // A substantive todo list materialises the same session.
         let mut todos = neenee_core::TodoList::new();
-        todos.reconcile(&[("Task".to_string(), neenee_core::TodoStatus::Pending)], 1000, 1);
+        todos.reconcile(
+            &[("Task".to_string(), neenee_core::TodoStatus::Pending)],
+            1000,
+            1,
+        );
         store.set_todos(todos).await.unwrap();
         assert!(!store.is_empty_unpersisted().await);
         assert!(path.exists(), "a substantive todo list materialises");
         let _ = fs::remove_dir_all(directory);
 
         // A scheduled job likewise materialises a fresh session on its own.
-        let directory2 = std::env::temp_dir().join(format!(
-            "neenee-unified-guard2-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory2 =
+            std::env::temp_dir().join(format!("neenee-unified-guard2-{}", uuid::Uuid::new_v4()));
         let path2 = directory2.join("session.json");
         let store2 = SessionStore::for_path(path2.clone());
         let now = chrono::Utc::now();
-        let job = neenee_core::ScheduledJob::cron(
-            "j1".into(),
-            "* * * * *".into(),
-            "ping".into(),
-            now,
-        )
-        .expect("a valid cron expression yields a job");
+        let job =
+            neenee_core::ScheduledJob::cron("j1".into(), "* * * * *".into(), "ping".into(), now)
+                .expect("a valid cron expression yields a job");
         store2.set_scheduled_jobs(vec![job]).await.unwrap();
         assert!(
             path2.exists(),

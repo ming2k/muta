@@ -1468,8 +1468,10 @@ mod tests {
         // A default (trusted-shape) policy allows autopilot-confirm to be
         // configured; hardening for an untrusted project forces Deny and
         // prepends exactly one `confirm` rule for fetch/install/pipe-to-shell.
-        let mut base = BashPolicyConfig::default();
-        base.autopilot_confirm = BashPolicyAutopilotAction::Allow; // user opted in
+        let base = BashPolicyConfig {
+            autopilot_confirm: BashPolicyAutopilotAction::Allow, // user opted in
+            ..BashPolicyConfig::default()
+        };
         let hardened = base.clone().with_untrusted_hardening();
 
         assert_eq!(

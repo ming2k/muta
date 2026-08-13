@@ -13,7 +13,7 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 The daemon (`neenee serve`, or the `neenee-server` binary) serves one
 control-plane endpoint per user, on a Unix domain socket by default and on
-TCP when exposed (ADR-0096). Four client roles share the protocol,
+TCP when exposed (ADR-0096). Three client roles share the protocol,
 distinguished by the first frame the client sends after the upgrade
 (`Select`):
 
@@ -22,7 +22,6 @@ distinguished by the first frame the client sends after the upgrade
 | **Attach** | `Select{action: New \| Attach(id?)}` | bidirectional | Drive a session: send `Request`s, receive `Response`s |
 | **Monitor** | `Select{action: Monitor{watch, include_idle}}` | server → client | Observe every session the daemon knows about (ADR-0093) |
 | **Control** | `Select{action: Control(verb)}` | one round-trip | Manage sessions: create / prompt / interrupt / approve / kill (ADR-0096) |
-| **Mirror** | `Select{action: Mirror}` | client → server | (Removed by ADR-0096 — no standalone sessions left) |
 
 The in-TUI `/serve` command (legacy single-session prehost) is superseded by
 the unified daemon; the protocol below is the daemon's control plane.
@@ -65,6 +64,19 @@ After the upgrade, the client selects a session:
 { "type": "Select", "action": { "attach": "session-id" } }
 { "type": "Select", "action": { "attach": null } }
 ```
+
+An attach client declares its working directory in the frame's optional
+`project` field:
+
+```json
+{ "type": "Select", "action": "new", "project": "/abs/path/to/project" }
+```
+
+`project` scopes `new` creation, auto-attach (`{ "attach": null }`), and lazy
+resume to that project (ADR-0096). A client that omits it is scoped by the
+daemon's own process working directory — whatever directory the first client
+that spawned the daemon used — so current clients always send it. `project`
+has no effect on monitor or control selects.
 
 The server answers one of:
 
@@ -145,17 +157,11 @@ read-only and cannot steer any session.
   `needs_approval`, `needs_input`, `interrupted`, `failed`. The `needs_*`
   values are overlays on a still-running round (cleared when model output
   resumes); `note` carries the blocking reason (e.g. `permission: write_file`).
-- `hosting` is `hosted` (the host drives the session; it can be attached to)
-  or `mirrored` (a standalone TUI owns it; observability only — ADR-0095).
-  Older producers may omit `hosting`; treat missing as `hosted`.
+- `hosting` is always `hosted` — under ADR-0096 the daemon owns every
+  session, so it can be attached to. Older producers may omit `hosting`;
+  treat missing as `hosted`.
 - `elapsed_ms` runs while a round is active and freezes at its terminal
   event; `turn` is the 0-based model-request index within `round`.
-
-## Mirror: report a session you own (ADR-0095)
-
-> **Removed by ADR-0096.** With the unified daemon owning every session there
-> are no standalone sessions to mirror; the `Mirror` / `MirrorUpdate` frames
-> remain on the wire for one release as a parsing no-op for older clients.
 
 ## Control: manage sessions (ADR-0096)
 
@@ -186,7 +192,7 @@ after the reply; issue another verb on a fresh connection.
 Two discriminator levels:
 
 - `type` identifies the transport envelope: `Select`, `Welcome`, `Pick`,
-  `Error`, `Request`, `Response`, `Monitor`, `Mirror`, `MirrorUpdate`.
+  `Error`, `Request`, `Response`, `Monitor`.
 - `Monitor` frames carry a second `kind` discriminator on the flattened
   `MonitorEvent`: `snapshot`, `session_added`, `session_updated`,
   `session_removed`.
@@ -380,7 +386,7 @@ A production frontend should:
    a TLS-terminating reverse proxy; the bearer token protects the handshake but
    not the wire from eavesdropping.
 9. Upsert monitor diffs by `id`; handle `session_removed` even though hosted
-   sessions are not yet torn down (mirrored sessions are, on disconnect).
+   sessions are not yet torn down.
 
 ## Contract maintenance
 

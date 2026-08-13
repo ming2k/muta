@@ -5,8 +5,6 @@
 //! `Layout::split` semantics) so the migrated widget code needs no geometry
 //! changes — only an import path swap from `ratatui::layout` to `neenee_tui_engine`.
 
-use std::cell::RefCell;
-
 /// A rectangular region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Rect {
@@ -146,9 +144,7 @@ impl Layout {
     pub fn split(self, area: Rect) -> RcRects {
         let n = self.constraints.len();
         if n == 0 || area.width == 0 || area.height == 0 {
-            return RcRects {
-                rects: RefCell::new(Vec::new()),
-            };
+            return RcRects { rects: Vec::new() };
         }
         let total = match self.direction {
             Direction::Vertical => area.height,
@@ -213,42 +209,33 @@ impl Layout {
             offset = offset.saturating_add(size);
         }
 
-        RcRects {
-            rects: RefCell::new(rects),
-        }
+        RcRects { rects }
     }
 }
 
-/// The result of `Layout::split`. Indexable like `Rc<[Rect]>` in ratatui.
-/// Uses a `RefCell<Vec>` so the migration code's `chunks[i]` pattern works
-/// without `Rc` plumbing.
+/// The result of `Layout::split`. Indexable like `Rc<[Rect]>` in ratatui:
+/// the rect list is computed once in `split` and never mutated afterwards, so
+/// a plain `Vec` behind an [`Index`][std::ops::Index] impl gives call sites the
+/// same `chunks[i]` pattern with no interior mutability.
 pub struct RcRects {
-    pub(crate) rects: RefCell<Vec<Rect>>,
+    pub(crate) rects: Vec<Rect>,
 }
 
 impl std::ops::Index<usize> for RcRects {
     type Output = Rect;
     fn index(&self, i: usize) -> &Rect {
-        // Borrow through a RefCell; return a raw pointer to satisfy &Output.
-        // The returned reference is valid as long as the RcRects lives and no
-        // other mutable borrow intervenes. In practice the app indexes the
-        // split result immediately and never holds the borrow.
-        let borrow = self.rects.borrow();
-        let ptr = &borrow[i] as *const Rect;
-        // SAFETY: the Vec lives for the lifetime of self; the caller does not
-        // mutate the RcRects while holding this reference.
-        unsafe { &*ptr }
+        &self.rects[i]
     }
 }
 
 impl RcRects {
     pub fn iter(&self) -> std::vec::IntoIter<Rect> {
-        self.rects.borrow().clone().into_iter()
+        self.rects.clone().into_iter()
     }
     pub fn len(&self) -> usize {
-        self.rects.borrow().len()
+        self.rects.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.rects.borrow().is_empty()
+        self.rects.is_empty()
     }
 }

@@ -692,7 +692,9 @@ fn effort_block_lines(
     let label_row = || {
         Line::from(Span::styled(
             label.clone(),
-            Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
         ))
     };
     // The caption always gets its own row; zero width hides it entirely. The
@@ -722,10 +724,17 @@ fn effort_block_lines(
         // Compact carousel fallback: unknown ladder, or too narrow for the
         // slider. `< current >` with a position pip per rung so the depth
         // direction still reads.
-        let value_style = Style::default().fg(selected_fg).add_modifier(Modifier::BOLD);
+        let value_style = Style::default()
+            .fg(selected_fg)
+            .add_modifier(Modifier::BOLD);
         let chev_style = Style::default().fg(theme.muted());
         let mut spans = vec![
-            Span::styled(label, Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" ".to_string()),
             Span::styled("< ".to_string(), chev_style),
             Span::styled(current.to_string(), value_style),
@@ -758,18 +767,18 @@ fn effort_block_lines(
     let columns = slider_node_columns(levels.len(), track_w);
     let sel_idx = levels.iter().position(|l| l == current).unwrap_or(0);
     let track_style = Style::default().fg(theme.muted());
-    let marker_style = Style::default().fg(selected_fg).add_modifier(Modifier::BOLD);
+    let marker_style = Style::default()
+        .fg(selected_fg)
+        .add_modifier(Modifier::BOLD);
 
     let last = columns.len() - 1;
     let track: Vec<char> = (0..track_w)
-        .map(|col| {
-            match columns.iter().position(|&c| c == col) {
-                Some(i) if i == sel_idx => TRACK_MARKER,
-                Some(0) => TRACK_LEFT,
-                Some(i) if i == last => TRACK_RIGHT,
-                Some(_) => TRACK_NODE,
-                None => '─',
-            }
+        .map(|col| match columns.iter().position(|&c| c == col) {
+            Some(i) if i == sel_idx => TRACK_MARKER,
+            Some(0) => TRACK_LEFT,
+            Some(i) if i == last => TRACK_RIGHT,
+            Some(_) => TRACK_NODE,
+            None => '─',
         })
         .collect();
     let marker_col = columns[sel_idx];
@@ -788,7 +797,9 @@ fn effort_block_lines(
     for (i, level) in levels.iter().enumerate() {
         label_spans.push(Span::raw(" ".repeat(positions[i] - x)));
         let style = if i == sel_idx {
-            Style::default().fg(selected_fg).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(selected_fg)
+                .add_modifier(Modifier::BOLD)
         } else {
             track_style
         };
@@ -846,7 +857,8 @@ pub fn draw_model_editor(
     // padding `modal_frame` applies to recover the exact body width.
     let body_width = content_modal_probe(frame, geometry)
         .width
-        .saturating_sub(2 * crate::tui::design::MODAL_INNER_H_PADDING) as usize;
+        .saturating_sub(2 * crate::tui::design::MODAL_INNER_H_PADDING)
+        as usize;
     let effort_rows = match effort {
         Some(_) if effort_block_slider(body_width, effort_levels) => 4,
         Some(_) => 2, // wrapped: carousel row + caption row
@@ -1547,7 +1559,10 @@ mod tests {
             "marker on the selected node: {track_row:?}"
         );
         // The carousel affordance is gone in the slider form.
-        assert!(!track_row.contains('<'), "no carousel chevrons: {track_row:?}");
+        assert!(
+            !track_row.contains('<'),
+            "no carousel chevrons: {track_row:?}"
+        );
 
         let labels_row = rows[label_idx + 2];
         for tier in ["low", "medium", "high", "xhigh", "max"] {
@@ -1626,7 +1641,18 @@ mod tests {
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
         let mut terminal = neenee_tui_engine::TestTerminal::new(120, 24);
         terminal.draw(|f| {
-            draw_model_editor(f, "m", "sk-live", 7, true, 1, Some("high"), &full, None, &theme);
+            draw_model_editor(
+                f,
+                "m",
+                "sk-live",
+                7,
+                true,
+                1,
+                Some("high"),
+                &full,
+                None,
+                &theme,
+            );
         });
         assert_eq!(
             terminal.cursor(),
@@ -1635,10 +1661,24 @@ mod tests {
         );
         let mut terminal = neenee_tui_engine::TestTerminal::new(120, 24);
         terminal.draw(|f| {
-            draw_model_editor(f, "m", "sk-live", 7, true, 0, Some("high"), &full, None, &theme);
+            draw_model_editor(
+                f,
+                "m",
+                "sk-live",
+                7,
+                true,
+                0,
+                Some("high"),
+                &full,
+                None,
+                &theme,
+            );
         });
         assert!(
-            matches!(terminal.cursor(), neenee_tui_engine::CursorState::Visible(..)),
+            matches!(
+                terminal.cursor(),
+                neenee_tui_engine::CursorState::Visible(..)
+            ),
             "the API-key text field keeps its caret"
         );
     }

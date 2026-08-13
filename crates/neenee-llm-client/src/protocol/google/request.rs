@@ -616,8 +616,11 @@ mod tests {
         // Gemini 3.x uses a level ladder; each rung maps to thinkingLevel,
         // clamping down from unsupported depths.
         use neenee_core::effort::{EFFORT_GEMINI_LEVEL, Effort};
-        let level: Vec<neenee_core::EffortLevel> =
-            EFFORT_GEMINI_LEVEL.iter().copied().map(Into::into).collect();
+        let level: Vec<neenee_core::EffortLevel> = EFFORT_GEMINI_LEVEL
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect();
         assert_eq!(
             resolve_thinking(Some(Effort::High), &level, 0),
             Some(GoogleThinking::Level(Effort::High))
@@ -640,8 +643,11 @@ mod tests {
         // Gemini 2.5 uses a budget ladder; rungs map to token buckets against
         // the model's max (Flash: 24576).
         use neenee_core::effort::{EFFORT_GEMINI_BUDGET, Effort};
-        let budget: Vec<neenee_core::EffortLevel> =
-            EFFORT_GEMINI_BUDGET.iter().copied().map(Into::into).collect();
+        let budget: Vec<neenee_core::EffortLevel> = EFFORT_GEMINI_BUDGET
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect();
         assert_eq!(
             resolve_thinking(Some(Effort::Medium), &budget, 24576),
             Some(GoogleThinking::Budget(12288))

@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tool dispatch runs on the task-level scheduler (stage-3 switchover).**
+  The concurrent fan-out moved from conflict-free sub-batches
+  (`group_by_conflict`, batch-parallel / batch-serial) to the ported
+  `ToolScheduler` state machine (kimi-code model: FIFO + anti-starvation,
+  full re-scan on every completion). A queued call now starts as soon as its
+  own conflicts clear instead of waiting for its whole predecessor batch.
+  `dispatch_tool_calls` is decomposed into named preflight / schedule /
+  finalize stages (`dispatch_pipeline.rs`); the permission chain still
+  evaluates inside each task, so hook concurrency and permission parking are
+  unchanged. Interrupt semantics (cooperative drain with
+  `ENVOY_DRAIN_GRACE`, terminal `ToolCancelled` per unproduced call,
+  input-order recording) are preserved, and a panicking tool task now
+  resolves as an ordinary error instead of stranding the scheduler queue.
+
+### Removed
+
+- **The ADR-0095 mirror channel leaves the wire (ADR-0096 follow-through).**
+  `Select{action: Mirror}`, the `Wire::Mirror` / `Wire::MirrorUpdate`
+  envelope variants, `MirrorHello`, and `SessionHosting::Mirrored` are
+  deleted, along with the daemon-side machinery that served them
+  (`serve::run_mirror`, the registry's mirror-row store and its
+  `mirror_adopt` / `mirror_upsert` / `mirror_remove` methods) and the
+  dashboard's mirrored-row rendering. Under unified daemon ownership every
+  session is `hosted`; the `hosting` field stays on monitor rows
+  (serde-defaulted) so older peers still deserialize. No shipped client ever
+  sent mirror frames — the standalone-TUI path they served no longer exists.
+
+### Fixed
+
+- **Daemon control-plane token is now cryptographically random.** The
+  `--public` bearer token was derived from clock nanoseconds XOR the pid —
+  guessable enough to brute-force on a LAN. It is now 256 bits from
+  `getrandom` (two UUIDv4 halves), compared in constant time, and no longer
+  printed to stderr at startup (the discovery-file path is printed instead;
+  the file itself stays 0600). `neenee-server`'s usage text now matches its
+  parser (`--public`, not the stale `--expose`).
+- **The daemon fires SessionEnd hooks.** `kill_session` (including the idle
+  reaper) and daemon shutdown now run each hosted session's SessionEnd hooks;
+  previously they only fired on the in-process exit path, which ADR-0096 made
+  unreachable.
+- **Attach-mode sessions now land in the calling client's project, not the
+  daemon's.** The unified daemon inherits its working directory from
+  whichever client first spawned it and used that directory to scope
+  fresh-session creation, auto-attach, and lazy resume — so attaching from
+  another project grouped the session under the wrong one. The attach
+  handshake's `Select` frame now carries the client's working directory as an
+  optional `project` field; older clients omit it and keep the daemon-cwd
+  fallback.
+- **`/serve` no longer quits the TUI.** Starting, stopping, or re-issuing
+  `/serve` in a standalone session ran the whole interception and then exited
+  the event loop; it now returns to the conversation.
+- **The LLM client no longer waits forever on a stalled endpoint.** The
+  pooled client gets a 15 s connect timeout, and non-streaming chat requests
+  get a 300 s overall timeout (streaming stays unbounded by design; the
+  harness owns the 120 s idle-stall guard). Stall errors classify as
+  retryable, so the turn retries with backoff instead of hanging.
+- **`#[derive(ToolSchema)]` emits field descriptions again.**
+  `#[tool(desc = "...")]` was parsed as a bare string literal, so every
+  field's description was silently dropped from the generated JSON Schema —
+  the model saw bare types. The attribute is parsed properly now, unknown
+  `#[tool(...)]` keys are compile errors, `Vec<T>` maps to a typed array, and
+  generic structs derive correctly.
+
 ## [0.22.6] - 2026-08-13
 
 ### Changed

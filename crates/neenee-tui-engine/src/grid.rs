@@ -71,14 +71,6 @@ pub struct Grid {
     /// mutate in place must call [`Grid::mark`] for the touched content, or
     /// [`Grid::mark_all_dirty`] for a wholesale edit.
     pub content: Vec<Cell>,
-    /// Alias for `content` matching ratatui's `Buffer::content` naming,
-    /// so migrated code that reads `buf.content[idx]` works without changes.
-    /// This is a method returning a slice because a field alias would require
-    /// duplicating the storage; callers should use `.cells` directly in new
-    /// code.
-    // Note: we can't have both `cells` field and `content` field. Callers
-    // that used `buf.content` need to use `buf.cells` instead. The migration
-    // script handles this rename.
     /// Leftmost changed column on each row since the last flush, or `None`
     /// when the row is clean. Mirrors vim's per-line `dirty_col`.
     pub(crate) dirty_col: Vec<Option<u16>>,

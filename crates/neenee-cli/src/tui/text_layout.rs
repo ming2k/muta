@@ -3,7 +3,9 @@
 //! lays out character-addressable content.
 
 use neenee_tui_engine::{
-    text::{floor_grapheme_boundary, inclusive_grapheme_end},
+    text::{
+        floor_grapheme_boundary, inclusive_grapheme_end, prohibited_line_end, prohibited_line_start,
+    },
     {Color, Modifier, Style}, {Line, Span},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -794,43 +796,6 @@ fn wrap_impl(text: &str, max_width: usize, hidden_ranges: &[(usize, usize)]) -> 
     }
 
     lines
-}
-
-pub(crate) fn prohibited_line_start(ch: char) -> bool {
-    matches!(
-        ch,
-        '，' | '。'
-            | '、'
-            | '！'
-            | '？'
-            | '：'
-            | '；'
-            | '）'
-            | '】'
-            | '》'
-            | '〉'
-            | '」'
-            | '』'
-            | '〕'
-            | '”'
-            | '’'
-            | ','
-            | '.'
-            | '!'
-            | '?'
-            | ':'
-            | ';'
-            | ')'
-            | ']'
-            | '}'
-    )
-}
-
-pub(crate) fn prohibited_line_end(ch: char) -> bool {
-    matches!(
-        ch,
-        '（' | '【' | '《' | '〈' | '「' | '『' | '〔' | '“' | '‘' | '(' | '[' | '{'
-    )
 }
 
 #[cfg(test)]

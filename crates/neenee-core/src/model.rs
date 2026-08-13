@@ -189,9 +189,14 @@ impl ModelCapabilities {
             thinking: remote.thinking.unwrap_or(baseline.thinking),
             tool_call: remote.tool_call.unwrap_or(baseline.tool_call),
             vision: remote.vision.unwrap_or(baseline.vision),
-            effort_levels: remote
-                .effort_levels
-                .unwrap_or_else(|| baseline.effort_levels.iter().copied().map(Into::into).collect()),
+            effort_levels: remote.effort_levels.unwrap_or_else(|| {
+                baseline
+                    .effort_levels
+                    .iter()
+                    .copied()
+                    .map(Into::into)
+                    .collect()
+            }),
         }
     }
 

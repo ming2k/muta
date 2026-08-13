@@ -170,6 +170,9 @@ impl<'a> PolicyContext<'a> {
 /// One rule in the permission chain. Async because some gates await.
 #[async_trait]
 pub trait PermissionPolicy: Send + Sync {
+    /// Stable rule name. Not read by the dispatch path itself; exists so the
+    /// chain-order regression test can pin the load-bearing sequence.
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision;
 }
@@ -194,6 +197,9 @@ impl PermissionChain {
         }
         PolicyDecision::Approve
     }
+    /// The policy names in chain order. Consumed by the chain-order regression
+    /// test; not part of the dispatch path.
+    #[allow(dead_code)]
     pub fn policy_names(&self) -> Vec<&'static str> {
         self.policies.iter().map(|p| p.name()).collect()
     }
@@ -527,6 +533,26 @@ mod tests {
         name: String,
         target: ScopeTarget,
     }
+
+    /// The chain order is load-bearing (see [`default_chain`]): hooks observe
+    /// every call, schema validation runs after the hook, the scope gate
+    /// precedes the broker. Pin it so a careless reorder fails loudly.
+    #[test]
+    fn default_chain_order_is_load_bearing() {
+        let chain = PermissionChain::new(default_chain());
+        assert_eq!(
+            chain.policy_names(),
+            vec![
+                "hook",
+                "disabled",
+                "schema",
+                "scope-gate",
+                "bash-policy",
+                "ask-user",
+                "broker",
+            ]
+        );
+    }
     #[async_trait]
     impl Tool for StubTool {
         fn name(&self) -> &str {
@@ -551,7 +577,6 @@ mod tests {
 
     /// A stub PermissionContext for policy tests: all hooks/bash/park are no-ops.
     struct StubCtx {
-        autopilot: bool,
         perms: PermissionStore,
     }
     #[async_trait]
@@ -568,6 +593,10 @@ mod tests {
         }
     }
 
+    /// Build a [`PolicyContext`] for one policy evaluation. The argument count
+    /// mirrors the struct's fields one-to-one so each call site reads as a
+    /// literal context; grouping them would only obscure that mapping.
+    #[allow(clippy::too_many_arguments)]
     fn pctx<'a>(
         tool: &'a Arc<dyn Tool>,
         name: &'a str,
@@ -602,7 +631,6 @@ mod tests {
         let scoped = ScopedToolDisable::default();
         let op = neenee_core::OperationScope::unrestricted();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -636,7 +664,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -670,7 +697,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -704,7 +730,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -734,7 +759,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -764,7 +788,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -800,7 +823,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -834,7 +856,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -864,7 +885,6 @@ mod tests {
         let disabled: HashSet<String> = ["write_file".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -895,7 +915,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -929,7 +948,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: false,
             perms: PermissionStore::new(),
         };
         let c = pctx(
@@ -965,7 +983,6 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
-            autopilot: true,
             perms: PermissionStore::new(),
         };
         let c = pctx(

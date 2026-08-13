@@ -76,9 +76,10 @@ pub fn message(output: &Value) -> Message {
                     // third-party Responses providers (DeepSeek V4) carry the
                     // raw CoT as `reasoning_text` parts in `content`. Read
                     // both — any part with a `text` string contributes.
-                    let parts = item["summary"].as_array().into_iter().chain(
-                        item["content"].as_array().into_iter(),
-                    );
+                    let parts = item["summary"]
+                        .as_array()
+                        .into_iter()
+                        .chain(item["content"].as_array());
                     for part in parts.flatten() {
                         if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                             let cleaned = strip_reasoning_placeholder(text);

@@ -346,10 +346,6 @@ impl Cell {
         self.style.bg
     }
 
-    /// No-op in this engine (wide-glyph handling is at the grid level, not via
-    /// per-cell skip flags). Exists for ratatui API compatibility.
-    pub fn set_skip(&mut self, _skip: bool) {}
-
     /// Return this cell's style (ratatui-compat method).
     pub fn style(&self) -> Style {
         self.style

@@ -1,8 +1,5 @@
 use futures::{SinkExt, StreamExt};
-use neenee_core::{
-    AgentRequest, AgentResponse, MirrorHello, MonitorAction, MonitorEvent, MonitoredSession,
-    SessionOverview,
-};
+use neenee_core::{AgentRequest, AgentResponse, MonitorAction, MonitorEvent, SessionOverview};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -53,12 +50,6 @@ pub enum AttachAction {
     /// (ADR-0093): the server answers with a snapshot frame and, when
     /// `watch` is set, streams diffs until the client disconnects.
     Monitor(MonitorAction),
-    /// Report a session owned by THIS client process (a standalone `neenee`
-    /// TUI) into the host's observability surface (ADR-0095). The next frame
-    /// must be `Wire::Mirror(MirrorHello)`; after that the client streams
-    /// `Wire::MirrorUpdate(MonitoredSession)` rows until it disconnects,
-    /// which removes the row.
-    Mirror,
     /// Issue a session-management verb (ADR-0096): create, prompt, interrupt,
     /// answer a permission, or kill — without attaching as a session client.
     Control(ControlRequest),
@@ -94,6 +85,15 @@ pub enum ControlRequest {
 pub enum Wire {
     Select {
         action: AttachAction,
+        /// The attaching client's working directory — the project scope for
+        /// `New` creation, auto-attach, and lazy resume (ADR-0096). Optional
+        /// for wire compatibility: a client predating the field sends none
+        /// and the daemon falls back to its own process cwd, its behavior
+        /// before the field existed. Ignored for Monitor / Control
+        /// actions, which the daemon serves without consulting a project
+        /// scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<std::path::PathBuf>,
     },
     Welcome {
         session_id: String,
@@ -130,19 +130,6 @@ pub enum Wire {
     Monitor {
         #[serde(flatten)]
         event: MonitorEvent,
-    },
-    /// Mirror handshake header (ADR-0095). Client → server, exactly once as
-    /// the first frame after `Select{action: Mirror}`.
-    Mirror {
-        #[serde(flatten)]
-        hello: MirrorHello,
-    },
-    /// Mirrored status row (ADR-0095). Client → server, streamed while the
-    /// mirror connection lives; the server re-publishes it onto the monitor
-    /// topic with identity fields pinned to the adopted `MirrorHello`.
-    MirrorUpdate {
-        #[serde(flatten)]
-        row: MonitoredSession,
     },
     /// Reply to a `Select{action: Control(..)}` verb (ADR-0096): either the
     /// created/confirmed session id or an error message.
@@ -364,16 +351,16 @@ async fn bind_uds(path: &std::path::Path) -> std::io::Result<tokio::net::UnixLis
     Ok(listener)
 }
 
+/// Generate the bearer token a `--public` listener requires. Two UUIDv4s —
+/// 256 bits from the OS CSPRNG (uuid v4 reads `getrandom`), hex-encoded so
+/// the token is URL-safe. The previous time^pid hash let a LAN attacker
+/// shrink the brute-force space to almost nothing; this does not.
 fn generate_token() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id() as u128;
-    let h1 = (nanos ^ pid.wrapping_mul(0x9e3779b97f4a7c15)) as u64;
-    let h2 = (nanos >> 64 ^ pid.wrapping_mul(0xbf58476d1ce4e5b9)) as u64;
-    format!("{h1:016x}{h2:016x}")
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 #[allow(clippy::result_large_err)]
@@ -402,10 +389,10 @@ where
             .map_err(|e| format!("ws handshake: {e}"))?
     };
     let (mut ws_sink, mut ws_source) = ws_stream.split();
-    let action = loop {
+    let (action, project) = loop {
         match ws_source.next().await {
             Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                Ok(Wire::Select { action }) => break action,
+                Ok(Wire::Select { action, project }) => break (action, project),
                 Ok(_) => {
                     send_error(&mut ws_sink, "expected Select as the first frame").await?;
                     return Ok(());
@@ -422,15 +409,18 @@ where
     };
     match action {
         AttachAction::Monitor(action) => return run_monitor(ws_sink, registry, action).await,
-        AttachAction::Mirror => return run_mirror(ws_sink, ws_source, registry).await,
         AttachAction::Control(request) => return run_control(ws_sink, registry, request).await,
         AttachAction::New | AttachAction::Attach(_) => {}
     }
-    // The caller's project scopes creation / lazy resume. Attach clients
-    // declare it in their Select via the discovery record they used; for now
-    // the registry treats the daemon's recorded project set as global and
-    // uses the process cwd as the fallback scope.
-    let caller_project = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // The caller's project scopes creation / lazy resume (ADR-0096). Attach
+    // clients declare their working directory in the Select frame's optional
+    // `project`; a client predating that field sends none and the daemon
+    // falls back to its own process cwd — which is whatever the first client
+    // that spawned the daemon happened to use, so it is only correct by
+    // coincidence.
+    let caller_project = project.unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
     let bound = match registry.resolve(action, &caller_project).await {
         crate::registry::ResolveOutcome::Welcome(s) => s,
         crate::registry::ResolveOutcome::Pick { sessions } => {
@@ -582,77 +572,6 @@ async fn send_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         .map_err(|e| format!("send monitor event: {e}"))
 }
 
-/// Serve a mirror client (ADR-0095): a standalone `neenee` process reporting
-/// a session it owns. The first frame after the handshake must be
-/// `Wire::Mirror(MirrorHello)`; every `Wire::MirrorUpdate` after that is
-/// re-published onto the monitor topic. The channel is client → server; the
-/// server sends nothing back. When the connection ends the row is removed so
-/// panels never display a silently-stale mirror.
-async fn run_mirror<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut ws_sink: futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
-    mut ws_source: futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    registry: Arc<crate::registry::SessionRegistry>,
-) -> Result<(), String> {
-    let hello = loop {
-        match ws_source.next().await {
-            Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                Ok(Wire::Mirror { hello }) => break hello,
-                Ok(_) => {
-                    send_error(&mut ws_sink, "expected Mirror header as the first frame").await?;
-                    return Ok(());
-                }
-                Err(error) => {
-                    send_error(&mut ws_sink, &format!("bad mirror header: {error}")).await?;
-                    return Ok(());
-                }
-            },
-            Some(Ok(_)) => continue,
-            Some(Err(error)) => return Err(format!("ws recv before mirror header: {error}")),
-            None => return Ok(()),
-        }
-    };
-    let session_id = hello.session_id.clone();
-    registry.mirror_adopt(hello).await;
-    // From here on, every exit path must remove the row.
-    let mut current_id = session_id;
-    loop {
-        match ws_source.next().await {
-            Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                Ok(Wire::Mirror { hello }) => {
-                    // Re-adoption: the owning TUI switched which session it
-                    // drives (`/session open`, `/new`, fork). Drop the old
-                    // row, adopt the new identity (ADR-0095 §3).
-                    registry.mirror_remove(&current_id).await;
-                    current_id = hello.session_id.clone();
-                    registry.mirror_adopt(hello).await;
-                }
-                Ok(Wire::MirrorUpdate { row }) => {
-                    // The connection is bound to the adopted session: a row
-                    // naming another id is a protocol violation, not an
-                    // identity takeover.
-                    if row.id == current_id {
-                        registry.mirror_upsert(row).await;
-                    } else {
-                        tracing::warn!(session = %current_id, claimed = %row.id, "neenee serve: mirror update id mismatch dropped");
-                    }
-                }
-                Ok(_) => {
-                    tracing::warn!("neenee serve: unexpected frame on mirror channel, ignored")
-                }
-                Err(error) => tracing::warn!(%error, "neenee serve: bad mirror frame"),
-            },
-            Some(Ok(_)) => {}
-            Some(Err(error)) => {
-                tracing::warn!(%error, "neenee serve: mirror recv failed");
-                break;
-            }
-            None => break,
-        }
-    }
-    registry.mirror_remove(&current_id).await;
-    Ok(())
-}
-
 async fn send_error<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
     message: &str,
@@ -677,7 +596,20 @@ fn check_bearer(req: &Request, expected: &str) -> bool {
     let Some(rest) = s.strip_prefix("Bearer ") else {
         return false;
     };
-    rest.trim() == expected
+    constant_time_eq(rest.trim().as_bytes(), expected.as_bytes())
+}
+
+/// Constant-time token comparison. Always scans the full `expected` length
+/// and folds every byte into one accumulator, so timing reveals neither the
+/// first mismatching position nor the expected length (a shorter `given`
+/// reads as 0 bytes, a longer one is caught by the length fold — both still
+/// compare every expected byte).
+fn constant_time_eq(given: &[u8], expected: &[u8]) -> bool {
+    let mut diff = given.len() ^ expected.len();
+    for (i, &b) in expected.iter().enumerate() {
+        diff |= usize::from(given.get(i).copied().unwrap_or(0) ^ b);
+    }
+    diff == 0
 }
 
 #[allow(clippy::result_large_err)]
@@ -697,8 +629,63 @@ mod tests {
     #[test]
     fn generate_token_is_nonempty_hex() {
         let t = generate_token();
-        assert_eq!(t.len(), 32);
+        // Two UUIDv4 simple encodings: 2 × 32 hex chars.
+        assert_eq!(t.len(), 64);
         assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+    #[test]
+    fn generate_token_never_repeats() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1024 {
+            let t = generate_token();
+            assert_eq!(t.len(), 64);
+            assert!(seen.insert(t), "token collision");
+        }
+    }
+    #[test]
+    fn constant_time_eq_matches_only_exact_equality() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"sekret", b"sekret"));
+        // Same length, one byte off.
+        assert!(!constant_time_eq(b"sekret", b"sekreT"));
+        // Prefix / extension / empty must not match (no length leak via an
+        // early return: the fold covers length too).
+        assert!(!constant_time_eq(b"sek", b"sekret"));
+        assert!(!constant_time_eq(b"sekrets", b"sekret"));
+        assert!(!constant_time_eq(b"", b"sekret"));
+    }
+    #[test]
+    fn check_bearer_accepts_only_the_exact_token() {
+        fn req(auth: Option<&str>) -> Request {
+            let mut builder = tungstenite::http::Request::builder();
+            if let Some(value) = auth {
+                builder = builder.header("Authorization", value);
+            }
+            builder.body(()).unwrap()
+        }
+        let expected = "0123456789abcdef";
+        assert!(check_bearer(
+            &req(Some(&format!("Bearer {expected}"))),
+            expected
+        ));
+        // Surrounding whitespace on the header value is tolerated.
+        assert!(check_bearer(
+            &req(Some(&format!("Bearer  {expected} "))),
+            expected
+        ));
+        assert!(!check_bearer(
+            &req(Some("Bearer 0123456789abcde")),
+            expected
+        ));
+        assert!(!check_bearer(
+            &req(Some("Bearer 0123456789abcdef0")),
+            expected
+        ));
+        assert!(!check_bearer(
+            &req(Some("Basic 0123456789abcdef")),
+            expected
+        ));
+        assert!(!check_bearer(&req(None), expected));
     }
     #[test]
     fn attach_action_roundtrips() {

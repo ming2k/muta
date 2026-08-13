@@ -79,15 +79,16 @@ pub use neenee_core::{
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
 // `neenee-core`'s lib.rs (`use super::*`).
-use futures::{StreamExt, future::join_all};
+use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// Maximum interval between consecutive stream events (text/reasoning/tool-call
-/// deltas) before the stream is considered stalled. All LLM providers use
-/// `reqwest::Client::new()` which sets no read timeout, so without this guard a
+/// deltas) before the stream is considered stalled. The shared LLM client sets
+/// a connect timeout but deliberately no read timeout on streaming responses
+/// (a legitimate stream may pause between deltas), so without this guard a
 /// reasoning model whose SSE connection hangs mid-generation (server stops
 /// sending but keeps the TCP connection alive) blocks the turn loop
 /// indefinitely — the UI spins "running · responding" forever and only a user
@@ -97,16 +98,6 @@ use tokio_util::sync::CancellationToken;
 /// surfaces a retryable error so the turn retries with backoff instead of
 /// hanging.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Overall timeout for a single non-streaming `provider.chat()` call. The
-/// non-streaming ReAct path ([`Agent::run_with_events`]) and context-
-/// compaction summarization both call `chat()`, which blocks until the model
-/// returns the complete response. Without a bound, a stalled or overloaded
-/// endpoint hangs the turn (and, for compaction, the entire frontend) forever.
-/// Five minutes is generous enough for a reasoning model generating a full
-/// non-streaming response, while still catching a genuine stall. On timeout
-/// the caller surfaces a retryable / fallback error instead of hanging.
-const CHAT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// How long the tool executors wait for a cooperatively-cancelled in-flight
 /// call (an envoy) to drain after the user interrupts a turn, before falling
@@ -130,7 +121,6 @@ pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
-#[allow(dead_code)] // machinery: the four-stage pipeline types await the full dispatch rewrite.
 mod dispatch_pipeline;
 pub mod envoy_tool;
 mod hook_runner;
@@ -138,8 +128,6 @@ pub mod loop_guard;
 mod model_request;
 pub mod no_provider;
 pub mod orchestration;
-#[allow(dead_code)] // machinery: permission policies are wired; the async-gate policy types
-// (HookPolicy/BashPolicy/AskUserPolicy) stay as documented placeholders.
 mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;
@@ -152,11 +140,7 @@ use neenee_skills as skills;
 pub mod mcp;
 mod tool_call;
 mod tool_integration;
-#[allow(dead_code)] // machinery: ToolManager logic is reused via Agent methods; the standalone
-// struct stays as a tested unit pending the resolved_tools field restructure.
 mod tool_manager;
-#[allow(dead_code)] // machinery: ToolScheduler is tested but not yet the dispatch driver
-// (execute_tools_concurrent uses group_by_conflict batching instead).
 mod tool_scheduler;
 pub mod tools;
 

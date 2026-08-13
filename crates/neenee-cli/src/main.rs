@@ -358,8 +358,7 @@ async fn run_dashboard(
             .to_string()
     })?;
     // One-shot monitor snapshot to pick the carrier session: the
-    // most-recently-active hosted session. Mirrored rows belong to other
-    // (standalone) clients and cannot be attached to (ADR-0095).
+    // most-recently-active hosted session (ADR-0096: every row is hosted).
     let mut rx = status::monitor_stream(
         &info,
         neenee_core::MonitorAction {
@@ -378,7 +377,6 @@ async fn run_dashboard(
     let carrier = snapshot
         .sessions
         .iter()
-        .filter(|s| s.hosting == neenee_core::SessionHosting::Hosted)
         .max_by_key(|s| s.updated_at)
         .map(|s| s.id.clone())
         .ok_or_else(|| {

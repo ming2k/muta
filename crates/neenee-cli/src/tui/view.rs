@@ -55,10 +55,10 @@ use crate::tui::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};
 #[cfg(test)]
 use crate::tui::text_layout::WrappedLine;
 #[cfg(test)]
-use crate::tui::text_layout::{
-    block_selection_range, line_selection, prohibited_line_end, prohibited_line_start,
-};
+use crate::tui::text_layout::{block_selection_range, line_selection};
 pub use crate::tui::theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, Theme};
+#[cfg(test)]
+use neenee_tui_engine::text::{prohibited_line_end, prohibited_line_start};
 // Re-export the drawing sub-trees so consumers that used to reach them through
 // the old `paint` parent can drill in via this module (overlays/tools/…).
 pub(crate) use crate::tui::{overlays, tools};

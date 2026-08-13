@@ -137,6 +137,7 @@ impl Agent {
         // Box the recursive call: `run_session_review` is reached from inside
         // a turn loop, and the reviewer runs that same turn loop, so without
         // indirection the future would be infinitely sized.
+        let reviewer = std::sync::Arc::new(reviewer);
         let result =
             Box::pin(reviewer.run_streaming_with_events(&mut child_messages, &cancel, |_| {}))
                 .await;

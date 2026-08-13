@@ -142,7 +142,7 @@ pub fn format_export_markdown(
                         out.push_str(&format!("> {}\n", line));
                     }
                 }
-                out.push_str("\n");
+                out.push('\n');
             }
             None => {
                 out.push_str(&format!("> `{}`\n\n", invocation));

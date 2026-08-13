@@ -1615,14 +1615,14 @@ mod tests {
 
         // The warning color must be present somewhere in the awaiting row.
         assert!(
-            awaiting.iter().any(|&c| c == theme.warning),
+            awaiting.contains(&theme.warning),
             "awaiting-permission row must use the warning hue"
         );
         // A permission state must not shimmer (the shimmer sweeps the brand hue
         // across phases). The normal row, by contrast, carries brand-derived
         // colors at this phase.
         assert!(
-            !awaiting.iter().any(|&c| c == theme.warning) || awaiting != normal,
+            !awaiting.contains(&theme.warning) || awaiting != normal,
             "awaiting row must differ from the ordinary shimmer row"
         );
         // Sanity: the normal row does carry some non-warning color from the

@@ -70,18 +70,6 @@ impl MonitorTracker {
         self.wip = wip;
     }
 
-    /// Stamp a real identity (session id + header fields) onto the base row
-    /// WITHOUT touching any folded state (ADR-0095): a mirror client adopts
-    /// its session id only after the host connection exists, and a round
-    /// that started earlier must still read Running on the panel. Contrast
-    /// with re-seeding via [`MonitorTracker::bootstrap`], which is correct
-    /// when the *session itself* changed.
-    pub fn rebind_identity(&mut self, base: MonitoredSession) {
-        let status = self.status;
-        self.base = base;
-        self.base.status = status;
-    }
-
     /// The current panel row. `updated_at` advances with every observed event
     /// so a consumer can sort by liveness without the session store.
     pub fn row(&self) -> MonitoredSession {

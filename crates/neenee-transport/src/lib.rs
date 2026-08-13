@@ -15,17 +15,30 @@
 //! translates the wire protocol (`AgentRequest`/`AgentResponse`, both
 //! `Serialize`/`Deserialize`) to and from the in-process channels.
 //!
-//! # Migration posture
+//! # Architecture today
 //!
-//! The frontend-neutral session driver and its handlers live in this crate.
 //! The ADR-0037 Step 6 assembly factory has landed as
-//! [`bootstrap::assemble`]: both application binaries (`neenee-cli`,
-//! `neenee-server`) call it to build their
-//! [`session_driver::SessionDriver`]. The posture is still one session per
-//! process — `neenee-server` hosts one session and frontends attach over
-//! `serve`; the multi-session scaffolding sketched in ADR-0037 §6
-//! (`SessionRegistry` / `SessionHandle` / `SharedState`) remains deferred
-//! (ADR-0081).
+//! [`bootstrap::assemble`]: it builds one frontend-neutral session harness
+//! ([`session_driver::SessionDriver`] plus its channels) per call, and both
+//! application binaries (`neenee-cli`, `neenee-server`) go through it. The
+//! multi-session host of ADR-0089 and the unified session daemon of
+//! ADR-0096 have landed on top of it — the "one session per process"
+//! posture is gone:
+//!
+//! - [`registry::SessionRegistry`] owns every live session across every
+//!   project, one [`registry::HostedSession`] per assembled harness, and
+//!   lazily resumes persisted sessions on attach.
+//! - [`host`] is the daemon runtime; the `neenee-server` binary is a thin
+//!   shell over it (product identity, headless UI bridge, CLI parsing).
+//! - Clients — the `neenee` TUI (attach mode), `neenee status`, the
+//!   dashboard — talk to the daemon over the [`serve`] WebSocket control
+//!   plane: a Unix domain socket by default (0600, so filesystem
+//!   permissions are the auth boundary), plus TCP with a bearer token when
+//!   started `--public`.
+//! - [`serve_discovery`] publishes the global `daemon.json` record clients
+//!   use to find the daemon; on graceful shutdown the daemon tears every
+//!   hosted session down through the registry, firing each one's
+//!   SessionEnd hooks (ADR-0025).
 //!
 //! # Dependency posture
 //!

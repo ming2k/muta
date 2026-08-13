@@ -456,7 +456,7 @@ fn dock_card_line(
     let name_w = cell_width.saturating_sub(FIXED).max(4);
     let name = truncate_display(&entry.workspace, name_w);
 
-    let mut spans = vec![
+    let spans = vec![
         Span::styled(format!("{marker} "), Style::default().fg(theme.brand())),
         Span::styled(format!("{seq:<5}"), Style::default().fg(theme.brand())),
         Span::styled(format_padded(&name, name_w), name_style),
@@ -465,13 +465,6 @@ fn dock_card_line(
         Span::styled("  ".to_string(), Style::default()),
         Span::styled(format!("{status:<15}"), status_style(row.status, theme)),
     ];
-    // Mirrored sessions carry the view-only glyph right after the seq.
-    if row.hosting == SessionHosting::Mirrored {
-        spans.insert(
-            2,
-            Span::styled("⇢ ".to_string(), Style::default().fg(theme.dim())),
-        );
-    }
     Line::from(spans)
 }
 
@@ -753,7 +746,6 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
         "hosting",
         match row.hosting {
             SessionHosting::Hosted => "hosted".to_string(),
-            SessionHosting::Mirrored => "mirrored (view-only)".to_string(),
         },
         Style::default().fg(theme.fg()),
     );

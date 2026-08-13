@@ -46,14 +46,6 @@ impl ThinkingConfig {
         Self::default()
     }
 
-    /// Default: thinking off, no explicit effort.
-    pub const fn default() -> Self {
-        Self {
-            mode: ThinkingMode::Off,
-            effort: None,
-        }
-    }
-
     /// Set the thinking mode. Returns `self` for chaining.
     pub fn with_mode(mut self, mode: ThinkingMode) -> Self {
         self.mode = mode;

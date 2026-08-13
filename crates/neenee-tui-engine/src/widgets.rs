@@ -33,7 +33,7 @@ impl<'a> Span<'a> {
 
     /// Display width of this span's content.
     pub fn width(&self) -> usize {
-        crate::text::str_idth(&self.content)
+        crate::text::str_width(&self.content)
     }
 }
 
@@ -111,7 +111,7 @@ impl<'a> Line<'a> {
     pub fn width(&self) -> usize {
         self.spans
             .iter()
-            .map(|s| crate::text::str_idth(&s.content))
+            .map(|s| crate::text::str_width(&s.content))
             .sum()
     }
 }

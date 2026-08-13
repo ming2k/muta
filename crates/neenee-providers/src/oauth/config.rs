@@ -238,7 +238,9 @@ mod tests {
             "copilot"
         );
         assert_eq!(
-            config_by_provider_id("google-antigravity").unwrap().provider_id,
+            config_by_provider_id("google-antigravity")
+                .unwrap()
+                .provider_id,
             "google-antigravity"
         );
         assert_eq!(

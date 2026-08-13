@@ -280,41 +280,6 @@ pub fn normalize_access_path(path: impl Into<String>) -> String {
     out
 }
 
-/// Greedily partition `accesses` into ordered batches where no two entries
-/// in the same batch conflict. Within a batch, calls may run concurrently;
-/// across batches they must serialize.
-///
-/// The algorithm is first-fit: walk the inputs in order, place each into the
-/// earliest batch whose existing members none-conflict with it, or open a new
-/// batch if it clashes with every existing one. This is not optimal
-/// bin-packing (that's NP-hard) but it is deterministic, cheap (O(n·b) where
-/// b is the batch count, tiny in practice), and preserves input order within
-/// and across batches — which keeps the dispatcher's "results in input order"
-/// invariant trivially true.
-///
-/// Returns the batch index of each input, so callers can reconstruct per-batch
-/// slices without copying the inputs themselves.
-pub fn group_by_conflict(accesses: &[ToolAccesses]) -> Vec<usize> {
-    // `batches[i]` = the union of accesses already placed in batch i, so a new
-    // entry can be checked against a whole batch in one `conflicts`.
-    let mut batches: Vec<ToolAccesses> = Vec::new();
-    let mut assignment = Vec::with_capacity(accesses.len());
-    for acc in accesses {
-        let target = batches
-            .iter()
-            .position(|batch| !batch.conflicts(acc))
-            .unwrap_or_else(|| {
-                batches.push(ToolAccesses::none());
-                batches.len() - 1
-            });
-        // Merge this access into the chosen batch for future checks.
-        let merged = std::mem::take(&mut batches[target]);
-        batches[target] = ToolAccesses(merged.0.into_iter().chain(acc.0.iter().cloned()).collect());
-        assignment.push(target);
-    }
-    assignment
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -398,7 +363,7 @@ mod tests {
     fn all_conflicts_with_everything() {
         let all = ToolAccesses::all();
         assert!(all.conflicts(&rd("any")));
-        assert!(all.conflicts(&ToolAccesses::none()) == false); // none never conflicts, even with all
+        assert!(!all.conflicts(&ToolAccesses::none())); // none never conflicts, even with all
         assert!(all.conflicts(&ToolAccesses::all()));
     }
 
@@ -429,82 +394,5 @@ mod tests {
         // built-in constructors normalize; raw conflict sees raw strings,
         // but constructors guarantee normalized input.
         assert!(rd("src//a.rs").conflicts(&wt("src/a.rs/")));
-    }
-
-    #[cfg(test)]
-    mod grouping_tests {
-        use super::*;
-
-        #[test]
-        fn non_conflicting_all_one_batch() {
-            // Three reads of different files: all parallel.
-            let accs = vec![
-                ToolAccesses::read_file("a"),
-                ToolAccesses::read_file("b"),
-                ToolAccesses::read_file("c"),
-            ];
-            let g = group_by_conflict(&accs);
-            assert_eq!(g, vec![0, 0, 0], "non-conflicting reads share a batch");
-        }
-
-        #[test]
-        fn clashing_writes_split_into_batches() {
-            // W(a), W(a), W(a) — each clashes with the prior, so three batches.
-            let accs = vec![
-                ToolAccesses::write_file("a"),
-                ToolAccesses::write_file("a"),
-                ToolAccesses::write_file("a"),
-            ];
-            let g = group_by_conflict(&accs);
-            assert_eq!(g, vec![0, 1, 2], "same-file writes serialize");
-        }
-
-        #[test]
-        fn independent_writes_share_a_batch() {
-            // W(a), W(b), W(c) — different files, no conflict → one batch.
-            let accs = vec![
-                ToolAccesses::write_file("a"),
-                ToolAccesses::write_file("b"),
-                ToolAccesses::write_file("c"),
-            ];
-            let g = group_by_conflict(&accs);
-            assert_eq!(g, vec![0, 0, 0]);
-        }
-
-        #[test]
-        fn mixed_read_write_interleaving() {
-            // R(a), R(b), W(a), R(c), W(b)
-            //   R(a),R(b) → batch 0 (reads don't conflict)
-            //   W(a) clashes with R(a) in batch 0 → batch 1
-            //   R(c) doesn't clash with batch 0 → batch 0
-            //   W(b) clashes with R(b) in batch 0 and nothing in batch 1 → batch 1
-            let accs = vec![
-                ToolAccesses::read_file("a"),
-                ToolAccesses::read_file("b"),
-                ToolAccesses::write_file("a"),
-                ToolAccesses::read_file("c"),
-                ToolAccesses::write_file("b"),
-            ];
-            let g = group_by_conflict(&accs);
-            assert_eq!(g, vec![0, 0, 1, 0, 1]);
-        }
-
-        #[test]
-        fn empty_input() {
-            assert_eq!(group_by_conflict(&[]), Vec::<usize>::new());
-        }
-
-        #[test]
-        fn none_accesses_never_conflict() {
-            // Tools with no declared access (todo, ask_user) never force a split.
-            let accs = vec![
-                ToolAccesses::none(),
-                ToolAccesses::none(),
-                ToolAccesses::write_file("a"),
-                ToolAccesses::none(),
-            ];
-            let g = group_by_conflict(&accs);
-            assert_eq!(g, vec![0, 0, 0, 0]);
-        }
     }
 }

@@ -1,8 +1,8 @@
 //! The `antigravity-oauth` provider template: Google-native models served
 //! via Google Antigravity OAuth subscription.
 
-use super::google::{GOOGLE_BUILTIN_MODELS, MODELS};
 use super::ProviderTemplateSpec;
+use super::google::{GOOGLE_BUILTIN_MODELS, MODELS};
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "antigravity-oauth",

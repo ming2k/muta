@@ -53,7 +53,8 @@ pub mod catalog;
 pub mod channelauth;
 pub mod effort;
 pub use effort::{
-    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort, EffortLevel,
+    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
+    EffortLevel,
 };
 pub mod thinking;
 pub use thinking::{ThinkingMode, ThinkingSupport};
@@ -112,8 +113,8 @@ pub use model::{
     resolve as resolve_model,
 };
 pub use monitor::{
-    MirrorHello, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting,
-    SessionStatus, WipAdvice, WipConflict, WipStatus,
+    MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
+    WipAdvice, WipConflict, WipStatus,
 };
 pub use pressure::{
     CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,

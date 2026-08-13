@@ -21,13 +21,31 @@
 //!    order and promotes whatever is no longer blocked. O(n²) per batch — but
 //!    batch sizes are tiny (a handful of tool calls), so simplicity wins.
 //!
-//! State machine (one lock, [`SchedulerInner`], guards all of it):
+//! State machine (one lock, [`SchedulerInner`] inside [`Shared`], guards all
+//! of it):
 //! - `add()` decides start-vs-queue, then spawns if start.
 //! - each spawned task runs to completion, then calls `finish(id, result)`.
 //! - `finish` resolves the caller, removes the finished `ActiveTask`, and
 //!   re-scans the queue, promoting unblocked tasks (each promotion spawns
 //!   another task that will itself call `finish` on completion). This single
 //!   entry point keeps the state machine local and auditable.
+//!
+//! Cancellation is two-tier, and both tiers are idempotent:
+//! - [`ToolScheduler::cancel_all`] is the *cooperative* tier. It rejects
+//!   every queued task immediately and cancels the batch-wide token; every
+//!   spawned task — including tasks promoted later by `finish`'s re-scan —
+//!   observes that through a child token handed to its `run` closure.
+//! - [`ToolScheduler::abort_all`] is the *forced* fallback for tasks that
+//!   ignore the token. It aborts the `JoinHandle` of every still-running
+//!   task, dropping its run future (so tool `Drop` impls clean up child
+//!   processes and the like), and rejects anything still queued. Callers are
+//!   expected to `cancel_all` first, allow a drain grace period, then
+//!   `abort_all`.
+//!
+//! A receiver waiting on an aborted task resolves with the oneshot's own
+//! `Err` (the completion sender is dropped without a result ever being
+//! sent); callers must treat that as "no result was produced", on par with
+//! a queued task rejected by cancellation.
 //!
 //! Lives in `neenee-agent` (not `neenee-core`) because it spins up tokio
 //! tasks: core is pure domain, zero I/O (ADR-0005).
@@ -36,8 +54,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use futures::FutureExt;
 use neenee_core::ToolAccesses;
 use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -76,11 +96,14 @@ struct QueuedTask<R> {
 }
 
 /// A running task. The `run` closure has already moved into its spawned task;
-/// `completion` is taken (and the entry removed) when that task reports back.
+/// `handle` is that task's [`JoinHandle`], kept so [`ToolScheduler::abort_all`]
+/// can force-stop a task that ignores cooperative cancellation. `completion`
+/// is taken (and the entry removed) when the task reports back via `finish`.
 struct ActiveTask<R> {
     id: u64,
     accesses: ToolAccesses,
     completion: Option<oneshot::Sender<Result<R, String>>>,
+    handle: JoinHandle<()>,
 }
 
 struct SchedulerInner<R> {
@@ -89,16 +112,26 @@ struct SchedulerInner<R> {
     next_id: u64,
 }
 
+/// Everything shared between the scheduler and its spawned tasks: the state
+/// machine plus the batch-wide cancellation token. One `Arc` clone carries
+/// both into `spawn`/`finish`, so a task promoted by `finish`'s re-scan
+/// derives its token from the same batch token as a directly-added one.
+struct Shared<R> {
+    inner: Mutex<SchedulerInner<R>>,
+    cancel: CancellationToken,
+}
+
 /// Concurrency-arbitrating scheduler for one batch of tool calls.
 ///
 /// Create one per batch, feed every call through [`ToolScheduler::add`],
-/// await all returned receivers, then drop it. Cancel-aware: the
-/// batch-wide [`CancellationToken`] is derived into a child token handed to
-/// each task's `run` closure; [`ToolScheduler::cancel_all`] rejects every
-/// queued task immediately and signals running tasks via the token.
+/// await all returned receivers, then drop it. Cancellation is two-tier:
+/// [`ToolScheduler::cancel_all`] rejects every queued task immediately and
+/// signals running tasks through the batch-wide [`CancellationToken`] (each
+/// `run` closure receives a child of it); [`ToolScheduler::abort_all`] is
+/// the forced fallback that aborts tasks still running after a grace period.
+/// See the module docs for the full contract.
 pub struct ToolScheduler<R: Send + 'static> {
-    inner: Arc<Mutex<SchedulerInner<R>>>,
-    cancel: CancellationToken,
+    shared: Arc<Shared<R>>,
 }
 
 impl<R: Send + 'static> Default for ToolScheduler<R> {
@@ -111,12 +144,14 @@ impl<R: Send + 'static> ToolScheduler<R> {
     /// Create a scheduler driven by the given (batch-wide) cancellation token.
     pub fn with_token(cancel: CancellationToken) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(SchedulerInner {
-                active: Vec::new(),
-                queued: Vec::new(),
-                next_id: 0,
-            })),
-            cancel,
+            shared: Arc::new(Shared {
+                inner: Mutex::new(SchedulerInner {
+                    active: Vec::new(),
+                    queued: Vec::new(),
+                    next_id: 0,
+                }),
+                cancel,
+            }),
         }
     }
 
@@ -126,40 +161,40 @@ impl<R: Send + 'static> ToolScheduler<R> {
     /// finish and free it up.
     pub async fn add(&self, task: ToolCallTask<R>) -> oneshot::Receiver<Result<R, String>> {
         let (tx, rx) = oneshot::channel();
-        let spawn_now: Option<(u64, RunClosure<R>)>;
-        {
-            let mut inner = self.inner.lock().await;
-            let blocked = inner.is_blocked(&task.accesses);
-            if blocked {
-                inner.queued.push(QueuedTask {
-                    accesses: task.accesses,
-                    run: task.run,
-                    completion: tx,
-                });
-                spawn_now = None;
-            } else {
-                let id = inner.next_id;
-                inner.next_id += 1;
-                inner.active.push(ActiveTask {
-                    id,
-                    accesses: task.accesses,
-                    completion: Some(tx),
-                });
-                spawn_now = Some((id, task.run));
-            }
-        }
-        if let Some((id, run)) = spawn_now {
-            Self::spawn(id, run, self.inner.clone(), self.cancel.child_token());
+        let mut inner = self.shared.inner.lock().await;
+        if inner.is_blocked(&task.accesses) {
+            inner.queued.push(QueuedTask {
+                accesses: task.accesses,
+                run: task.run,
+                completion: tx,
+            });
+        } else {
+            let id = inner.next_id;
+            inner.next_id += 1;
+            // `spawn` only schedules the task — its first poll happens on the
+            // runtime, never synchronously — so doing it under the lock is
+            // safe and keeps the `ActiveTask` entry (including the
+            // `JoinHandle`) atomic with the start decision: `abort_all` can
+            // never observe a started task whose handle was not yet stored.
+            let handle = Self::spawn(id, task.run, self.shared.clone());
+            inner.active.push(ActiveTask {
+                id,
+                accesses: task.accesses,
+                completion: Some(tx),
+                handle,
+            });
         }
         rx
     }
 
-    /// Cancel every still-pending task. Queued tasks are rejected immediately;
-    /// running tasks observe the token through their `run` closure.
+    /// Cancel every still-pending task, cooperatively. Queued tasks are
+    /// rejected immediately; running tasks observe the token through their
+    /// `run` closure. Idempotent: a second call finds an empty queue and
+    /// re-cancels an already-cancelled token.
     pub async fn cancel_all(&self) {
         let drained: Vec<QueuedTask<R>>;
         {
-            let mut inner = self.inner.lock().await;
+            let mut inner = self.shared.inner.lock().await;
             drained = std::mem::take(&mut inner.queued);
         }
         for qt in drained {
@@ -167,23 +202,78 @@ impl<R: Send + 'static> ToolScheduler<R> {
                 .completion
                 .send(Err("cancelled before start".to_string()));
         }
-        self.cancel.cancel();
+        self.shared.cancel.cancel();
     }
 
-    /// Drive a task: run its closure, then `finish` — resolve the caller,
-    /// remove the finished task, re-scan the queue and promote unblocked
-    /// tasks (each promotion calls `spawn` recursively, so the chain
-    /// continues until the queue empties).
-    fn spawn(
-        id: u64,
-        run: RunClosure<R>,
-        inner: Arc<Mutex<SchedulerInner<R>>>,
-        token: CancellationToken,
-    ) {
+    /// Force-stop everything still pending — the fallback for tasks that
+    /// ignore the cooperative token after a drain grace period. Aborts every
+    /// running task's `JoinHandle` (its run future is dropped, so tool `Drop`
+    /// impls clean up) and rejects every queued task. Idempotent.
+    ///
+    /// A receiver waiting on an aborted task resolves with the oneshot's own
+    /// `Err`: aborting drops the task's `finish` call along with its run
+    /// future, so the completion sender is dropped here without a result
+    /// ever being sent. Treat that like a queued rejection — no result was
+    /// produced. Aborting a task that already completed but has not yet
+    /// reported back is a safe no-op on the handle; its receiver still ends
+    /// with `Err`, as if it had produced nothing.
+    pub async fn abort_all(&self) {
+        let (queued, active) = {
+            let mut inner = self.shared.inner.lock().await;
+            (
+                std::mem::take(&mut inner.queued),
+                std::mem::take(&mut inner.active),
+            )
+        };
+        for qt in queued {
+            let _ = qt
+                .completion
+                .send(Err("cancelled before start".to_string()));
+        }
+        for task in active {
+            // Abort first; `task` then drops at the end of the iteration,
+            // closing the oneshot so its waiter is released with `RecvError`
+            // instead of hanging forever.
+            task.handle.abort();
+        }
+    }
+
+    /// Drive a task: run its closure with a child of the batch-wide token,
+    /// then `finish` — resolve the caller, remove the finished task, re-scan
+    /// the queue and promote unblocked tasks (each promotion calls `spawn`
+    /// recursively, so the chain continues until the queue empties).
+    ///
+    /// The child token is derived here, from the shared batch token, so
+    /// promoted tasks observe `cancel_all` exactly like directly-added ones.
+    /// The returned `JoinHandle` is stored in the `ActiveTask` entry by the
+    /// caller, giving `abort_all` its handle on the task.
+    fn spawn(id: u64, run: RunClosure<R>, shared: Arc<Shared<R>>) -> JoinHandle<()> {
+        let token = shared.cancel.child_token();
         tokio::spawn(async move {
-            let result = run(token).await;
-            Self::finish(id, result, inner).await;
-        });
+            // Catch a panicking tool task so it cannot wedge the scheduler:
+            // an uncaught panic would skip `finish`, stranding the ActiveTask
+            // entry (blocking same-resource queued tasks for the rest of the
+            // batch) and dropping the completion sender without a cause. The
+            // panic still reaches the runtime's panic hook; we additionally
+            // log it and resolve the task as an ordinary error so the queue
+            // re-scan proceeds.
+            let result = match std::panic::AssertUnwindSafe(run(token))
+                .catch_unwind()
+                .await
+            {
+                Ok(result) => result,
+                Err(payload) => {
+                    let detail = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "non-string payload".to_string());
+                    tracing::error!(panic = %detail, "tool task panicked; resolving as error");
+                    Err(format!("tool task panicked: {detail}"))
+                }
+            };
+            Self::finish(id, result, shared).await;
+        })
     }
 
     /// The single re-scan entry point. Resolves the finished task, removes it,
@@ -197,65 +287,52 @@ impl<R: Send + 'static> ToolScheduler<R> {
     fn finish(
         id: u64,
         result: Result<R, String>,
-        inner: Arc<Mutex<SchedulerInner<R>>>,
+        shared: Arc<Shared<R>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
-            // Collect spawn instructions under the lock.
-            let mut to_spawn: Vec<(u64, RunClosure<R>)> = Vec::new();
-            {
-                let mut guard = inner.lock().await;
-                // Resolve the finished task.
-                if let Some(pos) = guard.active.iter().position(|t| t.id == id) {
-                    let task = guard.active.remove(pos);
-                    if let Some(tx) = task.completion {
-                        let _ = tx.send(result);
-                    }
+            let mut guard = shared.inner.lock().await;
+            // Resolve the finished task. Its `JoinHandle` drops with the
+            // entry — detaching an already-completed task is a no-op. (The
+            // entry may already be gone if `abort_all` removed it first;
+            // then the result simply goes nowhere.)
+            if let Some(pos) = guard.active.iter().position(|t| t.id == id) {
+                let task = guard.active.remove(pos);
+                if let Some(tx) = task.completion {
+                    let _ = tx.send(result);
                 }
-                // Re-scan: take the whole queue (FnOnce closures aren't Clone,
-                // so move them out), partition into start-now vs keep-waiting.
-                // The "start-now" set is checked against `active` only here;
-                // because promotions happen within one critical section and we
-                // then spawn them, FIFO among the same pass is preserved by
-                // the fact that conflicting promotions would both see the
-                // first one already in `active` once added in iteration order.
-                let queued = std::mem::take(&mut guard.queued);
-                let mut keep = Vec::with_capacity(queued.len());
-                for qt in queued {
-                    let blocked = guard
-                        .active
-                        .iter()
-                        .any(|a| a.accesses.conflicts(&qt.accesses));
-                    if blocked {
-                        keep.push(qt);
-                    } else {
-                        let id = guard.next_id;
-                        guard.next_id += 1;
-                        // Track same-pass promotions: a later queued task that
-                        // conflicts with an earlier *promoted* one in this
-                        // pass must still wait (FIFO). We push to `active`
-                        // first, so the `active`-based check above already
-                        // covers it for the next iteration.
-                        guard.active.push(ActiveTask {
-                            id,
-                            accesses: qt.accesses,
-                            completion: Some(qt.completion),
-                        });
-                        to_spawn.push((id, qt.run));
-                    }
+            }
+            // Re-scan: take the whole queue (FnOnce closures aren't Clone,
+            // so move them out), partition into start-now vs keep-waiting.
+            // Each promotion is pushed to `active` and spawned within this
+            // same critical section, so a later queued task that conflicts
+            // with an earlier *promoted* one in this pass still sees it in
+            // `active` and keeps waiting — FIFO within the pass is preserved
+            // by iteration order.
+            let queued = std::mem::take(&mut guard.queued);
+            let mut keep = Vec::with_capacity(queued.len());
+            for qt in queued {
+                let blocked = guard
+                    .active
+                    .iter()
+                    .any(|a| a.accesses.conflicts(&qt.accesses));
+                if blocked {
+                    keep.push(qt);
+                } else {
+                    let id = guard.next_id;
+                    guard.next_id += 1;
+                    // Same spawn-under-lock reasoning as `add`: scheduling is
+                    // not polling, so the entry and its `JoinHandle` stay
+                    // atomic for `abort_all`.
+                    let handle = Self::spawn(id, qt.run, shared.clone());
+                    guard.active.push(ActiveTask {
+                        id,
+                        accesses: qt.accesses,
+                        completion: Some(qt.completion),
+                        handle,
+                    });
                 }
-                guard.queued = keep;
             }
-            // Spawn promoted tasks outside the lock. Each gets a fresh token;
-            // for batch-wide cancel we rely on `cancel_all` draining the queue
-            // before these get here. (See doc on `cancel_all`.)
-            for (id, run) in to_spawn {
-                let inner_for_task = inner.clone();
-                tokio::spawn(async move {
-                    let token = CancellationToken::new();
-                    let result = run(token).await;
-                    Self::finish(id, result, inner_for_task).await;
-                });
-            }
+            guard.queued = keep;
         })
     }
 }
@@ -435,5 +512,135 @@ mod tests {
             "R(a) stays queued behind W(a)"
         );
         scheduler.cancel_all().await;
+    }
+
+    #[tokio::test]
+    async fn promoted_task_observes_batch_cancel() {
+        let scheduler: ToolScheduler<()> = ToolScheduler::default();
+        // t1 holds the resource briefly; t2 conflicts with it, so t2 queues
+        // and is only promoted by finish's re-scan once t1 completes.
+        let rx1 = scheduler
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("p.txt"),
+                |_| async {
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    Ok(())
+                },
+            ))
+            .await;
+        let (e2, t2) = held_task(ToolAccesses::write_file("p.txt"));
+        let rx2 = scheduler.add(t2).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(e2.load(Ordering::SeqCst), 0, "t2 queued behind t1");
+        // t1 finishes; the re-scan inside finish promotes t2.
+        rx1.await.unwrap().unwrap();
+        for _ in 0..200 {
+            if e2.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(e2.load(Ordering::SeqCst), 1, "t2 promoted by the re-scan");
+        // The promoted task's token must be a child of the batch token: a
+        // batch cancel after promotion has to reach it. (It used to spawn
+        // with an orphan token and would hang forever here.)
+        scheduler.cancel_all().await;
+        let r2 = tokio::time::timeout(Duration::from_secs(2), rx2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            r2,
+            Err("cancelled".to_string()),
+            "promoted task must observe the batch cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_all_terminates_token_ignoring_task() {
+        let scheduler: ToolScheduler<()> = ToolScheduler::default();
+        let rx = scheduler
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("q.txt"),
+                |_token| async {
+                    // Deliberately ignores the cancellation token.
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                },
+            ))
+            .await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Cooperative cancel first: the task ignores it and keeps running.
+        scheduler.cancel_all().await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Forced fallback: abort drops the run future before finish can ever
+        // run, so the completion sender drops without sending and the
+        // receiver ends with the oneshot's own error.
+        scheduler.abort_all().await;
+        let res = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .unwrap();
+        assert!(
+            res.is_err(),
+            "aborted task's receiver must end with sender-dropped Err"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_and_abort_are_idempotent() {
+        let scheduler: ToolScheduler<()> = ToolScheduler::default();
+        let (_e1, t1) = held_task(ToolAccesses::write_file("r.txt"));
+        let (_e2, t2) = held_task(ToolAccesses::write_file("r.txt"));
+        let rx1 = scheduler.add(t1).await;
+        let rx2 = scheduler.add(t2).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        // Double cancel, double abort: none of these may panic or wedge.
+        scheduler.cancel_all().await;
+        scheduler.cancel_all().await;
+        scheduler.abort_all().await;
+        scheduler.abort_all().await;
+        // t2 was rejected by the first cancel_all. t1 either observed the
+        // token (Ok(Err)) or was aborted before finish could deliver its
+        // result (Err(RecvError)) — never a success.
+        assert!(rx2.await.unwrap().is_err());
+        assert!(rx1.await.map(|r| r.is_err()).unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn panicking_task_resolves_err_and_promotes_queue() {
+        let scheduler: ToolScheduler<String> = ToolScheduler::default();
+        // A task that panics must not wedge the scheduler: its receiver gets
+        // an ordinary Err, `finish` still runs, and a queued same-resource
+        // task is promoted and completes.
+        let rx1 = scheduler
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("p.txt"),
+                |_| async {
+                    panic!("boom");
+                    #[allow(unreachable_code)]
+                    Ok("never".to_string())
+                },
+            ))
+            .await;
+        let rx2 = scheduler
+            .add(ToolCallTask::new(
+                ToolAccesses::write_file("p.txt"),
+                |_| async { Ok("promoted".to_string()) },
+            ))
+            .await;
+        let r1 = tokio::time::timeout(Duration::from_secs(2), rx1)
+            .await
+            .expect("panicking task must not hang its receiver");
+        match r1 {
+            Ok(Err(e)) => assert!(e.contains("panicked"), "got: {e}"),
+            other => panic!("panicking task must resolve as Err, got: {other:?}"),
+        }
+        let r2 = tokio::time::timeout(Duration::from_secs(2), rx2)
+            .await
+            .expect("queued task must be promoted after the panic")
+            .expect("receiver alive")
+            .expect("task result");
+        assert_eq!(r2, "promoted");
     }
 }

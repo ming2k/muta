@@ -1,390 +1,586 @@
-//! Four-stage tool-call dispatch pipeline (stage 3 machinery).
+//! Four-stage tool-call dispatch pipeline.
 //!
-//! Ports kimi-code's `runToolCallBatch` (preflight / prepare / schedule /
-//! finalize) onto neenee's dispatch path. Each stage owns a precise slice of
-//! the historical `dispatch_tool_calls` / `execute_tools_concurrent` /
-//! `execute_tool` / `record_tool_result` behavior, so the whole can be
-//! reasoned about stage-by-stage instead of as one 250-line function.
+//! The native tool-call path of [`Agent::dispatch_tool_calls`] is split into
+//! four named stages, each owning a precise slice of the historical
+//! 250-line function so the whole can be reasoned about stage by stage:
 //!
-//! ### Stage ownership (mapped from the old code)
-//!
-//! | stage | owns (from the old dispatch path) |
+//! | stage | owns |
 //! |---|---|
-//! | **preflight** | turn classification (`consecutive_readonly_turns`), checkpoint-replay scan + `ProviderRetry` notice, doom-guard `check_doom_ahead` (signature masking + `NudgeInjected` notice + nudge capture), text-fallback decision (`parse_text_tool_call` + `AssistantDiscard` + `attach_fallback_tool_call`). |
-//! | **prepare** (per call) | generate `call_<uuid>`, emit `AgentEvent::ToolCall` up front, decide short-circuit (checkpoint-replay / doom-blocked) vs execute, and for short-circuits emit the terminal `ToolResult(duration_ms=0)` + fill the result slot. For executable calls: resolve the tool (resolved → dynamic fallback), run the [`PermissionChain`](crate::permission_policy::PermissionChain) (which folds in hook/disabled/schema/scope/bash/ask-user/broker), resolve stdin policy. |
-//! | **schedule** | the concurrent fan-out via [`ToolScheduler`]: a shared `mpsc` channel, biased `select!` with `cancel.cancelled()` first (drain + `ToolCancelled` per dispatched id + `Err(Interrupted)`), interleaved forwarding of `Envoy`/`ToolStream`/`PermissionRequest`, per-task terminal `ToolResult` the instant it finishes, results in input order. |
-//! | **finalize** (per call, input order) | [`record_tool_result`](crate::Agent) (token accounting w/ envoy special-case, optional `TodosUpdated`, `Message::tool_result` with `.with_children().with_envoy_meta()` or plain, image peel-out), `run_post_tool_hooks` unless replay, turn-level doom nudge injection, `Ok(!denied)`. |
+//! | **preflight** ([`Agent::dispatch_preflight`], per turn) | turn classification (`consecutive_readonly_turns`), checkpoint-replay scan + `ProviderRetry` notice, doom-guard `check_doom_ahead` (signature masking + `NudgeInjected` notice + nudge capture), dispatch-id generation, the up-front `AgentEvent::ToolCall` events (all of them, before any `ToolResult`), and the short-circuits: checkpoint-replay and guard-blocked calls get their terminal `ToolResult(duration_ms = 0)` here and their result slot is filled without execution. |
+//! | **prepare** (per call, in-task) | the gate sequence inside [`Agent::execute_tool`]: tool resolution (builtin → user → mcp), the full [`PermissionChain`](crate::permission_policy::PermissionChain) evaluation (folding in hook/disabled/schema/scope/bash/ask-user/broker) including `Ask` parks, and the bash stdin policy. It deliberately runs *inside* each scheduled task, not as a separate serialised phase: PreToolUse hooks and `Ask` parks keep their historical concurrency. |
+//! | **schedule** ([`Agent::schedule_tool_calls`], the batch) | the concurrent fan-out through [`ToolScheduler`]: per-call declared [`ToolAccesses`](neenee_core::ToolAccesses) arbitrate which calls run concurrently (a write serializes against any other access to the same path; non-conflicting reads parallelize). A shared `mpsc` channel forwards `Envoy`/`ToolStream`/`PermissionRequest` events in real time; each task emits its terminal `ToolResult` the instant it finishes; a turn interrupt runs the two-tier cancel (cooperative drain with `ENVOY_DRAIN_GRACE`, then forced abort) and pairs every unproduced call with a terminal `AgentEvent::ToolCancelled`. |
+//! | **finalize** ([`Agent::dispatch_finalize`], per call, input order) | recovered results folded back into the input-ordered slots, `remember_completed_tool`, [`Agent::record_tool_result`] (token accounting, `TodosUpdated`, `Message::tool_result` with envoy children/meta, image peel-out), post-tool hooks unless replay, turn-level doom-nudge injection, `Ok(!denied)`. On interruption it records only the drained results and returns `Err(HarnessError::Interrupted)` — no hooks, no nudge, no `remember`. |
 //!
-//! ### Why land the machinery first
-//!
-//! Like stages 1-2, this lands the *types and the stage boundaries* without
-//! rewiring `dispatch_tool_calls` onto them. The actual switchover is a
-//! follow-up so the behavior diff against the old path can be reviewed
-//! stage-by-stage. Every type here is `#[allow(dead_code)]` until then.
+//! The text-fallback path (one call per turn) stays inside
+//! `dispatch_tool_calls`, driving [`Agent::execute_tool_evented`], which
+//! mirrors the same cancellation contract for a single call.
 
 use std::sync::Arc;
 
-use neenee_core::{Message, ScopeTarget, ToolCall, ToolOutput};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-use crate::permission_policy::{PermissionChain, PolicyContext, PolicyDecision};
-use crate::tool_scheduler::{RunClosure, ToolScheduler};
+use crate::agent::{Agent, ConcurrentOutcome, RoundState};
+use crate::tool_scheduler::{ToolCallTask, ToolScheduler};
+use crate::{
+    AgentEvent, AgentNotice, ENVOY_DRAIN_GRACE, HarnessError, InjectionKind, Message, NoticeKind,
+    NoticeSeverity, NoticeSource, NoticeSurface, ToolCall, ToolOutput,
+};
 
-/// The kind of outcome `prepare` produces for one call. Mirrors kimi-code's
-/// `runnable | rejected`, plus neenee's short-circuit kinds. Not `Debug`
-/// because it embeds an `Arc<dyn Tool>`; use [`PreparedCall::debug_summary`].
-pub enum PreparedCall {
-    /// The call will execute: tool resolved, permission admitted (or `Ask`
-    /// pending), accesses + run-closure ready for the scheduler.
-    Runnable {
-        call_id: String,
-        call: ToolCall,
-        #[allow(unused)]
-        tool: Arc<dyn neenee_core::Tool>,
-        accesses: neenee_core::ToolAccesses,
-        /// A pending permission ask, if the policy chain returned `Ask`. The
-        /// scheduler task parks on it before executing; `None` means admitted.
-        pending_ask: Option<PendingAsk>,
-    },
-    /// Short-circuited at prepare: result already known, no execution. The
-    /// `ToolResult` event has already been emitted; finalize just records.
-    ShortCircuited {
-        call_id: String,
-        call: ToolCall,
-        output: ToolOutput,
-        /// Whether this short-circuit is a checkpoint replay (affects
-        /// finalize: skips token re-accounting + post-tool hooks).
-        is_replay: bool,
-    },
-    /// Rejected at prepare (tool not found, schema invalid, permission denied).
-    /// Distinct from `ShortCircuited` so finalize can route `PermissionDenied`
-    /// to "stop the round" semantics.
-    Rejected {
-        call_id: String,
-        call: ToolCall,
-        output: ToolOutput,
-    },
-}
-
-impl PreparedCall {
-    /// The dispatch id of this prepared call, regardless of kind.
-    pub fn call_id(&self) -> &str {
-        match self {
-            PreparedCall::Runnable { call_id, .. }
-            | PreparedCall::ShortCircuited { call_id, .. }
-            | PreparedCall::Rejected { call_id, .. } => call_id,
-        }
-    }
-    /// A non-owning Debug representation (the embedded tool isn't Debug).
-    pub fn debug_summary(&self) -> String {
-        match self {
-            PreparedCall::Runnable {
-                call_id,
-                call,
-                pending_ask,
-                ..
-            } => format!(
-                "Runnable({}, {}, ask={})",
-                call_id,
-                call.name,
-                pending_ask.is_some()
-            ),
-            PreparedCall::ShortCircuited {
-                call_id,
-                call,
-                is_replay,
-                ..
-            } => {
-                format!(
-                    "ShortCircuited({}, {}, replay={})",
-                    call_id, call.name, is_replay
-                )
-            }
-            PreparedCall::Rejected { call_id, call, .. } => {
-                format!("Rejected({}, {})", call_id, call.name)
-            }
-        }
-    }
-}
-
-/// A permission ask deferred by the policy chain, parked until the user
-/// replies. The scheduler task awaits the receiver; `Always` seeds the store.
-#[derive(Debug)]
-pub struct PendingAsk {
-    pub request: neenee_core::PermissionRequest,
-    pub rule: crate::permission_store::PermissionRule,
-}
-
-/// The product of one scheduler task: the call's result, its wall-clock
-/// duration, and whether the permission broker rejected it (round-stop).
-#[derive(Debug, Clone)]
-pub struct ExecutedCall {
-    pub call_id: String,
-    pub call: ToolCall,
-    pub output: ToolOutput,
-    pub duration_ms: u64,
+/// The product of [`Agent::dispatch_preflight`]: everything `schedule` and
+/// `finalize` need to finish the batch.
+pub(crate) struct PreparedDispatch {
+    /// Dispatch-generated ids, one per call in input order. The matching
+    /// `ToolCall` events have all been emitted already.
+    pub(crate) call_ids: Vec<String>,
+    /// Per-call checkpoint-replay flags (finalize skips post-tool hooks and
+    /// the nested-usage token accounting for these; the call never entered
+    /// the exec set).
+    pub(crate) checkpoint_replays: Vec<bool>,
+    /// Indices (into the batch) of the calls that must actually execute, in
+    /// input order — scheduler submission order derives from this.
+    pub(crate) exec_indices: Vec<usize>,
+    /// Per-call result slots, input order. Short-circuited calls (replay /
+    /// guard-blocked) are already filled with their `(output, 0)` terminal
+    /// result; executable slots stay `None` until `schedule` recovers them.
+    pub(crate) results: Vec<Option<(ToolOutput, u64)>>,
+    /// Turn-level signals for finalize.
+    pub(crate) signals: TurnSignals,
 }
 
 /// Per-turn signals computed by preflight and consumed by finalize.
 #[derive(Debug, Default)]
-pub struct TurnSignals {
+pub(crate) struct TurnSignals {
     /// The hidden `LoopReviewNudge` to inject after the batch, if the doom
     /// guard blocked anything this turn.
-    pub doom_nudge: Option<String>,
-    /// Whether *any* call this turn is a checkpoint replay (excludes it from
-    /// `remember_completed_tool`, post-tool hooks, and doom-guard input).
-    pub has_replay: bool,
+    pub(crate) doom_nudge: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// The pipeline. Constructed per dispatch (one batch of tool calls); the four
-// stages are methods so each is unit-testable in isolation once wired.
-// ---------------------------------------------------------------------------
-
-/// A four-stage dispatch pipeline over one batch of tool calls.
-///
-/// Holds the cross-cutting dependencies (permission chain, scheduler) so the
-/// agent constructs it once and drives batches through `run`. The actual
-/// per-call execution closure (`run_tool`) is injected by the agent, keeping
-/// this struct free of `&Agent` coupling — it only knows the types it needs.
-pub struct DispatchPipeline<'a> {
-    pub permission: &'a PermissionChain,
-    pub scheduler: ToolScheduler<ExecutedCall>,
+/// Forward one live event from a scheduled task to the dispatch callback,
+/// filling the call's result slot when the event is its terminal
+/// `ToolResult`. Slots are filled from the events themselves — the event
+/// stream is the single source of truth for "this call produced a result",
+/// which keeps the slot and the UI event atomic: a task aborted between
+/// emitting its `ToolResult` and reporting back to the scheduler still
+/// counts as produced (the event is already visible), and is never doubly
+/// terminated with a `ToolCancelled`.
+fn forward_scheduled_event<F>(
+    event: AgentEvent,
+    slot_index: &std::collections::HashMap<String, usize>,
+    slots: &mut [Option<(ToolOutput, u64)>],
+    on_event: &mut F,
+) where
+    F: FnMut(AgentEvent) + Send,
+{
+    if let AgentEvent::ToolResult {
+        id,
+        structured,
+        duration_ms,
+        ..
+    } = &event
+        && let Some(&i) = slot_index.get(id)
+    {
+        slots[i] = Some((structured.clone(), *duration_ms));
+    }
+    on_event(event);
 }
 
-impl<'a> DispatchPipeline<'a> {
-    pub fn new(permission: &'a PermissionChain, scheduler: ToolScheduler<ExecutedCall>) -> Self {
-        Self {
-            permission,
-            scheduler,
+impl Agent {
+    /// **Stage 1 — preflight** (per turn). Classifies the turn, scans for
+    /// checkpoint replays, runs the pre-dispatch doom-guard check, generates
+    /// the dispatch ids, emits every `ToolCall` event up front, and resolves
+    /// the short-circuits (replay / guard-blocked) by emitting their terminal
+    /// `ToolResult(duration_ms = 0)` and filling their slots. Returns the
+    /// prepared batch; the calls listed in [`PreparedDispatch::exec_indices`]
+    /// still need execution.
+    pub(crate) fn dispatch_preflight<F>(
+        &self,
+        tool_calls: &[ToolCall],
+        state: &mut RoundState,
+        on_event: &mut F,
+    ) -> PreparedDispatch
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        // Classify this turn once, for two consumers: the turn-hook axis
+        // (consecutive read-only streak, surfaced to user hooks) and the
+        // round-scoped guard registry (checked at the turn boundary). Any call
+        // whose target is a real Path/Command (i.e. not Unspecified) makes
+        // the turn "progress", resetting both.
+        let all_read = tool_calls
+            .iter()
+            .all(|c| self.tool_target_is_unspecified(&c.name, &c.arguments));
+        if all_read {
+            state.consecutive_readonly_turns = state.consecutive_readonly_turns.saturating_add(1);
+        } else {
+            state.consecutive_readonly_turns = 0;
+        }
+
+        // A provider retry may produce the same tool request again even
+        // though its terminal result is already in the checkpointed
+        // history. Treat exact matches as idempotency replays regardless
+        // of the optional doom-loop setting.
+        let checkpoint_replays: Vec<bool> = tool_calls
+            .iter()
+            .map(|call| state.is_checkpoint_replay(call))
+            .collect();
+        if checkpoint_replays.iter().any(|replayed| *replayed) {
+            on_event(AgentEvent::Notice(
+                AgentNotice::new(
+                    NoticeKind::ProviderRetry,
+                    NoticeSeverity::Warning,
+                    "Completed tool call not repeated",
+                    NoticeSource::Harness,
+                )
+                .with_body(
+                    "The retried model request repeated a tool call that already completed. \
+                     The checkpointed result remains authoritative; the tool was not run again.",
+                )
+                .with_surface(NoticeSurface::Toast),
+            ));
+        }
+
+        // Pre-dispatch doom-loop check (the decisive intervention). Before
+        // any tool runs this turn, ask the doom guard whether any call is a
+        // repeat of one already issued this round. A repeat is blocked here
+        // and now — the tool never executes, so its result never enters
+        // context. Unlike the post-hoc read-loop guard, this covers all
+        // watched tools (bash/webfetch/edit/...), not just reads, and trips
+        // on the *first* repeat (threshold = 2). `Block` records the
+        // repeated signatures into the per-round mask, so the per-call
+        // `is_blocked` filter below short-circuits them without re-running
+        // the guard. We surface the guard's message as a notice + a hidden
+        // user message so the model learns the call is refused.
+        let doom_calls: Vec<(&str, &str)> = tool_calls
+            .iter()
+            .zip(&checkpoint_replays)
+            .filter(|(_, replayed)| !**replayed)
+            .map(|(call, _)| (call.name.as_str(), call.arguments.as_str()))
+            .collect();
+        let doom_action = state.guards.check_doom_ahead(&doom_calls);
+        let doom_nudge: Option<String> = match &doom_action {
+            crate::loop_guard::GuardAction::Block { message, .. } => {
+                tracing::warn!(
+                    blocked = ?state.guards.blocked_summary(),
+                    "doom guard blocked a repeating tool call before execution"
+                );
+                on_event(AgentEvent::Notice(
+                    AgentNotice::new(
+                        NoticeKind::NudgeInjected,
+                        NoticeSeverity::Warning,
+                        "Repeating tool call blocked",
+                        NoticeSource::TurnGuard,
+                    )
+                    .with_body(
+                        "The agent tried to re-run a tool call it already issued this round. \
+                         The call was blocked before it ran — the result it already has is \
+                         unchanged, so re-running it cannot help. The agent must change \
+                         approach (or call `abort`).",
+                    )
+                    .with_surface(NoticeSurface::Toast),
+                ));
+                Some(message.clone())
+            }
+            _ => None,
+        };
+
+        // Emit all ToolCall events up front — before any ToolResult.
+        let call_ids: Vec<String> = tool_calls
+            .iter()
+            .map(|_| format!("call_{}", uuid::Uuid::new_v4()))
+            .collect();
+        tracing::info!(count = tool_calls.len(), "dispatching native tool calls");
+        for (call, id) in tool_calls.iter().zip(&call_ids) {
+            tracing::debug!(tool = %call.name, "tool call");
+            on_event(AgentEvent::ToolCall {
+                id: id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            });
+        }
+        // Signature-level loop guard (ADR-0036): a call whose canonical
+        // signature is in the per-round block mask — set either by the
+        // read-loop guard (a repeat that escalated past a nudge) or by the
+        // doom guard above (any watched tool's first repeat) — is
+        // short-circuited here, before execution. The model gets an
+        // explanatory error instead of the content/side-effect, so it is
+        // physically unable to re-enter the loop. Blocked calls are split
+        // out so the rest run concurrently exactly as before. Each blocked
+        // call is given the same ToolResult event an executed call would
+        // get, so the UI never sees an orphaned running step.
+        let blocked_output = |name: &str| {
+            ToolOutput::Text(format!(
+                "[loop guard] This call ({name}) is blocked for the rest of the turn \
+                 because it was a repeat of one already issued this round. Re-running it \
+                 cannot help: the result is already in context above. Act on it now \
+                 (use what you already have, try a *different* command/file/query), or, \
+                 if you cannot proceed, say so explicitly or call `abort`."
+            ))
+        };
+        let checkpoint_output = |name: &str| {
+            ToolOutput::Text(format!(
+                "[retry checkpoint] This exact {name} call already completed before the \
+                 provider retry. Its result is present earlier in the conversation and \
+                 remains authoritative. The tool was not executed again."
+            ))
+        };
+        let mut results: Vec<Option<(ToolOutput, u64)>> =
+            (0..tool_calls.len()).map(|_| None).collect();
+        let exec_indices: Vec<usize> = tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(idx, c)| {
+                if checkpoint_replays[*idx] {
+                    tracing::warn!(
+                        tool = %c.name,
+                        args = %c.arguments,
+                        "provider retry repeated a completed tool call"
+                    );
+                    let output = checkpoint_output(&c.name);
+                    let id = &call_ids[*idx];
+                    on_event(AgentEvent::ToolResult {
+                        id: id.clone(),
+                        name: c.name.clone(),
+                        output: output.to_text(),
+                        structured: output.clone(),
+                        duration_ms: 0,
+                    });
+                    results[*idx] = Some((output, 0));
+                    false
+                } else if state.guards.is_blocked(&c.name, &c.arguments) {
+                    tracing::warn!(
+                        tool = %c.name,
+                        args = %c.arguments,
+                        "tool call blocked by turn-loop guard signature mask"
+                    );
+                    let output = blocked_output(&c.name);
+                    let id = &call_ids[*idx];
+                    // Emit the ToolResult the executed path would have, so
+                    // the UI pairs this call's ToolCall with a terminal
+                    // result instead of leaving it "running".
+                    on_event(AgentEvent::Notice(
+                        AgentNotice::new(
+                            NoticeKind::NudgeInjected,
+                            NoticeSeverity::Warning,
+                            "Blocked repeating tool call",
+                            NoticeSource::TurnGuard,
+                        )
+                        .with_body(format!(
+                            "A tool call ({}) was blocked by the loop guard — it is a \
+                             repeat of a call already issued this round. Use the result \
+                             already in context, or try a different call.",
+                            c.name,
+                        ))
+                        .with_surface(NoticeSurface::Toast),
+                    ));
+                    on_event(AgentEvent::ToolResult {
+                        id: id.clone(),
+                        name: c.name.clone(),
+                        output: output.to_text(),
+                        structured: output.clone(),
+                        duration_ms: 0,
+                    });
+                    results[*idx] = Some((output, 0));
+                    false // do not execute
+                } else {
+                    true // execute
+                }
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        PreparedDispatch {
+            call_ids,
+            checkpoint_replays,
+            exec_indices,
+            results,
+            signals: TurnSignals { doom_nudge },
         }
     }
 
-    // Stages are documented here as the contract the switchover must honor.
-    // Full bodies arrive with the execute_tool rewrite; these signatures pin
-    // the boundaries now so the rewrite is mechanical.
-
-    /// **Stage 1 — preflight** (per turn). Computes turn signals (doom nudge,
-    /// replay flags) from the batch before any per-call work.
+    /// **Stage 3 — schedule** (the batch). Fan the executable calls out
+    /// through a [`ToolScheduler`] in input order (the scheduler's FIFO
+    /// queueing preserves it), forwarding interleaved events to the callback
+    /// in real time. Returns the outcome slots in input order.
     ///
-    /// Maps the old `dispatch_tool_calls` steps B+C+D.
-    pub async fn preflight(
+    /// Cancellation-aware, two-tier: an interrupt first cancels the batch
+    /// cooperatively — queued tasks reject immediately, running tasks observe
+    /// their child token (a cooperatively-cancellable call, i.e. an envoy,
+    /// drains to a terminal result) — within the bounded
+    /// [`ENVOY_DRAIN_GRACE`]; whatever still has not settled is then aborted.
+    /// The outcome reports `interrupted: true` with every drained result
+    /// preserved in its slot, and every call that produced nothing is paired
+    /// with a terminal [`AgentEvent::ToolCancelled`]. The caller
+    /// ([`Agent::dispatch_finalize`]) decides how to end the round.
+    pub(crate) async fn schedule_tool_calls<F>(
+        self: &Arc<Self>,
+        calls: &[ToolCall],
+        call_ids: &[String],
+        cancel: &CancellationToken,
+        on_event: &mut F,
+    ) -> Result<ConcurrentOutcome, HarnessError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        // One scheduler per batch; the batch-wide token is a child of the
+        // turn token, so `cancel_all` reaches queued and running tasks alike
+        // without touching the turn token itself.
+        let scheduler: ToolScheduler<()> = ToolScheduler::with_token(cancel.child_token());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // Submit in input order. A call whose tool can't be resolved gets
+        // `none()` accesses (freely parallel) — it still produces its
+        // "not found" error inside `execute_tool`; there's no point
+        // serializing an error.
+        let mut receivers = Vec::with_capacity(calls.len());
+        for (call, call_id) in calls.iter().zip(call_ids) {
+            let accesses = self.accesses_for_call(call);
+            let agent = Arc::clone(self);
+            let call = call.clone();
+            let call_id = call_id.clone();
+            let tx = tx.clone();
+            let task = ToolCallTask::new(accesses, move |token| async move {
+                let started = std::time::Instant::now();
+                // One execution future, pinned: the cancel arm keeps driving
+                // the SAME future to its drained terminal result instead of
+                // dropping and re-entering the tool (dropping mid-`Ask`-park
+                // or mid-envoy and re-running would duplicate side effects).
+                let fut = agent.execute_tool(&call, &call_id, &tx);
+                tokio::pin!(fut);
+                let output = tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        // Cooperative cancel: a tool that can stop at a safe
+                        // boundary (an envoy) is signalled and drains; anything
+                        // else is dropped here by returning early — its
+                        // terminal ToolCancelled is emitted by the driver,
+                        // which owns pairing for unproduced calls.
+                        let tool = agent.tool_manager().find(&call.name);
+                        let cancellable = tool
+                            .as_ref()
+                            .is_some_and(|sourced| sourced.tool.supports_cooperative_cancel());
+                        if !cancellable {
+                            return Err("cancelled".to_string());
+                        }
+                        if let Some(sourced) = &tool {
+                            sourced.tool.request_cancel(&call_id);
+                        }
+                        fut.await
+                    }
+                    output = &mut fut => output,
+                };
+                let duration_ms = started.elapsed().as_millis() as u64;
+                // Emit ToolResult immediately so the TUI transitions this
+                // step Running→Completed without waiting for siblings.
+                let _ = tx.send(AgentEvent::ToolResult {
+                    id: call_id.clone(),
+                    name: call.name.clone(),
+                    output: output.to_text(),
+                    structured: output.clone(),
+                    duration_ms,
+                });
+                Ok(())
+            });
+            receivers.push(scheduler.add(task).await);
+        }
+        // Drop the driver's own sender so `rx` closes once every task has
+        // finished; `rx_open` then latches off instead of spinning on `None`.
+        drop(tx);
+        let mut rx_open = true;
+        // Result slots, filled from the terminal ToolResult events (see
+        // `forward_scheduled_event`). On interrupt the slots keep whatever
+        // drained before the grace deadline, so finalize can record real
+        // work even though the round ends.
+        let mut slots: Vec<Option<(ToolOutput, u64)>> = vec![None; calls.len()];
+        let slot_index: std::collections::HashMap<String, usize> = call_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
+        let receivers = futures::future::join_all(receivers);
+        tokio::pin!(receivers);
+
+        let interrupted = loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break true,
+                event = rx.recv(), if rx_open => {
+                    match event {
+                        Some(event) => {
+                            forward_scheduled_event(event, &slot_index, &mut slots, on_event);
+                        }
+                        None => rx_open = false,
+                    }
+                }
+                _ = &mut receivers => break false,
+            }
+        };
+
+        if interrupted {
+            // Cooperative tier: reject every queued task immediately and
+            // signal the running ones through their child tokens.
+            scheduler.cancel_all().await;
+            // Bounded grace for cooperative tools (envoys) to drain to a
+            // terminal result; events keep flowing while we wait.
+            let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
+            tokio::pin!(grace);
+            let drained = loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut grace => break false,
+                    event = rx.recv(), if rx_open => {
+                        match event {
+                            Some(event) => {
+                                forward_scheduled_event(event, &slot_index, &mut slots, on_event);
+                            }
+                            None => rx_open = false,
+                        }
+                    }
+                    _ = &mut receivers => break true,
+                }
+            };
+            if !drained {
+                // Grace expired: force-stop whatever ignored the token. A
+                // receiver dropped by the abort ends in `RecvError` — no
+                // result; its slot stays `None` unless its ToolResult event
+                // already landed (and filled the slot) before the abort.
+                scheduler.abort_all().await;
+            }
+            while let Ok(event) = rx.try_recv() {
+                forward_scheduled_event(event, &slot_index, &mut slots, on_event);
+            }
+            // Pair every announced-but-unproduced call with its terminal
+            // ToolCancelled; produced (drained) calls keep their results.
+            for (i, slot) in slots.iter().enumerate() {
+                if slot.is_none() {
+                    on_event(AgentEvent::ToolCancelled {
+                        id: call_ids[i].clone(),
+                        name: calls[i].name.clone(),
+                    });
+                }
+            }
+            return Ok(ConcurrentOutcome {
+                results: slots,
+                interrupted: true,
+            });
+        }
+
+        // Normal completion: drain the terminal events that landed with the
+        // final tasks, then flatten in input order. Any slot still None means
+        // its task never produced (defensive — every terminal task emits a
+        // ToolResult); synthesize the loop-guard placeholder to keep the
+        // contract non-panicking.
+        while let Ok(event) = rx.try_recv() {
+            forward_scheduled_event(event, &slot_index, &mut slots, on_event);
+        }
+        for slot in slots.iter_mut() {
+            let _ = slot
+                .get_or_insert_with(|| (ToolOutput::Text("[loop guard] blocked".to_string()), 0));
+        }
+        Ok(ConcurrentOutcome {
+            results: slots,
+            interrupted: false,
+        })
+    }
+
+    /// **Stage 4 — finalize** (per call, input order). Fold the recovered
+    /// results back into the input-ordered batch, record every result
+    /// (token accounting, todos, transcript messages), run post-tool hooks
+    /// for non-replay calls, and inject the doom nudge captured by
+    /// preflight. On interruption only the drained results are recorded and
+    /// the round ends with `Err(HarnessError::Interrupted)` — no hooks, no
+    /// nudge, no `remember_completed_tool`, matching the historical contract.
+    pub(crate) async fn dispatch_finalize<F>(
         &self,
-        _response: &Message,
-        _state: &mut crate::agent::RoundState,
-    ) -> Result<(Vec<ToolCall>, TurnSignals), crate::HarnessError> {
-        // TODO(stage-3-switch): turn classification, checkpoint-replay scan,
-        // doom-guard check_doom_ahead, text-fallback parse.
-        Ok((Vec::new(), TurnSignals::default()))
-    }
-
-    /// **Stage 2 — prepare** (per call). Resolves the tool, runs the permission
-    /// chain, decides runnable vs short-circuit vs reject.
-    ///
-    /// Maps the old `execute_tool` gate sequence (now folded into
-    /// [`PermissionChain`]) plus the doom-guard `is_blocked` short-circuit.
-    pub async fn prepare(&self, _call: ToolCall, _ctx: &PolicyContext<'_>) -> PreparedCall {
-        // TODO(stage-3-switch): tool lookup, permission.evaluate(ctx),
-        // short-circuit on Ask/Deny, build Runnable otherwise.
-        unimplemented!("stage 3 switchover")
-    }
-
-    /// **Stage 3 — schedule** (the batch). Fans executable calls out through
-    /// the [`ToolScheduler`], interleaving events and preserving input order.
-    ///
-    /// Maps the old `execute_tools_concurrent` (join_all + mpsc + biased
-    /// cancel + per-id ToolCancelled), but with conflict arbitration from
-    /// `accesses` replacing blanket join_all.
-    pub async fn schedule(
-        &self,
-        _runnables: Vec<PreparedCall>,
-        _run_tool: RunClosure<ExecutedCall>,
-        _cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<Vec<ExecutedCall>, crate::HarnessError> {
-        // TODO(stage-3-switch): for each Runnable, scheduler.add(ToolCallTask),
-        // then await all receivers in input order, forwarding events.
-        unimplemented!("stage 3 switchover")
-    }
-
-    /// **Stage 4 — finalize** (per call, input order). Records the result,
-    /// runs post-tool hooks, injects the doom nudge.
-    ///
-    /// Maps the old `record_tool_result` + `run_post_tool_hooks` + nudge push.
-    pub async fn finalize(
-        &self,
-        _executed: &[ExecutedCall],
-        _signals: &TurnSignals,
-        _messages: &mut Vec<Message>,
-    ) -> Result<bool, crate::HarnessError> {
-        // TODO(stage-3-switch): record_tool_result per call, post-tool hooks
-        // unless replay, doom-nudge hidden-user push, return !denied.
-        unimplemented!("stage 3 switchover")
-    }
-}
-
-/// Helper: classify a policy-chain decision into a prepare outcome.
-///
-/// `Approve`/`Pass` (chain fallback) → the call may run (caller builds the
-/// Runnable). `Deny` → Rejected (a `ToolOutput::PermissionDenied` output marks
-/// a user-style abort, which the store resolves collectively across the batch).
-/// `Ask` → Runnable with a pending ask.
-#[allow(dead_code)]
-pub fn decision_to_prepare(
-    decision: PolicyDecision,
-    call_id: String,
-    call: ToolCall,
-    tool: Arc<dyn neenee_core::Tool>,
-    _scope_target: ScopeTarget,
-    arguments: &str,
-) -> PreparedCall {
-    match decision {
-        PolicyDecision::Pass | PolicyDecision::Approve => {
-            let accesses = tool.accesses(arguments);
-            PreparedCall::Runnable {
-                call_id,
-                call,
-                tool,
-                accesses,
-                pending_ask: None,
+        tool_calls: &[ToolCall],
+        mut prepared: PreparedDispatch,
+        outcome: Option<ConcurrentOutcome>,
+        messages: &mut Vec<Message>,
+        state: &mut RoundState,
+        on_event: &mut F,
+    ) -> Result<bool, HarnessError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        if let Some(outcome) = outcome {
+            // Destructure so the per-call results can move out by value.
+            let ConcurrentOutcome {
+                results: recovered,
+                interrupted,
+            } = outcome;
+            if interrupted {
+                // The user interrupted this turn mid-flight. Record whatever
+                // real work drained (an interrupted envoy's partial
+                // transcript), then end the round as interrupted — the caller
+                // commits the transcript so the recovered work survives into
+                // the session. Dropped calls already received their terminal
+                // `ToolCancelled` event.
+                for (&idx, recovered) in prepared.exec_indices.iter().zip(recovered) {
+                    if let Some((result, duration_ms)) = recovered {
+                        self.record_tool_result(
+                            &tool_calls[idx],
+                            &prepared.call_ids[idx],
+                            &result,
+                            duration_ms,
+                            messages,
+                            state,
+                            false,
+                            false,
+                            on_event,
+                        );
+                    }
+                }
+                return Err(HarnessError::Interrupted);
+            }
+            for (&idx, recovered) in prepared.exec_indices.iter().zip(recovered) {
+                prepared.results[idx] = recovered;
+                state.remember_completed_tool(&tool_calls[idx]);
             }
         }
-        PolicyDecision::Deny { output, .. } => PreparedCall::Rejected {
-            call_id,
-            call,
-            output,
-        },
-        PolicyDecision::Ask { request, rule } => {
-            let accesses = tool.accesses(arguments);
-            PreparedCall::Runnable {
-                call_id,
+        // Flatten back to a positional Vec, matching tool_calls order.
+        let results: Vec<(ToolOutput, u64)> = prepared
+            .results
+            .into_iter()
+            .map(|r| r.unwrap_or_else(|| (ToolOutput::Text("[loop guard] blocked".to_string()), 0)))
+            .collect();
+        let denied = results
+            .iter()
+            .any(|(result, _)| matches!(result, ToolOutput::PermissionDenied { .. }));
+        for (idx, ((call, id), (result, duration_ms))) in tool_calls
+            .iter()
+            .zip(&prepared.call_ids)
+            .zip(results)
+            .enumerate()
+        {
+            self.record_tool_result(
                 call,
-                tool,
-                accesses,
-                pending_ask: Some(PendingAsk { request, rule }),
+                id,
+                &result,
+                duration_ms,
+                messages,
+                state,
+                prepared.checkpoint_replays[idx],
+                false,
+                on_event,
+            );
+            if !prepared.checkpoint_replays[idx] {
+                self.run_post_tool_hooks(call, &result, duration_ms, messages)
+                    .await;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use async_trait::async_trait;
-    use neenee_core::ToolAccesses;
-
-    struct StubTool {
-        name: String,
-        target: ScopeTarget,
-    }
-    #[async_trait]
-    impl neenee_core::Tool for StubTool {
-        fn name(&self) -> &str {
-            &self.name
+        // If the user denied permission for any call, stop the round here
+        // instead of feeding the (possibly partial) results back to the
+        // model and asking it to continue.
+        // If the doom guard blocked any repeats this round, deliver its
+        // consolidated message as a hidden user note alongside the blocked
+        // tool results, so the model learns *why* its call was refused and
+        // what to do instead. Non-terminating: the turn continues with the
+        // (now masked) signatures hard-blocked for subsequent turns in this round.
+        if let Some(message) = prepared.signals.doom_nudge {
+            messages.push(crate::conversation_context::hidden_user(
+                InjectionKind::LoopReviewNudge,
+                message,
+            ));
         }
-        fn description(&self) -> &str {
-            ""
-        }
-        fn parameters(&self) -> serde_json::Value {
-            serde_json::json!({"type": "object"})
-        }
-        async fn call(&self, _a: &str) -> Result<String, String> {
-            Ok("ok".into())
-        }
-        fn scope_target(&self, _a: &str) -> ScopeTarget {
-            self.target.clone()
-        }
-        fn accesses(&self, _a: &str) -> ToolAccesses {
-            ToolAccesses::none()
-        }
-    }
-
-    fn mkcall(name: &str) -> ToolCall {
-        ToolCall {
-            id: "orig".into(),
-            name: name.into(),
-            arguments: "{}".into(),
-        }
-    }
-
-    #[test]
-    fn decision_approve_yields_runnable_no_ask() {
-        let tool: Arc<dyn neenee_core::Tool> = Arc::new(StubTool {
-            name: "read_text".into(),
-            target: ScopeTarget::Unspecified,
-        });
-        let prepared = decision_to_prepare(
-            PolicyDecision::Approve,
-            "call_1".into(),
-            mkcall("read_text"),
-            tool,
-            ScopeTarget::Unspecified,
-            "{}",
-        );
-        match prepared {
-            PreparedCall::Runnable {
-                pending_ask: None, ..
-            } => {}
-            other => panic!(
-                "expected Runnable without ask, got {}",
-                other.debug_summary()
-            ),
-        }
-    }
-
-    #[test]
-    fn decision_deny_yields_rejected() {
-        let tool: Arc<dyn neenee_core::Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path("/x".into()),
-        });
-        let prepared = decision_to_prepare(
-            PolicyDecision::Deny {
-                output: ToolOutput::Text("no".into()),
-            },
-            "call_2".into(),
-            mkcall("write_file"),
-            tool,
-            ScopeTarget::Path("/x".into()),
-            "{}",
-        );
-        assert!(matches!(prepared, PreparedCall::Rejected { .. }));
-    }
-
-    #[test]
-    fn decision_ask_yields_runnable_with_pending_ask() {
-        let tool: Arc<dyn neenee_core::Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path("/y".into()),
-        });
-        let prepared = decision_to_prepare(
-            PolicyDecision::Ask {
-                request: neenee_core::PermissionRequest {
-                    id: String::new(),
-                    tool: "write_file".into(),
-                    label: "Write".into(),
-                    description: "".into(),
-                    arguments: "{}".into(),
-                    scope: "/y".into(),
-                    elevation: false,
-                    one_off: false,
-                },
-                rule: crate::permission_store::PermissionRule {
-                    tool: "write_file".into(),
-                    scope: "/y".into(),
-                },
-            },
-            "call_3".into(),
-            mkcall("write_file"),
-            tool,
-            ScopeTarget::Path("/y".into()),
-            "{}",
-        );
-        match prepared {
-            PreparedCall::Runnable {
-                pending_ask: Some(_),
-                ..
-            } => {}
-            other => panic!("expected Runnable with ask, got {}", other.debug_summary()),
-        }
+        Ok(!denied)
     }
 }

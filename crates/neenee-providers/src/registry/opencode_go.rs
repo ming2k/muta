@@ -1,7 +1,7 @@
 //! The `opencode-go` provider template: the opencode.ai/zen/go relay's
 //! curated OpenAI-compatible catalogue.
 
-use neenee_core::effort::{EFFORT_LOW_HIGH_MAX, EFFORT_GLM_5};
+use neenee_core::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
 use neenee_core::thinking::ThinkingSupport;
 use neenee_core::{Model, WireFormat};
 

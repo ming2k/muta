@@ -53,6 +53,7 @@ pub fn token_report_round_count(report: &TokenSourceReport) -> usize {
 /// `QueryTokenUsage` and is waiting for the daemon's report. The body then
 /// shows a loading placeholder instead of the empty-ledger copy, so a
 /// not-yet-arrived report never reads as "no usage recorded".
+#[allow(clippy::too_many_arguments)] // modal draw fns thread many context args by nature
 pub fn draw_token_report_modal(
     frame: &mut Frame,
     report: &TokenSourceReport,

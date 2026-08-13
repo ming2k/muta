@@ -1,6 +1,8 @@
-//! Tests for input handling — extracted from `mod.rs` to keep the
-//! production input code focused. Resolves via `mod tests;` and reaches
-//! the production items through `super::*` exactly as before.
+//! Tests for input handling, extracted from `mod.rs` so the production
+//! input code stays focused. This module is wired in via the
+//! `#[cfg(test)] mod tests;` declaration at the bottom of `mod.rs` and
+//! reaches the production items through `super::*`, exactly as the
+//! former inline module did.
 
 use super::*;
 use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
@@ -19,6 +21,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::Slash,
             suggestion_count: 1,
@@ -31,7 +34,13 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -62,6 +71,7 @@ fn enter_with_completion(
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: kind,
             suggestion_count,
@@ -74,7 +84,13 @@ fn enter_with_completion(
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -82,58 +98,11 @@ fn enter_with_completion(
 
 #[test]
 fn enter_executes_an_exact_slash_command() {
-    let mut input = "/pursue".to_string();
+    let mut input = "/repeat".to_string();
     assert_eq!(
         enter(&mut input, true),
-        InputAction::SendSlash("/pursue".to_string())
+        InputAction::SendSlash("/repeat".to_string())
     );
-}
-
-#[test]
-fn text_modal_commands_resolve_and_consume_composer() {
-    // Slash commands that open an interactive modal are intercepted locally:
-    // they resolve to a data-less `Open*` action (not `SendSlash`) and consume
-    // the composer text. The event loop snapshots the composer before dispatch
-    // and relies on `is_text_modal_command` to recover that text for input
-    // history + transcript recording — so these must stay in sync with the
-    // intercepted set in `process_event`.
-    for (cmd, expected) in [
-        ("/models", InputAction::OpenModels),
-        ("/connections", InputAction::OpenConnections),
-        ("/permissions", InputAction::OpenPermissions),
-        ("/tools", InputAction::OpenTools),
-        ("/mcp", InputAction::OpenMcp),
-        ("/skills", InputAction::OpenSkills),
-        ("/config", InputAction::OpenConfig),
-    ] {
-        let mut input = cmd.to_string();
-        let action = enter(&mut input, true);
-        assert_eq!(action, expected, "modal command {cmd}");
-        assert!(
-            input.is_empty(),
-            "composer must be consumed for {cmd}, got {input:?}"
-        );
-        assert!(
-            action.is_text_modal_command(),
-            "{cmd} must be flagged as a text modal command so its \
-             invocation is recorded in history + transcript"
-        );
-    }
-}
-
-#[test]
-fn keybinding_modals_are_not_text_commands() {
-    // Ctrl+R / F1 open modals via keybindings, not by typing a slash
-    // command, so they must NOT be flagged: they consume no composer text and
-    // therefore have nothing to record in input history.
-    assert!(!InputAction::OpenHistory.is_text_modal_command());
-    assert!(!InputAction::OpenHelp.is_text_modal_command());
-    // `/exit` resolves to Quit — it is not a replayable input, so it is
-    // deliberately excluded from the recorded set.
-    assert!(!InputAction::Quit.is_text_modal_command());
-    // Notification-style slash commands carry their text on the action, so the
-    // event loop records it from the action itself rather than via this hint.
-    assert!(!InputAction::SendSlash("/pursue".to_string()).is_text_modal_command());
 }
 
 #[test]
@@ -229,6 +198,7 @@ fn esc_closes_slash_completion_menu() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::Slash,
             suggestion_count: 2,
@@ -241,7 +211,13 @@ fn esc_closes_slash_completion_menu() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -267,6 +243,7 @@ fn esc_closes_path_completion_menu() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::Path,
             suggestion_count: 3,
@@ -279,7 +256,13 @@ fn esc_closes_path_completion_menu() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -304,6 +287,7 @@ fn esc_falls_through_when_no_completion_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -316,7 +300,13 @@ fn esc_falls_through_when_no_completion_is_open() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -338,6 +328,7 @@ fn typing_in_compose_returns_insert_char() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::Slash,
             suggestion_count: 2,
@@ -350,7 +341,13 @@ fn typing_in_compose_returns_insert_char() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -372,6 +369,7 @@ fn backspace_in_compose_returns_backspace_action() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::Slash,
             suggestion_count: 1,
@@ -384,7 +382,13 @@ fn backspace_in_compose_returns_backspace_action() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -395,9 +399,9 @@ fn backspace_in_compose_returns_backspace_action() {
 
 #[test]
 fn backspace_atomically_deletes_an_image_chip() {
-    // Pasting an image inserts `[Image #1 · size] ` (chip + trailing space).
-    // A single Backspace right after the space must erase both the
-    // space and the chip — mirroring codex / claude-code / opencode's
+    // Pasting an image inserts `[Image #1 · size] ` (chip + trailing
+    // space). A single Backspace right after the space must erase both
+    // the space and the chip — mirroring codex / claude-code / opencode's
     // atomic chip backspace. The reconcile pass in the event loop
     // drops the orphaned `pending_images` entry.
     let chip = crate::tui::composer_attachments::image_chip(1, 0);
@@ -410,6 +414,7 @@ fn backspace_atomically_deletes_an_image_chip() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -422,7 +427,13 @@ fn backspace_atomically_deletes_an_image_chip() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -448,6 +459,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -460,7 +472,13 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -481,6 +499,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -493,7 +512,13 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -555,6 +580,7 @@ fn enter_shell(input: &mut String) -> InputAction {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -567,7 +593,13 @@ fn enter_shell(input: &mut String) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -589,6 +621,7 @@ fn escape_returns_from_always_confirmation() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::Permission,
+            session_info_detail: false,
             is_responding: true,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -601,7 +634,13 @@ fn escape_returns_from_always_confirmation() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -619,6 +658,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -631,7 +671,13 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -639,7 +685,10 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
 }
 
 #[test]
-fn star_in_models_modal_toggles_favorite() {
+fn star_in_models_modal_toggles_model_favorite() {
+    // `*` favorites the highlighted MODEL (favorite is model-level,
+    // ADR-0046). It is a Models-only action; in the Connections list `*`
+    // falls through to the ordinary char path (inert in browse mode).
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -649,6 +698,7 @@ fn star_in_models_modal_toggles_favorite() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::Models,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -661,7 +711,13 @@ fn star_in_models_modal_toggles_favorite() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -669,9 +725,205 @@ fn star_in_models_modal_toggles_favorite() {
 }
 
 #[test]
+fn a_in_connections_modal_opens_template_chooser() {
+    // `a` in the Connections modal opens the add-provider template chooser.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Connections,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::OpenProviderTemplate);
+}
+
+#[test]
+fn enter_in_connections_modal_is_inert_no_activate_concept() {
+    // Connections is a pure management surface: it has no activate concept
+    // (switching the active provider is the Models picker's job), so Enter
+    // must not map to `ProviderPickerActivate`. It is inert in browse mode.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Connections,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+}
+
+#[test]
+fn esc_in_models_browse_closes_the_modal() {
+    // The flat Models picker has no back stage: Esc in browse mode closes
+    // it (the search sub-layer's first-Esc is `ModelExitSearch`).
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Models,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::CloseModal);
+}
+
+#[test]
+fn esc_in_connections_browse_closes_the_modal() {
+    // In the Connections list (browse mode), Esc closes the picker.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Connections,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::CloseModal);
+}
+
+#[test]
+fn star_in_connections_modal_is_inert_favorite_is_model_level() {
+    // `*` favorites a MODEL — a Models-only action (ADR-0046). In the
+    // Connections list it must not map to ToggleFavorite (it falls through
+    // to the ordinary char path, which is inert in browse mode).
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('*'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Connections,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_ne!(action, InputAction::ProviderPickerToggleFavorite);
+}
+
+#[test]
 fn letter_in_models_modal_feeds_the_fuzzy_filter() {
-    // `k` used to open the key configurator; now every letter feeds the
-    // fuzzy filter so users can search for "kimi" or "deepseek".
+    // In the model picker's search sub-layer every letter feeds the fuzzy
+    // filter so users can search for "kimi" or "deepseek". (In browse mode
+    // the same letter is inert — see `letter_in_models_browse_mode_is_inert`.)
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -681,6 +933,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::Models,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -693,7 +946,13 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: true,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -702,8 +961,60 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
 }
 
 #[test]
+fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
+    // Browse mode (no `/` yet): printable letters do not mutate the borrowed
+    // composer line; `/` is what enters the search sub-layer.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let ctx = || InputContext {
+        active_modal: crate::tui::Modal::Models,
+        session_info_detail: false,
+        is_responding: false,
+        completion_kind: crate::tui::CompletionKind::None,
+        suggestion_count: 0,
+        has_exact_suggestion: false,
+        suggestion_index: None,
+        permission_confirm_always: false,
+        permission_show_details: false,
+        in_envoy_view: false,
+        in_side_view: false,
+        has_focused_target: false,
+        has_queued: false,
+        history_searching: false,
+        model_searching: false,
+        modal_keymap_open: false,
+        editor_field: None,
+        custom_provider_field: None,
+        question_other_highlighted: false,
+        history_clear_confirm: false,
+        host_prompting: false,
+    };
+    let letter = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        ctx(),
+        &mut drag,
+    );
+    assert_eq!(letter, InputAction::None);
+    assert_eq!(input, "");
+    let slash = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        ctx(),
+        &mut drag,
+    );
+    assert_eq!(slash, InputAction::ModelEnterSearch);
+    assert_eq!(input, "");
+}
+
+#[test]
 fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
-    // Ctrl+T is a declared global binding (registry → OpenTodos).
+    // Ctrl+T is a declared global binding (registry → OpenTodos). It opens
+    // the Todos modal from the top level and is a no-op while another
+    // modal owns the surface.
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -716,6 +1027,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -728,7 +1040,13 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -742,6 +1060,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
     let mut drag = SelectionDrag::default();
     let context = InputContext {
         active_modal: crate::tui::Modal::None,
+        session_info_detail: false,
         is_responding: false,
         completion_kind: crate::tui::CompletionKind::None,
         suggestion_count: 0,
@@ -754,6 +1073,13 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         has_focused_target: false,
         has_queued: false,
         history_searching: false,
+        model_searching: false,
+        modal_keymap_open: false,
+        editor_field: None,
+        custom_provider_field: None,
+        question_other_highlighted: false,
+        history_clear_confirm: false,
+        host_prompting: false,
     };
     let action = process_event(
         Event::Key(crossterm::event::KeyEvent::new(
@@ -778,6 +1104,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::Help,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -790,7 +1117,13 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -806,6 +1139,7 @@ fn key_in_view(code: KeyCode, in_envoy_view: bool, input: &mut String) -> InputA
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -818,7 +1152,13 @@ fn key_in_view(code: KeyCode, in_envoy_view: bool, input: &mut String) -> InputA
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -834,6 +1174,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -846,7 +1187,13 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             has_focused_target: true,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -872,6 +1219,51 @@ fn tab_in_compose_without_suggestions_is_noop() {
         key_in_view(KeyCode::BackTab, false, &mut input),
         InputAction::None
     );
+}
+
+#[test]
+fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
+    // The Tab toggle for the insert/next-round send target was removed — a
+    // busy Enter always queues for the next round. With no completion,
+    // modal, or focused target, Tab must fall through to a no-op and leave
+    // the draft untouched.
+    let mut input = String::from("follow up");
+    let mut cursor = input.chars().count();
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
+            is_responding: true,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "follow up");
 }
 
 #[test]
@@ -1043,6 +1435,7 @@ fn run_key(
         cursor,
         InputContext {
             active_modal: modal,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -1054,8 +1447,20 @@ fn run_key(
             in_side_view: false,
             has_focused_target: has_focus,
             has_queued: false,
-            history_searching: false,
-            ..Default::default()
+            // Editing text in the history and model-picker modals only
+            // happens inside their search sub-layer, so treat those cases
+            // here as search mode (browse mode never reaches editing keys).
+            history_searching: modal == crate::tui::Modal::HistorySearch,
+            model_searching: matches!(
+                modal,
+                crate::tui::Modal::Models | crate::tui::Modal::Connections
+            ),
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -1153,40 +1558,230 @@ fn home_and_end_scroll_in_permission_modal() {
     );
 }
 
-fn mouse_ctx_for(modal: crate::tui::Modal) -> InputContext {
-    InputContext {
-        active_modal: modal,
-        is_responding: false,
-        completion_kind: crate::tui::CompletionKind::None,
-        suggestion_count: 0,
-        has_exact_suggestion: false,
-        suggestion_index: None,
-        permission_confirm_always: false,
-        permission_show_details: false,
-        in_envoy_view: false,
-        in_side_view: false,
-        has_focused_target: false,
-        has_queued: false,
-        history_searching: false,
+#[test]
+fn page_keys_scroll_question_modal_body() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+            crate::tui::Modal::Question,
+            false
+        ),
+        InputAction::ScrollPageUp
+    );
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::PageDown,
+            KeyModifiers::NONE,
+            crate::tui::Modal::Question,
+            false
+        ),
+        InputAction::ScrollPageDown
+    );
+}
+
+/// Every modal that paints its own scrollable body must route PageUp /
+/// PageDown to a body page-scroll action — not just the four modals the
+/// old gate covered (None / Permission / Question / OauthPending). This
+/// is the regression guard for "any modal should support scroll".
+#[test]
+fn page_keys_scroll_every_scrollable_modal_body() {
+    let scrollable = [
+        crate::tui::Modal::Help,
+        crate::tui::Modal::Activity,
+        crate::tui::Modal::Permissions,
+        crate::tui::Modal::Config,
+        crate::tui::Modal::ConfigTheme,
+        crate::tui::Modal::ConfigThemeCustom,
+        crate::tui::Modal::ConfigLayout,
+        crate::tui::Modal::TokenReport,
+        crate::tui::Modal::OauthPending,
+        crate::tui::Modal::ProviderTemplate,
+        crate::tui::Modal::CustomProvider,
+        crate::tui::Modal::Tools,
+        crate::tui::Modal::Mcp,
+        crate::tui::Modal::Skills,
+        crate::tui::Modal::Sessions,
+        crate::tui::Modal::Queue,
+        crate::tui::Modal::HistorySearch,
+        crate::tui::Modal::Connections,
+        crate::tui::Modal::Models,
+        crate::tui::Modal::Question,
+    ];
+    for modal in scrollable {
+        let mut input = String::new();
+        let mut cursor = 0;
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+                modal,
+                false
+            ),
+            InputAction::ScrollPageUp,
+            "PageUp should page-scroll the {modal:?} modal body"
+        );
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+                modal,
+                false
+            ),
+            InputAction::ScrollPageDown,
+            "PageDown should page-scroll the {modal:?} modal body"
+        );
+    }
+}
+
+/// Ctrl+↑ / Ctrl+↓ inside any scrollable modal advance the body by a page
+/// — the chord a pager/editor binds to a page jump, useful on keyboards
+/// without dedicated Page keys and consistent across every modal. Mirrors
+/// PageUp / PageDown.
+#[test]
+fn ctrl_arrows_page_scroll_modal_body() {
+    let scrollable = [
+        crate::tui::Modal::Help,
+        crate::tui::Modal::Activity,
+        crate::tui::Modal::Config,
+        crate::tui::Modal::TokenReport,
+        crate::tui::Modal::Sessions,
+        crate::tui::Modal::Queue,
+        crate::tui::Modal::HistorySearch,
+        crate::tui::Modal::Models,
+        crate::tui::Modal::Connections,
+        crate::tui::Modal::Question,
+        crate::tui::Modal::Skills,
+    ];
+    for modal in scrollable {
+        let mut input = String::new();
+        let mut cursor = 0;
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::Up,
+                KeyModifiers::CONTROL,
+                modal,
+                false
+            ),
+            InputAction::ScrollPageUp,
+            "Ctrl+Up should page-scroll the {modal:?} modal body"
+        );
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::Down,
+                KeyModifiers::CONTROL,
+                modal,
+                false
+            ),
+            InputAction::ScrollPageDown,
+            "Ctrl+Down should page-scroll the {modal:?} modal body"
+        );
+    }
+}
+
+/// On the no-modal baseline, Ctrl+↑ / Ctrl+↓ still drive transcript item
+/// focus (the established gesture), not page-scroll — the modal page-scroll
+/// arms are gated on `scrolls_own_body`, so the baseline is untouched.
+#[test]
+fn ctrl_arrows_keep_transcript_focus_on_no_modal() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Up,
+            KeyModifiers::CONTROL,
+            crate::tui::Modal::None,
+            false
+        ),
+        InputAction::FocusPrevTarget
+    );
+    assert_eq!(
+        run_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Down,
+            KeyModifiers::CONTROL,
+            crate::tui::Modal::None,
+            false
+        ),
+        InputAction::FocusNextTarget
+    );
+}
+
+/// The caret-owning text editors (ModelEditor, InputInjection) have no body
+/// scroll, so PageUp / PageDown and Ctrl+↑ / Ctrl+↓ must be inert there
+/// (no-op), not a stray page-scroll or transcript focus gesture.
+#[test]
+fn page_keys_are_inert_in_caret_editors() {
+    for modal in [
+        crate::tui::Modal::ModelEditor,
+        crate::tui::Modal::InputInjection,
+    ] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+                modal,
+                false
+            ),
+            InputAction::None,
+            "PageUp should be a no-op in {modal:?}"
+        );
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+                modal,
+                false
+            ),
+            InputAction::None,
+            "PageDown should be a no-op in {modal:?}"
+        );
+        assert_eq!(
+            run_key(
+                &mut input,
+                &mut cursor,
+                KeyCode::Up,
+                KeyModifiers::CONTROL,
+                modal,
+                false
+            ),
+            InputAction::None,
+            "Ctrl+Up should be a no-op in {modal:?}"
+        );
     }
 }
 
 #[test]
-fn mouse_wheel_scrolls_body_in_question_modal() {
-    // The wheel scrolls the question modal's *body* (its overflowing option
-    // list), decoupled from the ↑/↓ option highlight: it maps to the generic
-    // ScrollUp/ScrollDown, which the event loop translates to `question_scroll`
-    // (and clears the follow flag) — like every other scrollable modal. It must
-    // NOT move the selection cursor, and must NOT leak through to the transcript
-    // behind the modal.
-    use crossterm::event::{MouseEvent, MouseEventKind};
-
+fn mouse_wheel_scrolls_question_modal_body() {
     let mk = |kind| {
         let mut input = String::new();
         let mut cursor = 0;
         let mut drag = SelectionDrag::default();
         process_event(
-            Event::Mouse(MouseEvent {
+            Event::Mouse(crossterm::event::MouseEvent {
                 kind,
                 column: 5,
                 row: 5,
@@ -1194,41 +1789,41 @@ fn mouse_wheel_scrolls_body_in_question_modal() {
             }),
             &mut input,
             &mut cursor,
-            mouse_ctx_for(crate::tui::Modal::Question),
+            InputContext {
+                active_modal: crate::tui::Modal::Question,
+                session_info_detail: false,
+                is_responding: false,
+                completion_kind: crate::tui::CompletionKind::None,
+                suggestion_count: 0,
+                has_exact_suggestion: false,
+                suggestion_index: None,
+                permission_confirm_always: false,
+                permission_show_details: false,
+                in_envoy_view: false,
+                in_side_view: false,
+                has_focused_target: false,
+                has_queued: false,
+                history_searching: false,
+                model_searching: false,
+                modal_keymap_open: false,
+                editor_field: None,
+                custom_provider_field: None,
+                question_other_highlighted: false,
+                history_clear_confirm: false,
+                host_prompting: false,
+            },
             &mut drag,
         )
     };
 
-    assert_eq!(mk(MouseEventKind::ScrollUp), InputAction::ScrollUp);
-    assert_eq!(mk(MouseEventKind::ScrollDown), InputAction::ScrollDown);
-}
-
-#[test]
-fn mouse_wheel_still_scrolls_when_no_modal_open() {
-    // Regression guard: outside the question modal the wheel keeps its original
-    // transcript-scroll behavior.
-    use crossterm::event::{MouseEvent, MouseEventKind};
-
-    let mk = |kind| {
-        let mut input = String::new();
-        let mut cursor = 0;
-        let mut drag = SelectionDrag::default();
-        process_event(
-            Event::Mouse(MouseEvent {
-                kind,
-                column: 5,
-                row: 5,
-                modifiers: KeyModifiers::NONE,
-            }),
-            &mut input,
-            &mut cursor,
-            mouse_ctx_for(crate::tui::Modal::None),
-            &mut drag,
-        )
-    };
-
-    assert_eq!(mk(MouseEventKind::ScrollUp), InputAction::ScrollUp);
-    assert_eq!(mk(MouseEventKind::ScrollDown), InputAction::ScrollDown);
+    assert_eq!(
+        mk(crossterm::event::MouseEventKind::ScrollUp),
+        InputAction::ScrollUp
+    );
+    assert_eq!(
+        mk(crossterm::event::MouseEventKind::ScrollDown),
+        InputAction::ScrollDown
+    );
 }
 
 #[test]
@@ -1482,6 +2077,85 @@ fn ctrl_w_is_noop_in_question_modal() {
 }
 
 #[test]
+fn shift_tab_returns_to_the_previous_question() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Question,
+            session_info_detail: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::QuestionPrevious);
+}
+
+#[test]
+fn question_space_toggles_when_other_row_not_highlighted() {
+    // On a normal option row, Space toggles the option — it must not be
+    // swallowed as free text.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Question,
+            session_info_detail: false,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::QuestionToggle);
+}
+
+#[test]
+fn question_space_inserts_into_other_free_text_row() {
+    // When the synthetic "Other" free-text row is highlighted, Space is an
+    // ordinary character — it must insert into the field, not toggle.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Question,
+            session_info_detail: false,
+            question_other_highlighted: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::QuestionInsertChar(' '));
+}
+
+#[test]
 fn ctrl_u_deletes_to_line_start() {
     let mut input = "hello world".to_string();
     let mut cursor = 7;
@@ -1686,6 +2360,63 @@ fn ctrl_backspace_deletes_previous_word() {
 }
 
 #[test]
+fn f1_opens_help() {
+    // F1 is a portable help shortcut with no legacy control-byte
+    // collision, so it works under multiplexers (tmux) that strip the
+    // Kitty keyboard protocol — unlike Ctrl+H, which collapses to the
+    // Backspace byte (0x08) there.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::F(1),
+        KeyModifiers::NONE,
+        crate::tui::Modal::None,
+        false,
+    );
+    assert_eq!(action, InputAction::OpenHelp);
+}
+
+#[test]
+fn question_mark_opens_help_when_input_empty() {
+    // `?` is the conventional help key. It opens help only from the top
+    // level with an empty input box, so typing a literal `?` is never
+    // swallowed.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('?'),
+        KeyModifiers::NONE,
+        crate::tui::Modal::None,
+        false,
+    );
+    assert_eq!(action, InputAction::OpenHelp);
+    assert!(input.is_empty(), "no char inserted when opening help");
+}
+
+#[test]
+fn question_mark_inserts_when_input_nonempty() {
+    // With text already in the box, `?` is a normal character — the help
+    // shortcut only fires on an empty prompt.
+    let mut input = "what".to_string();
+    let mut cursor = 4;
+    let action = run_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('?'),
+        KeyModifiers::NONE,
+        crate::tui::Modal::None,
+        false,
+    );
+    assert_eq!(action, InputAction::InsertChar('?'));
+    assert_eq!(input, "what?");
+    assert_eq!(cursor, 5);
+}
+
+#[test]
 fn ctrl_w_works_in_history_modal() {
     // Free-text modals (history search, models, provider editor) accept the
     // same line-editing vocabulary as the main prompt so the user is
@@ -1733,10 +2464,10 @@ fn ctrl_keys_do_not_insert_literal_chars() {
     }
 }
 
-/// Drive the history-search modal with `code` (+ `modifiers`) and return
-/// the resulting action plus the final cursor position. The modal is open
-/// and the focus zone is Compose, matching the live state while the user
-/// is editing the fuzzy query.
+/// Drive the history modal's **search sub-layer** with `code` (+
+/// `modifiers`) and return the resulting action. `history_searching` is set
+/// so the modal borrows the input line as the fuzzy query — matching the
+/// live state once the user has pressed `/` to enter search.
 fn run_history_key(
     input: &mut String,
     cursor: &mut usize,
@@ -1755,6 +2486,7 @@ fn run_history_key(
         cursor,
         InputContext {
             active_modal: crate::tui::Modal::HistorySearch,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -1766,8 +2498,14 @@ fn run_history_key(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
-            history_searching: false,
-            ..Default::default()
+            history_searching: true,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -1817,6 +2555,51 @@ fn backspace_in_history_modal_trims_query() {
 }
 
 #[test]
+fn esc_in_history_panel_closes_modal_directly() {
+    // The history panel floats above a live composer that is permanently
+    // the filter field, so there is no browse/search distinction: a single
+    // Esc closes the panel outright (and the app loop restores the stashed
+    // draft). Whether or not a query is typed, the result is the same.
+    let mut input = "git".to_string();
+    let mut cursor = 3;
+    let action = run_history_key(&mut input, &mut cursor, KeyCode::Esc, KeyModifiers::NONE);
+    assert_eq!(action, InputAction::CloseModal);
+}
+
+#[test]
+fn typing_in_history_panel_inserts_into_filter() {
+    // The composer is always the live filter: a printable key splices into
+    // the query buffer and narrows the list. There is no inert browse mode.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let action = run_history_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('g'),
+        KeyModifiers::NONE,
+    );
+    assert_eq!(action, InputAction::InsertChar('g'));
+    assert_eq!(input, "g");
+    assert_eq!(cursor, 1);
+}
+
+#[test]
+fn slash_in_history_panel_inserts_literal() {
+    // `/` is just another query character — the composer is always the
+    // filter, so it splices into the buffer rather than toggling a mode.
+    let mut input = String::new();
+    let mut cursor = 0;
+    run_history_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('/'),
+        KeyModifiers::NONE,
+    );
+    assert_eq!(input, "/");
+    assert_eq!(cursor, 1);
+}
+
+#[test]
 fn enter_in_history_modal_emits_history_insert() {
     // Enter must NOT send a chat — it inserts the highlighted match into
     // the input box for further editing. The dedicated HistoryInsert
@@ -1827,130 +2610,6 @@ fn enter_in_history_modal_emits_history_insert() {
     assert_eq!(action, InputAction::HistoryInsert);
     assert_eq!(input, "go", "Enter must not consume the query");
     assert_eq!(cursor, 2);
-}
-
-#[test]
-fn ctrl_x_in_history_modal_arms_clear() {
-    // Ctrl+X inside the Ctrl+R panel arms the clear-history confirmation.
-    // It must never type an `x` into the filter.
-    let mut input = "git".to_string();
-    let mut cursor = 3;
-    let action = run_history_key(&mut input, &mut cursor, KeyCode::Char('x'), KeyModifiers::CONTROL);
-    assert_eq!(action, InputAction::HistoryClearAll);
-    assert_eq!(input, "git", "Ctrl+X must not type into the filter");
-    assert_eq!(cursor, 3);
-}
-
-#[test]
-fn ctrl_x_outside_history_modal_is_a_noop() {
-    // Nowhere else does Ctrl+X mean anything: at the top level (no modal) it
-    // must not arm the clear — a stray Ctrl+X while composing can never wipe
-    // history.
-    let mut input = "draft".to_string();
-    let mut cursor = 5;
-    let mut drag = SelectionDrag::default();
-    let action = process_event(
-        Event::Key(KeyEvent {
-            code: KeyCode::Char('x'),
-            modifiers: KeyModifiers::CONTROL,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        }),
-        &mut input,
-        &mut cursor,
-        InputContext {
-            active_modal: crate::tui::Modal::None,
-            is_responding: false,
-            completion_kind: crate::tui::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_envoy_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            has_queued: false,
-            history_searching: false,
-            ..Default::default()
-        },
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::None);
-    assert_eq!(input, "draft");
-}
-
-/// Drive the history modal with the clear-confirmation already armed (what
-/// the app loop passes after a `HistoryClearAll`), returning the action and
-/// the (unmodified) filter text — the armed question must own every key.
-fn run_history_clear_key(
-    input: &mut String,
-    cursor: &mut usize,
-    code: KeyCode,
-    modifiers: KeyModifiers,
-) -> InputAction {
-    let mut drag = SelectionDrag::default();
-    process_event(
-        Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        }),
-        input,
-        cursor,
-        InputContext {
-            active_modal: crate::tui::Modal::HistorySearch,
-            history_clear_confirm: true,
-            is_responding: false,
-            completion_kind: crate::tui::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_envoy_view: false,
-            in_side_view: false,
-            has_focused_target: false,
-            has_queued: false,
-            history_searching: false,
-            ..Default::default()
-        },
-        &mut drag,
-    )
-}
-
-#[test]
-fn armed_clear_confirm_resolves_on_y_or_enter() {
-    let mut input = "filter".to_string();
-    let mut cursor = 6;
-    assert_eq!(
-        run_history_clear_key(&mut input, &mut cursor, KeyCode::Char('y'), KeyModifiers::NONE),
-        InputAction::HistoryClearConfirm,
-        "y confirms the wipe"
-    );
-    assert_eq!(
-        run_history_clear_key(&mut input, &mut cursor, KeyCode::Enter, KeyModifiers::NONE),
-        InputAction::HistoryClearConfirm,
-        "Enter confirms the wipe"
-    );
-    assert_eq!(input, "filter", "armed confirm must not edit the filter");
-}
-
-#[test]
-fn armed_clear_confirm_cancels_on_any_other_key() {
-    let mut input = "filter".to_string();
-    let mut cursor = 6;
-    // Esc, `n`, and a plain filter letter all cancel — and none of them may
-    // type into the (soon-to-be-wiped) history.
-    for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('g')] {
-        assert_eq!(
-            run_history_clear_key(&mut input, &mut cursor, code, KeyModifiers::NONE),
-            InputAction::HistoryClearCancel,
-            "{code:?} cancels the armed clear"
-        );
-    }
-    assert_eq!(input, "filter", "cancelling must not edit the filter");
 }
 
 #[test]
@@ -1969,6 +2628,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -1981,7 +2641,13 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -1998,6 +2664,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::HistorySearch,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2010,7 +2677,13 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -2031,6 +2704,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2043,7 +2717,13 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             has_focused_target: false,
             has_queued,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -2066,6 +2746,231 @@ fn up_arrow_walks_history_when_queue_empty() {
     assert_eq!(up_with_queued(false), InputAction::HistoryPrev);
 }
 
+/// Helper: dispatch a bare `code` in the compose zone against a completion
+/// menu that reports `suggestion_count` candidates and `exact` = whether
+/// the composer text exactly matches one of them. `suggestion_index` is
+/// pinned to 0 so Tab-cycling assertions have a deterministic "next"
+/// candidate.
+fn compose_key_with_completion(
+    code: KeyCode,
+    completion_kind: crate::tui::CompletionKind,
+    suggestion_count: usize,
+    exact: bool,
+) -> InputAction {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::None,
+            is_responding: false,
+            completion_kind,
+            suggestion_count,
+            has_exact_suggestion: exact,
+            suggestion_index: Some(0),
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn arrows_navigate_completion_menu_while_command_is_partial() {
+    // A partially-typed `/` command keeps the completion menu interactive:
+    // ↑/↓ cycle its candidates (SuggestPrev/SuggestNext) rather than
+    // walking history, so the user can keep switching toward the command
+    // they want.
+    let kind = crate::tui::CompletionKind::Slash;
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Down, kind, 5, false),
+        InputAction::SuggestNext
+    );
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Up, kind, 5, false),
+        InputAction::SuggestPrev
+    );
+}
+
+#[test]
+fn arrows_walk_history_once_command_is_fully_typed() {
+    // Regression for the reported bug: once ↑/↓ has switched the composer
+    // to a fully-typed `/command`, the exact-match completion row used to
+    // pin the arrows — every press was consumed as a no-op suggestion
+    // cycle and history navigation became unreachable. A resolved command
+    // must hand ↑/↓ back to their ordinary history role.
+    let kind = crate::tui::CompletionKind::Slash;
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Down, kind, 1, true),
+        InputAction::HistoryNext,
+        "↓ on an exact-match command should keep walking history"
+    );
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Up, kind, 1, true),
+        InputAction::HistoryPrev,
+        "↑ on an exact-match command should keep walking history"
+    );
+    // Even with several candidates, an exact match (e.g. `/session`
+    // alongside the prefix-sibling `/sessions`) is resolved: arrows keep
+    // their history role instead of being captured by the popup.
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Down, kind, 2, true),
+        InputAction::HistoryNext
+    );
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Up, kind, 2, true),
+        InputAction::HistoryPrev
+    );
+}
+
+#[test]
+fn tab_does_not_cycle_completions_on_exact_command() {
+    // A fully-typed command is resolved: its popup is hidden, so Tab must
+    // not invisibly cycle sibling candidates (e.g. `/session` →
+    // `/sessions`).
+    let kind = crate::tui::CompletionKind::Slash;
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Tab, kind, 2, true),
+        InputAction::None
+    );
+
+    // A partial command still accepts the next suggestion on Tab.
+    assert_eq!(
+        compose_key_with_completion(KeyCode::Tab, kind, 2, false),
+        InputAction::AcceptSuggestion("1".to_string())
+    );
+}
+
+/// Helper: send a printable char inside the Queue modal. The queue modal
+/// is a pure browse/manage surface (no text field), so printable chars
+/// route to its management verbs rather than into a borrowed input.
+fn queue_modal_char(c: char) -> InputAction {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::SHIFT,
+        )),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Queue,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: true,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    )
+}
+
+/// Helper: send a bare (no-modifier) key inside the Queue modal. Used for
+/// Enter (re-edit) and F3 (block toggle) routing.
+fn queue_modal_key(code: KeyCode) -> InputAction {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::Queue,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: true,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn queue_modal_enter_recalls_selected_not_newest() {
+    // Enter in the Queue modal re-edits the *selected* item (the ↑/↓
+    // highlight), so it routes to the dedicated RecallQueuedSelected
+    // action rather than the top-level RecallQueued (newest) one.
+    assert_eq!(
+        queue_modal_key(KeyCode::Enter),
+        InputAction::RecallQueuedSelected
+    );
+}
+
+#[test]
+fn queue_modal_shift_d_deletes_selected() {
+    // `Shift+D` deletes the highlighted item (the queue modal
+    // auto-blocks on open, so the index can't drift mid-delete).
+    assert_eq!(queue_modal_char('D'), InputAction::QueueDelete);
+}
+
+#[test]
+fn queue_modal_k_and_j_reorder() {
+    // Vim convention: `K` toward the front (next to pop), `J` toward the
+    // tail. Routes through QueueMoveItem with the signed delta.
+    assert_eq!(
+        queue_modal_char('K'),
+        InputAction::QueueMoveItem { delta: -1 }
+    );
+    assert_eq!(
+        queue_modal_char('J'),
+        InputAction::QueueMoveItem { delta: 1 }
+    );
+}
+
+#[test]
+fn queue_modal_f3_toggles_block() {
+    // F3 is NoModal-gated in the registry, so inside the modal it falls
+    // through to the contextual arm — which honors it only in the Queue
+    // modal so the user can resume without closing the list.
+    assert_eq!(
+        queue_modal_key(KeyCode::F(3)),
+        InputAction::QueueToggleBlock
+    );
+}
+
 #[test]
 fn up_arrow_in_browse_does_not_recall_queued() {
     // Browse zone owns ↑ for step navigation; the queued-message recall
@@ -2083,6 +2988,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
         &mut cursor,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2095,7 +3001,13 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             has_focused_target: true,
             has_queued: true,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -2118,6 +3030,7 @@ fn run_paste(
         cursor,
         InputContext {
             active_modal: modal,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2129,8 +3042,19 @@ fn run_paste(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
-            history_searching: false,
-            ..Default::default()
+            // The history and model-picker modals only take text in their
+            // search sub-layer; treat those cases as search mode here.
+            history_searching: modal == crate::tui::Modal::HistorySearch,
+            model_searching: matches!(
+                modal,
+                crate::tui::Modal::Models | crate::tui::Modal::Connections
+            ),
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     )
@@ -2244,6 +3168,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
         &mut cur,
         InputContext {
             active_modal: crate::tui::Modal::None,
+            session_info_detail: false,
             is_responding: false,
             completion_kind: crate::tui::CompletionKind::None,
             suggestion_count: 0,
@@ -2256,7 +3181,13 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             has_focused_target: false,
             has_queued: false,
             history_searching: false,
-            ..Default::default()
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
         },
         &mut drag,
     );
@@ -2305,6 +3236,492 @@ fn up_arrow_clamps_column_to_shorter_line() {
     let (action, cur) = multiline_arrow(seed, start, KeyCode::Up);
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 2, "column should clamp to the first line's length");
+}
+
+// --- SgrLeakGuard -------------------------------------------------------
+
+/// Build a crossterm `Event::Key` for a single character, the form crossterm
+/// returns when it fails to reassemble a split escape sequence.
+fn leaked_char(c: char) -> Event {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState};
+    Event::Key(KeyEvent {
+        code: KeyCode::Char(c),
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    })
+}
+
+fn leaked_esc() -> Event {
+    use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+    Event::Key(KeyEvent {
+        code: KeyCode::Esc,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    })
+}
+
+/// Drive a sequence of events through a fresh guard and report how many it
+/// dropped vs accepted.
+fn drain_guard(events: &[Event]) -> (usize, usize) {
+    let mut g = SgrLeakGuard::default();
+    let mut dropped = 0;
+    let mut accepted = 0;
+    for ev in events {
+        match g.feed(ev) {
+            Feed::Drop => dropped += 1,
+            Feed::Accept => accepted += 1,
+        }
+    }
+    (accepted, dropped)
+}
+
+#[test]
+fn sgr_guard_drops_split_sgr_mouse_sequence() {
+    // The exact symptom from the field: a mouse report crossterm split into
+    // individual chars. `ESC [ < 0 ; 3 5 ; 4 6 M` — the `[ < … M` payload
+    // is dropped, but the leading Esc is *delivered* (it is a real control
+    // key, never inserted as text, and is the double-Esc interrupt path).
+    let seq: Vec<Event> = [
+        leaked_esc(),
+        leaked_char('['),
+        leaked_char('<'),
+        leaked_char('0'),
+        leaked_char(';'),
+        leaked_char('3'),
+        leaked_char('5'),
+        leaked_char(';'),
+        leaked_char('4'),
+        leaked_char('6'),
+        leaked_char('M'),
+    ]
+    .into_iter()
+    .collect();
+    let (accepted, dropped) = drain_guard(&seq);
+    assert_eq!(
+        accepted, 1,
+        "the leading Esc is delivered, the rest dropped"
+    );
+    assert_eq!(dropped, seq.len() - 1);
+}
+
+#[test]
+fn sgr_guard_drops_release_variant_lowercase_m() {
+    // SGR release uses lowercase `m`. Same coverage as the press variant:
+    // only the leading Esc is delivered.
+    let seq: Vec<Event> = [
+        leaked_esc(),
+        leaked_char('['),
+        leaked_char('<'),
+        leaked_char('3'),
+        leaked_char('5'),
+        leaked_char(';'),
+        leaked_char('5'),
+        leaked_char('6'),
+        leaked_char('m'),
+    ]
+    .into_iter()
+    .collect();
+    let (accepted, _) = drain_guard(&seq);
+    assert_eq!(accepted, 1);
+}
+
+#[test]
+fn sgr_guard_drops_run_of_split_sequences() {
+    // The real complaint showed *many* sequences back to back (resize drag).
+    // The guard must resync to idle after each terminating M/m and catch
+    // the next one too. Each sequence's leading Esc is delivered; the
+    // remaining payload bytes are swallowed.
+    let one = |b: char| {
+        vec![
+            leaked_esc(),
+            leaked_char('['),
+            leaked_char('<'),
+            leaked_char(b),
+            leaked_char(';'),
+            leaked_char('1'),
+            leaked_char('M'),
+        ]
+    };
+    let seq: Vec<Event> = [one('0'), one('3'), one('5')]
+        .into_iter()
+        .flatten()
+        .collect();
+    let (accepted, _) = drain_guard(&seq);
+    assert_eq!(accepted, 3, "each sequence delivers its leading Esc");
+}
+
+#[test]
+fn sgr_guard_passes_through_normal_typing() {
+    // Ordinary typing must be unaffected — the guard never enters a
+    // tracking state and hands every char back as Accept.
+    let seq: Vec<Event> = ['h', 'e', 'l', 'l', 'o']
+        .into_iter()
+        .map(leaked_char)
+        .collect();
+    let (accepted, dropped) = drain_guard(&seq);
+    assert_eq!(accepted, seq.len());
+    assert_eq!(dropped, 0);
+}
+
+#[test]
+fn sgr_guard_delivers_lone_esc() {
+    // Regression: a standalone Esc (e.g. the first of a double-Esc
+    // interrupt) must reach the app. The previous guard dropped it as a
+    // suspected leak prefix, which broke double-Esc interrupt entirely.
+    let mut g = SgrLeakGuard::default();
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    // Not idle: it armed the tracker so a following `[` still opens a leak.
+    assert!(!g.is_idle());
+    // A subsequent normal char aborts the tracking and is delivered too.
+    assert!(matches!(g.feed(&leaked_char('x')), Feed::Accept));
+    assert!(g.is_idle());
+}
+
+#[test]
+fn sgr_guard_delivers_double_esc() {
+    // The double-Esc interrupt path: two Escs with nothing between them.
+    // Neither is part of an SGR sequence (a real leak has `[` next, never
+    // another Esc), so both must be delivered.
+    let mut g = SgrLeakGuard::default();
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    assert!(!g.is_idle());
+}
+
+#[test]
+fn sgr_guard_recovers_from_aborted_prefix() {
+    // `ESC [` followed by something other than `<` is a real CSI (e.g. an
+    // arrow key's payload). The leading Esc is delivered; `[` is dropped
+    // (it can only be leak noise from this state); the aborting char is
+    // delivered and the guard returns to idle.
+    let mut g = SgrLeakGuard::default();
+    // ESC [ A = Up arrow, delivered as separate chars by a broken read.
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    assert!(matches!(g.feed(&leaked_char('[')), Feed::Drop));
+    // 'A' is not the SGR intro: the guard aborts and *this* event is
+    // accepted (returned to the caller to deal with), then goes idle.
+    assert!(matches!(g.feed(&leaked_char('A')), Feed::Accept));
+    assert!(g.is_idle());
+    // Subsequent normal typing is accepted.
+    assert!(matches!(g.feed(&leaked_char('x')), Feed::Accept));
+}
+
+#[test]
+fn sgr_guard_resets_on_non_key_events() {
+    // A genuine parsed mouse event or a resize resyncs the tracker, so a
+    // half-buffered prefix can't poison the next real interaction.
+    let mut g = SgrLeakGuard::default();
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    assert!(matches!(g.feed(&leaked_char('[')), Feed::Drop));
+    assert!(matches!(g.feed(&Event::Resize(80, 24)), Feed::Accept));
+    assert!(g.is_idle());
+    assert!(matches!(g.feed(&leaked_char('x')), Feed::Accept));
+}
+
+#[test]
+fn sgr_guard_survives_garbage_inside_payload() {
+    // A malformed payload (non-digit, non-;) while inside an SGR sequence
+    // resyncs to idle instead of swallowing arbitrary following text.
+    let mut g = SgrLeakGuard::default();
+    assert!(matches!(g.feed(&leaked_esc()), Feed::Accept));
+    assert!(matches!(g.feed(&leaked_char('[')), Feed::Drop));
+    assert!(matches!(g.feed(&leaked_char('<')), Feed::Drop));
+    // A letter that is not the terminator: abort and resync.
+    assert!(matches!(g.feed(&leaked_char('Z')), Feed::Accept));
+    assert!(g.is_idle());
+}
+
+// The OAuth pending sheet shows a device verification code + URL that the
+// user must copy. Mouse drag-select does not reach modal body text, so `c`
+// / `u` are the only in-app copy path — guard against regressions.
+fn oauth_key(c: char) -> InputAction {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::OauthPending,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::Slash,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn oauth_pending_c_copies_user_code() {
+    assert_eq!(
+        oauth_key('c'),
+        InputAction::CopyOauthContent {
+            target: OauthCopyTarget::UserCode
+        }
+    );
+}
+
+#[test]
+fn oauth_pending_u_copies_url() {
+    assert_eq!(
+        oauth_key('u'),
+        InputAction::CopyOauthContent {
+            target: OauthCopyTarget::Url
+        }
+    );
+}
+
+#[test]
+fn text_modal_commands_resolve_and_consume_composer() {
+    // Slash commands that open an interactive modal are intercepted locally:
+    // they resolve to a data-less `Open*` action (not `SendSlash`) and consume
+    // the composer text. The event loop snapshots the composer before dispatch
+    // and relies on `is_text_modal_command` to recover that text for input
+    // history + transcript recording — so these must stay in sync with the
+    // intercepted set in `process_event`.
+    for (cmd, expected) in [
+        ("/models", InputAction::OpenModels),
+        ("/connections", InputAction::OpenConnections),
+        ("/permissions", InputAction::OpenPermissions),
+        ("/tools", InputAction::OpenTools),
+        ("/mcp", InputAction::OpenMcp),
+        ("/skills", InputAction::OpenSkills),
+        ("/config", InputAction::OpenConfig),
+    ] {
+        let mut input = cmd.to_string();
+        let action = enter(&mut input, true);
+        assert_eq!(action, expected, "modal command {cmd}");
+        assert!(
+            input.is_empty(),
+            "composer must be consumed for {cmd}, got {input:?}"
+        );
+        assert!(
+            action.is_text_modal_command(),
+            "{cmd} must be flagged as a text modal command so its \
+             invocation is recorded in history + transcript"
+        );
+    }
+}
+
+#[test]
+fn keybinding_modals_are_not_text_commands() {
+    // Ctrl+R / F1 open modals via keybindings, not by typing a slash
+    // command, so they must NOT be flagged: they consume no composer text and
+    // therefore have nothing to record in input history.
+    assert!(!InputAction::OpenHistory.is_text_modal_command());
+    assert!(!InputAction::OpenHelp.is_text_modal_command());
+    // `/exit` resolves to Quit — it is not a replayable input, so it is
+    // deliberately excluded from the recorded set.
+    assert!(!InputAction::Quit.is_text_modal_command());
+    // Notification-style slash commands carry their text on the action, so the
+    // event loop records it from the action itself rather than via this hint.
+    assert!(!InputAction::SendSlash("/pursue".to_string()).is_text_modal_command());
+}
+
+fn mouse_ctx_for(modal: crate::tui::Modal) -> InputContext {
+    InputContext {
+        active_modal: modal,
+        is_responding: false,
+        completion_kind: crate::tui::CompletionKind::None,
+        suggestion_count: 0,
+        has_exact_suggestion: false,
+        suggestion_index: None,
+        permission_confirm_always: false,
+        permission_show_details: false,
+        in_envoy_view: false,
+        in_side_view: false,
+        has_focused_target: false,
+        has_queued: false,
+        history_searching: false,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn mouse_wheel_still_scrolls_when_no_modal_open() {
+    // Regression guard: outside the question modal the wheel keeps its original
+    // transcript-scroll behavior.
+    use crossterm::event::{MouseEvent, MouseEventKind};
+
+    let mk = |kind| {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        process_event(
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 5,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &mut input,
+            &mut cursor,
+            mouse_ctx_for(crate::tui::Modal::None),
+            &mut drag,
+        )
+    };
+
+    assert_eq!(mk(MouseEventKind::ScrollUp), InputAction::ScrollUp);
+    assert_eq!(mk(MouseEventKind::ScrollDown), InputAction::ScrollDown);
+}
+
+#[test]
+fn ctrl_x_in_history_modal_arms_clear() {
+    // Ctrl+X inside the Ctrl+R panel arms the clear-history confirmation.
+    // It must never type an `x` into the filter.
+    let mut input = "git".to_string();
+    let mut cursor = 3;
+    let action = run_history_key(
+        &mut input,
+        &mut cursor,
+        KeyCode::Char('x'),
+        KeyModifiers::CONTROL,
+    );
+    assert_eq!(action, InputAction::HistoryClearAll);
+    assert_eq!(input, "git", "Ctrl+X must not type into the filter");
+    assert_eq!(cursor, 3);
+}
+
+#[test]
+fn ctrl_x_outside_history_modal_is_a_noop() {
+    // Nowhere else does Ctrl+X mean anything: at the top level (no modal) it
+    // must not arm the clear — a stray Ctrl+X while composing can never wipe
+    // history.
+    let mut input = "draft".to_string();
+    let mut cursor = 5;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::None,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
+    assert_eq!(input, "draft");
+}
+
+/// Drive the history modal with the clear-confirmation already armed (what
+/// the app loop passes after a `HistoryClearAll`), returning the action and
+/// the (unmodified) filter text — the armed question must own every key.
+fn run_history_clear_key(
+    input: &mut String,
+    cursor: &mut usize,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> InputAction {
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        input,
+        cursor,
+        InputContext {
+            active_modal: crate::tui::Modal::HistorySearch,
+            history_clear_confirm: true,
+            is_responding: false,
+            completion_kind: crate::tui::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn armed_clear_confirm_resolves_on_y_or_enter() {
+    let mut input = "filter".to_string();
+    let mut cursor = 6;
+    assert_eq!(
+        run_history_clear_key(
+            &mut input,
+            &mut cursor,
+            KeyCode::Char('y'),
+            KeyModifiers::NONE
+        ),
+        InputAction::HistoryClearConfirm,
+        "y confirms the wipe"
+    );
+    assert_eq!(
+        run_history_clear_key(&mut input, &mut cursor, KeyCode::Enter, KeyModifiers::NONE),
+        InputAction::HistoryClearConfirm,
+        "Enter confirms the wipe"
+    );
+    assert_eq!(input, "filter", "armed confirm must not edit the filter");
+}
+
+#[test]
+fn armed_clear_confirm_cancels_on_any_other_key() {
+    let mut input = "filter".to_string();
+    let mut cursor = 6;
+    // Esc, `n`, and a plain filter letter all cancel — and none of them may
+    // type into the (soon-to-be-wiped) history.
+    for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('g')] {
+        assert_eq!(
+            run_history_clear_key(&mut input, &mut cursor, code, KeyModifiers::NONE),
+            InputAction::HistoryClearCancel,
+            "{code:?} cancels the armed clear"
+        );
+    }
+    assert_eq!(input, "filter", "cancelling must not edit the filter");
 }
 
 #[test]
@@ -2399,4 +3816,3 @@ fn digit_jump_is_scoped_to_the_effort_field() {
     );
     assert_eq!(key, "sk-5");
 }
-

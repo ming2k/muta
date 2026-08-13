@@ -792,6 +792,9 @@ mod tests {
     /// profile — the permission broker is the principal's gate, not the
     /// envoy's. Pins the value so ADR-0086's `autopilot: false` cannot
     /// silently come back.
+    // The assertion is constant by design: it pins the compiled-in `CODE`
+    // profile value (see the doc comment above), not a computed property.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn code_profile_runs_autopilot() {
         use crate::CODE;

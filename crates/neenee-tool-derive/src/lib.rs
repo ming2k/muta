@@ -6,15 +6,26 @@
 //! from the struct's fields, so the schema and the parsed type can never drift
 //! (the failure mode of hand-written `fn parameters()`).
 //!
-//! Supported field types: `String`, `bool`, `i32`/`i64`/`u32`/`u64`/`usize`
-//! (→ integer), `f32`/`f64` (→ number), `Option<T>` (optional, unwraps T),
-//! `Vec<T>` (array of T). Field attributes: `#[tool(desc = "...")]` sets the
-//! description; fields without it get no description.
+//! Supported field types: `String`/`&str` (→ string), `bool` (→ boolean),
+//! `i8`–`i64`/`u8`–`u64`/`isize`/`usize` (→ integer), `f32`/`f64` (→ number),
+//! `Option<T>` (optional: unwraps to T's schema, absent from `required`), and
+//! `Vec<T>` (→ array with a typed `items` when T is one of those scalars).
+//! Any other type — nested structs, maps, arrays of them — falls back to
+//! `"object"`.
+//!
+//! Field attributes: `#[tool(desc = "...")]` sets the property description;
+//! fields without it get no `description` key. Any other key inside
+//! `#[tool(...)]` is a compile error — silently ignoring a typo'd key is how
+//! `desc` itself once broke. Generic structs (type parameters, lifetimes,
+//! where clauses) derive fine; the generated schema simply ignores the
+//! parameters.
 //!
 //! This is deliberately a small, dependency-light macro (syn/quote only — no
 //! `schemars` runtime) so the schema shape is fully visible and auditable in
 //! generated code. Tools adopt it incrementally; hand-written schemas remain
 //! valid.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -23,103 +34,140 @@ use syn::{Data, DeriveInput, Fields, Type, parse_macro_input};
 #[proc_macro_derive(ToolSchema, attributes(tool))]
 pub fn tool_schema_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+    expand(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// The expansion, split out from the proc-macro entry so unit tests can drive
+/// it with `proc_macro2` token streams (`proc_macro::TokenStream` only exists
+/// inside a real macro invocation).
+fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
-    let fields = match &input.data {
-        Data::Struct(s) => match &s.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
-                return syn::Error::new_spanned(
-                    &input,
-                    "ToolSchema only supports structs with named fields",
-                )
-                .to_compile_error()
-                .into();
-            }
-        },
-        _ => {
-            return syn::Error::new_spanned(&input, "ToolSchema only supports structs")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    // Build (field_name, json_type, description, is_required) per field.
-    let mut field_entries = Vec::new();
-    for f in fields {
-        let ident = f.ident.as_ref().unwrap();
-        let field_name = ident.to_string();
-        let (json_type, optional) = rust_type_to_json(&f.ty);
-        let desc = f.attrs.iter().find_map(|a| {
-            if a.path().is_ident("tool") {
-                a.parse_args::<syn::LitStr>().ok().map(|s| s.value())
-            } else {
-                None
-            }
-        });
-        field_entries.push((field_name, json_type, desc, optional, ident));
-    }
-
-    // Generate the properties map and required array as token streams built
-    // from serde_json::json! at runtime — simplest correct approach.
-    let properties_builder = field_entries.iter().map(|(fname, jtype, desc, _, _)| {
-        let fname = fname;
-        match desc {
-            Some(d) => quote! {
-                props.insert(
-                    #fname.to_string(),
-                    serde_json::json!({"type": #jtype, "description": #d}),
-                );
-            },
-            None => quote! {
-                props.insert(
-                    #fname.to_string(),
-                    serde_json::json!({"type": #jtype}),
-                );
-            },
-        }
-    });
-    let required_names: Vec<&String> = field_entries
-        .iter()
-        .filter(|(_, _, _, opt, _)| !opt)
-        .map(|(n, _, _, _, _)| n)
-        .collect();
-
-    let expanded = quote! {
-        impl #name {
+    let schema_tokens = value_to_tokens(&build_schema(&input)?);
+    // Carry generics and the where clause onto the impl so generic structs
+    // produce compilable code; the schema itself never references them.
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    Ok(quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
             /// The draft-07 JSON Schema for this struct's fields, in the shape a
             /// tool advertises to the model (`{type:object, properties, required}`).
             /// Generated by `#[derive(ToolSchema)]` — never hand-written.
             pub fn parameters_schema() -> serde_json::Value {
-                let mut props = serde_json::Map::new();
-                #(#properties_builder)*
-                serde_json::json!({
-                    "type": "object",
-                    "properties": props,
-                    "required": [#(#required_names),*],
-                    "additionalProperties": false,
-                })
+                serde_json::json!(#schema_tokens)
             }
         }
-    };
-    expanded.into()
+    })
 }
 
-/// Map a Rust type to its JSON-Schema type string, returning (type, optional).
-fn rust_type_to_json(ty: &Type) -> (&'static str, bool) {
-    let s = type_to_string(ty);
-    // Option<T> → unwrap inner, mark optional.
-    if let Some(inner) = strip_option(ty) {
-        let (jt, _) = rust_type_to_json(inner);
-        return (jt, true);
-    }
-    match s.as_str() {
-        "String" | "&str" => ("string", false),
-        "bool" => ("boolean", false),
-        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
-            ("integer", false)
+/// Build the draft-07 schema for the deriving struct. Pure data in / data out,
+/// so the unit tests assert against the schema itself rather than token
+/// strings; `expand` then re-emits it as one `serde_json::json!` literal.
+fn build_schema(input: &DeriveInput) -> syn::Result<serde_json::Value> {
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<serde_json::Value> = Vec::new();
+    for field in named_fields(input)? {
+        let ident = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new_spanned(field, "ToolSchema requires named fields"))?;
+        let name = ident.to_string();
+        let (mut prop, optional) = json_type(&field.ty);
+        if let Some(desc) = tool_description(field)? {
+            prop["description"] = desc.into();
         }
-        "f32" | "f64" => ("number", false),
-        _ => ("object", false), // fallback for nested structs / maps
+        if !optional {
+            required.push(name.clone().into());
+        }
+        properties.insert(name, prop);
+    }
+    Ok(serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": false,
+    }))
+}
+
+/// The struct's named fields, or an error for anything else (enums, unions,
+/// tuple/unit structs).
+fn named_fields(
+    input: &DeriveInput,
+) -> syn::Result<&syn::punctuated::Punctuated<syn::Field, syn::Token![,]>> {
+    match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => Ok(&named.named),
+            _ => Err(syn::Error::new_spanned(
+                input,
+                "ToolSchema only supports structs with named fields",
+            )),
+        },
+        _ => Err(syn::Error::new_spanned(
+            input,
+            "ToolSchema only supports structs",
+        )),
+    }
+}
+
+/// Extract `desc` from a field's `#[tool(desc = "...")]` attribute(s). Unknown
+/// keys inside `#[tool(...)]` are a hard error rather than silently ignored.
+fn tool_description(field: &syn::Field) -> syn::Result<Option<String>> {
+    let mut desc = None;
+    for attr in field.attrs.iter().filter(|a| a.path().is_ident("tool")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("desc") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                desc = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error("unsupported `tool` attribute; expected `desc = \"...\"`"))
+            }
+        })?;
+    }
+    Ok(desc)
+}
+
+/// Map a Rust field type to its property schema plus whether the field is
+/// optional. `Option<T>` unwraps to T's schema and is optional; `Vec<T>`
+/// becomes a typed array when T maps to a JSON scalar; everything else falls
+/// back to `"object"`.
+fn json_type(ty: &Type) -> (serde_json::Value, bool) {
+    if let Some(inner) = strip_single_generic_arg(ty, "Option") {
+        let (schema, _) = json_type(inner);
+        return (schema, true);
+    }
+    if let Some(inner) = strip_single_generic_arg(ty, "Vec") {
+        return match scalar_json_type(inner) {
+            Some(item) => (
+                serde_json::json!({"type": "array", "items": {"type": item}}),
+                false,
+            ),
+            // Arrays of nested structs/maps fall back like the structs do.
+            None => (serde_json::json!({"type": "object"}), false),
+        };
+    }
+    let scalar = scalar_json_type(ty).unwrap_or("object");
+    (serde_json::json!({"type": scalar}), false)
+}
+
+/// The JSON-Schema scalar type for a Rust primitive, or `None` for anything
+/// else (nested structs, maps — those fall back to `"object"`).
+fn scalar_json_type(ty: &Type) -> Option<&'static str> {
+    // `&str` (any lifetime) is a string; other references are not scalar.
+    if let Type::Reference(r) = ty {
+        return match &*r.elem {
+            Type::Path(p) if p.path.is_ident("str") => Some("string"),
+            _ => None,
+        };
+    }
+    match type_to_string(ty).as_str() {
+        "String" => Some("string"),
+        "bool" => Some("boolean"),
+        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+            Some("integer")
+        }
+        "f32" | "f64" => Some("number"),
+        _ => None,
     }
 }
 
@@ -127,14 +175,14 @@ fn type_to_string(ty: &Type) -> String {
     quote::quote!(#ty).to_string().replace(' ', "")
 }
 
-/// If `ty` is `Option<T>`, return the inner `T`.
-fn strip_option(ty: &Type) -> Option<&Type> {
+/// If `ty` is `<ident><T>` (e.g. `Option<T>` / `Vec<T>`), return the inner `T`.
+fn strip_single_generic_arg<'a>(ty: &'a Type, ident: &str) -> Option<&'a Type> {
     let path = match ty {
         Type::Path(p) => &p.path,
         _ => return None,
     };
     let last = path.segments.last()?;
-    if last.ident != "Option" {
+    if last.ident != ident {
         return None;
     }
     let args = match &last.arguments {
@@ -145,5 +193,258 @@ fn strip_option(ty: &Type) -> Option<&Type> {
         Some(inner)
     } else {
         None
+    }
+}
+
+/// Turn a `serde_json::Value` into tokens that `serde_json::json!` re-parses
+/// into the same value. The schema is computed at expansion time, so the
+/// generated method body is a single literal.
+fn value_to_tokens(value: &serde_json::Value) -> proc_macro2::TokenStream {
+    match value {
+        serde_json::Value::Object(map) => {
+            let entries = map.iter().map(|(key, value)| {
+                let value = value_to_tokens(value);
+                quote!(#key: #value)
+            });
+            quote!({ #(#entries),* })
+        }
+        serde_json::Value::Array(items) => {
+            let items = items.iter().map(value_to_tokens);
+            quote!([ #(#items),* ])
+        }
+        serde_json::Value::String(s) => quote!(#s),
+        serde_json::Value::Bool(b) => quote!(#b),
+        serde_json::Value::Number(n) => {
+            // A `Number` wraps exactly one of i64/u64/f64 (finite only).
+            if let Some(i) = n.as_i64() {
+                quote!(#i)
+            } else if let Some(u) = n.as_u64() {
+                quote!(#u)
+            } else {
+                let f = n.as_f64().unwrap_or_default();
+                quote!(#f)
+            }
+        }
+        serde_json::Value::Null => quote!(null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use syn::parse_quote;
+
+    fn schema_of(input: DeriveInput) -> Value {
+        build_schema(&input).expect("schema build should succeed")
+    }
+
+    #[test]
+    fn desc_appears_in_schema() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                #[tool(desc = "Absolute path to the file")]
+                path: String,
+            }
+        });
+        assert_eq!(
+            schema["properties"]["path"]["description"],
+            json!("Absolute path to the file")
+        );
+        assert_eq!(schema["properties"]["path"]["type"], json!("string"));
+    }
+
+    #[test]
+    fn field_without_desc_has_no_description_key() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                path: String,
+            }
+        });
+        assert!(schema["properties"]["path"].get("description").is_none());
+    }
+
+    #[test]
+    fn vec_of_scalars_becomes_typed_array() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                tags: Vec<String>,
+                counts: Option<Vec<i64>>,
+            }
+        });
+        assert_eq!(
+            schema["properties"]["tags"],
+            json!({"type": "array", "items": {"type": "string"}})
+        );
+        // Option<Vec<T>> unwraps to the array schema and stays optional.
+        assert_eq!(
+            schema["properties"]["counts"],
+            json!({"type": "array", "items": {"type": "integer"}})
+        );
+        assert_eq!(schema["required"], json!(["tags"]));
+    }
+
+    #[test]
+    fn vec_of_non_scalars_falls_back_to_object() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                items: Vec<Nested>,
+            }
+        });
+        assert_eq!(schema["properties"]["items"], json!({"type": "object"}));
+    }
+
+    #[test]
+    fn option_fields_are_optional_and_unwrapped() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                path: String,
+                offset: Option<i64>,
+                verbose: Option<bool>,
+            }
+        });
+        assert_eq!(schema["required"], json!(["path"]));
+        assert_eq!(schema["properties"]["offset"]["type"], json!("integer"));
+        assert_eq!(schema["properties"]["verbose"]["type"], json!("boolean"));
+    }
+
+    #[test]
+    fn non_option_fields_are_required_in_declaration_order() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                name: String,
+                count: u32,
+                ratio: f64,
+            }
+        });
+        assert_eq!(schema["required"], json!(["name", "count", "ratio"]));
+        assert_eq!(schema["properties"]["count"]["type"], json!("integer"));
+        assert_eq!(schema["properties"]["ratio"]["type"], json!("number"));
+    }
+
+    #[test]
+    fn schema_shape_is_a_closed_object() {
+        let schema = schema_of(parse_quote! {
+            struct Args {
+                path: String,
+            }
+        });
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn read_args_like_struct_matches_expected_schema() {
+        // Mirrors the `ReadArgs` derive in neenee-agent's read.rs, including
+        // the multi-line attribute form.
+        let schema = schema_of(parse_quote! {
+            struct ReadArgs {
+                #[tool(desc = "Absolute or relative path to the file")]
+                path: String,
+                #[tool(desc = "1-based line to start reading from (default 1)")]
+                offset: Option<i64>,
+                #[tool(
+                    desc = "Maximum number of lines to read (default: to EOF / until the byte budget is hit)"
+                )]
+                limit: Option<i64>,
+            }
+        });
+        assert_eq!(
+            schema,
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or relative path to the file",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "1-based line to start reading from (default 1)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to read (default: to EOF / until the byte budget is hit)",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": false,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_enums_and_tuple_structs() {
+        let enum_input: DeriveInput = parse_quote! {
+            enum Args {
+                A,
+            }
+        };
+        assert!(build_schema(&enum_input).is_err());
+        let tuple_input: DeriveInput = parse_quote! {
+            struct Args(String);
+        };
+        assert!(build_schema(&tuple_input).is_err());
+    }
+
+    #[test]
+    fn unknown_tool_attribute_key_is_an_error() {
+        let input: DeriveInput = parse_quote! {
+            struct Args {
+                #[tool(description = "typo")]
+                path: String,
+            }
+        };
+        assert!(build_schema(&input).is_err());
+    }
+
+    #[test]
+    fn expansion_keeps_generics_and_where_clause() {
+        let input: DeriveInput = parse_quote! {
+            struct Paged<T>
+            where
+                T: Clone,
+            {
+                items: Vec<String>,
+                marker: Option<T>,
+            }
+        };
+        let tokens = expand(input)
+            .expect("expansion should succeed")
+            .to_string()
+            .replace(' ', "");
+        assert!(tokens.contains("impl<T>Paged<T>whereT:Clone"));
+        assert!(tokens.contains("parameters_schema"));
+    }
+
+    #[test]
+    fn expansion_keeps_lifetimes_and_maps_str_references() {
+        let input: DeriveInput = parse_quote! {
+            struct Borrowed<'a> {
+                name: &'a str,
+            }
+        };
+        let schema = build_schema(&input).expect("schema build should succeed");
+        assert_eq!(schema["properties"]["name"]["type"], json!("string"));
+        let tokens = expand(input)
+            .expect("expansion should succeed")
+            .to_string()
+            .replace(' ', "");
+        assert!(tokens.contains("impl<'a>Borrowed<'a>"));
+    }
+
+    #[test]
+    fn expansion_embeds_schema_as_one_json_literal() {
+        let tokens = expand(parse_quote! {
+            struct Args {
+                #[tool(desc = "the path")]
+                path: String,
+            }
+        })
+        .expect("expansion should succeed")
+        .to_string();
+        assert!(tokens.contains("serde_json :: json !"));
+        assert!(tokens.contains("\"the path\""));
+        assert!(tokens.contains("additionalProperties"));
     }
 }

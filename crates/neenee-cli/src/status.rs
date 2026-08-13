@@ -132,13 +132,12 @@ pub(crate) fn table(snapshot: &MonitorSnapshot) -> String {
     out
 }
 
-/// How the row's session is driven: `hosted` rows the host can serve to
-/// `attach` clients; `⇢` marks a mirrored standalone TUI (ADR-0095) — visible
-/// here, drivable only at its own terminal.
+/// How the row's session is driven. Since ADR-0096 every session is
+/// daemon-held, so this is always `hosted`; the column stays so older
+/// daemons' rows (which may omit `hosting`) still render.
 fn hosting_cell(row: &MonitoredSession) -> String {
     match row.hosting {
         SessionHosting::Hosted => "hosted".to_string(),
-        SessionHosting::Mirrored => "⇢ mirror".to_string(),
     }
 }
 
@@ -225,16 +224,16 @@ pub(crate) async fn monitor_stream(
     // transport policy as `remote::connect`/`remote::control`, so the monitor
     // stream works against a UDS-only daemon.
     #[cfg(unix)]
-    if let Some(uds) = &info.uds_path {
-        if let Ok(stream) = tokio::net::UnixStream::connect(uds).await {
-            let request = "ws://localhost/"
-                .into_client_request()
-                .map_err(|e| format!("bad uds ws request: {e}"))?;
-            let (ws, _) = tokio_tungstenite::client_async(request, stream)
-                .await
-                .map_err(|e| format!("ws handshake over uds: {e}"))?;
-            return finish_monitor(ws.split(), action, "uds").await;
-        }
+    if let Some(uds) = &info.uds_path
+        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    {
+        let request = "ws://localhost/"
+            .into_client_request()
+            .map_err(|e| format!("bad uds ws request: {e}"))?;
+        let (ws, _) = tokio_tungstenite::client_async(request, stream)
+            .await
+            .map_err(|e| format!("ws handshake over uds: {e}"))?;
+        return finish_monitor(ws.split(), action, "uds").await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
@@ -270,6 +269,8 @@ where
 
     let select = serde_json::to_string(&Wire::Select {
         action: neenee_transport::serve::AttachAction::Monitor(action),
+        // Monitor streams are host-wide; no project scope applies.
+        project: None,
     })
     .map_err(|e| format!("serialize select: {e}"))?;
     ws_sink

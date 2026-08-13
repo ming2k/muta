@@ -112,16 +112,16 @@ pub async fn connect(info: &ServeInfo, action: AttachAction) -> Result<Handshake
     // Prefer the Unix domain socket (the daemon's primary local channel,
     // ADR-0096); fall back to TCP for exposed/legacy deployments.
     #[cfg(unix)]
-    if let Some(uds) = &info.uds_path {
-        if let Ok(stream) = tokio::net::UnixStream::connect(uds).await {
-            let request = "ws://localhost/"
-                .into_client_request()
-                .map_err(|e| format!("bad uds ws request: {e}"))?;
-            let (ws, _) = tokio_tungstenite::client_async(request, stream)
-                .await
-                .map_err(|e| format!("ws handshake over uds: {e}"))?;
-            return finish_handshake(ws.split(), action).await;
-        }
+    if let Some(uds) = &info.uds_path
+        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    {
+        let request = "ws://localhost/"
+            .into_client_request()
+            .map_err(|e| format!("bad uds ws request: {e}"))?;
+        let (ws, _) = tokio_tungstenite::client_async(request, stream)
+            .await
+            .map_err(|e| format!("ws handshake over uds: {e}"))?;
+        return finish_handshake(ws.split(), action).await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
@@ -152,7 +152,13 @@ where
 {
     let (mut ws_sink, mut ws_source) = parts;
 
-    let select = serde_json::to_string(&Wire::Select { action })
+    // Declare this client's working directory so the daemon scopes a fresh or
+    // auto-attached session to the project the user actually invoked us in —
+    // the daemon's own cwd is whatever the first client that spawned it
+    // happened to use. A daemon predating the field ignores it; a failed cwd
+    // read degrades to the daemon's fallback.
+    let project = std::env::current_dir().ok();
+    let select = serde_json::to_string(&Wire::Select { action, project })
         .map_err(|e| format!("serialize select: {e}"))?;
     ws_sink
         .send(WsMessage::Text(select.into()))
@@ -308,8 +314,13 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let (mut ws_sink, mut ws_source) = parts;
-    let select = serde_json::to_string(&Wire::Select { action })
-        .map_err(|e| format!("serialize control select: {e}"))?;
+    // Control verbs carry their own scope (`CreateSession::project`); the
+    // daemon never consults a select-level project for them.
+    let select = serde_json::to_string(&Wire::Select {
+        action,
+        project: None,
+    })
+    .map_err(|e| format!("serialize control select: {e}"))?;
     ws_sink
         .send(WsMessage::Text(select.into()))
         .await

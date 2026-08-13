@@ -547,7 +547,7 @@ impl App {
             .collect();
         }
 
-        if current.starts_with('/') {
+        if let Some(trigger) = current.strip_prefix('/') {
             // Trigger-word steering ("did you mean …"): when the whole token
             // is a known trigger (`/clear`, `/reset`, `/continue`, …) pin the
             // suggested command on top of the popup — ahead of any real
@@ -557,7 +557,7 @@ impl App {
             // input to the target command. Only the bare top-level token is
             // consulted, so subcommand arguments (`/permissions clear`) never
             // trigger it.
-            let suggestion = crate::startup::suggest_for_trigger(&current[1..])
+            let suggestion = crate::startup::suggest_for_trigger(trigger)
                 .map(|(target, reason)| Completion::whole_input(target, reason, self.input.len()));
             return suggestion
                 .into_iter()

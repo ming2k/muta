@@ -4,10 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use neenee_core::{
-    AgentRequest, AgentResponse, MirrorHello, MonitorAction, MonitorEvent, MonitoredSession,
-    RoundEvent, SessionHosting, SessionStatus,
-};
+use neenee_core::{AgentRequest, AgentResponse, MonitorAction, MonitorEvent, RoundEvent};
 use neenee_persistence::session::SessionStore;
 use neenee_transport::monitor::MonitorTracker;
 use neenee_transport::registry::{HostedSession, SessionRegistry};
@@ -70,7 +67,7 @@ async fn prehosted(
                 guard.observe(&response);
                 guard.row()
             };
-            let _ = registry_for_tap.publish_for_test(MonitorEvent::SessionUpdated(row));
+            registry_for_tap.publish_for_test(MonitorEvent::SessionUpdated(row));
             if matches!(
                 response,
                 AgentResponse::ProviderSwitched { .. }
@@ -91,9 +88,40 @@ async fn prehosted(
             tracker,
             sync_buffer,
             created_at: std::time::Instant::now(),
+            agent_for_session_end: None,
         })
         .await;
     (registry, req_rx, bc_tx)
+}
+
+/// Host a throwaway session rooted at `project`, returning its id. Unlike
+/// [`prehosted`] this takes the project explicitly and skips the
+/// broadcast-tap: project-scoping tests need several hosted sessions with
+/// distinct roots in one registry, and only the registry's project index
+/// matters for them.
+async fn host_with_project(registry: &SessionRegistry, project: std::path::PathBuf) -> String {
+    let session = Arc::new(SessionStore::load_for_project(project.clone()));
+    let id = session.id().await;
+    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
+    let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+        idle_base(id.clone()),
+        neenee_core::SessionStatus::Idle,
+    )));
+    registry
+        .host(HostedSession {
+            project_root: project,
+            session,
+            req_tx,
+            events: bc_tx,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tracker,
+            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            created_at: std::time::Instant::now(),
+            agent_for_session_end: None,
+        })
+        .await;
+    id
 }
 
 #[tokio::test]
@@ -112,6 +140,7 @@ async fn test_select_then_attach_round_trip() {
         .unwrap();
     let select = serde_json::to_string(&Wire::Select {
         action: AttachAction::Attach(None),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -220,6 +249,7 @@ async fn attach_receives_restored_todos_after_welcome() {
         .unwrap();
     let select = serde_json::to_string(&Wire::Select {
         action: AttachAction::Attach(None),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -289,6 +319,7 @@ async fn attach_receives_buffered_provider_state_after_welcome() {
     ws.send(WsMessage::Text(
         serde_json::to_string(&Wire::Select {
             action: AttachAction::Attach(None),
+            project: None,
         })
         .unwrap()
         .into(),
@@ -340,6 +371,7 @@ async fn unknown_id_is_an_error() {
         .unwrap();
     let select = serde_json::to_string(&Wire::Select {
         action: AttachAction::Attach(Some("nope".into())),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -352,6 +384,86 @@ async fn unknown_id_is_an_error() {
     match parsed {
         Wire::Error { message } => assert!(message.contains("nope")),
         other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+/// Project scoping (ADR-0096): the Select frame's optional `project` declares
+/// the caller's working directory, and auto-attach must resolve inside THAT
+/// project — not the daemon process's cwd, which is whatever the first client
+/// that spawned the daemon happened to use. `New` creation and lazy resume
+/// are scoped by the same value (`registry::SessionRegistry::resolve`).
+#[tokio::test]
+async fn select_project_scopes_auto_attach() {
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let project_a = std::env::temp_dir().join(format!("neenee-scope-a-{}", uuid::Uuid::new_v4()));
+    let project_b = std::env::temp_dir().join(format!("neenee-scope-b-{}", uuid::Uuid::new_v4()));
+    let id_a = host_with_project(&registry, project_a.clone()).await;
+    let _id_b = host_with_project(&registry, project_b).await;
+
+    let handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.port.await.unwrap();
+    let _ = handle;
+
+    // Two hosted sessions, neither rooted at the daemon's cwd: under the old
+    // cwd-only behavior this attach could only yield a Pick frame. Declaring
+    // project A must bind A's session directly.
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let select = serde_json::to_string(&Wire::Select {
+        action: AttachAction::Attach(None),
+        project: Some(project_a),
+    })
+    .unwrap();
+    ws.send(WsMessage::Text(select.into())).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match serde_json::from_str::<Wire>(msg.to_text().unwrap_or("")).unwrap() {
+        Wire::Welcome { session_id, .. } => assert_eq!(session_id, id_a),
+        other => panic!("expected Welcome for project-a's session, got {other:?}"),
+    }
+}
+
+/// Wire compatibility: a Select frame without `project` — what every client
+/// sent before the field existed — still deserializes, and the daemon falls
+/// back to its own process cwd as the caller's project scope.
+#[tokio::test]
+async fn select_without_project_falls_back_to_daemon_cwd() {
+    let cwd = std::env::current_dir().unwrap();
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let cwd_session = host_with_project(&registry, cwd).await;
+    let elsewhere = std::env::temp_dir().join(format!("neenee-scope-c-{}", uuid::Uuid::new_v4()));
+    let _other = host_with_project(&registry, elsewhere).await;
+
+    let handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.port.await.unwrap();
+    let _ = handle;
+
+    // Hand-written legacy frame: no `project` key at all. The fallback scope
+    // is the process cwd, which the test process shares with the in-process
+    // server — so the cwd-rooted session must win. Without the cwd fallback
+    // the two hosted sessions could only produce a Pick frame.
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws.send(WsMessage::Text(
+        r#"{"type":"Select","action":{"attach":null}}"#.into(),
+    ))
+    .await
+    .unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match serde_json::from_str::<Wire>(msg.to_text().unwrap_or("")).unwrap() {
+        Wire::Welcome { session_id, .. } => assert_eq!(session_id, cwd_session),
+        other => panic!("expected Welcome for the cwd-rooted session, got {other:?}"),
     }
 }
 
@@ -375,6 +487,7 @@ async fn monitor_handshake_yields_snapshot_then_diffs() {
             watch: true,
             include_idle: true,
         }),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -438,6 +551,7 @@ async fn monitor_one_shot_closes_after_snapshot() {
             watch: false,
             include_idle: false,
         }),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -463,174 +577,6 @@ async fn monitor_one_shot_closes_after_snapshot() {
     }
 }
 
-/// ADR-0095: a standalone session mirrors its status into the host; monitor
-/// clients see it as a `mirrored` row; disconnecting removes the row.
-#[tokio::test]
-async fn mirror_reports_row_and_disconnect_removes_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
-    let (registry, _req_rx, _bc_tx) = prehosted(session).await;
-    let probe = registry.clone();
-    let handle = serve::start_server(serve::ServeOptions::default(), registry);
-    let port = handle.port.await.unwrap();
-    let _ = handle;
-
-    // 1. A mirror client connects and adopts its session identity.
-    let (mut mirror, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
-        .await
-        .unwrap();
-    let select = serde_json::to_string(&Wire::Select {
-        action: AttachAction::Mirror,
-    })
-    .unwrap();
-    mirror.send(WsMessage::Text(select.into())).await.unwrap();
-    let hello = serde_json::to_string(&Wire::Mirror {
-        hello: MirrorHello {
-            session_id: "standalone-1".into(),
-            overview: "local TUI work".into(),
-            created_at: 1,
-            message_count: 4,
-        },
-    })
-    .unwrap();
-    mirror.send(WsMessage::Text(hello.into())).await.unwrap();
-
-    // 2. A mirror update flows in: running, round 1. Wait until the registry
-    //    has folded it before snapshotting (WS delivery is async).
-    let mut row = MonitoredSession::empty("standalone-1".into());
-    row.status = SessionStatus::Running;
-    row.round = 1;
-    row.turn = Some(0);
-    row.output_tokens = 42;
-    let update = serde_json::to_string(&Wire::MirrorUpdate { row }).unwrap();
-    mirror.send(WsMessage::Text(update.into())).await.unwrap();
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
-        let snap = probe
-            .monitor_snapshot(MonitorAction {
-                watch: false,
-                include_idle: true,
-            })
-            .await;
-        if snap
-            .sessions
-            .iter()
-            .any(|r| r.id == "standalone-1" && r.status == SessionStatus::Running)
-        {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            panic!("mirror row never reached Running: {snap:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    // 3. A one-shot monitor snapshot contains the mirrored row, forced to
-    //    `mirrored` hosting, with identity pinned to the hello.
-    let (mut mon, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
-        .await
-        .unwrap();
-    let select = serde_json::to_string(&Wire::Select {
-        action: AttachAction::Monitor(MonitorAction {
-            watch: true,
-            include_idle: false,
-        }),
-    })
-    .unwrap();
-    mon.send(WsMessage::Text(select.into())).await.unwrap();
-    let first = tokio::time::timeout(Duration::from_secs(2), mon.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let frame: Wire = serde_json::from_str(first.to_text().unwrap_or("")).unwrap();
-    match frame {
-        Wire::Monitor {
-            event: MonitorEvent::Snapshot(snapshot),
-        } => {
-            let mirrored = snapshot
-                .sessions
-                .iter()
-                .find(|r| r.id == "standalone-1")
-                .expect("mirrored row should be in the snapshot");
-            assert_eq!(mirrored.hosting, SessionHosting::Mirrored);
-            assert_eq!(mirrored.status, SessionStatus::Running);
-            assert_eq!(mirrored.output_tokens, 42);
-            assert_eq!(mirrored.overview, "local TUI work");
-        }
-        other => panic!("expected Snapshot, got {other:?}"),
-    }
-
-    // 4. The mirror disconnects: the watch stream reports SessionRemoved.
-    drop(mirror);
-    let mut removed = false;
-    for _ in 0..4 {
-        let msg = tokio::time::timeout(Duration::from_secs(2), mon.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let frame: Wire = serde_json::from_str(msg.to_text().unwrap_or("")).unwrap();
-        if let Wire::Monitor {
-            event: MonitorEvent::SessionRemoved { session_id },
-        } = frame
-        {
-            assert_eq!(session_id, "standalone-1");
-            removed = true;
-            break;
-        }
-    }
-    assert!(removed, "expected SessionRemoved after mirror disconnect");
-}
-
-/// ADR-0095: a mirrored row never shadows a hosted session with the same id.
-#[tokio::test]
-async fn hosted_session_wins_over_mirror_with_same_id() {
-    let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
-    let session_id = session.id().await;
-    let (registry, _req_rx, _bc_tx) = prehosted(session).await;
-    let snapshot_registry = registry.clone();
-    let handle = serve::start_server(serve::ServeOptions::default(), registry);
-    let port = handle.port.await.unwrap();
-    let _ = handle;
-
-    // A mirror claims the SAME id the registry already hosts.
-    let (mut mirror, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
-        .await
-        .unwrap();
-    let select = serde_json::to_string(&Wire::Select {
-        action: AttachAction::Mirror,
-    })
-    .unwrap();
-    mirror.send(WsMessage::Text(select.into())).await.unwrap();
-    let hello = serde_json::to_string(&Wire::Mirror {
-        hello: MirrorHello {
-            session_id: session_id.clone(),
-            overview: "impostor".into(),
-            created_at: 1,
-            message_count: 1,
-        },
-    })
-    .unwrap();
-    mirror.send(WsMessage::Text(hello.into())).await.unwrap();
-
-    let snapshot = snapshot_registry
-        .monitor_snapshot(MonitorAction {
-            watch: false,
-            include_idle: true,
-        })
-        .await;
-    let rows: Vec<_> = snapshot
-        .sessions
-        .iter()
-        .filter(|r| r.id == session_id)
-        .collect();
-    assert_eq!(rows.len(), 1, "one row per session id, hosted wins");
-    assert_eq!(rows[0].hosting, SessionHosting::Hosted);
-}
-
 /// ADR-0096: the control plane manages sessions without attaching — create,
 /// observe in the monitor snapshot, kill.
 #[tokio::test]
@@ -652,6 +598,7 @@ async fn control_create_observe_kill_roundtrip() {
             project: "/tmp/x".into(),
             prompt: None,
         }),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -677,6 +624,7 @@ async fn control_create_observe_kill_roundtrip() {
         action: AttachAction::Control(serve::ControlRequest::KillSession {
             session_id: "nope".into(),
         }),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -729,6 +677,7 @@ async fn uds_serves_same_protocol_without_token() {
             watch: false,
             include_idle: true,
         }),
+        project: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -760,7 +709,11 @@ async fn uds_serves_same_protocol_without_token() {
 async fn host_bare(
     session: Arc<SessionStore>,
     created_at: std::time::Instant,
-) -> (Arc<SessionRegistry>, broadcast::Sender<AgentResponse>, String) {
+) -> (
+    Arc<SessionRegistry>,
+    broadcast::Sender<AgentResponse>,
+    String,
+) {
     let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let registry = Arc::new(SessionRegistry::prehost_only());
@@ -780,6 +733,7 @@ async fn host_bare(
             tracker,
             sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             created_at,
+            agent_for_session_end: None,
         })
         .await;
     (registry, bc_tx, id)

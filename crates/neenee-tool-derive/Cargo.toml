@@ -8,6 +8,9 @@ description = "Procedural macros for the neenee tool system: derive JSON Schemas
 [lib]
 proc-macro = true
 
+[lints]
+workspace = true
+
 [dependencies]
 syn = { workspace = true }
 quote = { workspace = true }

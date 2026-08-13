@@ -206,10 +206,16 @@ impl Provider for GoogleProvider {
             },
         );
 
+        // Non-streaming, sent through `Client::http` directly (the error
+        // clarification below needs the raw helpers), so stamp the shared
+        // non-streaming request bound here — `Client::send_json` applies it
+        // for the other protocols. The streaming paths deliberately carry no
+        // overall timeout (see the `client` module docs).
         let response = client
             .post(&url)
             .header("User-Agent", &self.endpoint.user_agent)
             .json(&body)
+            .timeout(self.client.request_timeout())
             .send()
             .await
             .map_err(|error| transport_error("Google", error))?;

@@ -231,7 +231,7 @@ mod tests {
         std::fs::write(user.join("safe.md"), "safe $ARGUMENTS").unwrap();
 
         // Untrusted: project command must NOT appear.
-        let untrusted = discover_commands_in(&[user.clone()]);
+        let untrusted = discover_commands_in(std::slice::from_ref(&user));
         assert_eq!(untrusted.len(), 1);
         assert_eq!(
             untrusted[0].name, "safe",

@@ -4,7 +4,7 @@
 //! Spawned detached (by `neenee`/`neenee attach` when no daemon is running),
 //! or run in the foreground by `neenee serve`, this process owns every
 //! session across every project for the user and serves them over the
-//! control plane (UDS by default, TCP + bearer token with `--expose`). It is
+//! control plane (UDS by default, TCP + bearer token with `--public`). It is
 //! a thin shell: every piece of session logic lives in
 //! `neenee-transport::host`; this binary only supplies the product
 //! identity/principal (ADR-0054), a headless UI bridge, and CLI parsing.
@@ -21,7 +21,7 @@ use neenee_transport::startup::init_tracing;
 use crate::identity::{neenee_identity, principal_code};
 use crate::ui::HeadlessUi;
 
-const USAGE: &str = "Usage: neenee-server [--port <n>] [--expose] [--project <path>]";
+const USAGE: &str = "Usage: neenee-server [--port <n>] [--public] [--project <path>]";
 
 /// The parsed command line. Hand-rolled (the workspace does not use clap):
 /// the surface is deliberately tiny — this binary is spawned by wrappers,

@@ -32,7 +32,11 @@ pub struct MonitorAction {
     pub include_idle: bool,
 }
 
-/// How the session behind a [`MonitoredSession`] row is hosted (ADR-0095).
+/// How the session behind a [`MonitoredSession`] row is hosted. Under
+/// ADR-0096's unified ownership every session is daemon-held, so this is
+/// always [`Hosted`](Self::Hosted); the field is kept on the wire (with its
+/// serde default) so rows produced before the distinction was removed still
+/// deserialize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionHosting {
@@ -41,17 +45,12 @@ pub enum SessionHosting {
     /// lifecycle and can serve full `Attach` clients for it.
     #[default]
     Hosted,
-    /// A standalone `neenee` process owns the session and mirrors its status
-    /// to this host (ADR-0095). The row is observability-only: attaching to
-    /// it here fails, and the mirror owner drives the real session.
-    Mirrored,
 }
 
 impl SessionHosting {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Hosted => "hosted",
-            Self::Mirrored => "mirrored",
         }
     }
 }
@@ -60,18 +59,6 @@ impl std::fmt::Display for SessionHosting {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// The static identity header a mirror client sends right after its
-/// handshake (ADR-0095). Updates from then on are whole [`MonitoredSession`]
-/// rows; the header's fields are pinned on the server's copy so a mirror
-/// cannot rewrite another session's identity by accident.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MirrorHello {
-    pub session_id: String,
-    pub overview: String,
-    pub created_at: u64,
-    pub message_count: usize,
 }
 
 /// A stream frame about the daemon as a whole.
@@ -115,8 +102,8 @@ pub struct MonitoredSession {
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: usize,
-    /// Who owns the session's driver (ADR-0095). Defaults to `Hosted` so
-    /// producers written against ADR-0093 stay valid.
+    /// Who owns the session's driver. Defaults to `Hosted` — the only value
+    /// since ADR-0096 — so producers written against ADR-0093 stay valid.
     #[serde(default)]
     pub hosting: SessionHosting,
     /// Derived lifecycle status (ADR-0093 §3): the panel's primary sort key.
@@ -141,7 +128,7 @@ pub struct MonitoredSession {
     pub note: Option<String>,
     /// Absolute project workspace path this session belongs to (ADR-0096's
     /// two-level indexing projected down to the row). Empty for producers
-    /// that predate the field (mirror hellos, prehosts) — display code must
+    /// that predate the field (e.g. `/serve` prehosts) — display code must
     /// tolerate it. Content-free in the monitor sense: it is addressing
     /// metadata, not conversation.
     #[serde(default)]
@@ -212,8 +199,8 @@ impl std::fmt::Display for WipAdvice {
 }
 
 impl MonitoredSession {
-    /// A zeroed row for one session id — the seed a mirror producer or a
-    /// tracker starts from before any event has been folded in.
+    /// A zeroed row for one session id — the seed a tracker starts from
+    /// before any event has been folded in.
     pub fn empty(id: String) -> Self {
         Self {
             id,
@@ -343,50 +330,10 @@ mod tests {
     }
 
     #[test]
-    fn mirrored_row_roundtrips_with_hosting() {
-        let row = MonitoredSession {
-            id: "s-9".into(),
-            overview: "standalone TUI".into(),
-            created_at: 1,
-            updated_at: 2,
-            message_count: 3,
-            hosting: SessionHosting::Mirrored,
-            status: SessionStatus::Running,
-            round: 1,
-            turn: Some(0),
-            output_tokens: 10,
-            elapsed_ms: 100,
-            current_tool: None,
-            activity: None,
-            context_tokens: None,
-            note: None,
-            project_root: String::new(),
-            wip: None,
-        };
-        let json = serde_json::to_string(&row).unwrap();
-        assert!(json.contains("\"hosting\":\"mirrored\""), "{json}");
-        let back: MonitoredSession = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, row);
-    }
-
-    #[test]
     fn hosting_defaults_to_hosted_for_older_producers() {
         let json = r#"{"id":"s","overview":"","created_at":0,"updated_at":0,"message_count":0,"status":"idle","round":0,"turn":null,"output_tokens":0,"elapsed_ms":0,"current_tool":null,"activity":null,"context_tokens":null,"note":null}"#;
         let row: MonitoredSession = serde_json::from_str(json).unwrap();
         assert_eq!(row.hosting, SessionHosting::Hosted);
-    }
-
-    #[test]
-    fn mirror_hello_roundtrips() {
-        let hello = MirrorHello {
-            session_id: "s-1".into(),
-            overview: "fix parser".into(),
-            created_at: 7,
-            message_count: 4,
-        };
-        let json = serde_json::to_string(&hello).unwrap();
-        let back: MirrorHello = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, hello);
     }
 
     #[test]

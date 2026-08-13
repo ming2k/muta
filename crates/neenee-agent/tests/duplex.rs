@@ -14,9 +14,9 @@
 //!    `EnvoyHandle` lands in the live transcript before the next model
 //!    round.
 //! 2. **Down (reply) + Up (request):** a write tool's permission broker
-//!    surfaces `AgentEvent::PermissionRequest` up through `run_with_events`,
-//!    and a `reply_permission` submitted through the handle resolves the
-//!    parked oneshot so the tool actually runs.
+//!    surfaces `AgentEvent::PermissionRequest` up through
+//!    `run_streaming_with_events`, and a `reply_permission` submitted through
+//!    the handle resolves the parked oneshot so the tool actually runs.
 //!
 //! The end-to-end path through `EnvoyTool` (registry lookup keyed by
 //! `parent_call_id`, nested `EnvoyEvent::PermissionRequest` rendered in the
@@ -32,13 +32,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use neenee_agent::{
-    Agent, AgentEvent, AgentOp, EnvoyEvent, EnvoyTool, Message, Provider, ProviderStreamEvent,
-    Role, ToolCall,
+    Agent, AgentEvent, AgentOp, EnvoyEvent, EnvoyTool, Message, Provider, ProviderStreamEvent, Role,
 };
 use neenee_core::{EnvoyProfile, PermissionDecision, Tool, ToolOutput, ToolPolicy};
 
-/// `chat()` returns "done" with no tool calls. Used by the inject test, where
-/// only the transcript mutation matters.
+/// `stream_chat` emits "done" with no tool calls (the default
+/// `stream_chat_events` wraps it into one `TextDelta`). Used by the inject
+/// test, where only the transcript mutation matters.
 struct IdleProvider;
 
 #[async_trait]
@@ -73,7 +73,7 @@ async fn inject_user_message_lands_in_transcript() {
 
     let mut messages = vec![Message::new(Role::User, "begin")];
     let _ = agent
-        .run_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
         .await
         .expect("round completes");
 
@@ -83,34 +83,6 @@ async fn inject_user_message_lands_in_transcript() {
             .any(|m| m.content.contains("STEER-PAYLOAD-9f3a")),
         "injected steering message must reach the live transcript"
     );
-}
-
-/// Round 0: an assistant message requesting the write tool. Round 1: "done".
-/// Mirrors `PermissionTestProvider` from the in-crate unit tests but kept here
-/// so this binary is self-contained.
-struct WriteCallProvider(AtomicUsize);
-
-#[async_trait]
-impl Provider for WriteCallProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
-        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
-            let mut msg = Message::new(Role::Assistant, "");
-            msg.tool_calls = Some(vec![ToolCall {
-                id: "call_1".to_string(),
-                name: "gated_write".to_string(),
-                arguments: "{}".to_string(),
-            }]);
-            Ok(msg)
-        } else {
-            Ok(Message::new(Role::Assistant, "done"))
-        }
-    }
-    async fn stream_chat(
-        &self,
-        _request: neenee_core::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        Ok(Box::pin(stream::empty()))
-    }
 }
 
 /// A Write-tier tool whose execution is gated by the permission broker. Its
@@ -152,7 +124,7 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
     // timeout below would fire.
     let ran = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(
-        Arc::new(WriteCallProvider(AtomicUsize::new(0))),
+        Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),
         vec![Arc::new(BrokerGatedTool(Arc::clone(&ran)))],
         neenee_agent::AgentIdentity::default(),
     ));
@@ -163,7 +135,7 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
     let task = tokio::spawn(async move {
         let mut messages = vec![Message::new(Role::User, "run the write tool")];
         run_agent
-            .run_with_events(&mut messages, &CancellationToken::new(), move |event| {
+            .run_streaming_with_events(&mut messages, &CancellationToken::new(), move |event| {
                 if let AgentEvent::PermissionRequest(req) = event {
                     let _ = req_tx.send(req);
                 }
@@ -221,8 +193,9 @@ async fn handle_reply_is_noop_after_agent_dropped() {
 }
 
 /// Streaming provider: turn 0 emits a tool-call for `gated_write`; turn 1
-/// emits plain text "done". Drives the EnvoyTool end-to-end path (which runs
-/// the child via `run_streaming_with_events`).
+/// emits plain text "done". Drives both the direct
+/// `run_streaming_with_events` loop test and the EnvoyTool end-to-end path
+/// (which runs the child via `run_streaming_with_events`).
 struct StreamWriteCallProvider(AtomicUsize);
 
 #[async_trait]

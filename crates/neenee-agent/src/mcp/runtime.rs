@@ -284,13 +284,13 @@ impl McpRuntime {
 
             let added_or_changed: Vec<(String, McpServerConfig)> = new_configs
                 .iter()
-                .filter(|(name, cfg)| current.get(*name).map_or(true, |old| old != *cfg))
+                .filter(|(name, cfg)| current.get(*name).is_none_or(|old| old != *cfg))
                 .map(|(n, c)| (n.clone(), c.clone()))
                 .collect();
 
             let unchanged: Vec<String> = new_configs
                 .iter()
-                .filter(|(name, cfg)| current.get(*name).map_or(false, |old| old == *cfg))
+                .filter(|(name, cfg)| current.get(*name).is_some_and(|old| old == *cfg))
                 .map(|(n, _)| n.clone())
                 .collect();
 

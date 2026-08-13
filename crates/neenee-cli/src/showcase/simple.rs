@@ -175,10 +175,10 @@ pub fn provider() -> io::Result<()> {
 
 // ──────────────────────────── models picker ──────────────────────────────
 
-/// A live showcase of the flat **Models** picker — the surface that exercises
-/// the full-width, gap-grouped row standard (status glyphs + identity cluster
-/// + optional trailing reasoning tag). Run it to eyeball the Gestalt spacing
-/// and the edge-to-edge fill under the brand cursor.
+/// A live showcase of the flat **Models** picker — the surface that
+/// exercises the full-width, gap-grouped row standard (status glyphs +
+/// identity cluster + optional trailing reasoning tag). Run it to eyeball
+/// the Gestalt spacing and the edge-to-edge fill under the brand cursor.
 pub fn models() -> io::Result<()> {
     let theme = Theme::default();
     // Seed a snapshot with a couple of providers and a favorited model so the
@@ -325,7 +325,18 @@ pub fn model_editor() -> io::Result<()> {
             let title = " key editor · API key  q/Ctrl+C=quit".to_string();
             let hint = " type to edit  Enter save  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
-                draw_model_editor(f, "OpenAI", &s.input, s.cursor, true, 0, None, &[], None, &theme);
+                draw_model_editor(
+                    f,
+                    "OpenAI",
+                    &s.input,
+                    s.cursor,
+                    true,
+                    0,
+                    None,
+                    &[],
+                    None,
+                    &theme,
+                );
             });
         },
         |s, key| -> ShowAction {

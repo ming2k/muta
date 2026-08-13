@@ -375,11 +375,7 @@ impl From<Effort> for EffortLevel {
 /// const-stable, so [`Effort::gemini_thinking_budget`] spells the clamp through
 /// this helper. Kept private: only the budget translation needs it.
 const fn nonzero(tokens: u64) -> i64 {
-    if tokens < 1 {
-        1
-    } else {
-        tokens as i64
-    }
+    if tokens < 1 { 1 } else { tokens as i64 }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -486,12 +482,8 @@ pub const EFFORT_GLM_5: &[Effort] = &[Effort::Low, Effort::High, Effort::Xhigh, 
 /// fully disable thinking (`minimal` is the floor; Gemini 3.1 Pro does not even
 /// support `minimal`, clamping up to `low`). A `max`/`xhigh` request clamps
 /// down to `high`.
-pub const EFFORT_GEMINI_LEVEL: &[Effort] = &[
-    Effort::Minimal,
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-];
+pub const EFFORT_GEMINI_LEVEL: &[Effort] =
+    &[Effort::Minimal, Effort::Low, Effort::Medium, Effort::High];
 
 /// **Upstream advertises nothing** — effective ladder, sourced from Google's
 /// thinking docs. Gemini **2.5** maps onto a `thinkingConfig.thinkingBudget`
@@ -562,7 +554,10 @@ mod tests {
         assert_eq!(Effort::Max.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
         assert_eq!(Effort::Xhigh.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
         // minimal is the floor on most 3.x models and is honored.
-        assert_eq!(Effort::Minimal.clamp_to(EFFORT_GEMINI_LEVEL), Effort::Minimal);
+        assert_eq!(
+            Effort::Minimal.clamp_to(EFFORT_GEMINI_LEVEL),
+            Effort::Minimal
+        );
     }
 
     #[test]
@@ -595,11 +590,20 @@ mod tests {
     fn effort_level_parse_never_drops() {
         // Known rungs parse to Known.
         assert_eq!(EffortLevel::parse("high"), EffortLevel::Known(Effort::High));
-        assert_eq!(EffortLevel::parse("  MAX "), EffortLevel::Known(Effort::Max));
+        assert_eq!(
+            EffortLevel::parse("  MAX "),
+            EffortLevel::Known(Effort::Max)
+        );
         // An unknown provider tier is preserved verbatim as Other — the whole
         // point: a live-advertised tier outside the vocabulary is not lost.
-        assert_eq!(EffortLevel::parse("turbo"), EffortLevel::Other("turbo".to_string()));
-        assert_eq!(EffortLevel::parse("draft"), EffortLevel::Other("draft".to_string()));
+        assert_eq!(
+            EffortLevel::parse("turbo"),
+            EffortLevel::Other("turbo".to_string())
+        );
+        assert_eq!(
+            EffortLevel::parse("draft"),
+            EffortLevel::Other("draft".to_string())
+        );
     }
 
     #[test]

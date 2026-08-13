@@ -1,7 +1,7 @@
 //! The session daemon runtime (ADR-0096): one process that owns every
 //! session across every project for the user and serves them over the
 //! control plane (Unix domain socket by default, TCP + bearer token with
-//! `--expose`) so TUI/CLI/web clients can drive, observe, and manage them.
+//! `--public`) so TUI/CLI/web clients can drive, observe, and manage them.
 //!
 //! Vocabulary (ADR-0094/0096): the *role* is the **daemon**; `neenee serve`
 //! runs it in the foreground, `neenee serve --detach` in the background.
@@ -105,13 +105,29 @@ pub async fn run(
     }
     eprintln!("neenee-server: serving sessions on ws://{bind}:{port}");
     eprintln!("neenee: observe with `neenee status --watch`, drive with `neenee attach [id]`");
-    if let Some(token) = &handle.token {
-        eprintln!("neenee: exposed listener requires Authorization: Bearer {token}");
+    if handle.token.is_some() {
+        // Never print the token itself: it is a LAN-facing credential and
+        // stderr lands in scrollback, logs, and terminal sharing. The
+        // discovery record carries it, written owner-only (0600) — point
+        // the operator there instead.
+        match &dp {
+            Some(path) => eprintln!(
+                "neenee: exposed listener requires a bearer token; read it from the discovery file {}",
+                path.display()
+            ),
+            None => eprintln!(
+                "neenee: exposed listener requires a bearer token, but the discovery file could not be written — check the logs"
+            ),
+        }
     }
     tracing::info!(%bind,port,"neenee serve: listening");
     tokio::signal::ctrl_c().await?;
     tracing::info!("neenee serve: shutdown requested (ctrl-c)");
     handle.cancel.cancel();
+    // The daemon owns every hosted session's lifecycle (ADR-0096): a graceful
+    // shutdown tears each one down through the registry, which cancels its
+    // driver and fires its SessionEnd hooks (ADR-0025).
+    registry.shutdown_all_sessions().await;
     if let Some(p) = dp {
         discovery::remove(&p);
     }

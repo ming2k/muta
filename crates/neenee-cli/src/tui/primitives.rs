@@ -657,10 +657,7 @@ fn cell_at_index(
     y: u16,
 ) -> &mut neenee_tui_engine::Cell {
     let idx = (y as usize - area.y as usize) * area.width as usize + (x as usize - area.x as usize);
-    let cell = &mut buf.content[idx];
-    cell.set_skip(false);
-    let _ = cell;
-    cell
+    &mut buf.content[idx]
 }
 
 /// Contrast foreground for a colored background (dark text on light fills).

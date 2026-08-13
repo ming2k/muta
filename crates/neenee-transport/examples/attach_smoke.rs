@@ -49,6 +49,9 @@ async fn run(project_root: &std::path::Path) -> Result<(), String> {
     let (mut sink, mut source) = ws.split();
     let select = serde_json::to_string(&Wire::Select {
         action: AttachAction::Attach(None),
+        // No declared project: the smoke run exercises the daemon's
+        // cwd-fallback scope.
+        project: None,
     })
     .map_err(|e| format!("{e}"))?;
     sink.send(WsMessage::Text(select.into()))
@@ -56,15 +59,14 @@ async fn run(project_root: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("send: {e}"))?;
     let (session_id, n) = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(f) = source.next().await {
-            if let Ok(WsMessage::Text(t)) = f {
-                if let Ok(Wire::Welcome {
+            if let Ok(WsMessage::Text(t)) = f
+                && let Ok(Wire::Welcome {
                     session_id,
                     messages,
                     ..
                 }) = serde_json::from_str::<Wire>(&t)
-                {
-                    return Ok((session_id, messages.len()));
-                }
+            {
+                return Ok((session_id, messages.len()));
             }
         }
         Err("closed before welcome".to_string())
@@ -81,10 +83,10 @@ async fn run(project_root: &std::path::Path) -> Result<(), String> {
     .map_err(|e| format!("{e}"))?;
     tokio::time::timeout(Duration::from_secs(30), async {
         while let Some(f) = source.next().await {
-            if let Ok(WsMessage::Text(t)) = f {
-                if let Ok(Wire::Response { .. }) = serde_json::from_str::<Wire>(&t) {
-                    return Ok(());
-                }
+            if let Ok(WsMessage::Text(t)) = f
+                && let Ok(Wire::Response { .. }) = serde_json::from_str::<Wire>(&t)
+            {
+                return Ok(());
             }
         }
         Err("closed".to_string())
