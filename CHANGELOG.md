@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-15
+
 ### Added
 
 - **Unified single-binary architecture (ADR-0102).** The workspace now compiles
@@ -2902,7 +2904,9 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.22.6...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/ming2k/neenee/releases/tag/v0.24.0
+[0.23.0]: https://github.com/ming2k/neenee/releases/tag/v0.23.0
 [0.22.6]: https://github.com/ming2k/neenee/releases/tag/v0.22.6
 [0.22.5]: https://github.com/ming2k/neenee/releases/tag/v0.22.5
 [0.22.4]: https://github.com/ming2k/neenee/releases/tag/v0.22.4
