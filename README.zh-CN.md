@@ -68,7 +68,7 @@ neenee dashboard         # 直接从 shell 进入全屏仪表盘
 
 **`neenee dashboard`** 直接从 shell 进入同一个全屏仪表盘——无需先进入会话。它只把 daemon 上最近活跃的会话当作底层载体，在其之上升起仪表盘：Esc 退出，选中卡片按 `a` 则 attach 进入该会话。与 `neenee status` 一样，它不会拉起 daemon，因此需要一个已在运行且至少有一个会话的宿主。
 
-daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创建、发提示、打断、批准、终止，外加监控流），`--public` 时同时走 TCP+token——这正是 Web 中控面板直接消费的东西。详见[如何用会话宿主跟踪会话](docs/how-to/track-sessions-with-a-session-host.md)与 [ADR-0096](docs/adr/0096-unified-session-daemon.md)。
+daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创建、发提示、打断、批准、终止，外加监控流），`--public` 时同时走 TCP+token——这正是 Web 中控面板直接消费的东西。详见[如何用会话守护进程跟踪会话](docs/how-to/track-sessions-with-a-session-daemon.md)与 [ADR-0096](docs/adr/0096-unified-session-daemon.md)。
 
 ## 快捷键
 

@@ -42,7 +42,7 @@ pub use token::{
 
 use std::sync::{Arc, Mutex};
 
-use neenee_core::SecretString;
+use neenee_contracts::SecretString;
 
 /// Errors from the auth flows. `Display` is human-readable for surfacing in the
 /// login UI / CLI.

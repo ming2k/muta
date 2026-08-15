@@ -7,13 +7,13 @@
 //! insertion point needs — so the loop calls a one-liner (`check_pre_tool_use`,
 //! `run_post_tool_use`, `check_stop`, …) instead of reimplementing dispatch.
 //!
-//! The [`Hook`] trait itself and the payload types live in `neenee_core`; the
+//! The [`Hook`] trait itself and the payload types live in `neenee_contracts`; the
 //! matcher (which needs `regex`) stays here so core stays regex-free.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use neenee_core::{
+use neenee_contracts::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, InjectionKind, Message,
     PermissionRequest, RestorePoint, SessionSource, UserQuestionRequest,
 };
@@ -655,7 +655,7 @@ mod tests {
             matcher: None,
             fires: fires.clone(),
         })]);
-        let request = neenee_core::PermissionRequest {
+        let request = neenee_contracts::PermissionRequest {
             id: "permission_x".into(),
             tool: "bash".into(),
             label: "Run command".into(),
@@ -683,7 +683,7 @@ mod tests {
             matcher: Some("bash".into()),
             fires: fires.clone(),
         })]);
-        let bash_req = neenee_core::PermissionRequest {
+        let bash_req = neenee_contracts::PermissionRequest {
             id: "p1".into(),
             tool: "bash".into(),
             label: "".into(),
@@ -693,7 +693,7 @@ mod tests {
             elevation: false,
             one_off: false,
         };
-        let edit_req = neenee_core::PermissionRequest {
+        let edit_req = neenee_contracts::PermissionRequest {
             id: "p2".into(),
             tool: "edit_file".into(),
             label: "".into(),
@@ -722,12 +722,12 @@ mod tests {
             matcher: None,
             fires: fires.clone(),
         })]);
-        let request = neenee_core::UserQuestionRequest {
+        let request = neenee_contracts::UserQuestionRequest {
             id: "ask_user_x".into(),
-            questions: vec![neenee_core::UserQuestion {
+            questions: vec![neenee_contracts::UserQuestion {
                 header: Some("Pick one".into()),
                 question: "Which?".into(),
-                options: vec![neenee_core::UserQuestionOption {
+                options: vec![neenee_contracts::UserQuestionOption {
                     label: "A".into(),
                     description: None,
                 }],

@@ -14,7 +14,7 @@
 
 use std::sync::Mutex;
 
-use neenee_core::TokenUsage;
+use neenee_contracts::TokenUsage;
 
 /// Default user agent this project sends to providers.
 pub const NEENEE_USER_AGENT: &str = concat!("neenee/", env!("CARGO_PKG_VERSION"));
@@ -43,7 +43,7 @@ pub const COPILOT_CLIENT_HEADERS: &[(&str, &str)] = &[
 /// A provider-specific struct embeds this as `pub endpoint: Endpoint` and adds
 /// only its wire-format-unique fields (e.g. Anthropic's `max_tokens` /
 /// `thinking`). `id` is the stable provider/solution id surfaced via
-/// [`neenee_core::Provider::provider_id`] so assistant responses can be
+/// [`neenee_contracts::Provider::provider_id`] so assistant responses can be
 /// attributed to the logical channel even after a mid-session switch.
 #[derive(Clone)]
 pub struct Endpoint {
@@ -122,7 +122,7 @@ impl Endpoint {
 }
 
 /// Response-side mutable state shared by all three providers: the most recent
-/// token-usage snapshot drained via [`neenee_core::Provider::take_last_usage`].
+/// token-usage snapshot drained via [`neenee_contracts::Provider::take_last_usage`].
 ///
 /// Factored out so a provider struct embeds `pub turn: TurnState` instead of
 /// restating the `Mutex` field. Recovering from a poisoned mutex (a prior

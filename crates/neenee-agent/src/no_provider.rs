@@ -4,15 +4,15 @@
 //! When the catalog cannot resolve a real channel for a provider id (unknown
 //! id, or the entry has no usable channel), the startup install site installs
 //! a [`NoProvider`] into the shared holder so the type still satisfies
-//! `Arc<dyn Provider>`. The chat dispatch in `neenee-transport` checks
+//! `Arc<dyn Provider>`. The chat dispatch in `neenee-runtime` checks
 //! [`NoProvider::ID`] up-front and refuses the send with a user-facing
 //! notification, so a [`NoProvider`] should never actually be invoked — its
-//! [`neenee_core::Provider`] impl is a defensive backstop that
+//! [`neenee_contracts::Provider`] impl is a defensive backstop that
 //! returns a clear error if it ever is.
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use neenee_core::{Message, ModelRequest, Provider};
+use neenee_contracts::{Message, ModelRequest, Provider};
 
 /// The provider id reported by [`NoProvider`]. Callers that need to gate on
 /// "is there a real provider installed?" compare against this constant (or
@@ -23,7 +23,7 @@ pub const NO_PROVIDER_ID: &str = "none";
 /// resolve a real provider/channel.
 ///
 /// Installed into the shared provider holder at startup so the holder always
-/// contains *something*. The chat dispatch in `neenee-transport` refuses
+/// contains *something*. The chat dispatch in `neenee-runtime` refuses
 /// up-front when the live provider is a [`NoProvider`]; this impl is the
 /// defensive backstop in case a code path reaches it without the gate.
 pub struct NoProvider;

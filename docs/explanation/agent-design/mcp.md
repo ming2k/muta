@@ -2,7 +2,7 @@
 
 neenee connects to local stdio [Model Context Protocol][mcp] servers and exposes
 their tools alongside the built-in ones, using the same execution path. A
-session-owned **MCP runtime** — the `mcp` module inside `neenee-agent` — owns the
+session-owned **MCP runtime** — the `neenee-mcp` crate (ADR-0098) — owns the
 live connections: it connects every configured server at startup, publishes
 per-server tool snapshots to the agent, and recovers crashed servers. This
 page covers the runtime and its recovery model, the tool wrapper, the `/mcp`

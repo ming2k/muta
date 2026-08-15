@@ -6,8 +6,8 @@
 //! the two legacy OpenAI-compatible presets) its [`OpenAiProviderSpec`] entry.
 //! This file keeps the shared types, the aggregate tables, and the factory.
 
-use neenee_core::Provider;
-use neenee_core::catalog::{Channel, Transport};
+use neenee_contracts::Provider;
+use neenee_contracts::catalog::{Channel, Transport};
 use std::sync::Arc;
 
 use crate::{
@@ -114,9 +114,9 @@ pub struct ProviderTemplateSpec {
     pub id: &'static str,
     /// Baseline capability metadata for the models this provider serves.
     /// Lives beside the template (one table per provider) and is submitted to
-    /// `neenee_core`'s baseline registry at link time; the reconciliation
+    /// `neenee_contracts`'s baseline registry at link time; the reconciliation
     /// layer intersects live-discovered ids against this local table.
-    pub baselines: &'static [neenee_core::Model],
+    pub baselines: &'static [neenee_contracts::Model],
     /// Wire protocol the template's channels speak: `"openai"` |
     /// `"openai-responses"` | `"anthropic"` | `"google"` (the legacy `"gemini"`
     /// label is still accepted). `"openai-responses"` is the OpenAI Responses
@@ -135,15 +135,14 @@ pub struct ProviderTemplateSpec {
     /// `ModelSource::Api` (live availability intersected with the client model
     /// registry, retaining the last valid subset on error). When `false`, the
     /// instance always uses the snapshot. A template is marked `false` when its
-    /// endpoint is a fixed single-model membership platform (Z.AI Code) or its
-    /// model list is derived at runtime (opencode-go), since those would
+    /// model list is derived at runtime (opencode-go), since that would
     /// regress under a live overwrite.
     pub discovery: bool,
     /// Whether live discovery may **fit capability metadata** for model ids the
     /// client registry does not know — materializing them as channels with
     /// their advertised context window, reasoning, vision, and effort tiers
     /// (persisted per instance, then overlaid onto model resolution; see
-    /// `neenee_core::model::register_fitted_models`).
+    /// `neenee_contracts::model::register_fitted_models`).
     ///
     /// This is a trust decision, not a technical one: it is enabled only for
     /// official first-party endpoints whose `/models` advertises real
@@ -214,17 +213,17 @@ impl OpenAiProviderSpec {
     }
 }
 
-/// Construct the concrete `Provider` for a [`neenee_core::catalog::Channel`].
+/// Construct the concrete `Provider` for a [`neenee_contracts::catalog::Channel`].
 ///
 /// This is the construction layer that knows about every concrete `Provider`
-/// implementation; it lives in `neenee-providers` (not `neenee-core`) so the
+/// implementation; it lives in `neenee-providers` (not `neenee-contracts`) so the
 /// domain crate stays free of HTTP I/O. `entry_id` becomes the provider's
 /// attribution id (`Provider::provider_id`) so assistant responses are
 /// attributed to the logical model even after a mid-session switch.
 ///
 /// `session_id` participates in prompt-cache control (ADR-0067): when the
-/// resolved [`neenee_core::CachePolicy`] for the model's family is
-/// [`SessionKey`](neenee_core::CachePolicy::SessionKey) (Moonshot / Kimi), the
+/// resolved [`neenee_contracts::CachePolicy`] for the model's family is
+/// [`SessionKey`](neenee_contracts::CachePolicy::SessionKey) (Moonshot / Kimi), the
 /// session id is stamped as the provider's `prompt_cache_key` so the server-side
 /// cache namespaces per conversation and repeated prefixes hit at a discount.
 /// Pass `None` when no session is known yet (shared bootstrap); the key is then
@@ -284,7 +283,8 @@ pub fn build_provider_for_channel(
             // (`for_model`: thinking **off** unless the user opts in — ADR-0046);
             // anything unset keeps that default. Effort is clamped to the
             // model's registered levels at request-build time.
-            let mut cfg = ThinkingConfig::for_model(&neenee_core::model::resolve(&channel.model));
+            let mut cfg =
+                ThinkingConfig::for_model(&neenee_contracts::model::resolve(&channel.model));
             if let Some(mode) = thinking {
                 cfg = cfg.with_mode(*mode);
             }
@@ -304,7 +304,7 @@ pub fn build_provider_for_channel(
             copilot,
         } => {
             let capabilities = channel.capabilities();
-            let policy = neenee_core::CachePolicy::for_family(&capabilities.family);
+            let policy = neenee_contracts::CachePolicy::for_family(&capabilities.family);
             let cache_key = if policy.injects_session_key() {
                 session_id.map(str::to_string)
             } else {
@@ -466,7 +466,7 @@ mod build_tests {
 
     #[test]
     fn builtin_provider_models_resolve_with_expected_wire_formats() {
-        use neenee_core::WireFormat;
+        use neenee_contracts::WireFormat;
         // Every model a multi-model built-in serves must exist in the model
         // registry (so metadata resolves) and carry the wire format its provider
         // speaks.
@@ -529,7 +529,7 @@ mod build_tests {
                     .map(|id| (id, WireFormat::Google)),
             )
         {
-            let model = neenee_core::model::resolve(id);
+            let model = neenee_contracts::model::resolve(id);
             assert_eq!(model.id, id, "model {id} must be registered");
             assert_eq!(model.format, expected, "{id} wire format");
         }

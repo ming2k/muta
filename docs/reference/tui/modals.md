@@ -20,7 +20,7 @@ expressed in one of three ways:
 
 Every centered modal uses the same low-level primitives and, where possible,
 the shared modal component in
-`crates/neenee-cli/src/tui/components/modal.rs`:
+`crates/neenee-tui/src/components/modal.rs`:
 
 - `recess_backdrop(frame, modal.recess(), theme)` is called once per frame by
   the event loop *after* the transcript and chrome are drawn and *before* the
@@ -477,14 +477,14 @@ left+right borders colored by variant.
 
 ## Source
 
-Modal-specific renderers live in `crates/neenee-cli/src/tui/overlays/`
+Modal-specific renderers live in `crates/neenee-tui/src/overlays/`
 (one renderer file per modal: `provider`, `permission`, `history`, `help`,
 `session`, `tools`, `permissions_manager`, `activity`, `tool_step_detail`,
 `toast`, plus feature-specific helpers). Shared composed pieces live in
-`crates/neenee-cli/src/tui/components/`: `modal`, `list`, `scroll`,
+`crates/neenee-tui/src/components/`: `modal`, `list`, `scroll`,
 `footer`, `toast`, and `options` cover the common modal shell, selectable list
 body, scroll body, footer hints, notification bubble, and question option
 rows. Low-level primitives (`recess_backdrop`, `centered_rect`,
 `modal_frame`, `panel_block`, raw `render_body`) remain in
-`crates/neenee-cli/src/tui/primitives.rs`. The chrome-hiding flag is
-read by `draw_transcript` in `crates/neenee-cli/src/tui/view.rs`.
+`crates/neenee-tui/src/primitives.rs`. The chrome-hiding flag is
+read by `draw_transcript` in `crates/neenee-tui/src/view.rs`.

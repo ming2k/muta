@@ -11,8 +11,8 @@
 //! channels (with `default_channel` selecting one). Favorites and recency are
 //! layered on top via the provider-usage telemetry.
 
-use neenee_core::catalog::{Channel, ProviderEntry, Transport, builtin_provider_metadata};
-use neenee_core::{
+use neenee_contracts::catalog::{Channel, ProviderEntry, Transport, builtin_provider_metadata};
+use neenee_contracts::{
     Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, RemoteModelEndpoint,
     SecretString, ThinkingMode, WireFormat,
 };
@@ -23,7 +23,7 @@ use neenee_persistence::provider_usage::ProviderUsage;
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
     NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, ProviderTemplateSpec,
-    provider_template_spec,
+    ZAI_CODE_MODELS, provider_template_spec,
 };
 use std::collections::HashSet;
 
@@ -80,7 +80,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
     let transport = match uc.auth {
         // ChatGPT OAuth always speaks the Responses transport, regardless of the
         // stored `UserTransport`, with the bearer + account id resolved above.
-        neenee_core::ChannelAuth::ChatGptOAuth => Transport::OpenAiResponses {
+        neenee_contracts::ChannelAuth::ChatGptOAuth => Transport::OpenAiResponses {
             base_url: uc
                 .base_url
                 .clone()
@@ -93,7 +93,7 @@ fn user_channel_to_channel(uc: &UserChannelConfig, fallback_model: &str) -> Chan
             account_id,
             copilot: false,
         },
-        neenee_core::ChannelAuth::CopilotOAuth => copilot_transport(uc),
+        neenee_contracts::ChannelAuth::CopilotOAuth => copilot_transport(uc),
         _ => match uc.transport {
             UserTransport::Google => Transport::Google {
                 base_url: uc
@@ -365,11 +365,11 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
     changed |= migrate_legacy_instance(
         config,
         "zai-code",
-        "ZAI Code",
+        "ZAI Code (CN)",
         UserTransport::OpenAi,
-        "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
         Some("opencode/1.17.10"),
-        &["glm-5.2"],
+        ZAI_CODE_MODELS,
         zai_key,
         legacy_model.as_deref(),
         Some("zai-code"),
@@ -571,6 +571,24 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
                 provider.model_source = ModelSource::Api;
                 changed = true;
             }
+            if !spec.discovery && provider.model_source == ModelSource::Api {
+                provider.model_source = ModelSource::Fixed;
+                changed = true;
+            }
+            // Migrate zai-code instances from api.z.ai to the domestic open.bigmodel.cn endpoint
+            if tid == "zai-code" {
+                for channel in &mut provider.channels {
+                    if channel.base_url.as_deref()
+                        == Some("https://api.z.ai/api/coding/paas/v4/chat/completions")
+                    {
+                        channel.base_url = Some(
+                            "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+                                .to_string(),
+                        );
+                        changed = true;
+                    }
+                }
+            }
             // Fitted ids from the last live fetch are as retainable as
             // registry ids — intersecting against the static registry alone
             // would undo the fitting on every startup. Owned up front so the
@@ -751,7 +769,7 @@ pub async fn discover_provider_models(config: &mut Config) -> DiscoveryOutcome {
                     // provider can never downgrade a known model).
                     let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
                         .iter()
-                        .filter(|model| neenee_core::model::model_by_id(&model.id).is_none())
+                        .filter(|model| neenee_contracts::model::model_by_id(&model.id).is_none())
                         .map(|model| (model.id.clone(), fitted_model_info(model)))
                         .collect();
                     if provider.fitted_models != fitted {
@@ -921,7 +939,7 @@ fn persist_remote_model_metadata(
 }
 
 /// Feed every instance's persisted fitted-model metadata into the dynamic
-/// model overlay ([`neenee_core::model::register_fitted_models`]), so a model
+/// model overlay ([`neenee_contracts::model::register_fitted_models`]), so a model
 /// id the static registry does not know still resolves with the capabilities
 /// its (trusted) provider advertised — context window, reasoning, vision, and
 /// effort tiers flow through the same `model::resolve` every consumer uses.
@@ -930,7 +948,7 @@ fn persist_remote_model_metadata(
 /// Called at startup after reconciliation and again after a live discovery
 /// refresh.
 pub fn sync_fitted_model_registry(config: &Config) {
-    let fitted: Vec<neenee_core::model::FittedModel> = config
+    let fitted: Vec<neenee_contracts::model::FittedModel> = config
         .providers
         .iter()
         .flat_map(|provider| {
@@ -946,7 +964,7 @@ pub fn sync_fitted_model_registry(config: &Config) {
                     // common shape if one somehow does.
                     None => (WireFormat::OpenAi, provider.id.clone()),
                 };
-                neenee_core::model::FittedModel {
+                neenee_contracts::model::FittedModel {
                     id: id.clone(),
                     display_name: info.display_name.clone(),
                     family,
@@ -984,7 +1002,7 @@ pub fn sync_fitted_model_registry(config: &Config) {
             })
         })
         .collect();
-    neenee_core::model::register_fitted_models(fitted);
+    neenee_contracts::model::register_fitted_models(fitted);
 }
 
 /// Map a template wire protocol to the registry's wire format. Mirrors
@@ -1163,7 +1181,7 @@ fn opencode_go_seed_channels(api_key: SecretString) -> Vec<UserChannelConfig> {
 pub fn build_provider_for(
     config: &Config,
     id: &str,
-) -> Option<std::sync::Arc<dyn neenee_core::Provider>> {
+) -> Option<std::sync::Arc<dyn neenee_contracts::Provider>> {
     build_provider_for_model(config, id, config.default_model.as_deref(), None)
 }
 
@@ -1180,7 +1198,7 @@ pub fn build_provider_for(
 /// its `Arc<dyn Provider>` type.
 ///
 /// `session_id` flows into prompt-cache control (ADR-0067): when the active
-/// model's [`neenee_core::CachePolicy`] is `SessionKey` (Moonshot / Kimi), the
+/// model's [`neenee_contracts::CachePolicy`] is `SessionKey` (Moonshot / Kimi), the
 /// session id becomes the provider's `prompt_cache_key`. Pass `None` at shared
 /// bootstrap; pass the live session id on session create / model switch.
 pub fn build_provider_for_model(
@@ -1188,7 +1206,7 @@ pub fn build_provider_for_model(
     provider_id: &str,
     model_id: Option<&str>,
     session_id: Option<&str>,
-) -> Option<std::sync::Arc<dyn neenee_core::Provider>> {
+) -> Option<std::sync::Arc<dyn neenee_contracts::Provider>> {
     let entries = build_catalog(config);
     let entry = entries.iter().find(|e| e.id == provider_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
@@ -1328,7 +1346,7 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
 }
 
 /// Auth mode of a user provider's default channel (`ApiKey` when unknown).
-fn provider_auth(config: &Config, provider_id: &str) -> neenee_core::ChannelAuth {
+fn provider_auth(config: &Config, provider_id: &str) -> neenee_contracts::ChannelAuth {
     config
         .providers
         .iter()
@@ -1386,7 +1404,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             }
         }
         Transport::OpenAi { effort, .. } => {
-            let model = neenee_core::model::resolve(&channel.model);
+            let model = neenee_contracts::model::resolve(&channel.model);
             let effective = if model.effort_levels.is_empty() {
                 None
             } else {
@@ -1416,7 +1434,7 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
-            let model = neenee_core::model::resolve(&channel.model);
+            let model = neenee_contracts::model::resolve(&channel.model);
             let effective = if model.effort_levels.is_empty() {
                 None
             } else {
@@ -1888,6 +1906,68 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_zai_code_fixed_instance_picks_up_newly_added_models() {
+        let mut config = bare_config();
+        let inst = template_instance("zai-code", &["glm-5.2"]);
+        config.providers.push(inst);
+
+        assert!(reconcile_provider_models(&mut config));
+        let got = config.providers[0].channel_models();
+        assert_eq!(got, vec!["glm-5.3", "glm-5.2"]);
+    }
+
+    #[test]
+    fn reconcile_upgrades_existing_zai_code_instance_with_api_key_to_glm_5_3() {
+        let mut config = bare_config();
+        config.providers.push(UserProviderConfig {
+            id: "111f".to_string(),
+            name: Some("111f".to_string()),
+            channels: vec![UserChannelConfig {
+                label: "glm-5.2".to_string(),
+                transport: UserTransport::OpenAi,
+                api_key_env: None,
+                api_key: Some("742f4d62404d4f30bc0ed0429f732722.EfnudJ2pfIu4TbRj".into()),
+                model: Some("glm-5.2".to_string()),
+                base_url: Some("https://api.z.ai/api/coding/paas/v4/chat/completions".to_string()),
+                user_agent: Some("opencode/1.17.10".to_string()),
+                effort: None,
+                thinking: None,
+                auth: Default::default(),
+                remote: None,
+            }],
+            default_channel: 0,
+            template_id: Some("zai-code".to_string()),
+            model_source: ModelSource::Fixed,
+            fitted_models: Default::default(),
+        });
+
+        assert!(reconcile_provider_models(&mut config));
+        assert_eq!(
+            config.providers[0].channel_models(),
+            vec!["glm-5.3", "glm-5.2"]
+        );
+        assert_eq!(
+            config.providers[0].channels[0]
+                .api_key
+                .as_ref()
+                .map(SecretString::expose_secret),
+            Some("742f4d62404d4f30bc0ed0429f732722.EfnudJ2pfIu4TbRj")
+        );
+        assert_eq!(
+            config.providers[0].channels[0].base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")
+        );
+        assert_eq!(
+            config.providers[0].channels[1].base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")
+        );
+        let usage = ProviderUsage::default();
+        let picker = build_picker_state(&config, &usage);
+        let zai_row = picker.rows.iter().find(|r| r.id == "111f").unwrap();
+        assert_eq!(zai_row.models, vec!["glm-5.3", "glm-5.2"]);
+    }
+
+    #[test]
     fn reconcile_leaves_unknown_template_id_untouched() {
         // A template_id that no longer resolves (template removed from the
         // codebase) must NOT blank out a working instance — the dangling
@@ -2051,7 +2131,7 @@ mod tests {
         assert!(
             matches!(
                 glm.transport,
-                neenee_core::catalog::Transport::OpenAi { .. }
+                neenee_contracts::catalog::Transport::OpenAi { .. }
             ),
             "glm-5.2 must use OpenAi"
         );
@@ -2063,7 +2143,7 @@ mod tests {
         assert!(
             matches!(
                 mm.transport,
-                neenee_core::catalog::Transport::Anthropic { .. }
+                neenee_contracts::catalog::Transport::Anthropic { .. }
             ),
             "minimax-m3 must use Anthropic /messages"
         );
@@ -3087,12 +3167,12 @@ mod tests {
     #[test]
     fn reconcile_backfill_sets_fixed_model_source_for_nondiscovery_template() {
         // A legacy instance that exactly matches a discovery-disabled template
-        // (zai-code) gets stamped but keeps model_source=Fixed.
-        let models = current_template_models("zai-code");
+        // (opencode-go) gets stamped but keeps model_source=Fixed.
+        let models = current_template_models("opencode-go");
         let mut config = bare_config();
         config.providers.push(UserProviderConfig {
-            id: "zai".to_string(),
-            name: Some("ZAI".to_string()),
+            id: "go".to_string(),
+            name: Some("OpenCode Go".to_string()),
             channels: models
                 .iter()
                 .map(|m| UserChannelConfig {
@@ -3101,7 +3181,7 @@ mod tests {
                     api_key_env: None,
                     api_key: Some("sk".into()),
                     model: Some(m.clone()),
-                    base_url: Some("https://zai.example.com".to_string()),
+                    base_url: Some("https://opencode.ai/zen/go/v1/chat/completions".to_string()),
                     user_agent: None,
                     effort: None,
                     thinking: None,
@@ -3116,7 +3196,10 @@ mod tests {
         });
 
         assert!(reconcile_provider_models(&mut config));
-        assert_eq!(config.providers[0].template_id.as_deref(), Some("zai-code"));
+        assert_eq!(
+            config.providers[0].template_id.as_deref(),
+            Some("opencode-go")
+        );
         assert_eq!(
             config.providers[0].model_source,
             neenee_persistence::config::ModelSource::Fixed,
@@ -3335,7 +3418,7 @@ mod tests {
 
         sync_fitted_model_registry(&config);
 
-        let model = neenee_core::model::resolve("fitted-sync-k9");
+        let model = neenee_contracts::model::resolve("fitted-sync-k9");
         assert_eq!(model.name, "Sync K9");
         assert_eq!(model.family, "kimi-code");
         assert_eq!(model.context_window, 512_000);
@@ -3346,12 +3429,12 @@ mod tests {
 
     #[test]
     fn copilot_remote_endpoint_selects_the_advertised_transport() {
-        use neenee_core::{RemoteModelMetadata, ThinkingSupport};
+        use neenee_contracts::{RemoteModelMetadata, ThinkingSupport};
 
         let base = UserChannelConfig {
             label: "remote-model".to_string(),
             model: Some("remote-model".to_string()),
-            auth: neenee_core::ChannelAuth::CopilotOAuth,
+            auth: neenee_contracts::ChannelAuth::CopilotOAuth,
             remote: Some(RemoteModelMetadata {
                 endpoint: Some(RemoteModelEndpoint::Messages),
                 max_output_tokens: Some(64_000),
@@ -3395,7 +3478,7 @@ mod tests {
                 context_window: Some(200_000),
                 max_output_tokens: Some(16_384),
                 reasoning: Some(true),
-                thinking: Some(neenee_core::ThinkingSupport::ReasoningSummary),
+                thinking: Some(neenee_contracts::ThinkingSupport::ReasoningSummary),
                 tool_call: Some(true),
                 vision: Some(true),
                 effort_levels: Some(vec!["low".to_string(), "high".to_string()]),

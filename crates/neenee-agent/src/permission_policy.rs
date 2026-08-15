@@ -43,7 +43,7 @@
 //! 6. **One prompt per call.** Both the bash confirm gate and the broker emit
 //!    [`PolicyDecision::Ask`]; the caller parks once, emits one prompt, and
 //!    awaits one decision. A bash command is never prompted twice (the old
-//!    chain-external re-evaluation is gone). An `Ask`'s [`neenee_core::PermissionRequest`]
+//!    chain-external re-evaluation is gone). An `Ask`'s [`neenee_contracts::PermissionRequest`]
 //!    carries `elevation` (out-of-scope, ADR-0028) and `one_off` (the bash
 //!    dangerous-command confirm: an `Always` reply is honoured but not
 //!    persisted) so the caller and the TUI handle both uniformly.
@@ -51,7 +51,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use neenee_core::{RestorePoint, ScopeTarget, Tool, ToolOutput};
+use neenee_contracts::{RestorePoint, ScopeTarget, Tool, ToolOutput};
 
 use crate::agent::ScopedToolDisable;
 use crate::bash_policy::BashPolicyMatch;
@@ -94,7 +94,7 @@ pub enum PolicyDecision {
     /// synchronous chain denies are per-call, and a `ToolOutput::PermissionDenied`
     /// is enough for the caller to treat the outcome as a user-style abort.
     Deny { output: ToolOutput },
-    /// Defer to the user: park and await a [`neenee_core::PermissionDecision`].
+    /// Defer to the user: park and await a [`neenee_contracts::PermissionDecision`].
     /// The chain caller parks, emits the request, awaits; the policy only
     /// contributes the request payload + the rule to remember on `Always`.
     ///
@@ -102,7 +102,7 @@ pub enum PolicyDecision {
     /// `Always` reply (the bash dangerous-command confirm is one-off); its
     /// `elevation` flag tells the TUI the call is out-of-scope (ADR-0028).
     Ask {
-        request: neenee_core::PermissionRequest,
+        request: neenee_contracts::PermissionRequest,
         rule: PermissionRule,
     },
 }
@@ -150,7 +150,7 @@ pub struct PolicyContext<'a> {
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
     pub autopilot: bool,
-    pub operation_scope: neenee_core::OperationScope,
+    pub operation_scope: neenee_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
     /// Agent capabilities (hooks, bash policy, permission parking). Sync
@@ -286,7 +286,7 @@ impl PermissionPolicy for SchemaPolicy {
         "schema"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        match neenee_core::tool_validation::validate_tool_arguments(
+        match neenee_contracts::tool_validation::validate_tool_arguments(
             &ctx.tool.parameters(),
             ctx.arguments,
         ) {
@@ -305,7 +305,7 @@ impl PermissionPolicy for SchemaPolicy {
 /// the broker: the right to decide out-of-scope calls is handed to the user.
 ///
 /// A call whose [`ScopeTarget`] falls outside the agent's granted
-/// [`neenee_core::OperationScope`] is not hard-blocked. Instead:
+/// [`neenee_contracts::OperationScope`] is not hard-blocked. Instead:
 /// - **Attended** (a human is reachable, `ctx.autopilot == false`) → `Pass`, so
 ///   the call falls through to the next gate — the [`BrokerPolicy`], which
 ///   surfaces the standard approve / always-allow / reject prompt. The user, not
@@ -406,7 +406,7 @@ impl PermissionPolicy for BashPolicy {
                 // tells the caller (and the TUI) that an `Always` reply is not
                 // persisted and the option should be de-emphasised.
                 PolicyDecision::Ask {
-                    request: neenee_core::PermissionRequest {
+                    request: neenee_contracts::PermissionRequest {
                         id: String::new(), // caller fills the generated id
                         tool: "bash".to_string(),
                         label: "Dangerous bash command".to_string(),
@@ -493,7 +493,7 @@ impl PermissionPolicy for BrokerPolicy {
         // they are authorising access beyond the configured boundary.
         let elevation = !ctx.operation_scope.allows(&ctx.scope_target);
         PolicyDecision::Ask {
-            request: neenee_core::PermissionRequest {
+            request: neenee_contracts::PermissionRequest {
                 id: String::new(), // caller fills the generated id
                 tool: ctx.call_name.to_string(),
                 label: ctx.tool.permission_label(),
@@ -525,7 +525,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use async_trait::async_trait;
-    use neenee_core::ToolAccesses;
+    use neenee_contracts::ToolAccesses;
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -603,7 +603,7 @@ mod tests {
         args: &'a str,
         target: ScopeTarget,
         autopilot: bool,
-        op: neenee_core::OperationScope,
+        op: neenee_contracts::OperationScope,
         disabled: std::collections::HashSet<String>,
         scoped: ScopedToolDisable,
         ctxr: &'a dyn PermissionContext,
@@ -629,7 +629,7 @@ mod tests {
         });
         let disabled: HashSet<String> = ["bash".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
-        let op = neenee_core::OperationScope::unrestricted();
+        let op = neenee_contracts::OperationScope::unrestricted();
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
@@ -657,7 +657,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -690,7 +690,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -723,7 +723,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/home/user/notes.md")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -755,7 +755,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
         });
-        let op = neenee_core::OperationScope::unrestricted();
+        let op = neenee_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -784,7 +784,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
-        let op = neenee_core::OperationScope::unrestricted();
+        let op = neenee_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -816,7 +816,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -849,7 +849,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/home/user/a")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -881,7 +881,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
-        let op = neenee_core::OperationScope::unrestricted();
+        let op = neenee_contracts::OperationScope::unrestricted();
         let disabled: HashSet<String> = ["write_file".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -911,7 +911,7 @@ mod tests {
             name: "read_text".into(),
             target: ScopeTarget::Unspecified,
         });
-        let op = neenee_core::OperationScope::unrestricted();
+        let op = neenee_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -941,7 +941,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };
@@ -976,7 +976,7 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = neenee_core::OperationScope {
+        let op = neenee_contracts::OperationScope {
             paths: Some(vec![PathBuf::from("/home/user")]),
             commands: None,
         };

@@ -6,7 +6,7 @@
 //! concern, not a domain-tool concern. The other tools (Bash/Read/Web/…)
 //! stay in [`crate::tools`] and remain pure trait implementations.
 //!
-//! Admission of tools to the envoy is driven by [`neenee_core::EXPLORE`]
+//! Admission of tools to the envoy is driven by [`neenee_contracts::EXPLORE`]
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use neenee_core::{EnvoyProfile, Tool};
+use neenee_contracts::{EnvoyProfile, Tool};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -31,7 +31,7 @@ context. The envoy cannot modify files — you perform any edits after \
 reviewing its findings.";
 
 /// Description of the write-capable `envoy_code` dispatch tool (bound to the
-/// [`neenee_core::CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
+/// [`neenee_contracts::CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
 /// the model understands this is the delegation path for *implementation*
 /// work, not exploration, and that every write/command the envoy makes is
 /// user-approved. Paired with the code-profile system prompt, it frames the
@@ -102,16 +102,16 @@ impl EnvoyRegistry {
 /// Spawn a read-only exploration envoy to handle a research sub-task.
 ///
 /// The envoy runs the same provider with the tools admitted by the bound
-/// [`EnvoyProfile`] (today always [`neenee_core::EXPLORE`]): read-only, non-interactive,
+/// [`EnvoyProfile`] (today always [`neenee_contracts::EXPLORE`]): read-only, non-interactive,
 /// non-recursive. Its final answer is returned to the calling agent, which
 /// stays in control of any write operations and any questions for the user.
 pub struct EnvoyTool {
-    provider: Arc<dyn neenee_core::Provider>,
-    toolset: neenee_core::ToolSet,
+    provider: Arc<dyn neenee_contracts::Provider>,
+    toolset: neenee_contracts::ToolSet,
     profile: &'static EnvoyProfile,
     /// The tool name the model calls this dispatch tool by. The default (set by
     /// [`EnvoyTool::new`]) is `"envoy"` for the read-only research role; a
-    /// second instance bound to a write-capable profile (e.g. [`neenee_core::CODE`]) takes a
+    /// second instance bound to a write-capable profile (e.g. [`neenee_contracts::CODE`]) takes a
     /// distinct name like `"envoy_code"` so it registers as its own capability
     /// alongside the read-only `envoy`, instead of colliding on the name.
     tool_name: &'static str,
@@ -126,7 +126,8 @@ pub struct EnvoyTool {
     /// its scoped capabilities to the model's chosen variants by snapshotting
     /// this, so an envoy — an agent on the same model — inherits the parent's
     /// overrides. `None` (the default, e.g. in tests) means default variants.
-    parent_variants: std::sync::Mutex<Option<Arc<std::sync::Mutex<neenee_core::VariantSelection>>>>,
+    parent_variants:
+        std::sync::Mutex<Option<Arc<std::sync::Mutex<neenee_contracts::VariantSelection>>>>,
     /// Full-duplex handle registry (ADR-0029): each spawned envoy's
     /// [`EnvoyHandle`] is lodged here keyed by the parent tool-call id, so
     /// the harness can route a user's permission / `ask_user` reply back down
@@ -150,7 +151,7 @@ pub struct EnvoyTool {
 
 #[derive(Clone)]
 struct EnvoyAccountingContext {
-    ledger: Arc<neenee_core::TokenSourceLedger>,
+    ledger: Arc<neenee_contracts::TokenSourceLedger>,
     session_id: Arc<std::sync::Mutex<Option<String>>>,
     round_counter: Arc<std::sync::Mutex<u64>>,
 }
@@ -161,8 +162,8 @@ impl EnvoyTool {
     /// pins + framing). The caller binds the role explicitly — `&EXPLORE` for
     /// the `envoy` tool.
     pub fn new(
-        provider: Arc<dyn neenee_core::Provider>,
-        toolset: neenee_core::ToolSet,
+        provider: Arc<dyn neenee_contracts::Provider>,
+        toolset: neenee_contracts::ToolSet,
         profile: &'static EnvoyProfile,
     ) -> Self {
         Self::named(provider, toolset, profile, "envoy", ENVOY_TOOL_DESCRIPTION)
@@ -181,8 +182,8 @@ impl EnvoyTool {
     /// dispatch tools lodging their children into one table never collide. See
     /// ADR-0029.
     pub fn with_registry(
-        provider: Arc<dyn neenee_core::Provider>,
-        toolset: neenee_core::ToolSet,
+        provider: Arc<dyn neenee_contracts::Provider>,
+        toolset: neenee_contracts::ToolSet,
         profile: &'static EnvoyProfile,
         registry: Arc<EnvoyRegistry>,
     ) -> Self {
@@ -198,13 +199,13 @@ impl EnvoyTool {
 
     /// Build a dispatch tool under an explicit name and description. This is
     /// how a second, write-capable envoy dispatch tool is constructed: a
-    /// profile like [`neenee_core::CODE`] is paired with a distinct tool name
+    /// profile like [`neenee_contracts::CODE`] is paired with a distinct tool name
     /// (e.g. `"envoy_code"`) and a description that tells the model this is the
     /// delegation path for implementation work. The read-only `envoy` tool and
     /// a named variant coexist as separate capabilities in the parent toolset.
     pub fn named(
-        provider: Arc<dyn neenee_core::Provider>,
-        toolset: neenee_core::ToolSet,
+        provider: Arc<dyn neenee_contracts::Provider>,
+        toolset: neenee_contracts::ToolSet,
         profile: &'static EnvoyProfile,
         tool_name: &'static str,
         tool_description: &'static str,
@@ -226,8 +227,8 @@ impl EnvoyTool {
     /// [`Self::with_registry`]: a named dispatch tool whose children are
     /// reachable through the same harness reply path as its sibling.
     pub fn named_with_registry(
-        provider: Arc<dyn neenee_core::Provider>,
-        toolset: neenee_core::ToolSet,
+        provider: Arc<dyn neenee_contracts::Provider>,
+        toolset: neenee_contracts::ToolSet,
         profile: &'static EnvoyProfile,
         tool_name: &'static str,
         tool_description: &'static str,
@@ -252,7 +253,7 @@ impl EnvoyTool {
     /// round/turn numbers.
     pub fn bind_accounting(
         &self,
-        ledger: Arc<neenee_core::TokenSourceLedger>,
+        ledger: Arc<neenee_contracts::TokenSourceLedger>,
         session_id: Arc<std::sync::Mutex<Option<String>>>,
         round_counter: Arc<std::sync::Mutex<u64>>,
     ) {
@@ -269,7 +270,7 @@ impl EnvoyTool {
     /// unbound, envoys use each capability's default variant.
     pub fn bind_variant_selection(
         &self,
-        handle: Arc<std::sync::Mutex<neenee_core::VariantSelection>>,
+        handle: Arc<std::sync::Mutex<neenee_contracts::VariantSelection>>,
     ) {
         *self
             .parent_variants
@@ -278,7 +279,7 @@ impl EnvoyTool {
     }
 
     /// Snapshot the parent's current variant selection (empty when unbound).
-    fn variant_snapshot(&self) -> neenee_core::VariantSelection {
+    fn variant_snapshot(&self) -> neenee_contracts::VariantSelection {
         self.parent_variants
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -359,7 +360,7 @@ impl Tool for EnvoyTool {
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(neenee_core::EnvoyEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(neenee_contracts::EnvoyEvent) + Send + 'a>,
     ) -> Result<String, String> {
         self.run_envoy(Some(call_id), arguments, on_event).await
     }
@@ -368,10 +369,10 @@ impl Tool for EnvoyTool {
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(neenee_core::EnvoyEvent) + Send + 'a>,
-        _on_stream: &mut (dyn FnMut(neenee_core::ToolStream) + Send + 'a),
-        _stdin: neenee_core::StdinPolicy,
-    ) -> Result<neenee_core::ToolOutput, String> {
+        on_event: Box<dyn FnMut(neenee_contracts::EnvoyEvent) + Send + 'a>,
+        _on_stream: &mut (dyn FnMut(neenee_contracts::ToolStream) + Send + 'a),
+        _stdin: neenee_contracts::StdinPolicy,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         // Run the envoy, streaming its lifecycle as EnvoyEvents to the
         // parent harness (so the live TUI builds the nested view in real
         // time), then return a structured payload carrying the full transcript
@@ -403,7 +404,7 @@ impl Tool for EnvoyTool {
         } else {
             outcome.final_content.trim().to_string()
         };
-        Ok(neenee_core::ToolOutput::Envoy {
+        Ok(neenee_contracts::ToolOutput::Envoy {
             summary,
             messages: outcome.messages,
             usage: outcome.token_usage,
@@ -417,14 +418,14 @@ impl Tool for EnvoyTool {
 /// Internal result of running an envoy. Bundles everything the parent
 /// harness needs to persist the nested transcript and account for real cost.
 struct EnvoyOutcome {
-    messages: Vec<neenee_core::Message>,
-    token_usage: neenee_core::TokenUsage,
+    messages: Vec<neenee_contracts::Message>,
+    token_usage: neenee_contracts::TokenUsage,
     /// Final assistant content, mirrored for convenience so the parent doesn't
     /// have to scan `messages` for the last Assistant turn.
     final_content: String,
     /// Whether the envoy terminated abnormally (hit its turn cap,
     /// repeated-call guard, or a provider error). Drives the structured
-    /// `failed` flag on the returned [`neenee_core::ToolOutput::Envoy`]
+    /// `failed` flag on the returned [`neenee_contracts::ToolOutput::Envoy`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
     failed: bool,
     /// Whether the envoy was stopped by the parent before finishing (the turn
@@ -444,7 +445,7 @@ impl EnvoyTool {
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        mut on_event: Box<dyn FnMut(neenee_core::EnvoyEvent) + Send + 'a>,
+        mut on_event: Box<dyn FnMut(neenee_contracts::EnvoyEvent) + Send + 'a>,
     ) -> Result<EnvoyOutcome, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
@@ -463,7 +464,7 @@ impl EnvoyTool {
         // Announce the bound profile name first so the parent harness / TUI
         // can label this envoy by its role (explore / plan / verify / …)
         // rather than a generic "Envoy". Emitted before the child runs.
-        on_event(neenee_core::EnvoyEvent::Started {
+        on_event(neenee_contracts::EnvoyEvent::Started {
             profile: self.profile.name.to_string(),
         });
 
@@ -474,9 +475,9 @@ impl EnvoyTool {
         // its variant overrides (snapshotted from the parent) and its hard
         // capability limits. `resolve_tools` composes both and applies the envoy
         // runtime hard rules (no recursion / control-flow / blocking-on-user).
-        let model = neenee_core::resolve_model(&self.provider.model());
+        let model = neenee_contracts::resolve_model(&self.provider.model());
         let model_sel =
-            neenee_core::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
+            neenee_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
         let sub_tools = self
             .profile
             .resolve_tools(&self.toolset, &model, &model_sel);
@@ -514,7 +515,7 @@ impl EnvoyTool {
         // read-loop guard's nudge (ADR-0034) so a short-lived, parent-supervised
         // envoy is never steered by it. The parent and `abort` remain its
         // backstops.
-        envoy.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
+        envoy.set_doom_guard_config(neenee_contracts::DoomGuardConfig::disabled());
         // Full-duplex (ADR-0029): install the child's steering inbox and lodge
         // its handle in the registry keyed by the parent tool-call id. Now any
         // permission / `ask_user` request the child surfaces travels *up* via
@@ -561,7 +562,7 @@ impl EnvoyTool {
         // itself is the user message; `description` remains a required label
         // arg (validated above) for the parent / TUI.
         let mut messages = vec![crate::conversation_context::visible_user(
-            neenee_core::InjectionKind::EnvoyTask,
+            neenee_contracts::InjectionKind::EnvoyTask,
             prompt,
         )];
         // The envoy runs under its own cancellation token. When the parent
@@ -586,7 +587,9 @@ impl EnvoyTool {
         let mut position: (u64, usize) = (1, 0);
         let result = envoy
             .run_streaming_with_events(&mut messages, &child_cancel, |event| {
-                if let neenee_core::AgentEvent::ModelRequestStarted { round, turn, .. } = &event {
+                if let neenee_contracts::AgentEvent::ModelRequestStarted { round, turn, .. } =
+                    &event
+                {
                     position = (*round, *turn);
                 }
                 Self::forward_event(event, position, &mut on_event)
@@ -628,14 +631,15 @@ impl EnvoyTool {
                 // reaches the parent round's accounting; the `final_content`
                 // is prefixed `Error: …` so the failure classifier and the
                 // TUI's Failed badge both trigger.
-                if matches!(error, neenee_core::HarnessError::Interrupted) {
+                if matches!(error, neenee_contracts::HarnessError::Interrupted) {
                     let tool_calls = messages
                         .iter()
-                        .filter(|m| m.role == neenee_core::Role::Tool)
+                        .filter(|m| m.role == neenee_contracts::Role::Tool)
                         .count();
                     let partial = messages.iter().rev().find_map(|m| {
-                        (m.role == neenee_core::Role::Assistant && !m.content.trim().is_empty())
-                            .then(|| m.content.trim().to_string())
+                        (m.role == neenee_contracts::Role::Assistant
+                            && !m.content.trim().is_empty())
+                        .then(|| m.content.trim().to_string())
                     });
                     let final_content = match partial {
                         Some(text) => format!(
@@ -654,7 +658,7 @@ impl EnvoyTool {
                     );
                     return Ok(EnvoyOutcome {
                         messages,
-                        token_usage: neenee_core::TokenUsage::default(),
+                        token_usage: neenee_contracts::TokenUsage::default(),
                         final_content,
                         failed: false,
                         interrupted: true,
@@ -665,7 +669,7 @@ impl EnvoyTool {
                 tracing::warn!(error = %error_string, "envoy failed; preserving partial transcript");
                 Ok(EnvoyOutcome {
                     messages,
-                    token_usage: neenee_core::TokenUsage::default(),
+                    token_usage: neenee_contracts::TokenUsage::default(),
                     final_content: format!("Error: {error_string}"),
                     failed: true,
                     interrupted: false,
@@ -679,7 +683,7 @@ impl EnvoyTool {
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        on_event: Box<dyn FnMut(neenee_core::EnvoyEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(neenee_contracts::EnvoyEvent) + Send + 'a>,
     ) -> Result<String, String> {
         let outcome = self.run_envoy_outcome(call_id, arguments, on_event).await?;
         let content = outcome.final_content.trim().to_string();
@@ -691,40 +695,40 @@ impl EnvoyTool {
     }
 
     fn forward_event(
-        event: neenee_core::AgentEvent,
+        event: neenee_contracts::AgentEvent,
         position: (u64, usize),
-        on_event: &mut dyn FnMut(neenee_core::EnvoyEvent),
+        on_event: &mut dyn FnMut(neenee_contracts::EnvoyEvent),
     ) {
         match event {
-            neenee_core::AgentEvent::Notice(notice) => {
-                on_event(neenee_core::EnvoyEvent::Notice(notice));
+            neenee_contracts::AgentEvent::Notice(notice) => {
+                on_event(neenee_contracts::EnvoyEvent::Notice(notice));
             }
-            neenee_core::AgentEvent::ModelRequestStarted { turn, .. } => {
+            neenee_contracts::AgentEvent::ModelRequestStarted { turn, .. } => {
                 let status = if turn == 0 {
                     "waiting for model".to_string()
                 } else {
                     format!("waiting for model · turn {}", turn + 1)
                 };
-                on_event(neenee_core::EnvoyEvent::Activity(status));
+                on_event(neenee_contracts::EnvoyEvent::Activity(status));
             }
-            neenee_core::AgentEvent::AssistantDelta { delta, start } => {
+            neenee_contracts::AgentEvent::AssistantDelta { delta, start } => {
                 if start {
-                    on_event(neenee_core::EnvoyEvent::StreamStart {
+                    on_event(neenee_contracts::EnvoyEvent::StreamStart {
                         round: position.0,
                         turn: position.1,
                     });
                 }
-                on_event(neenee_core::EnvoyEvent::StreamDelta(delta));
+                on_event(neenee_contracts::EnvoyEvent::StreamDelta(delta));
             }
-            neenee_core::AgentEvent::AssistantEnd(content) => {
-                on_event(neenee_core::EnvoyEvent::StreamEnd(content));
+            neenee_contracts::AgentEvent::AssistantEnd(content) => {
+                on_event(neenee_contracts::EnvoyEvent::StreamEnd(content));
             }
-            neenee_core::AgentEvent::ToolCall {
+            neenee_contracts::AgentEvent::ToolCall {
                 id,
                 name,
                 arguments,
             } => {
-                on_event(neenee_core::EnvoyEvent::ToolCall {
+                on_event(neenee_contracts::EnvoyEvent::ToolCall {
                     id,
                     name,
                     arguments,
@@ -732,14 +736,14 @@ impl EnvoyTool {
                     turn: position.1,
                 });
             }
-            neenee_core::AgentEvent::ToolResult {
+            neenee_contracts::AgentEvent::ToolResult {
                 id,
                 name,
                 output,
                 duration_ms,
                 ..
             } => {
-                on_event(neenee_core::EnvoyEvent::ToolResult {
+                on_event(neenee_contracts::EnvoyEvent::ToolResult {
                     id,
                     name,
                     output,
@@ -755,20 +759,20 @@ impl EnvoyTool {
             // `autopilot` + excluding `requires_user` tools, so reaching
             // here means either a future interactive profile is in use, or a
             // policy leak — forwarding (not dropping) is correct in both cases.
-            neenee_core::AgentEvent::PermissionRequest(request) => {
-                on_event(neenee_core::EnvoyEvent::PermissionRequest(request));
+            neenee_contracts::AgentEvent::PermissionRequest(request) => {
+                on_event(neenee_contracts::EnvoyEvent::PermissionRequest(request));
             }
             // Same full-duplex contract as the permission arm above. Reaching
             // here means an `ask_user` tool was admitted (the profile allows
             // user interaction) and the child is parked awaiting answers.
-            neenee_core::AgentEvent::UserQuestionRequest(request) => {
-                on_event(neenee_core::EnvoyEvent::UserQuestionRequest(request));
+            neenee_contracts::AgentEvent::UserQuestionRequest(request) => {
+                on_event(neenee_contracts::EnvoyEvent::UserQuestionRequest(request));
             }
             // L3.5 β: an interactive `bash` inside the envoy needs operator
             // input; forward the request up so the parent harness can surface
             // it, with the reply routed back down via `reply_input`.
-            neenee_core::AgentEvent::InputRequest(request) => {
-                on_event(neenee_core::EnvoyEvent::InputRequest(request));
+            neenee_contracts::AgentEvent::InputRequest(request) => {
+                on_event(neenee_contracts::EnvoyEvent::InputRequest(request));
             }
             _ => {}
         }
@@ -779,18 +783,18 @@ impl EnvoyTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use neenee_core::{EXPLORE, Message, Provider, ProviderStreamEvent, Role};
+    use neenee_contracts::{EXPLORE, Message, Provider, ProviderStreamEvent, Role};
 
     struct CannedProvider;
 
     #[async_trait::async_trait]
     impl Provider for CannedProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             Ok(Message::new(Role::Assistant, "found 3 relevant files"))
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::once(async {
                 Ok("found 3 relevant files".to_string())
@@ -800,19 +804,19 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingProvider {
-        request: std::sync::Mutex<Option<neenee_core::ModelRequest>>,
+        request: std::sync::Mutex<Option<neenee_contracts::ModelRequest>>,
     }
 
     #[async_trait::async_trait]
     impl Provider for RecordingProvider {
-        async fn chat(&self, request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             *self.request.lock().unwrap() = Some(request);
             Ok(Message::new(Role::Assistant, "found 3 relevant files"))
         }
 
         async fn stream_chat(
             &self,
-            request: neenee_core::ModelRequest,
+            request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             *self.request.lock().unwrap() = Some(request);
             Ok(Box::pin(stream::once(async {
@@ -865,7 +869,7 @@ mod tests {
     fn envoy_inherits_model_variant_then_applies_profile_scope() {
         // `StubWriteTool` (name "stub_write") is not in EXPLORE's read-only
         // scope, so it is always excluded; `read_text` has two variants.
-        let toolset = neenee_core::ToolSet::from_tools([
+        let toolset = neenee_contracts::ToolSet::from_tools([
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(TerseReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(StubWriteTool) as std::sync::Arc<dyn Tool>,
@@ -873,9 +877,9 @@ mod tests {
         let tool = EnvoyTool::new(std::sync::Arc::new(CannedProvider), toolset, &EXPLORE);
 
         let resolve = |tool: &EnvoyTool| {
-            let model = neenee_core::resolve_model(&CannedProvider.model());
-            let model_sel =
-                neenee_core::ToolSelection::unrestricted().with_variants(tool.variant_snapshot());
+            let model = neenee_contracts::resolve_model(&CannedProvider.model());
+            let model_sel = neenee_contracts::ToolSelection::unrestricted()
+                .with_variants(tool.variant_snapshot());
             tool.profile
                 .resolve_tools(&tool.toolset, &model, &model_sel)
         };
@@ -889,7 +893,7 @@ mod tests {
 
         // Bind a model selection pinning read_text=terse: the envoy inherits
         // the override (terse), while scope is still profile-driven.
-        let mut sel = neenee_core::VariantSelection::new();
+        let mut sel = neenee_contracts::VariantSelection::new();
         sel.insert("read_text".to_string(), "terse".to_string());
         tool.bind_variant_selection(std::sync::Arc::new(std::sync::Mutex::new(sel)));
         let scoped = resolve(&tool);
@@ -902,7 +906,7 @@ mod tests {
     async fn task_tool_runs_read_only_envoy_and_returns_answer() {
         let tool = EnvoyTool::new(
             std::sync::Arc::new(CannedProvider),
-            neenee_core::ToolSet::from_tools([
+            neenee_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
             &EXPLORE,
@@ -928,18 +932,18 @@ mod tests {
 
     #[async_trait]
     impl Provider for GatedProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             Ok(Message::new(Role::Assistant, "gated"))
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             if self
                 .requests
@@ -980,7 +984,7 @@ mod tests {
         });
         let tool = std::sync::Arc::new(EnvoyTool::new(
             provider,
-            neenee_core::ToolSet::from_tools([
+            neenee_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
             &EXPLORE,
@@ -992,7 +996,7 @@ mod tests {
                 .run_envoy_outcome(
                     Some("call_interrupt"),
                     r#"{"description":"interrupt me","prompt":"find the handlers"}"#,
-                    Box::new(|_event: neenee_core::EnvoyEvent| {}),
+                    Box::new(|_event: neenee_contracts::EnvoyEvent| {}),
                 )
                 .await
         });
@@ -1043,7 +1047,7 @@ mod tests {
         let provider = std::sync::Arc::new(RecordingProvider::default());
         let tool = EnvoyTool::new(
             provider.clone(),
-            neenee_core::ToolSet::from_tools([
+            neenee_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
             &EXPLORE,
@@ -1052,7 +1056,7 @@ mod tests {
             .run_envoy_outcome(
                 None,
                 r#"{"description":"find files","prompt":"where are the handlers?"}"#,
-                Box::new(|_event: neenee_core::EnvoyEvent| {}),
+                Box::new(|_event: neenee_contracts::EnvoyEvent| {}),
             )
             .await
             .unwrap();
@@ -1064,7 +1068,7 @@ mod tests {
             .clone()
             .expect("envoy request captured");
         let system = &request.messages[0];
-        assert_eq!(system.role, neenee_core::Role::System);
+        assert_eq!(system.role, neenee_contracts::Role::System);
         assert!(
             system
                 .content
@@ -1080,19 +1084,19 @@ mod tests {
             outcome
                 .messages
                 .iter()
-                .all(|message| message.role != neenee_core::Role::System),
+                .all(|message| message.role != neenee_contracts::Role::System),
             "request-scoped policy must not be persisted in the child transcript"
         );
 
         // The task is the first durable user message.
-        assert_eq!(outcome.messages[0].role, neenee_core::Role::User);
+        assert_eq!(outcome.messages[0].role, neenee_contracts::Role::User);
         assert_eq!(outcome.messages[0].content, "where are the handlers?");
         assert_eq!(
             outcome.messages[0]
                 .origin
                 .as_ref()
                 .map(|origin| origin.kind),
-            Some(neenee_core::InjectionKind::EnvoyTask)
+            Some(neenee_contracts::InjectionKind::EnvoyTask)
         );
     }
 
@@ -1100,7 +1104,7 @@ mod tests {
     async fn task_tool_rejects_missing_fields() {
         let tool = EnvoyTool::new(
             std::sync::Arc::new(CannedProvider),
-            neenee_core::ToolSet::default(),
+            neenee_contracts::ToolSet::default(),
             &EXPLORE,
         );
         assert!(tool.call(r#"{"description":"x"}"#).await.is_err());
@@ -1136,18 +1140,21 @@ mod tests {
     #[test]
     fn explore_profile_excludes_user_write_and_recursion_using_real_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let envoy_tool =
-            EnvoyTool::new(provider.clone(), neenee_core::ToolSet::default(), &EXPLORE);
+        let envoy_tool = EnvoyTool::new(
+            provider.clone(),
+            neenee_contracts::ToolSet::default(),
+            &EXPLORE,
+        );
 
-        let toolset = neenee_core::ToolSet::from_tools(vec![
+        let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(envoy_tool),
         ]);
 
-        let model = neenee_core::resolve_model(&CannedProvider.model());
-        let model_sel = neenee_core::ToolSelection::unrestricted();
+        let model = neenee_contracts::resolve_model(&CannedProvider.model());
+        let model_sel = neenee_contracts::ToolSelection::unrestricted();
         let admitted = EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let admitted_names: Vec<&str> = admitted.iter().map(|t| t.name()).collect();
 
@@ -1161,10 +1168,13 @@ mod tests {
     #[test]
     fn explore_profile_excludes_bash_writes_user_and_recursion() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let envoy_tool =
-            EnvoyTool::new(provider.clone(), neenee_core::ToolSet::default(), &EXPLORE);
+        let envoy_tool = EnvoyTool::new(
+            provider.clone(),
+            neenee_contracts::ToolSet::default(),
+            &EXPLORE,
+        );
 
-        let toolset = neenee_core::ToolSet::from_tools(vec![
+        let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::BashTool),
             std::sync::Arc::new(crate::tools::AskUserTool),
@@ -1174,14 +1184,14 @@ mod tests {
 
         // EXPLORE: only the whitelisted read tool survives (bash, ask_user,
         // the write stub, and recursion are all excluded).
-        let model = neenee_core::resolve_model(&CannedProvider.model());
-        let model_sel = neenee_core::ToolSelection::unrestricted();
+        let model = neenee_contracts::resolve_model(&CannedProvider.model());
+        let model_sel = neenee_contracts::ToolSelection::unrestricted();
         let explore_selected = EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let explore_names: Vec<&str> = explore_selected.iter().map(|t| t.name()).collect();
         assert_eq!(explore_names, vec!["read_text"]);
     }
 
-    /// A write-capable `envoy_code` tool (bound to [`neenee_core::CODE`])
+    /// A write-capable `envoy_code` tool (bound to [`neenee_contracts::CODE`])
     /// admits the edit surface a coder needs. Built with the real tools the
     /// harness registers so a future capability regression is caught here —
     /// mirrors `explore_profile_excludes_bash_writes_user_and_recursion` for
@@ -1191,13 +1201,13 @@ mod tests {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
         let envoy_code_arc = std::sync::Arc::new(EnvoyTool::named(
             provider.clone(),
-            neenee_core::ToolSet::default(),
-            &neenee_core::CODE,
+            neenee_contracts::ToolSet::default(),
+            &neenee_contracts::CODE,
             "envoy_code",
             "coding envoy",
         ));
 
-        let toolset = neenee_core::ToolSet::from_tools(vec![
+        let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::BashTool),
             std::sync::Arc::new(crate::tools::WriteFileTool),
@@ -1208,9 +1218,9 @@ mod tests {
 
         // CODE admits bash, write_file, edit_file, and the read tools; it
         // excludes the envoy dispatch tool itself (recursion).
-        let model = neenee_core::resolve_model(&CannedProvider.model());
-        let model_sel = neenee_core::ToolSelection::unrestricted();
-        let selected = neenee_core::CODE.resolve_tools(&toolset, &model, &model_sel);
+        let model = neenee_contracts::resolve_model(&CannedProvider.model());
+        let model_sel = neenee_contracts::ToolSelection::unrestricted();
+        let selected = neenee_contracts::CODE.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
         assert!(names.contains("bash"));
@@ -1231,12 +1241,16 @@ mod tests {
     #[test]
     fn named_with_registry_shares_the_registry_across_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let explore = EnvoyTool::new(provider.clone(), neenee_core::ToolSet::default(), &EXPLORE);
+        let explore = EnvoyTool::new(
+            provider.clone(),
+            neenee_contracts::ToolSet::default(),
+            &EXPLORE,
+        );
         let shared = explore.registry();
         let code = EnvoyTool::named_with_registry(
             provider,
-            neenee_core::ToolSet::default(),
-            &neenee_core::CODE,
+            neenee_contracts::ToolSet::default(),
+            &neenee_contracts::CODE,
             "envoy_code",
             "coding envoy",
             shared.clone(),

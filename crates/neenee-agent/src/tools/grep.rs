@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -102,19 +102,22 @@ impl Tool for GrepTool {
         Ok(cap_output(&stdout))
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         let out = self.call(arguments).await?;
         let pattern = serde_json::from_str::<serde_json::Value>(arguments)
             .ok()
             .and_then(|a| a["pattern"].as_str().map(str::to_string))
             .unwrap_or_default();
-        Ok(neenee_core::ToolOutput::Matches {
+        Ok(neenee_contracts::ToolOutput::Matches {
             pattern,
             lines: out.split('\n').map(str::to_string).collect(),
         })
     }
 }
-neenee_core::register_tool!(GrepFactory => GrepTool);
+neenee_contracts::register_tool!(GrepFactory => GrepTool);
 
 /// Bound ripgrep's stdout to [`GREP_MAX_LINES`] / [`GREP_MAX_BYTES`], whichever
 /// trips first, appending a one-line truncation notice. This is the grep

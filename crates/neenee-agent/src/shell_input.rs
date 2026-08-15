@@ -2,7 +2,7 @@
 //!
 //! This advisory classifier belongs beside tool dispatch: it decides whether
 //! the agent should open its input-injection path and whether that input must
-//! be masked. The shell result DTO and formatting remain in `neenee-core`.
+//! be masked. The shell result DTO and formatting remain in `neenee-contracts`.
 
 /// The kind of operator input a shell command is expected to request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -13,7 +13,7 @@
 //! - `response.output_item.added` (function_call) → captures id/name/call_id
 //! - `response.completed` → terminal usage
 
-use neenee_core::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
+use neenee_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::Value;
 
 /// Parse a Responses `usage` object (`input_tokens` / `output_tokens` /
@@ -32,7 +32,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     // Route cache-read accounting through the shared helper so the cache
     // policy is enforced in one place (ADR-0067). The Responses API hides the
     // discount in `input_tokens_details.cached_tokens`, which the helper reads.
-    let cached = neenee_core::cache::read_cached_tokens(usage);
+    let cached = neenee_contracts::cache::read_cached_tokens(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,

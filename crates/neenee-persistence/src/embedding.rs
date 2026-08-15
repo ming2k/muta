@@ -6,7 +6,7 @@
 //! or a cloud embedding API, and replace the flat index with an HNSW/vector-DB
 //! backend. The interface stays the same.
 
-use neenee_core::{Message, async_trait};
+use neenee_contracts::{Message, async_trait};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -314,8 +314,8 @@ mod tests {
             .await
             .unwrap();
         let messages = vec![
-            Message::new(neenee_core::Role::User, "how do I reset a password"),
-            Message::new(neenee_core::Role::Assistant, "go to settings"),
+            Message::new(neenee_contracts::Role::User, "how do I reset a password"),
+            Message::new(neenee_contracts::Role::Assistant, "go to settings"),
         ];
         store.index(&messages, "sess-1").await.unwrap();
         let results = store.search("password reset", 1).await.unwrap();

@@ -39,7 +39,7 @@
 
 use std::collections::VecDeque;
 
-use neenee_core::DoomGuardConfig;
+use neenee_contracts::DoomGuardConfig;
 use serde_json::Value;
 
 use crate::loop_guard::GuardAction;

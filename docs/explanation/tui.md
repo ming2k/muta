@@ -156,21 +156,23 @@ therefore repaints once instead of once per character.
 
 `neenee-tui-engine` is the *bottom* of a three-layer stack. Dependencies point
 strictly downward — no higher layer's types leak into a lower one. The engine
-is its own crate; the view and shell layers are module trees under
-`crate::tui` in the `neenee-cli` binary (the view was the `neenee-tui-view`
-crate until ADR-0079 re-merged it, so the seam is held by convention again
-rather than by the compiler):
+is its own crate; the view and shell layers are module trees inside the
+`neenee-tui` library crate (the view was the `neenee-tui-view`
+crate until ADR-0079 re-merged it, and ADR-0098 extracted the whole tree into
+`neenee-tui`, so the seam is held by convention rather than by the compiler):
 
 ```text
 neenee-tui-engine          engine: retained cell grid, back/front diff, crossterm
                     (ADR-0038). Knows nothing about neenee.
       ▲  widgets render into the grid
 tui view modules           view: the widget tree + the semantic document model
-                    (ADR-0045, re-merged by ADR-0079). Renders neenee-core
+                    (ADR-0045, re-merged by ADR-0079, extracted into
+                    `neenee-tui` by ADR-0098). Renders neenee-contracts
                     domain types — but never the shell.
       ▲  the shell hands it borrowed data each frame
 tui shell modules          app shell: App state, the event loop, input→action
                     mapping, terminal lifecycle. Owns the data.
+                    (Same `neenee-tui` crate as the view.)
 ```
 
 The split exists so the rendering engine, the widgets, and the application

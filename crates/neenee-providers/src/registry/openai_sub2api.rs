@@ -1,7 +1,7 @@
 //! The `openai-sub2api` provider template: OpenAI-compatible sub2api relays.
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -24,8 +24,8 @@ pub const OPENAI_SUB2API_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
@@ -37,7 +37,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -49,7 +49,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -61,7 +61,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
@@ -78,7 +78,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -90,7 +90,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -102,7 +102,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     // OpenAI sub2api relays can expose additional text aliases not used by the
     // official built-in template. Keep their metadata conservative when the
@@ -117,7 +117,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2",
@@ -129,7 +129,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-chat-latest",
@@ -141,7 +141,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-pro",
@@ -153,11 +153,11 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "openai-sub2api",

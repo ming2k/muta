@@ -2,7 +2,7 @@
 
 Every collapsible transcript entry — a [tool step](tool-step.md), a
 [thinking step](thinking-step.md), or an envoy task step — is presented
-through one shared state model in `crates/neenee-cli/src/tui/disclosure/`.
+through one shared state model in `crates/neenee-tui/src/disclosure/`.
 This page documents that model: its three orthogonal axes, the two
 presentation channels they reduce to, and the transitions each axis allows.
 Per-tool body content lives on the [tool step](tool-step.md) page; the shared

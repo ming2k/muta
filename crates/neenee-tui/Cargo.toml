@@ -1,0 +1,35 @@
+[package]
+name = "neenee-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+neenee-contracts = { path = "../neenee-contracts" }
+neenee-persistence = { path = "../neenee-persistence" }
+neenee-providers = { path = "../neenee-providers" }
+neenee-runtime = { path = "../neenee-runtime" }
+neenee-tui-engine = { path = "../neenee-tui-engine" }
+async-trait = { workspace = true }
+crossterm = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation.workspace = true
+similar = { workspace = true }
+arboard = "3.6"
+dirs = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+webbrowser = { version = "1.2", features = ["hardened"] }
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

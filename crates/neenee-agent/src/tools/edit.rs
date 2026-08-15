@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 
 use crate::tools::helpers::{json_string, save_file_atomic};
@@ -169,14 +169,19 @@ impl Tool for EditFileTool {
             "required": ["path", "old_string", "new_string"]
         })
     }
-    fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
-        neenee_core::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
+    fn scope_target(&self, arguments: &str) -> neenee_contracts::ScopeTarget {
+        neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(
+            arguments, "path",
+        )))
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
@@ -211,16 +216,16 @@ impl Tool for EditFileTool {
         // interrupted edit never corrupts the file in place.
         save_file_atomic(std::path::Path::new(path), edit.new_content.as_bytes())
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
-        Ok(neenee_core::ToolOutput::Patch {
+        Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
-            op: neenee_core::PatchOp::Edit,
+            op: neenee_contracts::PatchOp::Edit,
             old: edit.old_ctx,
             new: edit.new_ctx,
             start_line: edit.ctx_start,
         })
     }
 }
-neenee_core::register_tool!(EditFileFactory => EditFileTool);
+neenee_contracts::register_tool!(EditFileFactory => EditFileTool);
 
 #[cfg(test)]
 mod tests {

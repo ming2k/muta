@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_contracts::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use serde_json::{Map, Value};
 use std::sync::{Arc, Mutex};
 
@@ -48,12 +48,12 @@ pub struct GoogleProvider {
     pub last_text_thought_signature: Arc<Mutex<Option<String>>>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
-    pub capabilities: neenee_core::ModelCapabilities,
+    pub capabilities: neenee_contracts::ModelCapabilities,
     /// Channel-scoped reasoning-effort override. `None` leaves the model's
     /// server-default thinking level in place; `Some(e)` pins it, translated
     /// onto `thinkingConfig` (`thinkingLevel` for Gemini 3.x, a
     /// `thinkingBudget` bucket for Gemini 2.5) at request-build time.
-    pub reasoning_effort: Option<neenee_core::Effort>,
+    pub reasoning_effort: Option<neenee_contracts::Effort>,
 }
 
 impl GoogleProvider {
@@ -76,7 +76,7 @@ impl GoogleProvider {
         base_url: &str,
         user_agent: &str,
     ) -> Self {
-        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
+        let capabilities = neenee_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -102,7 +102,10 @@ impl GoogleProvider {
     }
 
     /// Attach the effective provider-channel capability view.
-    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+    pub fn with_model_capabilities(
+        mut self,
+        capabilities: neenee_contracts::ModelCapabilities,
+    ) -> Self {
         self.capabilities = capabilities;
         self
     }
@@ -112,7 +115,7 @@ impl GoogleProvider {
     /// `effort_levels` at request-build time, then translated onto Google's
     /// `thinkingConfig` (`thinkingLevel` for Gemini 3.x, a `thinkingBudget`
     /// bucket for Gemini 2.5).
-    pub fn with_reasoning_effort(mut self, effort: Option<neenee_core::Effort>) -> Self {
+    pub fn with_reasoning_effort(mut self, effort: Option<neenee_contracts::Effort>) -> Self {
         self.reasoning_effort = effort;
         self
     }
@@ -131,7 +134,7 @@ impl Provider for GoogleProvider {
         self.endpoint.model.clone()
     }
 
-    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+    fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }
 
@@ -149,7 +152,7 @@ impl Provider for GoogleProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<neenee_core::TokenUsage> {
+    fn take_last_usage(&self) -> Option<neenee_contracts::TokenUsage> {
         self.turn.take_usage()
     }
 

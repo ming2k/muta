@@ -1410,7 +1410,7 @@ dependencies = [
  "image",
  "inventory",
  "mockito",
- "neenee-core",
+ "neenee-contracts",
  "neenee-llm-client",
  "neenee-persistence",
  "neenee-providers",
@@ -1433,36 +1433,20 @@ dependencies = [
 name = "neenee-cli"
 version = "0.23.0"
 dependencies = [
- "arboard",
- "async-trait",
- "chrono",
- "crossterm",
- "dirs",
- "futures",
- "insta",
- "neenee-agent",
- "neenee-core",
+ "neenee-contracts",
+ "neenee-mcp",
  "neenee-persistence",
  "neenee-providers",
+ "neenee-runtime",
  "neenee-skills",
- "neenee-transport",
- "neenee-tui-engine",
+ "neenee-tui",
  "serde_json",
- "similar",
- "tempfile",
  "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "toml",
  "tracing",
- "unicode-segmentation",
- "unicode-width",
- "uuid",
- "webbrowser",
 ]
 
 [[package]]
-name = "neenee-core"
+name = "neenee-contracts"
 version = "0.23.0"
 dependencies = [
  "async-trait",
@@ -1484,12 +1468,24 @@ dependencies = [
  "httpdate",
  "inventory",
  "mockito",
- "neenee-core",
+ "neenee-contracts",
  "reqwest",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "neenee-mcp"
+version = "0.23.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "neenee-contracts",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1499,12 +1495,11 @@ dependencies = [
  "chrono",
  "crc32c",
  "directories",
- "dirs",
  "futures",
  "hex",
  "inventory",
  "libc",
- "neenee-core",
+ "neenee-contracts",
  "serde",
  "serde_json",
  "sha2",
@@ -1522,7 +1517,7 @@ dependencies = [
  "futures",
  "inventory",
  "mockito",
- "neenee-core",
+ "neenee-contracts",
  "neenee-llm-client",
  "neenee-persistence",
  "reqwest",
@@ -1536,17 +1531,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-server"
+name = "neenee-runtime"
 version = "0.23.0"
 dependencies = [
  "async-trait",
+ "chrono",
+ "futures",
  "neenee-agent",
- "neenee-core",
- "neenee-transport",
+ "neenee-contracts",
+ "neenee-mcp",
+ "neenee-persistence",
+ "neenee-providers",
+ "neenee-skills",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1556,7 +1564,7 @@ dependencies = [
  "async-trait",
  "dirs",
  "inventory",
- "neenee-core",
+ "neenee-contracts",
  "neenee-persistence",
  "reqwest",
  "serde",
@@ -1579,29 +1587,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-transport"
+name = "neenee-tui"
 version = "0.23.0"
 dependencies = [
+ "arboard",
  "async-trait",
  "chrono",
- "futures",
- "neenee-agent",
- "neenee-core",
+ "crossterm",
+ "dirs",
+ "insta",
+ "neenee-contracts",
  "neenee-persistence",
  "neenee-providers",
- "neenee-skills",
- "serde",
+ "neenee-runtime",
+ "neenee-tui-engine",
  "serde_json",
+ "similar",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
  "toml",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width",
  "uuid",
- "yaml_serde",
+ "webbrowser",
 ]
 
 [[package]]

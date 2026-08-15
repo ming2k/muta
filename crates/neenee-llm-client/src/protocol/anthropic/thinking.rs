@@ -4,7 +4,7 @@
 //! [`ThinkingMode`] (on/off) and [`Effort`] (depth) — that the request layer
 //! stamps onto every `/messages` body. This is an Anthropic-transport concern
 //! (it configures *how* the request encodes reasoning), so it lives here
-//! rather than in `neenee-core` (which holds only the model *capabilities*:
+//! rather than in `neenee-contracts` (which holds only the model *capabilities*:
 //! `ThinkingMode`, `Effort`, `ThinkingSupport`).
 //!
 //! **Reasoning is opt-in.** The default for every model is thinking **off**
@@ -13,11 +13,11 @@
 //! (ADR-0046). A request only carries a `thinking` object when the user has
 //! turned it on for that model.
 
-use neenee_core::{Effort, thinking::ThinkingSupport};
+use neenee_contracts::{Effort, thinking::ThinkingSupport};
 
 /// Re-export the on/off enum so callers reaching it through this module keep a
 /// stable path.
-pub use neenee_core::ThinkingMode;
+pub use neenee_contracts::ThinkingMode;
 
 /// Resolved thinking/effort configuration for an Anthropic Messages provider.
 ///
@@ -42,7 +42,7 @@ pub struct ThinkingConfig {
 impl ThinkingConfig {
     /// The default configuration for a model: **thinking off, no explicit
     /// effort**. Extended thinking is opt-in (ADR-0046).
-    pub fn for_model(_model: &neenee_core::Model) -> Self {
+    pub fn for_model(_model: &neenee_contracts::Model) -> Self {
         Self::default()
     }
 
@@ -62,7 +62,7 @@ impl ThinkingConfig {
     }
 
     /// Resolve this config against a concrete model's `effort_levels` (the
-    /// open [`neenee_core::EffortLevel`] ladder, which may carry provider-advertised tiers
+    /// open [`neenee_contracts::EffortLevel`] ladder, which may carry provider-advertised tiers
     /// the vocabulary does not name), returning a new config whose explicit
     /// effort (if any) is clamped to the model's supported levels. The mode and
     /// the effort's explicit/implicit distinction are honored unchanged. An
@@ -74,14 +74,14 @@ impl ThinkingConfig {
     /// the open ladder; provider-advertised `Other` tiers are not eligible
     /// ranking targets for a known request (their depth is unknowable), though
     /// an exact-name passthrough is honored via [`Effort::clamp_to_levels`].
-    pub(super) fn resolve_for(self, effort_levels: &[neenee_core::EffortLevel]) -> Self {
+    pub(super) fn resolve_for(self, effort_levels: &[neenee_contracts::EffortLevel]) -> Self {
         if effort_levels.is_empty() {
             return self;
         }
         // Clamp a known request against the known rungs of the open ladder.
         let known: Vec<Effort> = effort_levels
             .iter()
-            .filter_map(neenee_core::EffortLevel::as_known)
+            .filter_map(neenee_contracts::EffortLevel::as_known)
             .collect();
         Self {
             mode: self.mode,

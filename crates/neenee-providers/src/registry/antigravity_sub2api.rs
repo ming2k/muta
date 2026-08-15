@@ -1,8 +1,8 @@
 //! The `antigravity-sub2api` provider template: Google-native models served
 //! by Antigravity sub2api relays.
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -17,8 +17,8 @@ pub const ANTIGRAVITY_SUB2API_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── sub2api / antigravity relay models ────────────────────────────────
     // Google-native 中转站 variants that advertise effort-tiered 3.1 Pro
@@ -65,7 +65,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "antigravity-sub2api",

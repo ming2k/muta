@@ -11,7 +11,7 @@
 
 use crate::fsutil;
 use crate::session::ContextProjectionCheckpoint;
-use neenee_core::Message;
+use neenee_contracts::Message;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -61,7 +61,7 @@ pub enum SessionEvent {
     /// `Agent::todos` so resume restores the task panel. The full list is
     /// stored on every change (snapshot semantics); history of individual
     /// items is reconstructable from the log itself.
-    TodosSet { todos: neenee_core::TodoList },
+    TodosSet { todos: neenee_contracts::TodoList },
     /// The scheduled-prompt list changed (`/schedule` add / cancel / fire, and
     /// the legacy `/repeat`). Snapshot semantics: the full list is stored on
     /// every change so resume restores the same schedule. The session that
@@ -70,13 +70,13 @@ pub enum SessionEvent {
     /// logs replay unchanged.
     #[serde(alias = "repeat_jobs_set")]
     ScheduledJobsSet {
-        jobs: Vec<neenee_core::ScheduledJob>,
+        jobs: Vec<neenee_contracts::ScheduledJob>,
     },
     /// The durable command ledger changed (ADR-0091). Snapshot semantics: the
     /// full list is stored on every change so resume restores every command
     /// invocation and its typed result.
     CommandsReplaced {
-        commands: Vec<neenee_core::CommandRecord>,
+        commands: Vec<neenee_contracts::CommandRecord>,
     },
     /// The session title changed (ADR-0022). `title = None` clears it. `manual`
     /// marks a user-set title (`/title <text>`) that AI generation must not
@@ -97,7 +97,7 @@ pub enum SessionEvent {
     /// replay idempotent and avoids rewriting the full ledger on every stream
     /// boundary.
     RequestUsageUpsert {
-        record: neenee_core::RequestUsageRecord,
+        record: neenee_contracts::RequestUsageRecord,
     },
     /// The session-scoped provider + model pin changed (C6). `selection = None`
     /// means "follow the global default". Snapshot semantics. Set by the
@@ -306,7 +306,10 @@ mod tests {
         })
         .unwrap();
         log.append(SessionEvent::MessagesReplaced {
-            messages: vec![neenee_core::Message::new(neenee_core::Role::User, "hi")],
+            messages: vec![neenee_contracts::Message::new(
+                neenee_contracts::Role::User,
+                "hi",
+            )],
         })
         .unwrap();
 
@@ -385,8 +388,14 @@ mod tests {
         let log = EventLog::new(dir.join("events.jsonl"));
 
         log.append(SessionEvent::ContextProjectionCommitted {
-            archived_originals: vec![neenee_core::Message::new(neenee_core::Role::Tool, "old")],
-            model_window: vec![neenee_core::Message::new(neenee_core::Role::User, "live")],
+            archived_originals: vec![neenee_contracts::Message::new(
+                neenee_contracts::Role::Tool,
+                "old",
+            )],
+            model_window: vec![neenee_contracts::Message::new(
+                neenee_contracts::Role::User,
+                "live",
+            )],
             checkpoint: crate::session::ContextProjectionCheckpoint {
                 operation: ContextProjectionKind::Prune,
                 archived_messages: 1,
@@ -447,13 +456,16 @@ mod tests {
         let log = EventLog::new(dir.join("events.jsonl"));
 
         log.append(SessionEvent::MessagesReplaced {
-            messages: vec![neenee_core::Message::new(neenee_core::Role::User, "seed")],
+            messages: vec![neenee_contracts::Message::new(
+                neenee_contracts::Role::User,
+                "seed",
+            )],
         })
         .unwrap();
         log.append(SessionEvent::MessagesAppended {
             messages: vec![
-                neenee_core::Message::new(neenee_core::Role::Assistant, "turn 1"),
-                neenee_core::Message::new(neenee_core::Role::Tool, "result 1"),
+                neenee_contracts::Message::new(neenee_contracts::Role::Assistant, "turn 1"),
+                neenee_contracts::Message::new(neenee_contracts::Role::Tool, "result 1"),
             ],
         })
         .unwrap();

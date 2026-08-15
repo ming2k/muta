@@ -15,7 +15,7 @@
 
 use futures::StreamExt;
 use mockito::{Matcher, Server};
-use neenee_core::{Message, Provider, ProviderStreamEvent, Role, SecretString};
+use neenee_contracts::{Message, Provider, ProviderStreamEvent, Role, SecretString};
 use neenee_providers::{AnthropicMessagesProvider, OpenAiChatCompletionsProvider};
 use serde_json::{Value, json};
 
@@ -143,7 +143,7 @@ async fn openai_chat_completions_classifies_server_error_as_retryable() {
 
     // ensure_success tags 5xx as retryable so the harness backs off and retries.
     assert!(
-        neenee_core::parse_retryable_error(&error).is_some(),
+        neenee_contracts::parse_retryable_error(&error).is_some(),
         "5xx must be classified retryable: {error}"
     );
     assert!(error.contains("HTTP 500"));
@@ -449,8 +449,8 @@ async fn anthropic_stream_surfaces_in_band_error_event() {
 // wire body a configured channel actually publishes.
 // ═════════════════════════════════════════════════════════════════════════════
 
-use neenee_core::catalog::{Channel, Transport};
-use neenee_core::{Effort, ThinkingMode};
+use neenee_contracts::catalog::{Channel, Transport};
+use neenee_contracts::{Effort, ThinkingMode};
 use neenee_providers::build_provider_for_channel;
 
 /// Build a channel → factory provider, send one turn to a mockito server that

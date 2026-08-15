@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 
 use crate::tools::helpers::should_skip_path;
@@ -109,11 +109,14 @@ impl Tool for ListDirTool {
         }
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         let out = self.call(arguments).await?;
-        Ok(neenee_core::ToolOutput::Listing {
+        Ok(neenee_contracts::ToolOutput::Listing {
             entries: out.split('\n').map(str::to_string).collect(),
         })
     }
 }
-neenee_core::register_tool!(ListDirFactory => ListDirTool);
+neenee_contracts::register_tool!(ListDirFactory => ListDirTool);

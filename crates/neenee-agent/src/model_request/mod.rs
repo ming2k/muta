@@ -3,7 +3,7 @@
 //! The assembler is intentionally independent of [`crate::Agent`]. The agent
 //! owns when assembly occurs and supplies a plain state snapshot; this module
 //! owns the pure projection from a live conversation window to one immutable
-//! [`neenee_core::ModelRequest`].
+//! [`neenee_contracts::ModelRequest`].
 
 mod policies;
 pub(crate) mod system_prompt;
@@ -44,12 +44,12 @@ impl ModelRequestAssembler {
         window: &[Message],
         context: &SystemPromptContext,
         tools: &[Arc<dyn Tool>],
-    ) -> neenee_core::ModelRequest {
+    ) -> neenee_contracts::ModelRequest {
         let mut messages = window.to_vec();
         crate::agent::remove_empty_assistant_messages(&mut messages);
         messages.retain(|message| message.role != Role::System && !message.is_command_echo());
         messages.insert(0, self.system_prompt_registry.build_message(context));
-        neenee_core::ModelRequest::with_tools(messages, tools)
+        neenee_contracts::ModelRequest::with_tools(messages, tools)
     }
 }
 

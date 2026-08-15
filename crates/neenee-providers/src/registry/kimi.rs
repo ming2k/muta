@@ -1,8 +1,8 @@
 //! The `kimi-code` provider template and its legacy registry preset:
 //! Moonshot AI's Kimi Code coding platform (`api.kimi.com/coding/v1`).
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::{OpenAiProviderSpec, ProviderTemplateSpec};
 
@@ -33,8 +33,8 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
 };
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── Kimi (Moonshot / opencode-go) ─────────────────────────────────────
     Model {
@@ -56,7 +56,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "kimi-k2.7-code",
@@ -96,7 +96,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "kimi-code",
@@ -117,7 +117,7 @@ pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
 #[cfg(test)]
 mod tests {
     use crate::openai_provider_spec;
-    use neenee_core::Provider;
+    use neenee_contracts::Provider;
 
     #[test]
     fn kimi_code_uses_kimi_code_platform() {

@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 
 /// Fast file pattern matching using globs.
@@ -83,4 +83,4 @@ impl Tool for GlobTool {
         }
     }
 }
-neenee_core::register_tool!(GlobFactory => GlobTool);
+neenee_contracts::register_tool!(GlobFactory => GlobTool);

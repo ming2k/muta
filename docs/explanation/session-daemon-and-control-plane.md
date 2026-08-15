@@ -5,7 +5,7 @@ every client — the TUI, the CLI, a web panel — talks to the same place. This
 is the conceptual companion to [ADR-0096](../adr/0096-unified-session-daemon.md);
 for the wire contract see the [Server WebSocket API](../reference/server-api.md),
 and for day-to-day use see
-[How to track sessions with a session host](../how-to/track-sessions-with-a-session-host.md).
+[How to track sessions with a session daemon](../how-to/track-sessions-with-a-session-daemon.md).
 
 ## The shape
 

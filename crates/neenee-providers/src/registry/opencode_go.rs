@@ -1,9 +1,9 @@
 //! The `opencode-go` provider template: the opencode.ai/zen/go relay's
 //! curated OpenAI-compatible catalogue.
 
-use neenee_core::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -45,8 +45,8 @@ pub const OPENCODE_GO_SERVED_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
@@ -217,7 +217,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "minimax-m2.7",
@@ -229,7 +229,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
     Model {
@@ -242,7 +242,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.5-plus",
@@ -254,7 +254,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.6-plus",
@@ -266,7 +266,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
     // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
@@ -282,7 +282,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.7-plus",
@@ -294,11 +294,11 @@ pub const MODELS: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "opencode-go",

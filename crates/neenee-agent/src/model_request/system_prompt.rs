@@ -10,7 +10,7 @@
 //! owns request preparation; only provider-supplied prompt hints cross the
 //! lower-layer contract boundary.
 
-use neenee_core::{InjectionKind, InjectionOrigin, Message, Role};
+use neenee_contracts::{InjectionKind, InjectionOrigin, Message, Role};
 
 /// Read-only view of the live turn state a section may draw on to render.
 ///

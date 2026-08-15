@@ -1,7 +1,7 @@
 //! Session-review runner (ADR-0018, superseding the periodic ADR-0016 design):
 //! the orchestration side of the on-demand transcript diagnostic.
 //!
-//! Domain types ([`SessionReview`], [`ReviewVerdict`]) live in `neenee-core`;
+//! Domain types ([`SessionReview`], [`ReviewVerdict`]) live in `neenee-contracts`;
 //! this module owns the LLM-backed runner that lives next to [`crate::EnvoyTool`]
 //! because — like the `task` tool — it spawns a bounded read-only envoy via
 //! [`crate::Agent`]. The difference is who drives it: `task` is a *model* tool
@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use neenee_core::{
+use neenee_contracts::{
     DEFAULT_REVIEWER_HARD_STOP, Message, REVIEW, ReviewStatus, ReviewVerdict, Role, SessionReview,
 };
 use tokio_util::sync::CancellationToken;
@@ -90,8 +90,8 @@ impl Agent {
         // parent, so it carries the parent's model selection (variant overrides
         // + hard capability limits); the REVIEW profile narrows scope to the
         // read-only tools. `resolve_tools` composes both off the full pool.
-        let model = neenee_core::resolve_model(&self.provider.model());
-        let model_sel = neenee_core::ToolSelection::unrestricted().with_variants(
+        let model = neenee_contracts::resolve_model(&self.provider.model());
+        let model_sel = neenee_contracts::ToolSelection::unrestricted().with_variants(
             self.variant_selection_handle()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -113,7 +113,7 @@ impl Agent {
         reviewer.set_hard_stop_turns(DEFAULT_REVIEWER_HARD_STOP);
         // The reviewer reads a transcript excerpt; disable the deterministic
         // read-loop guard's nudge (ADR-0034) so its own reads are never steered.
-        reviewer.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
+        reviewer.set_doom_guard_config(neenee_contracts::DoomGuardConfig::disabled());
         // The builder installed the dedicated review composition above so
         // request assembly builds persona + dimensions + JSON contract every
         // round instead of replacing a pre-seeded system message with defaults.
@@ -129,7 +129,7 @@ impl Agent {
         // system message is built from the reviewer registry above. Starting
         // without a pre-seeded system message keeps the two lifecycles clear.
         let mut child_messages = vec![crate::conversation_context::visible_user(
-            neenee_core::InjectionKind::SessionReviewInput,
+            neenee_contracts::InjectionKind::SessionReviewInput,
             user,
         )];
 
@@ -359,7 +359,7 @@ mod tests {
                     Role::User,
                     format!("round {i} with {}", "padding ".repeat(20)),
                 );
-                m.tool_calls = Some(vec![neenee_core::ToolCall {
+                m.tool_calls = Some(vec![neenee_contracts::ToolCall {
                     id: format!("c{i}"),
                     name: "read_text".to_string(),
                     arguments: format!("{{\"path\":\"f{i}\"}}"),

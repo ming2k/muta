@@ -1,4 +1,4 @@
-//! The orchestration layer between the pure domain (`neenee-core`) and the
+//! The orchestration layer between the pure domain (`neenee-contracts`) and the
 //! application services (`neenee-persistence`) on one side, and the frontends on the
 //! other.
 //!
@@ -23,7 +23,7 @@
 //!
 //! # Dependency posture
 //!
-//! `neenee-agent` is the wiring layer: it depends on `neenee-core`
+//! `neenee-agent` is the wiring layer: it depends on `neenee-contracts`
 //! (domain vocabulary), `neenee-persistence` (durable state: `SessionStore`,
 //! `Config`, `EmbeddingStore`), and `neenee-providers` (the
 //! `build_provider_for_channel` factory plus the user-agent / spec
@@ -52,19 +52,19 @@
 //!   envoy tool is fundamentally an orchestration primitive that
 //!   happens to satisfy the `Tool` trait, so it lives here too.
 //!
-//! Everything `neenee-core` exports is re-exported here so consumers can
+//! Everything `neenee-contracts` exports is re-exported here so consumers can
 //! `use neenee_agent::*` and get the full domain vocabulary alongside the
 //! orchestration API.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-pub use neenee_core::*;
+pub use neenee_contracts::*;
 
 // Explicit re-exports of core's top-level re-exports. `pub use X::*` does
 // not propagate through X's own `pub use` re-exports in Rust, so the items
 // the Agent struct expects at the crate root have to be listed here by name.
-// Keep this list in sync with `neenee_core`'s lib.rs re-exports.
-pub use neenee_core::{
+// Keep this list in sync with `neenee_contracts`'s lib.rs re-exports.
+pub use neenee_contracts::{
     AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, EXPLORE, EnvoyEvent, EnvoyProfile,
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
     McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
@@ -78,7 +78,7 @@ pub use neenee_core::{
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
-// `neenee-core`'s lib.rs (`use super::*`).
+// `neenee-contracts`'s lib.rs (`use super::*`).
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -136,8 +136,6 @@ pub mod session_review;
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;
-/// MCP connector (formerly the standalone neenee-mcp crate).
-pub mod mcp;
 mod tool_call;
 mod tool_integration;
 mod tool_manager;

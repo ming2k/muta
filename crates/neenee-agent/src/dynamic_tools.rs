@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use neenee_core::{DynamicToolSink, Tool};
+use neenee_contracts::{DynamicToolSink, Tool};
 
 /// A deterministic snapshot entry carrying provenance beside the tool.
 pub(crate) struct DynamicToolEntry {

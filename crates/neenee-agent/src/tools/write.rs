@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 
 use crate::tools::helpers::{json_string, save_file_atomic};
@@ -30,14 +30,19 @@ impl Tool for WriteFileTool {
             "required": ["path", "content"]
         })
     }
-    fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
-        neenee_core::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
+    fn scope_target(&self, arguments: &str) -> neenee_contracts::ScopeTarget {
+        neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(
+            arguments, "path",
+        )))
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
@@ -47,13 +52,13 @@ impl Tool for WriteFileTool {
         // never leaves a half-written, corrupt file in place of the original.
         save_file_atomic(std::path::Path::new(path), content.as_bytes())
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
-        Ok(neenee_core::ToolOutput::Patch {
+        Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
-            op: neenee_core::PatchOp::Create,
+            op: neenee_contracts::PatchOp::Create,
             old: String::new(),
             new: content.to_string(),
             start_line: 0,
         })
     }
 }
-neenee_core::register_tool!(WriteFileFactory => WriteFileTool);
+neenee_contracts::register_tool!(WriteFileFactory => WriteFileTool);

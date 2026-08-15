@@ -13,7 +13,7 @@
 //! that need a visual gap include a leading `\n` in their own `render`, so
 //! joining on a single `\n` preserves a stable layout.
 use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
-use neenee_core::{REVIEW, SessionReview};
+use neenee_contracts::{REVIEW, SessionReview};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------

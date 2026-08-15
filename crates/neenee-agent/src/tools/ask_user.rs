@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 
 /// Ask the user one or more multiple-choice questions mid-task.
@@ -89,4 +89,4 @@ impl Tool for AskUserTool {
     }
 }
 
-neenee_core::register_tool!(AskUserFactory => AskUserTool);
+neenee_contracts::register_tool!(AskUserFactory => AskUserTool);

@@ -7,7 +7,7 @@
 use super::request::{self, BodyInput};
 use super::response;
 use super::*;
-use neenee_core::{Effort, Role, ThinkingMode, Tool};
+use neenee_contracts::{Effort, Role, ThinkingMode, Tool};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ fn request_body_serializes_tool_result_as_user_block() {
             Message {
                 role: Role::Assistant,
                 content: String::new(),
-                tool_calls: Some(vec![neenee_core::ToolCall {
+                tool_calls: Some(vec![neenee_contracts::ToolCall {
                     id: "toolu_1".to_string(),
                     name: "bash".to_string(),
                     arguments: "{}".to_string(),
@@ -114,7 +114,7 @@ fn request_body_includes_tools_in_anthropic_shape() {
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
     let request =
-        neenee_core::ModelRequest::with_tools(vec![Message::new(Role::User, "hi")], &tools);
+        neenee_contracts::ModelRequest::with_tools(vec![Message::new(Role::User, "hi")], &tools);
     let (messages, tool_specs) = request.into_parts();
     let body = request::body(
         messages,
@@ -168,7 +168,7 @@ fn cache_breakpoints_hit_all_four_zones() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
-    let request = neenee_core::ModelRequest::with_tools(
+    let request = neenee_contracts::ModelRequest::with_tools(
         vec![
             Message::new(Role::System, "you are a coding agent"),
             Message::new(Role::User, "do task A"),
@@ -215,7 +215,7 @@ fn cache_breakpoints_never_exceed_four_cap() {
             ]
         })
         .collect();
-    let request = neenee_core::ModelRequest::with_tools(history, &tools);
+    let request = neenee_contracts::ModelRequest::with_tools(history, &tools);
     let (messages, tool_specs) = request.into_parts();
     let body = request::body(
         messages,
@@ -464,7 +464,7 @@ fn non_default_effort_is_stamped_into_output_config() {
 #[test]
 fn effort_clamps_to_model_support_levels() {
     let cfg = ThinkingConfig::default().with_effort(Effort::Xhigh);
-    let common: Vec<neenee_core::EffortLevel> = neenee_core::EFFORT_COMMON
+    let common: Vec<neenee_contracts::EffortLevel> = neenee_contracts::EFFORT_COMMON
         .iter()
         .copied()
         .map(Into::into)
@@ -475,7 +475,7 @@ fn effort_clamps_to_model_support_levels() {
         Some(Effort::High),
         "xhigh clamps to high on a common-only model"
     );
-    let claude: Vec<neenee_core::EffortLevel> = neenee_core::EFFORT_CLAUDE_FULL
+    let claude: Vec<neenee_contracts::EffortLevel> = neenee_contracts::EFFORT_CLAUDE_FULL
         .iter()
         .copied()
         .map(Into::into)

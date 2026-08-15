@@ -7,7 +7,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use neenee_core::SecretString;
+use neenee_contracts::SecretString;
 use sha2::{Digest, Sha256};
 
 /// The PKCE code verifier + matching S256 code challenge.

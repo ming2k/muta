@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use neenee_tool_derive::ToolSchema;
 use serde_json::json;
 
@@ -46,7 +46,10 @@ impl Tool for ReadTextTool {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
@@ -107,7 +110,7 @@ impl Tool for ReadTextTool {
         // draws nothing) and the note explains why via `to_text()`.
         let start = offset - 1;
         if total_lines == 0 {
-            return Ok(neenee_core::ToolOutput::Code {
+            return Ok(neenee_contracts::ToolOutput::Code {
                 lang,
                 text: String::new(),
                 start_line: offset,
@@ -116,7 +119,7 @@ impl Tool for ReadTextTool {
             });
         }
         if start >= total_lines {
-            return Ok(neenee_core::ToolOutput::Code {
+            return Ok(neenee_contracts::ToolOutput::Code {
                 lang,
                 text: String::new(),
                 start_line: offset,
@@ -209,7 +212,7 @@ impl Tool for ReadTextTool {
             (Some(header), suffix)
         };
 
-        Ok(neenee_core::ToolOutput::Code {
+        Ok(neenee_contracts::ToolOutput::Code {
             lang,
             text,
             start_line: offset,
@@ -218,7 +221,7 @@ impl Tool for ReadTextTool {
         })
     }
 }
-neenee_core::register_tool!(ReadTextFactory => ReadTextTool);
+neenee_contracts::register_tool!(ReadTextFactory => ReadTextTool);
 
 /// The terse `read_text` variant: same capability name and identical behaviour
 /// (it delegates execution to [`ReadTextTool`]), but a stripped-down,
@@ -258,11 +261,14 @@ impl Tool for ReadTextTerseTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         ReadTextTool.call(arguments).await
     }
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         ReadTextTool.call_structured(arguments).await
     }
 }
-neenee_core::register_tool!(ReadTextTerseFactory => ReadTextTerseTool);
+neenee_contracts::register_tool!(ReadTextTerseFactory => ReadTextTerseTool);
 
 /// Extensions that are always treated as binary and never read as text.
 const BINARY_EXTENSIONS: &[&str] = &[

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-neenee-core = { path = "../neenee-core" }
+neenee-contracts = { path = "../neenee-contracts" }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 futures = { workspace = true }
 serde = { workspace = true }
@@ -16,7 +16,6 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 directories = "6.0"
-dirs = { workspace = true }
 libc = "0.2"
 crc32c = "0.6"
 hex = "0.4"

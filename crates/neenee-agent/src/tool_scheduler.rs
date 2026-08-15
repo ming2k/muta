@@ -47,7 +47,7 @@
 //! sent); callers must treat that as "no result was produced", on par with
 //! a queued task rejected by cancellation.
 //!
-//! Lives in `neenee-agent` (not `neenee-core`) because it spins up tokio
+//! Lives in `neenee-agent` (not `neenee-contracts`) because it spins up tokio
 //! tasks: core is pure domain, zero I/O (ADR-0005).
 
 use std::future::Future;
@@ -55,7 +55,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::FutureExt;
-use neenee_core::ToolAccesses;
+use neenee_contracts::ToolAccesses;
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;

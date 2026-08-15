@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use neenee_core::SecretString;
+use neenee_contracts::SecretString;
 
 use crate::oauth::config::OAuthConfig;
 use crate::oauth::token::TokenResponse;

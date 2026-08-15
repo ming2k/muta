@@ -21,7 +21,8 @@ info:
       the snapshot). Rows are whole `MonitoredSession` values; upsert by `id`.
     - **Control** (`Select{action: {control: {verb, …}}}`, ADR-0096): one
       round-trip session management — create_session / send_prompt / interrupt
-      / resolve_permission / kill_session — answered by a `ControlReply`.
+      / resolve_permission / kill_session / shutdown — answered by a
+      `ControlReply`.
 
     Every WebSocket text frame contains exactly one JSON value. Binary frames
     are ignored. There are no sequence numbers or replay cursors: an attach
@@ -208,6 +209,13 @@ components:
               control:
                 verb: create_session
                 project: /abs/path
+        - name: controlShutdown
+          payload:
+            type: Select
+            version: 0.23.0
+            action:
+              control:
+                verb: shutdown
     Welcome:
       name: Welcome
       title: Attach handshake reply with the bound session's transcript
@@ -283,6 +291,10 @@ components:
             type: Monitor
             kind: session_removed
             session_id: session-123
+        - name: daemonDraining
+          payload:
+            type: Monitor
+            kind: daemon_draining
     ControlReply:
       name: ControlReply
       title: Reply to a control-plane verb (ADR-0096)
@@ -344,6 +356,9 @@ components:
         The first frame on every connection. `action` is one of `"new"`,
         `{ "attach": "<id>" | null }`, `{ "monitor": { watch, include_idle } }`,
         or `{ "control": { verb, … } }` (serde `rename_all = "snake_case"`).
+        `version` (ADR-0100 rule 4) is the client's build; the daemon
+        refuses a mismatched value with a both-versions `Error` before any
+        session work. Absent means "legacy client" and is served.
       type: object
       required: [type, action]
       properties:
@@ -351,6 +366,9 @@ components:
           const: Select
         action:
           description: AttachAction; see examples on the Select message.
+        version:
+          type: string
+          description: The client's CARGO_PKG_VERSION for skew detection.
       additionalProperties: false
     WelcomeEnvelope:
       type: object
@@ -467,14 +485,16 @@ components:
         `type` is the Wire discriminator; `kind` is the flattened MonitorEvent
         discriminator. `snapshot` carries MonitorSnapshot fields;
         `session_added` / `session_updated` carry whole MonitoredSession rows;
-        `session_removed` carries `session_id`.
+        `session_removed` carries `session_id`; `daemon_draining` (ADR-0101)
+        carries nothing — it announces the daemon's graceful shutdown to
+        watch clients right before the stream closes.
       type: object
       required: [type, kind]
       properties:
         type:
           const: Monitor
         kind:
-          enum: [snapshot, session_added, session_updated, session_removed]
+          enum: [snapshot, session_added, session_updated, session_removed, daemon_draining]
     ControlReplyEnvelope:
       type: object
       required: [type, ok]
@@ -529,6 +549,7 @@ components:
         - $ref: '#/components/schemas/RequestExitSideView'
         - $ref: '#/components/schemas/RequestUpdateDoomGuardConfig'
         - $ref: '#/components/schemas/RequestUpdateTuiLayout'
+        - $ref: '#/components/schemas/RequestRefreshProviderModels'
     RequestChat:
       type: object
       required: [Chat]
@@ -819,6 +840,16 @@ components:
       type: object
       required: [UpdateTuiLayout]
       properties: { UpdateTuiLayout: { type: string, enum: [default, legacy] } }
+      additionalProperties: false
+    RequestRefreshProviderModels:
+      type: object
+      required: [RefreshProviderModels]
+      properties:
+        RefreshProviderModels:
+          type: object
+          properties:
+            user_initiated: { type: boolean, default: false }
+          additionalProperties: false
       additionalProperties: false
 
     AgentResponse:

@@ -15,10 +15,10 @@ provider channel. For provider availability and endpoints, see
 
 Each provider's baseline table lives beside its other registry data (e.g.
 `crates/neenee-providers/src/registry/openai.rs`) and is submitted to
-`neenee_core`'s lookup machinery at link time via
-`inventory::submit!(BaselineModels(...))`. `neenee_core` owns only the
+`neenee_contracts`'s lookup machinery at link time via
+`inventory::submit!(BaselineModels(...))`. `neenee_contracts` owns only the
 `resolve()` / `baseline_models()` mechanism — the data itself is distributed
-per provider. See [`neenee_core::model`](../../crates/neenee-core/src/model.rs)
+per provider. See [`neenee_contracts::model`](../../crates/neenee-contracts/src/model.rs)
 for the lookup precedence rules.
 
 Remote metadata never changes another provider's channel. A model id can have

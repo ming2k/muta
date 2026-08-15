@@ -8,6 +8,7 @@ Conceptual background and design rationale.
 |------|--------|
 | [Crate layering](crate-layering.md) | The workspace crate topology, each layer's responsibility, the dependency DAG, and how a request flows across layers |
 | [The session daemon and the control plane](session-daemon-and-control-plane.md) | Who owns a session's lifecycle, the daemon's observe/drive/manage roles, and how every client connects |
+| [Workflow patterns](workflow-patterns.md) | The five core interaction models: pairing loop, multi-session management, subagent delegation, MCP extensions, and headless automation |
 
 ## Storage and persistence
 

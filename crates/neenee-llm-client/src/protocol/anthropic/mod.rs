@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_contracts::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use std::sync::Arc;
 
 use crate::{Client, Endpoint, TurnState};
@@ -30,10 +30,10 @@ pub mod signature;
 pub mod thinking;
 
 // Re-export the model-capability enums so callers reaching them through the
-// provider crate keep a stable path. They live in `neenee-core` because they
+// provider crate keep a stable path. They live in `neenee-contracts` because they
 // are model capabilities, not transport details.
-pub use neenee_core::effort::Effort;
-pub use neenee_core::{ThinkingMode, ThinkingSupport};
+pub use neenee_contracts::effort::Effort;
+pub use neenee_contracts::{ThinkingMode, ThinkingSupport};
 pub use thinking::ThinkingConfig;
 
 /// Anthropic-compatible `/messages` provider.
@@ -53,7 +53,7 @@ pub struct AnthropicMessagesProvider {
     pub thinking: ThinkingConfig,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
-    pub capabilities: neenee_core::ModelCapabilities,
+    pub capabilities: neenee_contracts::ModelCapabilities,
     /// Use GitHub Copilot's bearer authentication and client headers for its
     /// `/v1/messages` adapter instead of stock Anthropic API-key headers.
     pub copilot: bool,
@@ -83,8 +83,8 @@ impl AnthropicMessagesProvider {
         user_agent: &str,
     ) -> Self {
         // Default the thinking/effort config to opt-in off (ADR-0046).
-        let thinking = ThinkingConfig::for_model(&neenee_core::model::resolve(&model));
-        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
+        let thinking = ThinkingConfig::for_model(&neenee_contracts::model::resolve(&model));
+        let capabilities = neenee_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -116,7 +116,10 @@ impl AnthropicMessagesProvider {
     }
 
     /// Attach the effective provider-channel capability view.
-    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+    pub fn with_model_capabilities(
+        mut self,
+        capabilities: neenee_contracts::ModelCapabilities,
+    ) -> Self {
         self.capabilities = capabilities;
         self
     }
@@ -163,7 +166,7 @@ impl Provider for AnthropicMessagesProvider {
         self.endpoint.model.clone()
     }
 
-    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+    fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }
 
@@ -181,7 +184,7 @@ impl Provider for AnthropicMessagesProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<neenee_core::TokenUsage> {
+    fn take_last_usage(&self) -> Option<neenee_contracts::TokenUsage> {
         self.turn.take_usage()
     }
 

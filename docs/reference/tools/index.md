@@ -9,7 +9,7 @@ Most built-in tools live in `neenee-agent`'s `tools` module; skill adapters live
 `neenee-skills`, MCP adapters in `neenee-agent`'s `mcp` module, and `envoy` in
 `neenee-agent` proper.
 The `Tool` trait is defined in
-`crates/neenee-core/src/capability.rs`.
+`crates/neenee-contracts/src/capability.rs`.
 
 ## Registry
 
@@ -45,7 +45,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 against.
 
 Parameters are exposed to the model as JSON Schema via
-`Tool::to_openai_function()` (`crates/neenee-core/src/capability.rs`), which
+`Tool::to_openai_function()` (`crates/neenee-contracts/src/capability.rs`), which
 wraps `Tool::parameters()`.
 
 ## See also

@@ -6,7 +6,7 @@
 //! content lives in `candidates[0].content.parts[]` as either `text` or
 //! `functionCall`.
 
-use neenee_core::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
+use neenee_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::{Map, Value};
 
 pub const THOUGHT_SIGNATURES_META_KEY: &str = "gemini_thought_signatures";
@@ -31,7 +31,7 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
     // Route cache-read accounting through the shared helper so the cache
     // policy is enforced in one place (ADR-0067). Google hides the discount in
     // `cachedContentTokenCount`, which the helper reads.
-    let cached = neenee_core::cache::read_cached_tokens(usage);
+    let cached = neenee_contracts::cache::read_cached_tokens(usage);
     match (prompt, completion, total) {
         (Some(p), Some(c), _) => Some(TokenUsage {
             prompt_tokens: p,

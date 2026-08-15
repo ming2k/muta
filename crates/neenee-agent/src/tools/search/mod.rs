@@ -15,7 +15,7 @@
 //! `searxng`) in `config.toml` if that matters.
 
 use async_trait::async_trait;
-use neenee_core::WebSearchConfig;
+use neenee_contracts::WebSearchConfig;
 
 pub mod duckduckgo;
 pub mod exa;

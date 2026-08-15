@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-neenee-core = { path = "../neenee-core" }
+neenee-contracts = { path = "../neenee-contracts" }
 async-trait = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }

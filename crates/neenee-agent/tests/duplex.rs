@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 use neenee_agent::{
     Agent, AgentEvent, AgentOp, EnvoyEvent, EnvoyTool, Message, Provider, ProviderStreamEvent, Role,
 };
-use neenee_core::{EnvoyProfile, PermissionDecision, Tool, ToolOutput, ToolPolicy};
+use neenee_contracts::{EnvoyProfile, PermissionDecision, Tool, ToolOutput, ToolPolicy};
 
 /// `stream_chat` emits "done" with no tool calls (the default
 /// `stream_chat_events` wraps it into one `TextDelta`). Used by the inject
@@ -43,12 +43,12 @@ struct IdleProvider;
 
 #[async_trait]
 impl Provider for IdleProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
     }
@@ -102,8 +102,8 @@ impl Tool for BrokerGatedTool {
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({"type": "object"})
     }
-    fn scope_target(&self, _arguments: &str) -> neenee_core::ScopeTarget {
-        neenee_core::ScopeTarget::Path(std::path::PathBuf::from("/tmp/gated"))
+    fn scope_target(&self, _arguments: &str) -> neenee_contracts::ScopeTarget {
+        neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from("/tmp/gated"))
     }
     async fn call(&self, _arguments: &str) -> Result<String, String> {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -130,7 +130,7 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
     ));
     let handle = agent.install_inbox();
 
-    let (req_tx, mut req_rx) = mpsc::unbounded_channel::<neenee_core::PermissionRequest>();
+    let (req_tx, mut req_rx) = mpsc::unbounded_channel::<neenee_contracts::PermissionRequest>();
     let run_agent = Arc::clone(&agent);
     let task = tokio::spawn(async move {
         let mut messages = vec![Message::new(Role::User, "run the write tool")];
@@ -200,18 +200,18 @@ struct StreamWriteCallProvider(AtomicUsize);
 
 #[async_trait]
 impl Provider for StreamWriteCallProvider {
-    async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
     async fn stream_chat(
         &self,
-        _: neenee_core::ModelRequest,
+        _: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
     async fn stream_chat_events(
         &self,
-        _: neenee_core::ModelRequest,
+        _: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let round = self.0.fetch_add(1, Ordering::SeqCst);
         let events = if round == 0 {
@@ -298,7 +298,7 @@ async fn envoy_tool_registry_routes_reply_into_live_envoy() {
     let ran = Arc::new(AtomicUsize::new(0));
     let envoy_tool = Arc::new(EnvoyTool::new(
         Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),
-        neenee_core::ToolSet::from_tools([
+        neenee_contracts::ToolSet::from_tools([
             Arc::new(BrokerGatedTool(Arc::clone(&ran))) as Arc<dyn Tool>
         ]),
         &INTERACTIVE,
@@ -316,7 +316,7 @@ async fn envoy_tool_registry_routes_reply_into_live_envoy() {
                 let _ = evt_tx.send(e);
             }),
             &mut on_stream,
-            neenee_core::StdinPolicy::default(),
+            neenee_contracts::StdinPolicy::default(),
         )
         .await
     });

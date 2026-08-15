@@ -1,7 +1,7 @@
 //! Agent extension point for projecting the next model-visible context.
 
 use async_trait::async_trait;
-use neenee_core::Message;
+use neenee_contracts::Message;
 
 /// Mid-turn model-context projection hook.
 ///

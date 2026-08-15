@@ -10,34 +10,16 @@ name = "neenee"
 path = "src/main.rs"
 
 [dependencies]
-neenee-core = { path = "../neenee-core" }
+neenee-contracts = { path = "../neenee-contracts" }
 neenee-persistence = { path = "../neenee-persistence" }
-neenee-providers = { path = "../neenee-providers" }
+neenee-runtime = { path = "../neenee-runtime" }
 neenee-skills = { path = "../neenee-skills" }
-neenee-agent = { path = "../neenee-agent" }
-neenee-transport = { path = "../neenee-transport" }
-neenee-tui-engine = { path = "../neenee-tui-engine" }
-async-trait = { workspace = true }
-crossterm = { workspace = true }
-arboard = "3.6"
-dirs = { workspace = true }
-unicode-width = { workspace = true }
-similar = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { workspace = true }
-tokio-tungstenite = { workspace = true }
-futures = { workspace = true }
-toml = { workspace = true }
+neenee-providers = { path = "../neenee-providers" }
+neenee-mcp = { path = "../neenee-mcp" }
+neenee-tui = { path = "../neenee-tui" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 serde_json = { workspace = true }
-uuid = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
-unicode-segmentation.workspace = true
-webbrowser = { version = "1.2", features = ["hardened"] }
-
-[dev-dependencies]
-insta = { workspace = true }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

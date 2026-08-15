@@ -1,8 +1,8 @@
 //! The `chatgpt-oauth` provider template: GPT-5.x over the ChatGPT
 //! subscription backend (the Codex Responses API).
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -20,8 +20,8 @@ pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
@@ -33,7 +33,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -45,7 +45,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -57,7 +57,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
@@ -74,7 +74,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -86,7 +86,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -98,11 +98,11 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "chatgpt-oauth",

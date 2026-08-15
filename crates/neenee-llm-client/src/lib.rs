@@ -52,9 +52,9 @@ pub use protocol::openai::{OpenAiChatCompletionsProvider, OpenAiResponsesProvide
 /// is no collision with providers' own inventory submissions.
 #[cfg(test)]
 mod test_baselines {
-    use neenee_core::model::BaselineModels;
-    use neenee_core::thinking::ThinkingSupport;
-    use neenee_core::{Model, WireFormat};
+    use neenee_contracts::model::BaselineModels;
+    use neenee_contracts::thinking::ThinkingSupport;
+    use neenee_contracts::{Model, WireFormat};
 
     const CLAUDE_BASELINES: &[Model] = &[
         Model {
@@ -67,7 +67,7 @@ mod test_baselines {
             vision: true,
             format: WireFormat::AnthropicCompat,
             model_guidance: "",
-            effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+            effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
         },
         Model {
             id: "claude-sonnet-4-6",
@@ -79,7 +79,7 @@ mod test_baselines {
             vision: true,
             format: WireFormat::AnthropicCompat,
             model_guidance: "",
-            effort_levels: neenee_core::effort::EFFORT_CLAUDE_NO_XHIGH,
+            effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
         },
         Model {
             id: "claude-haiku-4-5-20251001",
@@ -106,7 +106,7 @@ mod test_baselines {
             vision: true,
             format: WireFormat::OpenAi,
             model_guidance: "",
-            effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+            effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
         },
         Model {
             id: "gpt-5.6-sol",
@@ -118,7 +118,7 @@ mod test_baselines {
             vision: true,
             format: WireFormat::OpenAi,
             model_guidance: "",
-            effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+            effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
         },
     ];
 

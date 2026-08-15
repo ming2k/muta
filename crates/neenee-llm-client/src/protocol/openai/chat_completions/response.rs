@@ -4,7 +4,7 @@
 //! domain types: the assistant [`Message`] (with reasoning content and tool
 //! calls), the top-level `usage` object, and the per-chunk stream events.
 
-use neenee_core::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
+use neenee_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::Value;
 
 /// Parse an OpenAI top-level `usage` object (`prompt_tokens` /
@@ -19,7 +19,7 @@ use serde_json::Value;
 /// hit rate and the cost is attributed correctly. `cache_creation_input_tokens`
 /// stays zero: OpenAI-style auto-caching has no separate write counter.
 pub fn usage(usage: &Value) -> Option<TokenUsage> {
-    let cached = neenee_core::cache::read_cached_tokens(usage);
+    let cached = neenee_contracts::cache::read_cached_tokens(usage);
     let prompt = usage["prompt_tokens"].as_i64();
     let completion = usage["completion_tokens"].as_i64();
     let total = usage["total_tokens"].as_i64();
@@ -109,7 +109,7 @@ pub fn message(choice: &Value, content_filter: impl FnOnce(&str, bool) -> String
         children: None,
         envoy_meta: None,
         origin: None,
-        timestamp: Some(neenee_core::todos::unix_now()),
+        timestamp: Some(neenee_contracts::todos::unix_now()),
         sent_at_ms: None,
     }
 }

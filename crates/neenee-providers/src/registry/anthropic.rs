@@ -3,8 +3,8 @@
 //! plus the per-model `max_tokens` table every Anthropic-format build
 //! consults.
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -57,8 +57,8 @@ pub const ANTHROPIC_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── Claude (Anthropic, via Anthropic-compatible relays) ───────────────
     // Served over the Anthropic Messages wire format. Relays forward to
@@ -75,7 +75,7 @@ pub const MODELS: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Opus 4.8 honors the full effort range including `xhigh`/`max`.
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-4-6",
@@ -88,7 +88,7 @@ pub const MODELS: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_NO_XHIGH,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
     },
     Model {
         id: "claude-fable-5",
@@ -106,7 +106,7 @@ pub const MODELS: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Fable 5 honors the full effort range including `xhigh`/`max`.
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-5",
@@ -125,7 +125,7 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         // Sonnet 5 honors the full range INCLUDING `xhigh` — the key difference
         // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-haiku-4-5-20251001",
@@ -144,7 +144,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "anthropic",

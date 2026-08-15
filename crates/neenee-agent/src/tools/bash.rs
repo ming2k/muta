@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -34,14 +34,17 @@ impl Tool for BashTool {
             "required": ["command"]
         })
     }
-    fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
-        neenee_core::ScopeTarget::Command(json_string(arguments, "command"))
+    fn scope_target(&self, arguments: &str) -> neenee_contracts::ScopeTarget {
+        neenee_contracts::ScopeTarget::Command(json_string(arguments, "command"))
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }
 
-    async fn call_structured(&self, arguments: &str) -> Result<neenee_core::ToolOutput, String> {
+    async fn call_structured(
+        &self,
+        arguments: &str,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
         // Non-streaming path: delegate with no-op sinks and the default
         // (closed) stdin policy. The streaming entry point below is where the
         // real stdin policy is applied.
@@ -50,7 +53,7 @@ impl Tool for BashTool {
             arguments,
             Box::new(|_| {}),
             &mut |_| {},
-            neenee_core::StdinPolicy::default(),
+            neenee_contracts::StdinPolicy::default(),
         )
         .await
     }
@@ -72,11 +75,11 @@ impl Tool for BashTool {
         &self,
         _call_id: &str,
         arguments: &str,
-        _on_event: Box<dyn FnMut(neenee_core::EnvoyEvent) + Send + 'a>,
-        on_stream: &mut (dyn FnMut(neenee_core::ToolStream) + Send + 'a),
-        stdin_policy: neenee_core::StdinPolicy,
-    ) -> Result<neenee_core::ToolOutput, String> {
-        use neenee_core::tool_output::{
+        _on_event: Box<dyn FnMut(neenee_contracts::EnvoyEvent) + Send + 'a>,
+        on_stream: &mut (dyn FnMut(neenee_contracts::ToolStream) + Send + 'a),
+        stdin_policy: neenee_contracts::StdinPolicy,
+    ) -> Result<neenee_contracts::ToolOutput, String> {
+        use neenee_contracts::tool_output::{
             ShellLine, ShellStream, normalize_carriage_returns, strip_ansi,
         };
         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -93,8 +96,8 @@ impl Tool for BashTool {
         // bytes into right after spawn; the pipe buffer holds them ahead of
         // the child's first read. (L1 — see disclosure/bash design doc.)
         let stdin_bytes = match &stdin_policy {
-            neenee_core::StdinPolicy::Closed => None,
-            neenee_core::StdinPolicy::Prefilled { data } => Some(data.clone()),
+            neenee_contracts::StdinPolicy::Closed => None,
+            neenee_contracts::StdinPolicy::Prefilled { data } => Some(data.clone()),
         };
         let stdin_stdio = if stdin_bytes.is_some() {
             std::process::Stdio::piped()
@@ -238,14 +241,14 @@ impl Tool for BashTool {
                                     ShellStream::Out => {
                                         stdout_buf.push_str(&text);
                                         stdout_buf.push('\n');
-                                        on_stream(neenee_core::ToolStream::Stdout(
+                                        on_stream(neenee_contracts::ToolStream::Stdout(
                                             format!("{}\n", text),
                                         ));
                                     }
                                     ShellStream::Err => {
                                         stderr_buf.push_str(&text);
                                         stderr_buf.push('\n');
-                                        on_stream(neenee_core::ToolStream::Stderr(
+                                        on_stream(neenee_contracts::ToolStream::Stderr(
                                             format!("{}\n", text),
                                         ));
                                     }
@@ -270,14 +273,15 @@ impl Tool for BashTool {
             };
 
             let termination = if idle_blocked {
-                neenee_core::tool_output::ShellTermination::IdleBlocked
+                neenee_contracts::tool_output::ShellTermination::IdleBlocked
             } else {
-                neenee_core::tool_output::ShellTermination::Exited
+                neenee_contracts::tool_output::ShellTermination::Exited
             };
             let truncated =
-                neenee_core::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit).len()
-                    > neenee_core::tool_output::SHELL_MAX_OUTPUT_CHARS;
-            Ok(neenee_core::ToolOutput::Shell {
+                neenee_contracts::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit)
+                    .len()
+                    > neenee_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS;
+            Ok(neenee_contracts::ToolOutput::Shell {
                 command: command.to_string(),
                 stdout: stdout_buf,
                 stderr: stderr_buf,
@@ -285,7 +289,7 @@ impl Tool for BashTool {
                 exit,
                 truncated,
                 termination,
-            }) as Result<neenee_core::ToolOutput, String>
+            }) as Result<neenee_contracts::ToolOutput, String>
         };
 
         timeout(timeout_duration, run)
@@ -294,7 +298,7 @@ impl Tool for BashTool {
     }
 }
 
-neenee_core::register_tool!(BashFactory => BashTool);
+neenee_contracts::register_tool!(BashFactory => BashTool);
 
 #[cfg(test)]
 mod tests {
@@ -309,7 +313,7 @@ mod tests {
             .await
             .expect("ok");
         match out {
-            neenee_core::ToolOutput::Shell {
+            neenee_contracts::ToolOutput::Shell {
                 stdout,
                 exit,
                 termination,
@@ -319,7 +323,7 @@ mod tests {
                 assert_eq!(exit, Some(0));
                 assert_eq!(
                     termination,
-                    neenee_core::tool_output::ShellTermination::Exited
+                    neenee_contracts::tool_output::ShellTermination::Exited
                 );
             }
             other => panic!("expected Shell, got {:?}", other),
@@ -342,7 +346,7 @@ mod tests {
         .await
         .expect("closed stdin must NOT hang past 5s");
         match out.expect("ok") {
-            neenee_core::ToolOutput::Shell { exit, .. } => {
+            neenee_contracts::ToolOutput::Shell { exit, .. } => {
                 // `read` hits EOF → non-zero exit, but crucially it returned
                 // at all (no hang).
                 assert_ne!(exit, Some(0));
@@ -356,21 +360,21 @@ mod tests {
     #[tokio::test]
     async fn bash_prefilled_stdin_feeds_the_child() {
         let tool = BashTool;
-        let mut on_stream = |_: neenee_core::ToolStream| ();
+        let mut on_stream = |_: neenee_contracts::ToolStream| ();
         let out = tool
             .call_structured_with_events(
                 "",
                 r#"{"command":"cat"}"#,
                 Box::new(|_| {}),
                 &mut on_stream,
-                neenee_core::StdinPolicy::Prefilled {
+                neenee_contracts::StdinPolicy::Prefilled {
                     data: "injected\n".into(),
                 },
             )
             .await
             .expect("ok");
         match out {
-            neenee_core::ToolOutput::Shell { stdout, exit, .. } => {
+            neenee_contracts::ToolOutput::Shell { stdout, exit, .. } => {
                 assert_eq!(stdout, "injected\n");
                 assert_eq!(exit, Some(0));
             }
@@ -392,7 +396,7 @@ mod tests {
             .await
             .expect("ok");
         match out {
-            neenee_core::ToolOutput::Shell { stdout, exit, .. } => {
+            neenee_contracts::ToolOutput::Shell { stdout, exit, .. } => {
                 // The command ran (ps exists on the CI/Unix target). We only
                 // assert it completed without hanging — the isolation is
                 // structural (setpgid in spawn), not something we re-derive.
@@ -415,7 +419,7 @@ mod tests {
             .await
             .expect("ok");
         match out {
-            neenee_core::ToolOutput::Shell { stdout, .. } => {
+            neenee_contracts::ToolOutput::Shell { stdout, .. } => {
                 // `a` then 7 spaces (next stop = 8) then `b`.
                 assert_eq!(stdout, "a       b\n");
             }

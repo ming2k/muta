@@ -1,8 +1,8 @@
 //! The `copilot-oauth` provider template: GitHub Copilot subscription models
 //! over OpenAI-compatible chat completions against `api.githubcopilot.com`.
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -16,8 +16,8 @@ use super::ProviderTemplateSpec;
 pub const COPILOT_SEED_MODELS: &[&str] = &["gpt-4o-mini"];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[Model {
     id: "gpt-4o-mini",
     name: "GPT-4o Mini",
@@ -31,7 +31,7 @@ pub const MODELS: &[Model] = &[Model {
     effort_levels: &[],
 }];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "copilot-oauth",

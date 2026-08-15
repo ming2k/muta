@@ -37,7 +37,7 @@ pub mod tools;
 
 pub use catalog::SkillCatalog;
 pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
-pub use neenee_core::SkillsConfig;
+pub use neenee_contracts::SkillsConfig;
 pub use render::resolve_mentions;
 pub use tools::{ListSkillsTool, UseSkillTool};
 

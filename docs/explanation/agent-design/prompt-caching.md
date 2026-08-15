@@ -20,7 +20,7 @@ single rule that prevents drift.
 ## The three strategies
 
 A model family's caching strategy is classified once, in pure domain code, by
-`CachePolicy::for_family(family)` in `neenee-core::cache`:
+`CachePolicy::for_family(family)` in `neenee-contracts::cache`:
 
 | `CachePolicy` | Who | What the client does | What the response reports |
 |---------------|-----|----------------------|---------------------------|
@@ -57,7 +57,7 @@ Context Usage modal's "Cache hit (with parenthesized hit-rate)" /
 ## The one rule (and why it exists)
 
 > **Every per-protocol `usage()` parser in the SDK layer MUST route its
-> cache-read count through `neenee_core::cache::read_cached_tokens()`, never
+> cache-read count through `neenee_contracts::cache::read_cached_tokens()`, never
 > read the field inline.**
 
 This is not a style preference. It is the single structural lever against

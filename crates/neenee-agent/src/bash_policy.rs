@@ -99,8 +99,8 @@ impl BashPolicyMatch {
 
     /// A hard refusal (built-in/user `Deny`). Same wording in the interactive
     /// full check and the chain's non-interactive check.
-    pub(crate) fn blocked_output(&self, command: &str) -> neenee_core::ToolOutput {
-        neenee_core::ToolOutput::Error {
+    pub(crate) fn blocked_output(&self, command: &str) -> neenee_contracts::ToolOutput {
+        neenee_contracts::ToolOutput::Error {
             message: format!("[bash policy] Blocked dangerous command: {command}"),
             detail: Some(self.detail()),
         }
@@ -109,8 +109,8 @@ impl BashPolicyMatch {
     /// A `Confirm` that could not reach a human because the session is
     /// autopilot (and `autopilot_confirm` resolves to deny). Distinct
     /// headline from [`Self::blocked_output`]; shared detail.
-    pub(crate) fn autopilot_confirm_output(&self, command: &str) -> neenee_core::ToolOutput {
-        neenee_core::ToolOutput::Error {
+    pub(crate) fn autopilot_confirm_output(&self, command: &str) -> neenee_contracts::ToolOutput {
+        neenee_contracts::ToolOutput::Error {
             message: format!(
                 "[bash policy] Dangerous command requires confirmation but the session is \
                  on autopilot: {command}"

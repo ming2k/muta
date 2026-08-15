@@ -2,9 +2,10 @@
 
 The neenee terminal UI is split into **three layers** with dependencies
 pointing strictly downward. The engine is its own crate; the view and shell
-layers are module trees under `crate::tui` in the `neenee-cli` binary (the
-view was a separate crate, `neenee-tui-view`, until ADR-0079 re-merged it —
-the one-way seam is now a documented convention rather than
+layers are module trees inside the `neenee-tui` library crate (extracted
+from the `neenee-cli` binary by ADR-0098; the view had earlier been the
+separate `neenee-tui-view` crate until ADR-0079 re-merged it — so the
+one-way seam remains a documented convention rather than
 compiler-enforced). The split exists so the rendering engine, the widgets,
 and the application wiring can be
 reasoned about (and tested) in isolation, and so the widget layer can never
@@ -20,16 +21,16 @@ secretly reach into application state.
                           ▲  widgets render *into* the grid
                           │  (Frame::render_widget)
 ┌──────────────────────────────────────────────────────────────────────┐
-│  crate::tui view modules  ·  VIEW (widgets + document model)          │
+│  neenee-tui view modules  ·  VIEW (widgets + document model)         │
 │  render/ widget tree · document model · layout/hit-testing ·          │
 │  selection · fuzzy · provider ranking · shared modal discriminants.   │
-│  Renders neenee_core domain types → depends on neenee-core.           │
+│  Renders neenee_contracts domain types → depends on neenee-contracts.           │
 │  NEVER depends on the shell modules.                                  │
 └──────────────────────────────────────────────────────────────────────┘
                           ▲  the shell fills in a borrowed
                           │  TranscriptView<'a> each frame
 ┌──────────────────────────────────────────────────────────────────────┐
-│  crate::tui shell modules  ·  APP SHELL (neenee-cli binary)           │
+│  neenee-tui shell modules  ·  APP SHELL (neenee-tui crate)           │
 │  App state · event loop · input→action mapping · terminal lifecycle · │
 │  completion logic · clipboard · session wiring.                       │
 │  Owns the data; drives the view modules in the same crate.            │
@@ -46,18 +47,18 @@ It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
 and friends. It has **no neenee dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `crates/neenee-cli/src/tui` (view modules)
+### View — `crates/neenee-tui/src` (view modules)
 
 The widget layer and the semantic document model. Everything here is a pure
-function of borrowed data: it reads `neenee_core` domain types and a `Theme`
+function of borrowed data: it reads `neenee_contracts` domain types and a `Theme`
 and writes cells into the engine's grid. The view modules depend on
 `neenee-tui-engine` (to draw),
-`neenee-core` (the domain types they render), and `neenee-providers` (the model
+`neenee-contracts` (the domain types they render), and `neenee-providers` (the model
 catalog the picker ranks). They **do not** depend on the shell modules — since
 ADR-0079 re-merged the view crate into the binary, the one-way boundary is a
 documented convention rather than compiler-enforced.
 
-The view modules live flat under `crates/neenee-cli/src/tui/`, grouped by concern:
+The view modules live flat under `crates/neenee-tui/src/`, grouped by concern:
 
 | Module | Responsibility |
 |--------|----------------|
@@ -72,13 +73,13 @@ The view modules live flat under `crates/neenee-cli/src/tui/`, grouped by concer
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
 | `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
 
-### App shell — `crates/neenee-cli/src/tui`
+### App shell — `crates/neenee-tui/src`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the
 mutable state and drives the view layer once per frame. Shell and view share
-the `crate::tui` module tree since ADR-0079; the shell addresses the view as
-`crate::tui::{view, components, …}`.
+the `neenee-tui` crate since ADR-0098; the shell addresses the view as
+`crate::{view, components, …}`.
 
 | Module | Responsibility |
 |--------|----------------|

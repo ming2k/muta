@@ -3,7 +3,7 @@
 //!
 //! Mirrors the split established by [`crate::session_review`]: the domain
 //! vocabulary and the pure post-processing ([`clean_title`]) live in
-//! `neenee-core`, while the provider call lives here next to the `Agent`.
+//! `neenee-contracts`, while the provider call lives here next to the `Agent`.
 //! Like `session_review` this runs a bounded envoy of the primary agent,
 //! but the title task is pure text-in/text-out — it needs no tools and no
 //! ReAct loop — so the runner is a single `Provider::chat` call framed by
@@ -19,14 +19,14 @@
 //! it: the first-turn auto-trigger and the on-demand `/title` refresh both
 //! skip the write when the stored title is manual (ADR-0022's lock rule).
 //!
-//! [`clean_title`]: neenee_core::clean_title
-//! [`TITLE`]: neenee_core::TITLE
+//! [`clean_title`]: neenee_contracts::clean_title
+//! [`TITLE`]: neenee_contracts::TITLE
 
 use std::time::Duration;
 
 #[cfg(test)]
-use neenee_core::Provider;
-use neenee_core::{Message, ModelRequest, Role, TITLE, clean_title};
+use neenee_contracts::Provider;
+use neenee_contracts::{Message, ModelRequest, Role, TITLE, clean_title};
 
 use crate::agent::Agent;
 
@@ -175,7 +175,7 @@ mod tests {
     struct CannedProvider {
         reply: String,
         last_messages: Mutex<Vec<Message>>,
-        last_tool_specs: Mutex<Vec<neenee_core::ToolSpec>>,
+        last_tool_specs: Mutex<Vec<neenee_contracts::ToolSpec>>,
     }
 
     #[async_trait]

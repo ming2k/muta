@@ -5,22 +5,19 @@
 //! Unlike `neenee attach`, status never spawns a daemon: observing is only
 //! meaningful when a host is already running, so a missing/stale discovery
 //! record is a clean "no daemon" report, not an excuse to start one.
+//!
+//! This module is presentation only: the monitor-protocol client
+//! ([`neenee_runtime::client::monitor_stream`]) and the stream-folding helper
+//! ([`neenee_runtime::client::upsert_session_row`]) live with the wire protocol
+//! in `neenee-runtime`; what remains here is the terminal rendering of the
+//! snapshot.
 
 use std::path::Path;
-use std::time::Duration;
 
-use futures::{SinkExt, StreamExt};
-use neenee_core::{
+use neenee_contracts::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };
-use neenee_transport::serve::Wire;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
-
-use crate::remote::ServeInfo;
-
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+use neenee_runtime::client::{self, upsert_session_row};
 
 /// How `neenee status` renders its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,9 +28,9 @@ pub struct StatusOptions {
 }
 
 pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String> {
-    let Some(info) = crate::remote::discover(project_root) else {
+    let Some(info) = client::discover(project_root) else {
         return Err(format!(
-            "no neenee session host is running for {}. Start one with `neenee serve` \
+            "no neenee session daemon is running for {}. Start one with `neenee serve` \
              (or `neenee attach`, which spawns one on demand).",
             project_root.display()
         ));
@@ -42,7 +39,7 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
         watch: opts.watch,
         include_idle: opts.include_idle,
     };
-    let mut rx = monitor_stream(&info, action).await?;
+    let mut rx = client::monitor_stream(&info, action).await?;
     // The first frame is always the snapshot; from then on the stream is
     // maintained client-side by folding diffs, so `--watch` renders one
     // coherent table instead of a raw event log.
@@ -59,23 +56,24 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
         match event {
             MonitorEvent::Snapshot(snapshot) => state = snapshot,
             MonitorEvent::SessionAdded(row) | MonitorEvent::SessionUpdated(row) => {
-                upsert(&mut state.sessions, row);
+                upsert_session_row(&mut state.sessions, row);
             }
             MonitorEvent::SessionRemoved { session_id } => {
                 state.sessions.retain(|row| row.id != session_id);
+            }
+            // The daemon is draining (ADR-0101): the stream ends right
+            // after this frame. Print a note and stop watching — the next
+            // `neenee status` re-discovers (or reports none running).
+            MonitorEvent::DaemonDraining => {
+                if !opts.json {
+                    eprintln!("neenee: daemon is shutting down; watch ended.");
+                }
+                return Ok(());
             }
         }
         render(&state, opts);
     }
     Ok(())
-}
-
-pub(crate) fn upsert(rows: &mut Vec<MonitoredSession>, row: MonitoredSession) {
-    match rows.iter_mut().find(|existing| existing.id == row.id) {
-        Some(existing) => *existing = row,
-        None => rows.push(row),
-    }
-    rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
 }
 
 fn render(snapshot: &MonitorSnapshot, opts: StatusOptions) {
@@ -212,116 +210,6 @@ fn truncate(text: &str, max: usize) -> String {
     out
 }
 
-/// Open the WebSocket, perform the monitor handshake, and return a channel of
-/// stream frames. The WS pump runs on a background task; the channel closes
-/// when the daemon hangs up.
-pub(crate) async fn monitor_stream(
-    info: &ServeInfo,
-    action: MonitorAction,
-) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String> {
-    // Prefer the Unix domain socket (the daemon's primary local channel,
-    // ADR-0096); fall back to TCP for exposed/legacy deployments — the same
-    // transport policy as `remote::connect`/`remote::control`, so the monitor
-    // stream works against a UDS-only daemon.
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path
-        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
-    {
-        let request = "ws://localhost/"
-            .into_client_request()
-            .map_err(|e| format!("bad uds ws request: {e}"))?;
-        let (ws, _) = tokio_tungstenite::client_async(request, stream)
-            .await
-            .map_err(|e| format!("ws handshake over uds: {e}"))?;
-        return finish_monitor(ws.split(), action, "uds").await;
-    }
-    let url = format!("ws://127.0.0.1:{}/", info.port);
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|e| format!("bad ws url {url}: {e}"))?;
-    if let Some(token) = &info.token {
-        let value = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|e| format!("bad bearer token: {e}"))?;
-        request.headers_mut().insert("Authorization", value);
-    }
-    let (ws, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    finish_monitor(ws.split(), action, &url).await
-}
-
-/// The stream-generic monitor handshake + framing, shared by the UDS and TCP
-/// paths: send the `Select{Monitor}` handshake, await the opening snapshot
-/// (bounded), then forward every diff frame into the returned channel.
-async fn finish_monitor<S>(
-    parts: (
-        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
-        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    ),
-    action: MonitorAction,
-    target: &str,
-) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (mut ws_sink, mut ws_source) = parts;
-
-    let select = serde_json::to_string(&Wire::Select {
-        action: neenee_transport::serve::AttachAction::Monitor(action),
-        // Monitor streams are host-wide; no project scope applies.
-        project: None,
-    })
-    .map_err(|e| format!("serialize select: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(select.into()))
-        .await
-        .map_err(|e| format!("ws send select: {e}"))?;
-
-    // Await the opening snapshot (or a handshake-level error) with a bound.
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-        loop {
-            match ws_source.next().await {
-                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Monitor { event }) => return Ok(event),
-                    Ok(Wire::Error { message }) => return Err(message),
-                    Ok(_) => tracing::warn!("status: unexpected frame during handshake, ignored"),
-                    Err(error) => tracing::warn!(%error, "status: bad frame during handshake"),
-                },
-                Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(format!("ws recv during handshake: {error}")),
-                None => return Err("server closed the connection".to_string()),
-            }
-        }
-    })
-    .await
-    .map_err(|_| format!("timed out waiting for monitor snapshot from {target}"))??;
-
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let _ = tx.send(first);
-    tokio::spawn(async move {
-        while let Some(frame) = ws_source.next().await {
-            match frame {
-                Ok(WsMessage::Text(text)) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Monitor { event }) => {
-                        if tx.send(event).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(_) => tracing::warn!("status: unexpected post-handshake frame, ignored"),
-                    Err(error) => tracing::warn!(%error, "status: bad frame from daemon, ignored"),
-                },
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(%error, "status: ws recv failed");
-                    break;
-                }
-            }
-        }
-    });
-    Ok(rx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,11 +279,11 @@ mod tests {
         let mut rows = vec![row("a", SessionStatus::Running)];
         let mut newer = row("b", SessionStatus::Idle);
         newer.updated_at = 200;
-        upsert(&mut rows, newer);
+        upsert_session_row(&mut rows, newer);
         assert_eq!(rows[0].id, "b");
         let mut updated = row("b", SessionStatus::Failed);
         updated.updated_at = 300;
-        upsert(&mut rows, updated);
+        upsert_session_row(&mut rows, updated);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].status, SessionStatus::Failed);
     }

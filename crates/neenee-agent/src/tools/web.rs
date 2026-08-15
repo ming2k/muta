@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use neenee_core::{Tool, WebSearchConfig, truncate_utf8};
+use neenee_contracts::{Tool, WebSearchConfig, truncate_utf8};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -500,16 +500,16 @@ impl Tool for WebSearchTool {
     }
 }
 
-neenee_core::register_tool!(WebFetchFactory => |ctx| {
+neenee_contracts::register_tool!(WebFetchFactory => |ctx| {
     let cfg = ctx
-        .get::<neenee_core::WebSearchConfig>()
+        .get::<neenee_contracts::WebSearchConfig>()
         .cloned()
         .unwrap_or_default();
     WebFetchTool::with_config(cfg)
 });
-neenee_core::register_tool!(WebSearchFactory => |ctx| {
+neenee_contracts::register_tool!(WebSearchFactory => |ctx| {
     let cfg = ctx
-        .get::<neenee_core::WebSearchConfig>()
+        .get::<neenee_contracts::WebSearchConfig>()
         .cloned()
         .unwrap_or_default();
     WebSearchTool::with_config(cfg)

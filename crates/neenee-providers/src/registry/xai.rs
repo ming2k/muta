@@ -1,8 +1,8 @@
 //! The `xai-oauth` provider template: xAI Grok over OpenAI-compatible chat
 //! completions (SuperGrok OAuth or `XAI_API_KEY`).
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -11,8 +11,8 @@ use super::ProviderTemplateSpec;
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
     Model {
@@ -25,7 +25,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-4.20",
@@ -37,7 +37,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-4.3",
@@ -49,7 +49,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-build-0.1",
@@ -61,11 +61,11 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "xai-oauth",

@@ -7,7 +7,7 @@ speaks exposes some form of it; neenee abstracts them all onto one concept.
 
 This page is the single reference for the concept, the per-provider mapping,
 and how the effective ladder for a model is resolved. The implementation lives
-in `crates/neenee-core/src/effort.rs`.
+in `crates/neenee-contracts/src/effort.rs`.
 
 ## The abstraction
 
@@ -18,7 +18,7 @@ provider-independent type — the `Effort` ladder, ascending by depth:
 none < minimal < low < medium < high < xhigh < max
 ```
 
-No code outside `neenee-core` ever sees a provider-specific depth shape: it
+No code outside `neenee-contracts` ever sees a provider-specific depth shape: it
 sees `Effort`. The protocol layer translates a chosen rung onto the **public
 API specification** the channel speaks:
 

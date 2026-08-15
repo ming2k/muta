@@ -222,7 +222,7 @@ mod tests {
             "the error must be the 300ms request timeout, not an instant failure: \
              {elapsed:?} / {error}"
         );
-        let retryable = neenee_core::parse_retryable_error(&error)
+        let retryable = neenee_contracts::parse_retryable_error(&error)
             .unwrap_or_else(|| panic!("a timeout must classify as retryable: {error}"));
         assert!(
             retryable.message.contains("transport error"),
@@ -251,7 +251,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            neenee_core::parse_retryable_error(&error).is_some(),
+            neenee_contracts::parse_retryable_error(&error).is_some(),
             "connect-phase errors must be retryable: {error}"
         );
     }

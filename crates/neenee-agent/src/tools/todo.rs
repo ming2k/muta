@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::json;
 
-use neenee_core::{MAX_TODOS, TodoList, TodoStatus, Tool};
+use neenee_contracts::{MAX_TODOS, TodoList, TodoStatus, Tool};
 
 const TODO_DESCRIPTION: &str = "Maintain the task list for the current work. Replace the whole list each call with the current \
      set of concrete steps, in the order you intend to tackle them. At most one item may be \
@@ -153,7 +153,7 @@ impl Tool for TodoWriteTool {
             }
         }
 
-        let now = neenee_core::todos::unix_now();
+        let now = neenee_contracts::todos::unix_now();
         let turn = self.context.current_round();
         let mut list = self.context.todos();
         let prev_ids: HashSet<u64> = list.items.iter().map(|i| i.id.0).collect();
@@ -267,7 +267,7 @@ impl Tool for TodoUpdateTool {
             )
         })?;
 
-        let now = neenee_core::todos::unix_now();
+        let now = neenee_contracts::todos::unix_now();
         let turn = self.context.current_round();
         let mut list = self.context.todos();
         if list.is_empty() {
@@ -313,7 +313,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use neenee_core::TodoList;
+    use neenee_contracts::TodoList;
 
     fn ctx() -> (TodoToolContext, Arc<Mutex<TodoList>>) {
         let list = Arc::new(Mutex::new(TodoList::new()));

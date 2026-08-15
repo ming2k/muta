@@ -25,7 +25,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 
 use crate::transport_error;
-use neenee_core::retryable_error;
+use neenee_contracts::retryable_error;
 
 /// Decode a streaming SSE response into a flat stream of `data:` payload
 /// strings (the `data:` prefix and surrounding whitespace stripped; the
@@ -213,7 +213,7 @@ mod tests {
         let error = lines[1].as_ref().unwrap_err();
         assert!(error.contains("invalid UTF-8"), "{error}");
         assert!(
-            neenee_core::parse_retryable_error(error).is_some(),
+            neenee_contracts::parse_retryable_error(error).is_some(),
             "corruption is transient transport damage -> retryable: {error}"
         );
         assert_eq!(lines[2], Ok("data: after".to_string()));
@@ -243,7 +243,7 @@ mod tests {
         let error = items[1].as_ref().unwrap_err();
         assert!(error.contains("incomplete SSE event"), "{error}");
         assert!(
-            neenee_core::parse_retryable_error(error).is_some(),
+            neenee_contracts::parse_retryable_error(error).is_some(),
             "a truncated stream is transient -> retryable: {error}"
         );
     }

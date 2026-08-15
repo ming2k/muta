@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use neenee_core::PermissionDecision;
+use neenee_contracts::PermissionDecision;
 use tokio::sync::oneshot;
 
 /// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
@@ -176,11 +176,11 @@ impl PermissionStore {
         tools
     }
 
-    pub fn allowed_tools_structured(&self) -> Vec<neenee_core::PermissionRuleInfo> {
-        let mut rules: Vec<neenee_core::PermissionRuleInfo> = lock(&self.state)
+    pub fn allowed_tools_structured(&self) -> Vec<neenee_contracts::PermissionRuleInfo> {
+        let mut rules: Vec<neenee_contracts::PermissionRuleInfo> = lock(&self.state)
             .always
             .iter()
-            .map(|rule| neenee_core::PermissionRuleInfo {
+            .map(|rule| neenee_contracts::PermissionRuleInfo {
                 tool: rule.tool.clone(),
                 scope: rule.scope.clone(),
             })

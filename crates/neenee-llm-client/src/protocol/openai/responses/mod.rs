@@ -17,7 +17,7 @@ pub mod response;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{
+use neenee_contracts::{
     Effort, Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
 };
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,7 @@ pub struct OpenAiResponsesProvider {
     pub account_id: Option<String>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
-    pub capabilities: neenee_core::ModelCapabilities,
+    pub capabilities: neenee_contracts::ModelCapabilities,
     /// When `true`, inject GitHub Copilot's required per-request headers
     /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
     /// `Copilot-Vision-Request` for vision turns) instead of the ChatGPT
@@ -51,7 +51,7 @@ impl OpenAiResponsesProvider {
         base_url: &str,
         account_id: Option<String>,
     ) -> Self {
-        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
+        let capabilities = neenee_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key: access_token,
@@ -85,7 +85,10 @@ impl OpenAiResponsesProvider {
     }
 
     /// Attach the effective provider-channel capability view.
-    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+    pub fn with_model_capabilities(
+        mut self,
+        capabilities: neenee_contracts::ModelCapabilities,
+    ) -> Self {
         self.capabilities = capabilities;
         self
     }
@@ -158,7 +161,7 @@ impl Provider for OpenAiResponsesProvider {
         self.endpoint.model.clone()
     }
 
-    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+    fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }
 
@@ -174,7 +177,7 @@ impl Provider for OpenAiResponsesProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<neenee_core::TokenUsage> {
+    fn take_last_usage(&self) -> Option<neenee_contracts::TokenUsage> {
         self.turn.take_usage()
     }
 

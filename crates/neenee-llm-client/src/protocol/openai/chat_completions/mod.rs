@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use neenee_core::{Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use neenee_contracts::{Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -38,11 +38,11 @@ pub struct OpenAiChatCompletionsProvider {
     /// session via [`with_prompt_cache_key`](Self::with_prompt_cache_key); when
     /// present, every request carries `prompt_cache_key` so the server-side
     /// cache namespaces per session and repeated prefixes hit at a discount.
-    /// Resolved from the model's [`neenee_core::CachePolicy`] by the registry.
+    /// Resolved from the model's [`neenee_contracts::CachePolicy`] by the registry.
     pub prompt_cache_key: Option<String>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
-    pub capabilities: neenee_core::ModelCapabilities,
+    pub capabilities: neenee_contracts::ModelCapabilities,
     /// When `true`, inject GitHub Copilot's required per-request headers
     /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`) in addition to
     /// the bearer. Flipped on by the catalog for Copilot OAuth channels that
@@ -69,7 +69,7 @@ impl OpenAiChatCompletionsProvider {
         base_url: &str,
         user_agent: &str,
     ) -> Self {
-        let capabilities = neenee_core::ModelCapabilities::for_channel(&model, None);
+        let capabilities = neenee_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
                 api_key,
@@ -103,8 +103,8 @@ impl OpenAiChatCompletionsProvider {
 
     /// Set the session-scoped `prompt_cache_key` (Moonshot / Kimi). Typically the
     /// session id, so all turns in a session share a server-side cache namespace.
-    /// Only takes effect for model families whose [`neenee_core::CachePolicy`] is
-    /// [`SessionKey`](neenee_core::CachePolicy::SessionKey); the registry decides
+    /// Only takes effect for model families whose [`neenee_contracts::CachePolicy`] is
+    /// [`SessionKey`](neenee_contracts::CachePolicy::SessionKey); the registry decides
     /// whether to set this. Returns `self` for chaining.
     pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
         self.prompt_cache_key = key;
@@ -112,7 +112,10 @@ impl OpenAiChatCompletionsProvider {
     }
 
     /// Attach the effective provider-channel capability view.
-    pub fn with_model_capabilities(mut self, capabilities: neenee_core::ModelCapabilities) -> Self {
+    pub fn with_model_capabilities(
+        mut self,
+        capabilities: neenee_contracts::ModelCapabilities,
+    ) -> Self {
         self.capabilities = capabilities;
         self
     }
@@ -160,7 +163,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         self.endpoint.model.clone()
     }
 
-    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+    fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }
 
@@ -179,11 +182,11 @@ impl Provider for OpenAiChatCompletionsProvider {
         true
     }
 
-    fn take_last_usage(&self) -> Option<neenee_core::TokenUsage> {
+    fn take_last_usage(&self) -> Option<neenee_contracts::TokenUsage> {
         self.turn.take_usage()
     }
 
-    async fn chat(&self, request: ModelRequest) -> Result<neenee_core::Message, String> {
+    async fn chat(&self, request: ModelRequest) -> Result<neenee_contracts::Message, String> {
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -215,7 +218,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         Ok(response::message(choice, |raw, had_native| {
             let emitted = echo::ToolCallEchoFilter::filter_content(raw, had_native);
             tracing::debug!(
-                target: "neenee_core::provider",
+                target: "neenee_contracts::provider",
                 provider = %self.endpoint.id,
                 model = %self.endpoint.model,
                 raw_chars = raw.len(),
@@ -312,7 +315,7 @@ impl Provider for OpenAiChatCompletionsProvider {
                 .unwrap_or_else(|error| error.into_inner());
             let emitted = filter.finish();
             tracing::debug!(
-                target: "neenee_core::provider",
+                target: "neenee_contracts::provider",
                 provider = %provider_id,
                 model = %model,
                 content_fed_chars = filter.fed_chars,
@@ -342,7 +345,7 @@ impl Provider for OpenAiChatCompletionsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::{Message, Role, Tool};
+    use neenee_contracts::{Message, Role, Tool};
 
     // --- resolved-variant schema reaches the request body ---
 
@@ -398,7 +401,7 @@ mod tests {
         // A `read_text` capability with two variants; the agent resolves a
         // selection before handing the toolset to the provider, so whichever
         // variant is selected is the one whose schema reaches the request body.
-        let toolset = neenee_core::ToolSet::from_tools(vec![
+        let toolset = neenee_contracts::ToolSet::from_tools(vec![
             Arc::new(DummyTool {
                 name: "read_text",
                 variant: "default",
@@ -417,7 +420,7 @@ mod tests {
         assert_eq!(body["tools"][0]["function"]["name"], "read_text");
 
         // Selecting the terse variant → terse description in the body, same name.
-        let mut selection = neenee_core::VariantSelection::new();
+        let mut selection = neenee_contracts::VariantSelection::new();
         selection.insert("read_text".to_string(), "terse".to_string());
         let body = body_with_tools(&toolset.resolve(&selection));
         assert_eq!(tool_desc_at(&body, 0), "terse wording");

@@ -1,8 +1,8 @@
 //! The built-in `google` provider template: the native Google API, one key.
 
-use neenee_core::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -27,8 +27,8 @@ pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── Google (native) ────────────────────────────────────────────────────
     // Native Google REST surface (`generateContent`/`streamGenerateContent`).
@@ -147,7 +147,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "google",

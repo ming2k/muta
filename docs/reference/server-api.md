@@ -1,6 +1,6 @@
 # Server WebSocket API
 
-This page is the frontend integration guide for the session-host transport.
+This page is the frontend integration guide for the session daemon's WebSocket transport.
 Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 > **Why AsyncAPI rather than OpenAPI or TypeSpec?** The public surface is a
@@ -182,6 +182,7 @@ The verbs (`Select{action: {control: {…}}}`):
 | `interrupt` | `session_id` | Stop the current round |
 | `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
 | `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
+| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `neenee stop` sends. |
 
 `ControlReply` is `{ ok, session_id?, error? }`. On `ok:false`, `error`
 explains (unknown session, host cannot create, …). The connection closes
@@ -195,7 +196,7 @@ Two discriminator levels:
   `Error`, `Request`, `Response`, `Monitor`.
 - `Monitor` frames carry a second `kind` discriminator on the flattened
   `MonitorEvent`: `snapshot`, `session_added`, `session_updated`,
-  `session_removed`.
+  `session_removed`, `daemon_draining`.
 - Rust enums otherwise use serde's default externally tagged representation.
 
 A request carrying fields therefore looks like:
@@ -387,18 +388,28 @@ A production frontend should:
    not the wire from eavesdropping.
 9. Upsert monitor diffs by `id`; handle `session_removed` even though hosted
    sessions are not yet torn down.
+10. Handle `daemon_draining` (ADR-0101): sent once to every watch client
+    when the daemon begins its graceful shutdown, right before the stream
+    closes. Treat it as terminal for that daemon — surface a notice, do not
+    immediately reconnect (the process exits within its grace budget); the
+    next connection either discovers a fresh daemon or spawns one.
+11. Send `version` on `Select` (ADR-0100 rule 4): the daemon refuses a
+    mismatched client with a both-versions `Error` naming the fix. An absent
+    `version` is served; a discovered record without one (`daemon.json`
+    predating the field) is a mismatch for clients — stop the daemon and let
+    it restart at the new version.
 
 ## Contract maintenance
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/neenee-transport/src/serve.rs` (`Wire`, `AttachAction`,
-  `ControlRequest`) and the daemon runtime `crates/neenee-transport/src/host.rs`
-- requests/responses/events: `crates/neenee-core/src/events.rs`
-- monitor rows and status: `crates/neenee-core/src/monitor.rs`
-- session registry (hosting + control verbs): `crates/neenee-transport/src/registry.rs`
-- transcript: `crates/neenee-core/src/message.rs`
-- tool output: `crates/neenee-core/src/tool_output.rs`
+- envelope: `crates/neenee-runtime/src/serve.rs` (`Wire`, `AttachAction`,
+  `ControlRequest`) and the daemon runtime `crates/neenee-runtime/src/host.rs`
+- requests/responses/events: `crates/neenee-contracts/src/events.rs`
+- monitor rows and status: `crates/neenee-contracts/src/monitor.rs`
+- session registry (hosting + control verbs): `crates/neenee-runtime/src/registry.rs`
+- transcript: `crates/neenee-contracts/src/message.rs`
+- tool output: `crates/neenee-contracts/src/tool_output.rs`
 
 Any wire-visible change to those types must update
 `docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and

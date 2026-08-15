@@ -19,7 +19,7 @@ Every projection threshold is a fraction of the **active model's context
 window**, measured in tokens and re-seeded whenever the provider switches
 (the model-relative-thresholds design, later codified in
 [ADR-0044](../../adr/0044-layered-token-accounting.md)). The
-declarative `CompactionPolicy` (`neenee-core/src/pressure.rs`) carries the
+declarative `CompactionPolicy` (`neenee-contracts/src/pressure.rs`) carries the
 fractions; `CompactionPolicy::resolve(window_tokens)` turns them into a concrete
 `ContextBudget`:
 

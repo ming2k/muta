@@ -9,14 +9,15 @@ and the `cargo -p <name>` selector stay obvious.
 
 ```text
 crates/
-  neenee-cli/          # the interactive application binary (default workspace member)
-  neenee-server/       # unified session daemon: all sessions over the UDS/TCP control plane
-  neenee-tui-engine/           # in-house grid + diff rendering engine
-  neenee-transport/       # session harness, handlers, serve transport
-  neenee-agent/         # orchestration: the round/turn loop, built-in tools (bash, read, grep, glob, webfetch, …), and the MCP runtime (mcp module)
+  neenee-cli/           # the unified `neenee` application binary (default workspace member)
+  neenee-tui/           # terminal frontend library: app shell, view tree, showcase
+  neenee-tui-engine/    # in-house grid + diff rendering engine
+  neenee-runtime/       # session harness, handlers, serve transport, control-plane client
+  neenee-agent/         # orchestration: the round/turn loop, built-in tools (bash, read, grep, glob, webfetch, …)
+  neenee-mcp/           # MCP connector: stdio JSON-RPC client, server lifecycle, tool adapters
   neenee-skills/        # skill discovery, registry, and tool adapters
-  neenee-persistence/         # durable state: session store, config, paths
-  neenee-core/          # shared domain and wire contracts (no deps)
+  neenee-persistence/   # durable state: session store, config, paths
+  neenee-contracts/     # shared domain and wire contracts (no deps)
   neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)
   neenee-providers/     # channel registry, factory, discovery + provider facade + OAuth flows
   neenee-tool-derive/   # proc-macro derive for tool adapters (implementation detail of tools)
@@ -27,8 +28,8 @@ crates/
 - Every workspace member lives directly under `crates/`. There is no
   intermediate grouping directory; a package is selected by name, not by
   location.
-- Put shared contracts in `neenee-core`, orchestration in `neenee-agent`, and
-  the application binaries in `neenee-cli` / `neenee-server`. See
+- Put shared contracts in `neenee-contracts`, orchestration in `neenee-agent`, and
+  the application binary in `neenee-cli`. See
   [Crate layering](../explanation/crate-layering.md) for the dependency DAG.
 - Do not infer a dependency from directory containment. Cargo manifests remain
   the authoritative dependency graph.

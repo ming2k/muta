@@ -29,7 +29,7 @@ on every frame.
 ```
 
 The viewport rect itself comes from `viewport_rect(frame)` in
-`crates/neenee-cli/src/tui/primitives.rs`.
+`crates/neenee-tui/src/primitives.rs`.
 
 ## Root conversation view
 

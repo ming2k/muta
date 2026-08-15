@@ -13,7 +13,7 @@ guard).
 
 Spawns an envoy that inherits the parent's provider, runs isolated in its own
 context, and receives only the tools admitted by the bound profile
-(`EXPLORE` by default; `crates/neenee-core/src/envoy.rs`). Its final answer
+(`EXPLORE` by default; `crates/neenee-contracts/src/envoy.rs`). Its final answer
 is returned to the calling agent, which stays in control of all writes and any
 user questions. Communication is full-duplex
 ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)): a
@@ -29,7 +29,7 @@ event streaming, the TUI zoom view, profiles, and full-duplex — is explained i
 ## `envoy_code`
 
 A second `EnvoyTool` instance, constructed alongside `envoy` in the
-bootstrap (`crates/neenee-transport/src/bootstrap.rs`), bound to the
+bootstrap (`crates/neenee-runtime/src/bootstrap.rs`), bound to the
 [`CODE`](../../explanation/agent-design/envoys.md#profiles) profile. Same
 parameters as `envoy` (`description`, `prompt`), same streaming and full-duplex
 plumbing, but a different role: where `envoy` is the read-only research

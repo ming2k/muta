@@ -22,13 +22,13 @@ struct StreamingReadTool(Arc<AtomicUsize>);
 
 #[async_trait]
 impl Provider for TestProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
 
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         // The default `stream_chat_events` wraps this into a single
         // `TextDelta("done")`, so the streaming ReAct loop sees the same
@@ -39,19 +39,19 @@ impl Provider for TestProvider {
 
 #[async_trait]
 impl Provider for HintProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "done"))
     }
 
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
-    fn prompt_hints(&self) -> neenee_core::ProviderPromptHints {
-        neenee_core::ProviderPromptHints {
+    fn prompt_hints(&self) -> neenee_contracts::ProviderPromptHints {
+        neenee_contracts::ProviderPromptHints {
             system_guidance: "Provider protocol hint.",
         }
     }
@@ -59,20 +59,20 @@ impl Provider for HintProvider {
 
 #[async_trait]
 impl Provider for PermissionTestProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         unreachable!("streaming path should be used")
     }
 
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         unreachable!("stream_chat_events should be called directly")
     }
 
     async fn stream_chat_events(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             vec![Ok(ProviderStreamEvent::ToolCallDelta {
@@ -90,20 +90,20 @@ impl Provider for PermissionTestProvider {
 
 #[async_trait]
 impl Provider for StreamingToolProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Err("non-streaming path should not be used".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
             vec![
@@ -144,8 +144,8 @@ impl Tool for WriteTestTool {
         serde_json::json!({"type": "object"})
     }
 
-    fn scope_target(&self, _arguments: &str) -> neenee_core::ScopeTarget {
-        neenee_core::ScopeTarget::Path(std::path::PathBuf::from("/tmp/test"))
+    fn scope_target(&self, _arguments: &str) -> neenee_contracts::ScopeTarget {
+        neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from("/tmp/test"))
     }
 
     async fn call(&self, _arguments: &str) -> Result<String, String> {
@@ -217,9 +217,12 @@ fn agent_installs_its_stateful_todo_tools() {
 fn todo_state_is_scoped_to_one_agent() {
     let first = agent();
     let second = agent();
-    let mut list = neenee_core::TodoList::new();
+    let mut list = neenee_contracts::TodoList::new();
     list.reconcile(
-        &[("only first".to_string(), neenee_core::TodoStatus::Pending)],
+        &[(
+            "only first".to_string(),
+            neenee_contracts::TodoStatus::Pending,
+        )],
         1,
         1,
     );
@@ -309,8 +312,8 @@ fn static_tool_identity_shadows_a_dynamic_collision() {
     assert_ne!(todos[0].description(), "caller-owned shadow");
 }
 
-fn queued_user(id: &str, text: &str) -> neenee_core::QueuedUserInput {
-    neenee_core::QueuedUserInput {
+fn queued_user(id: &str, text: &str) -> neenee_contracts::QueuedUserInput {
+    neenee_contracts::QueuedUserInput {
         id: id.to_string(),
         text: text.to_string(),
         display_text: Some(text.to_string()),
@@ -387,7 +390,7 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
 /// composition is assembled on every request.
 #[test]
 fn reviewer_system_message_carries_persona_dimensions_and_contract() {
-    use neenee_core::{REVIEW, Role};
+    use neenee_contracts::{REVIEW, Role};
 
     let dimensions = crate::session_review::default_reviews();
     let reviewer = Agent::builder(
@@ -425,7 +428,7 @@ fn reviewer_system_message_carries_persona_dimensions_and_contract() {
     );
     assert_eq!(
         system.origin.as_ref().map(|o| o.kind),
-        Some(neenee_core::InjectionKind::SystemPrompt)
+        Some(neenee_contracts::InjectionKind::SystemPrompt)
     );
 }
 
@@ -477,8 +480,8 @@ fn apply_principal_profile_switches_identity_into_the_system_prompt() {
     let agent = agent();
     agent.set_identity(crate::AgentIdentity::new("neenee", "a coding assistant"));
 
-    let architect = neenee_core::PrincipalProfile::for_role(
-        neenee_core::PrincipalRole::Architect,
+    let architect = neenee_contracts::PrincipalProfile::for_role(
+        neenee_contracts::PrincipalRole::Architect,
         &crate::AgentIdentity::new("neenee", "a coding assistant"),
     );
     agent.apply_principal_profile(&architect);
@@ -601,18 +604,18 @@ async fn stalled_provider_stream_times_out_as_retryable() {
     struct StalledStreamProvider;
     #[async_trait]
     impl Provider for StalledStreamProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
@@ -645,18 +648,18 @@ async fn stream_ending_mid_tool_call_is_retryable() {
     struct TruncatedToolCallProvider;
     #[async_trait]
     impl Provider for TruncatedToolCallProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ToolCallDelta {
@@ -705,18 +708,18 @@ async fn stream_with_truncated_tool_arguments_is_retryable() {
     struct TruncatedArgumentsProvider;
     #[async_trait]
     impl Provider for TruncatedArgumentsProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ToolCallDelta {
@@ -791,18 +794,18 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     struct PendingProvider;
     #[async_trait]
     impl Provider for PendingProvider {
-        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _: neenee_core::ModelRequest,
+            _: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
         async fn stream_chat_events(
             &self,
-            _: neenee_core::ModelRequest,
+            _: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::pending()))
         }
@@ -815,7 +818,7 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     ));
     agent.set_thread_id("interrupt-session");
     agent.bump_round();
-    let ledger = neenee_core::TokenSourceLedger::shared();
+    let ledger = neenee_contracts::TokenSourceLedger::shared();
     agent.install_token_ledger(ledger.clone());
     let token = CancellationToken::new();
     let cancel_on_start = token.clone();
@@ -834,11 +837,11 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0].status,
-        neenee_core::RequestUsageStatus::Interrupted
+        neenee_contracts::RequestUsageStatus::Interrupted
     );
     assert_eq!(
         records[0].source,
-        neenee_core::RequestUsageSource::Estimated
+        neenee_contracts::RequestUsageSource::Estimated
     );
     assert!(records[0].prompt_tokens > 0);
     assert_eq!(records[0].completion_tokens, 0);
@@ -856,18 +859,18 @@ async fn stream_request_that_never_resolves_times_out() {
     struct PendingStreamProvider;
     #[async_trait]
     impl Provider for PendingStreamProvider {
-        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _: neenee_core::ModelRequest,
+            _: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             unreachable!("stream_chat_events should be called directly")
         }
         async fn stream_chat_events(
             &self,
-            _: neenee_core::ModelRequest,
+            _: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             // Never resolves.
             pending().await
@@ -902,18 +905,18 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
     struct ReasoningOnlyProvider;
     #[async_trait]
     impl Provider for ReasoningOnlyProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             unreachable!("streaming path should be used")
         }
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(stream::empty()))
         }
         async fn stream_chat_events(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
             Ok(Box::pin(stream::iter(vec![Ok(
                 ProviderStreamEvent::ReasoningDelta("let me think...".to_string()),
@@ -926,9 +929,9 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
         Vec::new(),
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
+    agent.set_doom_guard_config(neenee_contracts::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::DoomGuardConfig::default()
+        ..neenee_contracts::DoomGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -1161,22 +1164,23 @@ struct GatedEnvoyProvider {
 
 #[async_trait]
 impl Provider for GatedEnvoyProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "gated"))
     }
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
     async fn stream_chat_events(
         &self,
-        _request: neenee_core::ModelRequest,
-    ) -> Result<BoxStream<'static, Result<neenee_core::ProviderStreamEvent, String>>, String> {
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<BoxStream<'static, Result<neenee_contracts::ProviderStreamEvent, String>>, String>
+    {
         if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
             Ok(Box::pin(stream::iter(vec![Ok(
-                neenee_core::ProviderStreamEvent::ToolCallDelta {
+                neenee_contracts::ProviderStreamEvent::ToolCallDelta {
                     index: 0,
                     id: Some("inner_1".to_string()),
                     name: Some("read_text".to_string()),
@@ -1202,8 +1206,8 @@ async fn execute_tool_evented_drains_interrupted_envoy() {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        neenee_core::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
-        &neenee_core::EXPLORE,
+        neenee_contracts::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
+        &neenee_contracts::EXPLORE,
     ));
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
@@ -1441,20 +1445,20 @@ impl ScriptedProvider {
 
 #[async_trait]
 impl Provider for ScriptedProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Err("scripted provider is streaming-only".to_string())
     }
 
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Ok(Box::pin(stream::empty()))
     }
 
     async fn stream_chat_events(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         // A turn that runs past its script gets a terminal "done" so the
         // loop exits rather than hanging on a missing turn.
@@ -1512,7 +1516,7 @@ impl Tool for RecordingTool {
     fn parameters(&self) -> serde_json::Value {
         serde_json::json!({"type": "object"})
     }
-    fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
+    fn scope_target(&self, arguments: &str) -> neenee_contracts::ScopeTarget {
         if self.name == "bash" {
             let command = serde_json::from_str::<serde_json::Value>(arguments)
                 .ok()
@@ -1522,7 +1526,7 @@ impl Tool for RecordingTool {
                         .map(str::to_string)
                 })
                 .unwrap_or_else(|| arguments.to_string());
-            neenee_core::ScopeTarget::Command(command)
+            neenee_contracts::ScopeTarget::Command(command)
         } else if self.declares_target {
             // Pull a path from the args if present, else a fixed sentinel, so
             // the broker fires for the `write` variant.
@@ -1530,9 +1534,9 @@ impl Tool for RecordingTool {
                 .ok()
                 .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string))
                 .unwrap_or_else(|| "/tmp/recording".to_string());
-            neenee_core::ScopeTarget::Path(std::path::PathBuf::from(path))
+            neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from(path))
         } else {
-            neenee_core::ScopeTarget::Unspecified
+            neenee_contracts::ScopeTarget::Unspecified
         }
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
@@ -1712,7 +1716,7 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
+    agent.set_doom_guard_config(neenee_contracts::DoomGuardConfig::disabled());
 
     let (_events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -1745,9 +1749,9 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
+    agent.set_doom_guard_config(neenee_contracts::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::DoomGuardConfig::default()
+        ..neenee_contracts::DoomGuardConfig::default()
     });
     agent.seed_permissions_from_config(&[neenee_persistence::config::PermissionRuleConfig {
         tool: "bash".to_string(),
@@ -1816,9 +1820,9 @@ async fn doom_block_is_surgical_across_files() {
         vec![Arc::new(reader), Arc::new(lister)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(neenee_core::DoomGuardConfig {
+    agent.set_doom_guard_config(neenee_contracts::DoomGuardConfig {
         enabled: true,
-        ..neenee_core::DoomGuardConfig::default()
+        ..neenee_contracts::DoomGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -1865,7 +1869,7 @@ async fn doom_guard_suppressed_when_disabled() {
         vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(neenee_core::DoomGuardConfig::disabled());
+    agent.set_doom_guard_config(neenee_contracts::DoomGuardConfig::disabled());
     agent.seed_permissions_from_config(&[neenee_persistence::config::PermissionRuleConfig {
         tool: "bash".to_string(),
         scope: "make test".to_string(),
@@ -2439,7 +2443,7 @@ fn estimate_completed_turns_counts_assistant_tool_call_messages() {
     // Two assistant messages carrying tool calls → two completed turns; a plain text
     // assistant message in between does not inflate the count.
     let mut with_calls = msgs[1].clone();
-    with_calls.tool_calls = Some(vec![neenee_core::ToolCall {
+    with_calls.tool_calls = Some(vec![neenee_contracts::ToolCall {
         id: "c1".into(),
         name: "read_text".into(),
         arguments: "{}".into(),
@@ -2447,7 +2451,7 @@ fn estimate_completed_turns_counts_assistant_tool_call_messages() {
     msgs[1] = with_calls;
     msgs.push(Message::new(Role::Assistant, "more text"));
     let mut third = Message::new(Role::Assistant, String::new());
-    third.tool_calls = Some(vec![neenee_core::ToolCall {
+    third.tool_calls = Some(vec![neenee_contracts::ToolCall {
         id: "c2".into(),
         name: "edit_file".into(),
         arguments: "{}".into(),
@@ -2503,7 +2507,7 @@ async fn review_now_runs_diagnostic_and_returns_verdict() {
     // A transcript with one tool-bearing turn so the estimate is meaningful.
     let mut transcript = vec![Message::new(Role::User, "go")];
     let mut assistant = Message::new(Role::Assistant, String::new());
-    assistant.tool_calls = Some(vec![neenee_core::ToolCall {
+    assistant.tool_calls = Some(vec![neenee_contracts::ToolCall {
         id: "c1".into(),
         name: "read_text".into(),
         arguments: "{\"path\":\"f\"}".into(),
@@ -2545,18 +2549,18 @@ struct TwoEventProvider;
 
 #[async_trait]
 impl Provider for TwoEventProvider {
-    async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
         Err("chat path not used by this test".to_string())
     }
     async fn stream_chat(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         Err("stream_chat path not used by this test".to_string())
     }
     async fn stream_chat_events(
         &self,
-        _request: neenee_core::ModelRequest,
+        _request: neenee_contracts::ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         Ok(Box::pin(futures::stream::iter([
             Ok(ProviderStreamEvent::TextDelta("hel".to_string())),
@@ -2865,8 +2869,8 @@ async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        neenee_core::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
-        &neenee_core::EXPLORE,
+        neenee_contracts::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
+        &neenee_contracts::EXPLORE,
     ));
     let started = Arc::new(tokio::sync::Notify::new());
     let agent = Arc::new(Agent::new(
@@ -2979,12 +2983,12 @@ async fn scheduler_serializes_conflicting_writes() {
         fn parameters(&self) -> serde_json::Value {
             serde_json::json!({"type": "object"})
         }
-        fn scope_target(&self, arguments: &str) -> neenee_core::ScopeTarget {
+        fn scope_target(&self, arguments: &str) -> neenee_contracts::ScopeTarget {
             let path = serde_json::from_str::<serde_json::Value>(arguments)
                 .ok()
                 .and_then(|v| v.get("path").and_then(|p| p.as_str()).map(str::to_string))
                 .unwrap_or_else(|| "/tmp/probe".to_string());
-            neenee_core::ScopeTarget::Path(std::path::PathBuf::from(path))
+            neenee_contracts::ScopeTarget::Path(std::path::PathBuf::from(path))
         }
         async fn call(&self, _arguments: &str) -> Result<String, String> {
             let prev = self.active.fetch_add(1, Ordering::SeqCst);

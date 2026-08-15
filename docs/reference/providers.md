@@ -1,9 +1,9 @@
 # Providers
 
 The agent talks to LLM providers through the `Provider` trait
-(`crates/neenee-core/src/capability.rs`). Every provider implementation lives
+(`crates/neenee-contracts/src/capability.rs`). Every provider implementation lives
 in `crates/neenee-providers/src/`. Provider selection happens at startup and
-on `/models` (the flat model picker) in `crates/neenee-cli/src/main.rs`.
+on `/models` (the flat model picker) in `crates/neenee-tui/src/providers.rs`.
 
 ## Capability matrix
 
@@ -62,7 +62,7 @@ env vars are data in that table, not hard-coded per struct.
 | `default_provider` | Endpoint | Credentials | Default / popular models |
 |--------------------|----------|-------------|--------------------------|
 | `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `moonshot_api_key` config field / `credentials.toml` | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
-| `zai-code` | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `zai_api_key` config field / `credentials.toml` | `glm-5.2` (default), `glm-5.1`, `glm-4.7` |
+| `zai-code` | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | `zai_api_key` config field / `credentials.toml` | `glm-5.3` (default), `glm-5.2` |
 
 ### Bespoke providers
 
@@ -83,7 +83,7 @@ Notes:
   startup migration repoints any channel still on the official
   chat-completions URL. The dated ids (`-0731` / `-0813`) pin a snapshot; the
   bare ids float with the upstream latest.
-- `zai-code` targets the Z.AI (Zhipu) coding-plan platform and serves the
+- `zai-code` targets the Zhipu BigModel / Z.AI coding-plan platform (CN) and serves the
   GLM-5 family; it sends a `opencode/1.17.10` User-Agent so the platform
   recognises a coding agent.
 - `kimi-code` tracks the Kimi Code platform's live `GET /models` list at
@@ -168,7 +168,7 @@ without rebuilding the `Agent`.
 ## Retry
 
 Transient HTTP `408`, `429`, `5xx`, connection, and timeout failures are
-wrapped in `RetryableError` (`crates/neenee-core/src/error.rs`) by
+wrapped in `RetryableError` (`crates/neenee-contracts/src/error.rs`) by
 `ensure_success` and `transport_error` in `crates/neenee-providers/src/lib.rs`.
 The marker prefix
 is `[NEENEE_RETRYABLE]`.

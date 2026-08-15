@@ -3,7 +3,7 @@
 //! Ports kimi-code's `ToolManager` concept: tools are classified at runtime
 //! into three sources — `builtin` (collected from the registry + agent-owned
 //! instances like todo), `user` (RPC/SDK-injected tools, future), and `mcp`
-//! (dynamic tools published through [`neenee_core::DynamicToolSink`], today only MCP).
+//! (dynamic tools published through [`neenee_contracts::DynamicToolSink`], today only MCP).
 //!
 //! ### Why this exists
 //!
@@ -22,7 +22,7 @@
 //!
 //! ### What it is *not*
 //!
-//! Not a replacement for [`neenee_core::ToolSet`] (the capability-pool resolver) or
+//! Not a replacement for [`neenee_contracts::ToolSet`] (the capability-pool resolver) or
 //! [`DynamicToolRegistry`] (the sink). Those remain the storage; this is a
 //! read-side view over them plus the new `user` bucket. The storage layers
 //! keep their existing invariants (static > dynamic on name clash; dynamic
@@ -31,12 +31,12 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
 
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 
 use crate::dynamic_tools::DynamicToolRegistry;
 
 /// Which bucket a tool lives in. The classification is *runtime*, not a crate
-/// boundary: an MCP tool's transport lives in `neenee-agent::mcp`, but once published
+/// boundary: an MCP tool's transport lives in `neenee-mcp`, but once published
 /// through the sink it is an `mcp` tool *here* in the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSource {
@@ -47,7 +47,7 @@ pub enum ToolSource {
     /// classification and name-clash policy are stable from day one, even
     /// though nothing populates it yet.
     User,
-    /// Published through [`neenee_core::DynamicToolSink`] — today only MCP servers. Named
+    /// Published through [`neenee_contracts::DynamicToolSink`] — today only MCP servers. Named
     /// `mcp__<server>__<tool>` by convention (enforced at the publisher, not
     /// here).
     Mcp,
@@ -204,9 +204,9 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use async_trait::async_trait;
-    use neenee_core::DynamicToolSink;
-    use neenee_core::ScopeTarget;
-    use neenee_core::ToolAccesses;
+    use neenee_contracts::DynamicToolSink;
+    use neenee_contracts::ScopeTarget;
+    use neenee_contracts::ToolAccesses;
 
     /// Minimal tool stub for classification tests.
     struct StubTool {

@@ -1,12 +1,12 @@
 //! Capability-fidelity proof for the baseline-registry migration (Phase 3).
 //!
-//! `PRE_MIGRATION` is the old `neenee_core::model::KNOWN_MODELS` table,
+//! `PRE_MIGRATION` is the old `neenee_contracts::model::KNOWN_MODELS` table,
 //! embedded verbatim. The test resolves every id through the new
 //! provider-registered baselines and compares every field, proving the
 //! per-provider distribution changed no capability data.
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat, resolve_model};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat, resolve_model};
 
 const PRE_MIGRATION: &[Model] = &[
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
@@ -20,7 +20,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GLM_5,
+        effort_levels: neenee_contracts::effort::EFFORT_GLM_5,
     },
     Model {
         id: "glm-5.1",
@@ -79,7 +79,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "kimi-k2.7-code",
@@ -132,7 +132,7 @@ const PRE_MIGRATION: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Opus 4.8 honors the full effort range including `xhigh`/`max`.
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-4-6",
@@ -145,7 +145,7 @@ const PRE_MIGRATION: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_NO_XHIGH,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
     },
     Model {
         id: "claude-fable-5",
@@ -163,7 +163,7 @@ const PRE_MIGRATION: &[Model] = &[
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
         // Fable 5 honors the full effort range including `xhigh`/`max`.
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-5",
@@ -182,7 +182,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         // Sonnet 5 honors the full range INCLUDING `xhigh` — the key difference
         // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
-        effort_levels: neenee_core::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: neenee_contracts::effort::EFFORT_CLAUDE_FULL,
     },
     Model {
         id: "claude-haiku-4-5-20251001",
@@ -218,7 +218,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-sol",
@@ -230,7 +230,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -242,7 +242,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -254,7 +254,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
@@ -271,7 +271,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -283,7 +283,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -295,7 +295,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     // OpenAI sub2api relays can expose additional text aliases not used by the
     // official built-in template. Keep their metadata conservative when the
@@ -310,7 +310,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2",
@@ -322,7 +322,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-chat-latest",
@@ -334,7 +334,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-pro",
@@ -346,7 +346,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
     // remains only behind the TTS/transcribe specialized models) but kept
@@ -391,7 +391,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-pro-preview",
@@ -403,7 +403,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-flash-preview",
@@ -415,7 +415,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.1-pro-preview",
@@ -427,7 +427,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
@@ -440,7 +440,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_LEVEL,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
     // ── sub2api / antigravity relay models ────────────────────────────────
     // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
@@ -495,7 +495,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_BUDGET,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-pro",
@@ -507,7 +507,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::Google,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_GEMINI_BUDGET,
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-flash-lite",
@@ -544,7 +544,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-flash-0731",
@@ -556,7 +556,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-pro",
@@ -568,7 +568,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-pro-0813",
@@ -580,7 +580,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: neenee_contracts::effort::EFFORT_LOW_HIGH_MAX,
     },
     // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
     Model {
@@ -642,7 +642,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "minimax-m2.7",
@@ -654,7 +654,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "minimax-m2.5",
@@ -666,7 +666,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::AnthropicCompat,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     // ── Qwen (opencode-go, OpenAI /chat/completions format) ────────────────
     // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
@@ -682,7 +682,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.7-plus",
@@ -694,7 +694,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.6-plus",
@@ -706,7 +706,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     Model {
         id: "qwen3.5-plus",
@@ -718,7 +718,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: false,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_COMMON,
+        effort_levels: neenee_contracts::effort::EFFORT_COMMON,
     },
     // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
     Model {
@@ -731,7 +731,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-4.20",
@@ -743,7 +743,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-4.3",
@@ -755,7 +755,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
     Model {
         id: "grok-build-0.1",
@@ -767,7 +767,7 @@ const PRE_MIGRATION: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_XAI_GROK,
+        effort_levels: neenee_contracts::effort::EFFORT_XAI_GROK,
     },
 ];
 

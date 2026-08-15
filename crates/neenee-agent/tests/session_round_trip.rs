@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use futures::stream::{BoxStream, StreamExt};
-use neenee_core::{Message, ModelRequest, Provider, Role, async_trait};
+use neenee_contracts::{Message, ModelRequest, Provider, Role, async_trait};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -84,7 +84,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             session: session.clone(),
             session_id: session.id().await,
             projection: ContextProjectionSettings {
-                budget: neenee_core::CompactionPolicy::default().resolve(100_000),
+                budget: neenee_contracts::CompactionPolicy::default().resolve(100_000),
                 preserve_rounds: 6,
                 summarize: false,
                 prune: false,

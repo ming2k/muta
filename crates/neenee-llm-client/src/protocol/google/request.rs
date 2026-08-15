@@ -16,14 +16,14 @@
 //!   `functionCall` parts; tool results are user `functionResponse` parts.
 //! - Auth: none beyond the `?key=` query param.
 
-use neenee_core::{Message, Role};
+use neenee_contracts::{Message, Role};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 use super::response::{TEXT_THOUGHT_SIGNATURE_META_KEY, THOUGHT_SIGNATURES_META_KEY};
 
 /// The resolved reasoning-depth directive to stamp into `thinkingConfig` — the
-/// wire form of a channel's [`neenee_core::Effort`] override once it has been
+/// wire form of a channel's [`neenee_contracts::Effort`] override once it has been
 /// clamped and translated for this Gemini model.
 ///
 /// Gemini exposes **two mutually exclusive** depth surfaces, so a single field
@@ -39,11 +39,11 @@ pub enum GoogleThinking {
     /// `thinkingLevel` for a Gemini 3.x model: one of `minimal`/`low`/
     /// `medium`/`high`. Never `none`/`xhigh`/`max` (Gemini 3.x rejects them);
     /// the resolver clamps those down before constructing this variant.
-    Level(neenee_core::Effort),
+    Level(neenee_contracts::Effort),
     /// `thinkingBudget` for a Gemini 2.5 model: a token count in the model's
     /// supported range. `0` disables thinking (Flash/Lite only — Pro's floor is
     /// `128`, so the resolver only emits `0` when the model's ladder allows
-    /// [`neenee_core::Effort::None`]).
+    /// [`neenee_contracts::Effort::None`]).
     Budget(i64),
 }
 
@@ -51,9 +51,9 @@ pub enum GoogleThinking {
 /// this Gemini model expects, clamping it to the model's supported levels.
 ///
 /// The model's **effort ladder** decides which surface applies: a
-/// `thinkingLevel` ladder ([`neenee_core::effort::EFFORT_GEMINI_LEVEL`]) maps each rung
+/// `thinkingLevel` ladder ([`neenee_contracts::effort::EFFORT_GEMINI_LEVEL`]) maps each rung
 /// to a level enum; a `thinkingBudget` ladder
-/// ([`neenee_core::effort::EFFORT_GEMINI_BUDGET`]) maps each rung to a token bucket
+/// ([`neenee_contracts::effort::EFFORT_GEMINI_BUDGET`]) maps each rung to a token bucket
 /// (the bucket cap is `max_budget`, e.g. `24576` for Gemini 2.5 Flash or
 /// `32768` for Pro). Returns `None` when there is nothing to stamp — an empty
 /// ladder (non-reasoning / unknown model) or an unset override — leaving the
@@ -62,8 +62,8 @@ pub enum GoogleThinking {
 /// `max_budget` is only consulted for the budget surface; pass any value for a
 /// level-only model.
 pub fn resolve_thinking(
-    effort: Option<neenee_core::Effort>,
-    effort_levels: &[neenee_core::EffortLevel],
+    effort: Option<neenee_contracts::Effort>,
+    effort_levels: &[neenee_contracts::EffortLevel],
     max_budget: u32,
 ) -> Option<GoogleThinking> {
     // A model that does not advertise a depth ladder has no thinking surface to
@@ -77,15 +77,15 @@ pub fn resolve_thinking(
     // Gemini's ladders are always compiled-in known rungs, so extract the known
     // subset for ranking; `Other` (a provider tier outside the vocabulary) has
     // no Gemini surface to map onto and is ignored here.
-    let known: Vec<neenee_core::Effort> = effort_levels
+    let known: Vec<neenee_contracts::Effort> = effort_levels
         .iter()
-        .filter_map(neenee_core::EffortLevel::as_known)
+        .filter_map(neenee_contracts::EffortLevel::as_known)
         .collect();
     let clamped = requested.clamp_to(&known);
     // Decide the surface from the ladder's deepest rung: the budget ladder tops
     // out at `max`, the level ladder at `high`. This keeps the model-specific
     // choice in one place and never inspects the free-form model id string.
-    let is_budget = known.contains(&neenee_core::Effort::Max);
+    let is_budget = known.contains(&neenee_contracts::Effort::Max);
     Some(if is_budget {
         GoogleThinking::Budget(clamped.gemini_thinking_budget(max_budget))
     } else {
@@ -96,7 +96,7 @@ pub fn resolve_thinking(
 /// Inputs to [`body`]: the prepared tool schemas in OpenAI function-spec
 /// shape, if any.
 pub struct BodyInput<'a> {
-    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
+    pub tool_specs: Option<&'a [neenee_contracts::ToolSpec]>,
     /// Stamp `generationConfig.thinkingConfig.includeThoughts`. The Google API
     /// only returns reasoning *text* when the request asks for it, and rejects
     /// the flag with HTTP 400 on models that do not think — so this MUST be
@@ -326,7 +326,7 @@ fn tool_result_parts(message: Message, call_names: &HashMap<String, String>) -> 
 
 fn text_and_image_parts(
     text: String,
-    images: Vec<neenee_core::ImagePart>,
+    images: Vec<neenee_contracts::ImagePart>,
     include_empty_text: bool,
 ) -> Vec<Value> {
     let mut parts = Vec::new();
@@ -344,7 +344,7 @@ fn text_and_image_parts(
     parts
 }
 
-fn google_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
+fn google_tools(tool_specs: Option<&[neenee_contracts::ToolSpec]>) -> Option<Value> {
     let specs = tool_specs?;
     if specs.is_empty() {
         return None;
@@ -391,7 +391,7 @@ pub fn stream_url(base_url: &str, model: &str, api_key: &str) -> String {
 }
 
 /// The maximum `thinkingBudget` a Gemini 2.5 model accepts, in tokens — the cap
-/// [`neenee_core::Effort::gemini_thinking_budget`] buckets against. Gemini 2.5 Flash tops
+/// [`neenee_contracts::Effort::gemini_thinking_budget`] buckets against. Gemini 2.5 Flash tops
 /// out at `24576`; Pro at `32768`; Flash-Lite (floor `512`) also at `24576`.
 /// Any other model id (Gemini 3.x, non-reasoning) returns `0`, signaling "no
 /// budget surface" so [`resolve_thinking`] never constructs a `Budget` for it.
@@ -459,7 +459,7 @@ mod tests {
         let body = body(
             vec![Message::new(Role::User, "list files")],
             BodyInput {
-                tool_specs: Some(&[neenee_core::ToolSpec {
+                tool_specs: Some(&[neenee_contracts::ToolSpec {
                     name: "list_dir".to_string(),
                     description: "List files".to_string(),
                     parameters: json!({
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn replays_tool_calls_and_results_as_function_parts() {
-        let call = neenee_core::ToolCall {
+        let call = neenee_contracts::ToolCall {
             id: "call_1".to_string(),
             name: "list_dir".to_string(),
             arguments: r#"{"path":"."}"#.to_string(),
@@ -572,12 +572,12 @@ mod tests {
 
     #[test]
     fn strips_unanswered_tool_calls_and_orphan_results() {
-        let answered = neenee_core::ToolCall {
+        let answered = neenee_contracts::ToolCall {
             id: "answered".to_string(),
             name: "list_dir".to_string(),
             arguments: "{}".to_string(),
         };
-        let unanswered = neenee_core::ToolCall {
+        let unanswered = neenee_contracts::ToolCall {
             id: "unanswered".to_string(),
             name: "grep".to_string(),
             arguments: "{}".to_string(),
@@ -615,8 +615,8 @@ mod tests {
     fn resolve_thinking_level_for_gemini_3x() {
         // Gemini 3.x uses a level ladder; each rung maps to thinkingLevel,
         // clamping down from unsupported depths.
-        use neenee_core::effort::{EFFORT_GEMINI_LEVEL, Effort};
-        let level: Vec<neenee_core::EffortLevel> = EFFORT_GEMINI_LEVEL
+        use neenee_contracts::effort::{EFFORT_GEMINI_LEVEL, Effort};
+        let level: Vec<neenee_contracts::EffortLevel> = EFFORT_GEMINI_LEVEL
             .iter()
             .copied()
             .map(Into::into)
@@ -642,8 +642,8 @@ mod tests {
     fn resolve_thinking_budget_for_gemini_2_5() {
         // Gemini 2.5 uses a budget ladder; rungs map to token buckets against
         // the model's max (Flash: 24576).
-        use neenee_core::effort::{EFFORT_GEMINI_BUDGET, Effort};
-        let budget: Vec<neenee_core::EffortLevel> = EFFORT_GEMINI_BUDGET
+        use neenee_contracts::effort::{EFFORT_GEMINI_BUDGET, Effort};
+        let budget: Vec<neenee_contracts::EffortLevel> = EFFORT_GEMINI_BUDGET
             .iter()
             .copied()
             .map(Into::into)
@@ -667,7 +667,7 @@ mod tests {
     fn resolve_thinking_empty_ladder_is_no_override() {
         // A non-reasoning / unknown model (empty ladder) never stamps thinking.
         assert_eq!(
-            resolve_thinking(Some(neenee_core::Effort::High), &[], 24576),
+            resolve_thinking(Some(neenee_contracts::Effort::High), &[], 24576),
             None
         );
     }
@@ -680,7 +680,7 @@ mod tests {
             BodyInput {
                 tool_specs: None,
                 include_thoughts: false,
-                thinking: Some(GoogleThinking::Level(neenee_core::Effort::Medium)),
+                thinking: Some(GoogleThinking::Level(neenee_contracts::Effort::Medium)),
             },
         );
         assert_eq!(

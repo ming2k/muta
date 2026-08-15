@@ -102,8 +102,8 @@ provider file owns three things: a model-id list, a baseline metadata table,
 and a template spec. Use `deepseek.rs` as a minimal reference.
 
 ```rust
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -111,7 +111,7 @@ use super::ProviderTemplateSpec;
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
 
 /// Baseline capability metadata — context window, thinking support, effort
-/// levels, wire format. Submitted to `neenee_core`'s registry at link time.
+/// levels, wire format. Submitted to `neenee_contracts`'s registry at link time.
 pub const MODELS: &[Model] = &[
     Model {
         id: "acme-1",
@@ -127,7 +127,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "acme",
@@ -192,7 +192,7 @@ parser directly.
 
 Then wire the adapter into the two construction sites:
 
-1. Add a `Transport` variant in `crates/neenee-core/src/catalog.rs` and an arm
+1. Add a `Transport` variant in `crates/neenee-contracts/src/catalog.rs` and an arm
    in `build_provider_for_channel`
    (`crates/neenee-providers/src/registry/mod.rs`) that constructs the adapter
    from the channel.

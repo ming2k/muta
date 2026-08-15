@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use neenee_core::SecretString;
+use neenee_contracts::SecretString;
 use neenee_persistence::paths;
 use serde::{Deserialize, Serialize};
 

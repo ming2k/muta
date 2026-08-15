@@ -1,12 +1,12 @@
 //! This CLI's identity + principal profile.
 //!
-//! Lives in the application layer (`neenee`), NOT in `neenee-transport`.
+//! Lives in the application layer (`neenee`), NOT in `neenee-runtime`.
 //! The server layer stays application-neutral — a future sibling binary
 //! brings its own identity/principal. The server's `/btw` side
 //! session reuses the primary agent's identity via `Agent::identity()`,
 //! so it never asks the server to name a product.
 
-use neenee_agent::{AgentIdentity, PrincipalProfile};
+use neenee_contracts::{AgentIdentity, PrincipalProfile};
 
 /// The product's default instance name. A self-reference anchor the model
 /// uses in the system prompt (intro line, responding when called by name).
@@ -38,6 +38,6 @@ pub fn principal_code() -> PrincipalProfile {
 
 // Principal role presets (`architect`, `reviewer`, `security`) and the
 // `/principal` / `@principal:` switching mechanism are declared in
-// `neenee-core` as shared vocabulary (`PrincipalRole`,
+// `neenee-contracts` as shared vocabulary (`PrincipalRole`,
 // `PrincipalProfile::for_role`) and applied via `Agent::apply_principal_role`,
 // so this binary does not need its own role registry — both frontends share one.

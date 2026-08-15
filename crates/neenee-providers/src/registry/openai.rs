@@ -1,8 +1,8 @@
 //! The built-in `openai` provider template: OpenAI's chat-completions API,
 //! one key (`OPENAI_API_KEY`).
 
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -23,8 +23,8 @@ pub const OPENAI_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── GPT-5.6 (OpenAI) ───────────────────────────────────────────────────
     // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
@@ -45,7 +45,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-sol",
@@ -57,7 +57,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -69,7 +69,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -81,7 +81,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
     // ── GPT (OpenAI) ───────────────────────────────────────────────────────
     // The current frontier chat family served over the OpenAI chat-completions
@@ -98,7 +98,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -110,7 +110,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -122,7 +122,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         format: WireFormat::OpenAi,
         model_guidance: "",
-        effort_levels: neenee_core::effort::EFFORT_OPENAI_GPT,
+        effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
     // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
     // remains only behind the TTS/transcribe specialized models) but kept
@@ -153,7 +153,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "openai",

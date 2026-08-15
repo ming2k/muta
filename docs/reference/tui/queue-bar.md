@@ -96,7 +96,7 @@ close.
 
 `draw_queue_bar` in `chrome.rs`. Identity, count, paused/blocked coloring, the
 width-pressure legend, and the next-item preview live there; the staged items
-are `crate::tui::app::QueuedDispatch`, mirrored into the view via
+are `neenee_tui::app::QueuedDispatch`, mirrored into the view via
 `QueueItemView`. The block state lives in `App::queue_blocked_sessions`; the
 auto-drain gate in the event loop honors it. Height token: `QUEUE_BAR_ROWS = 1`
 (`design.rs`).

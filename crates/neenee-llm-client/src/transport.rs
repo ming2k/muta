@@ -4,7 +4,7 @@
 //! in [`crate::client`]; endpoint configuration in [`crate::endpoint`]; SSE
 //! byte reassembly in [`crate::sse`].
 
-use neenee_core::retryable_error;
+use neenee_contracts::retryable_error;
 use std::time::SystemTime;
 
 pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
@@ -175,7 +175,7 @@ pub async fn decode_response_json(
         Err(error) => {
             let preview = body_preview(&text);
             tracing::warn!(
-                target: "neenee_core::provider",
+                target: "neenee_contracts::provider",
                 provider = provider,
                 error = %error,
                 body_len = text.len(),

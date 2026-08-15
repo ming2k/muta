@@ -21,7 +21,7 @@
 //!    request is always wire-valid: every `tool` result references a known
 //!    preceding `tool_call`, and every assistant `tool_calls` has its results.
 
-use neenee_core::{Effort, Message, Role};
+use neenee_contracts::{Effort, Message, Role};
 use serde_json::{Value, json};
 
 /// The headers this wire format requires on every request, beyond the
@@ -56,14 +56,14 @@ pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
-    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
+    pub tool_specs: Option<&'a [neenee_contracts::ToolSpec]>,
     /// Optional OpenAI reasoning-effort override. `None` omits the field and
     /// keeps the model/provider default.
     pub reasoning_effort: Option<Effort>,
     /// Optional session-scoped prompt-cache key (Moonshot / Kimi). When set, the
     /// body carries `prompt_cache_key` so the server-side cache namespaces per
     /// session and repeated prefixes (system prompt, recent messages) hit at a
-    /// discount. Resolved from the model's [`neenee_core::CachePolicy`] by the
+    /// discount. Resolved from the model's [`neenee_contracts::CachePolicy`] by the
     /// provider adapter; `None` omits the field entirely (OpenAI ignores it
     /// harmlessly, but we still don't send it unless the policy is `SessionKey`).
     pub prompt_cache_key: Option<&'a str>,
@@ -82,7 +82,7 @@ pub struct BodyInput<'a> {
 /// reach the wire. Serialization is therefore a pure projection of the
 /// session: no field on the wire exists that the session did not produce.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
-    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    let capabilities = neenee_contracts::ModelCapabilities::for_channel(input.model, None);
     body_with_capabilities(messages, input, &capabilities)
 }
 
@@ -92,7 +92,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
 pub fn body_with_capabilities(
     messages: Vec<Message>,
     input: BodyInput<'_>,
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
 ) -> Value {
     let BodyInput {
         model: model_id,
@@ -113,7 +113,7 @@ pub fn body_with_capabilities(
             .map(|mut m| {
                 if m.images.is_some() {
                     tracing::debug!(
-                        target: "neenee_core::provider",
+                        target: "neenee_contracts::provider",
                         model = %model_id,
                         vision = false,
                         "stripping images from message — model does not support vision",
@@ -317,7 +317,7 @@ pub fn content(m: &Message) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::ToolCall;
+    use neenee_contracts::ToolCall;
     #[test]
     fn request_filters_empty_assistant_history() {
         let body = super::body(

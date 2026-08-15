@@ -5,7 +5,7 @@
 //! the `usage` object (with cache-token folding), and the per-event stream
 //! parsing.
 
-use neenee_core::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
+use neenee_contracts::{Message, ProviderStreamEvent, Role, TokenUsage, ToolCall};
 use serde_json::{Map, Value};
 
 /// The assembled pieces of an Anthropic assistant response: the text content,
@@ -203,7 +203,7 @@ pub fn into_message(
         children: None,
         envoy_meta: None,
         origin: None,
-        timestamp: Some(neenee_core::todos::unix_now()),
+        timestamp: Some(neenee_contracts::todos::unix_now()),
         sent_at_ms: None,
     }
 }

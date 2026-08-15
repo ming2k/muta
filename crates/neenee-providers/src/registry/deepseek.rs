@@ -12,9 +12,9 @@
 //! channels use the Responses transport. Chat-completions remains available
 //! upstream, but is no longer what the template seeds.
 
-use neenee_core::effort::EFFORT_LOW_HIGH_MAX;
-use neenee_core::thinking::ThinkingSupport;
-use neenee_core::{Model, WireFormat};
+use neenee_contracts::effort::EFFORT_LOW_HIGH_MAX;
+use neenee_contracts::thinking::ThinkingSupport;
+use neenee_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -30,8 +30,8 @@ pub const DEEPSEEK_BUILTIN_MODELS: &[&str] = &[
 ];
 
 /// Baseline capability metadata for the models this provider serves,
-/// submitted to `neenee_core`'s registry at link time (see
-/// [`neenee_core::model::BaselineModels`]).
+/// submitted to `neenee_contracts`'s registry at link time (see
+/// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
@@ -84,7 +84,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_core::model::BaselineModels(MODELS));
+inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "deepseek",

@@ -12,6 +12,8 @@ Lookup-oriented documentation — tables, lists, and exact values.
 
 ## Commands
 
+- [Command line](cli.md) — `neenee` subcommands, options, exit codes, and
+  shell completions
 - [Slash commands](commands.md) — built-in commands, subcommands, custom commands
 
 ## Configuration

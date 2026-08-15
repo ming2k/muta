@@ -11,7 +11,7 @@
 //!   `ChatGPT-Account-Id` header (applied by the provider, not here).
 //! - Body: `{model, instructions?, input, tools?, reasoning?, tool_choice?, stream}`.
 
-use neenee_core::{Effort, Message, Role};
+use neenee_contracts::{Effort, Message, Role};
 use serde_json::{Value, json};
 
 /// Inputs to [`body`]: the model id, whether this is a streaming request, the
@@ -21,7 +21,7 @@ pub struct BodyInput<'a> {
     pub model: &'a str,
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
-    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
+    pub tool_specs: Option<&'a [neenee_contracts::ToolSpec]>,
     pub reasoning_effort: Option<Effort>,
 }
 
@@ -33,7 +33,7 @@ pub struct BodyInput<'a> {
 /// `function_call_output` references a preceding `function_call`, and every
 /// `function_call` has its output (mirrors the chat-completions builder).
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
-    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    let capabilities = neenee_contracts::ModelCapabilities::for_channel(input.model, None);
     body_with_capabilities(messages, input, &capabilities)
 }
 
@@ -43,7 +43,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
 pub fn body_with_capabilities(
     messages: Vec<Message>,
     input: BodyInput<'_>,
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
 ) -> Value {
     let BodyInput {
         model: model_id,
@@ -224,7 +224,7 @@ fn message_item(role: &str, m: &Message, text_part: &str) -> Value {
 /// Flatten the OpenAI function-spec tool shape (`{type:"function",
 /// Translate provider-neutral [`ToolSpec`]s into the OpenAI Responses tool
 /// shape (`{type:"function", name, description, parameters, strict:false}`).
-fn flatten_tools(tool_specs: Option<&[neenee_core::ToolSpec]>) -> Option<Value> {
+fn flatten_tools(tool_specs: Option<&[neenee_contracts::ToolSpec]>) -> Option<Value> {
     let specs = tool_specs?;
     let out: Vec<Value> = specs
         .iter()
@@ -306,7 +306,7 @@ pub fn has_input_image(body: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::ToolCall;
+    use neenee_contracts::ToolCall;
 
     fn assistant_with_call(call: ToolCall, content: &str) -> Message {
         Message {

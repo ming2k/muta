@@ -9,7 +9,7 @@
 //! content — exactly the lowering opencode performs for OpenAI Chat.
 
 use async_trait::async_trait;
-use neenee_core::{Tool, ToolOutput};
+use neenee_contracts::{Tool, ToolOutput};
 use serde_json::json;
 
 /// Read an image file so the model can see it.
@@ -78,7 +78,7 @@ impl Tool for ReadImageTool {
     }
 }
 
-neenee_core::register_tool!(ReadImageFactory => ReadImageTool);
+neenee_contracts::register_tool!(ReadImageFactory => ReadImageTool);
 
 /// Map a file extension to the MIME type neenee can encode. We accept the
 /// formats the `image` crate is built with (see Cargo features) and that the

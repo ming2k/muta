@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
-use neenee_core::{
+use neenee_contracts::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule, estimate_bytes,
@@ -121,14 +121,14 @@ impl Provider for ProxyProvider {
             .model()
     }
 
-    fn model_capabilities(&self) -> neenee_core::ModelCapabilities {
+    fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.holder
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .model_capabilities()
     }
 
-    fn prompt_hints(&self) -> neenee_core::ProviderPromptHints {
+    fn prompt_hints(&self) -> neenee_contracts::ProviderPromptHints {
         self.holder
             .read()
             .unwrap_or_else(|error| error.into_inner())
@@ -247,7 +247,7 @@ impl Provider for ProxyProvider {
             .usage_supported()
     }
 
-    fn take_last_usage(&self) -> Option<neenee_core::TokenUsage> {
+    fn take_last_usage(&self) -> Option<neenee_contracts::TokenUsage> {
         self.holder
             .read()
             .unwrap_or_else(|error| error.into_inner())
@@ -370,7 +370,7 @@ pub struct ContextProjectionSettings {
     /// Token thresholds resolved against the active model's context window.
     /// Pressure (estimated in tokens) is compared against these to decide when
     /// to prune and when to run a full summarizing compaction.
-    pub budget: neenee_core::ContextBudget,
+    pub budget: neenee_contracts::ContextBudget,
     pub preserve_rounds: usize,
     /// Use the active model to produce an anchored structured summary.
     pub summarize: bool,
@@ -395,7 +395,7 @@ impl ContextProjectionSettings {
             summarize: config.compaction_summarize,
             prune: config.compaction_prune,
             prune_protect_chars: config.compaction_prune_protect_tokens
-                * neenee_core::CHARS_PER_TOKEN,
+                * neenee_contracts::CHARS_PER_TOKEN,
         }
     }
 
@@ -421,7 +421,7 @@ mod projection_settings_tests {
     #[test]
     fn compaction_target_accounts_for_projected_request_overhead() {
         let settings = ContextProjectionSettings {
-            budget: neenee_core::CompactionPolicy::default().resolve(200_000),
+            budget: neenee_contracts::CompactionPolicy::default().resolve(200_000),
             preserve_rounds: 6,
             summarize: true,
             prune: true,
@@ -450,7 +450,7 @@ pub struct MidTurnPruneProjectionGate {
 impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
     async fn project_context(&self, messages: Vec<Message>) -> Option<Vec<Message>> {
         let mut messages = messages;
-        let outcome = neenee_core::prune_tool_results(
+        let outcome = neenee_contracts::prune_tool_results(
             &mut messages,
             self.prune_protect_chars,
             ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS,
@@ -928,7 +928,7 @@ pub async fn execute_round(
         let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Notice(
-                neenee_core::AgentNotice::new(
+                neenee_contracts::AgentNotice::new(
                     NoticeKind::ProviderRetry,
                     NoticeSeverity::Warning,
                     format!("Retrying provider request ({}/{retry_limit})", attempt + 1),
@@ -1034,9 +1034,12 @@ pub async fn execute_round(
         agent.clear_todos();
         let _ = tx.send(round_response(
             &session_id,
-            RoundEvent::TodosUpdated(neenee_core::TodoList::default()),
+            RoundEvent::TodosUpdated(neenee_contracts::TodoList::default()),
         ));
-        if let Err(err) = session.set_todos(neenee_core::TodoList::default()).await {
+        if let Err(err) = session
+            .set_todos(neenee_contracts::TodoList::default())
+            .await
+        {
             tracing::warn!(error = %err, "could not clear todos");
         }
     } else {
@@ -1069,7 +1072,7 @@ pub async fn execute_round(
     if emit_round_completed {
         let _ = tx.send(round_response(
             &session_id,
-            RoundEvent::RoundCompleted(neenee_core::RoundSummary {
+            RoundEvent::RoundCompleted(neenee_contracts::RoundSummary {
                 round: agent_round,
                 output_tokens: outcome.token_usage.completion_tokens.max(0) as u64,
                 duration_ms: outcome.duration_ms,
@@ -1090,9 +1093,9 @@ fn send_context_projection(
     let tokens = agent.estimate_next_request_tokens(messages).total_tokens;
     let _ = tx.send(round_response(
         session_id,
-        RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+        RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
             tokens,
-            source: neenee_core::ContextTokenSource::Projection,
+            source: neenee_contracts::ContextTokenSource::Projection,
         }),
     ));
 }
@@ -1175,9 +1178,9 @@ pub fn relay_agent_event(
             // pre-wire boundary, after hooks and request preparation.
             let _ = tx.send(round_response(
                 session_id,
-                RoundEvent::ContextTokens(neenee_core::ContextTokenSnapshot {
+                RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
                     tokens: context_tokens,
-                    source: neenee_core::ContextTokenSource::Projection,
+                    source: neenee_contracts::ContextTokenSource::Projection,
                 }),
             ));
             // Structured turn signal first, so the Activity modal can show
@@ -1266,14 +1269,14 @@ pub fn relay_agent_event(
                 let _ = tx.send(round_response(
                     session_id,
                     RoundEvent::Notice(
-                        neenee_core::AgentNotice::new(
-                            neenee_core::NoticeKind::ReviewAlert,
-                            neenee_core::NoticeSeverity::Warning,
+                        neenee_contracts::AgentNotice::new(
+                            neenee_contracts::NoticeKind::ReviewAlert,
+                            neenee_contracts::NoticeSeverity::Warning,
                             "Session review needs attention",
-                            neenee_core::NoticeSource::Review,
+                            neenee_contracts::NoticeSource::Review,
                         )
                         .with_body(alert.clone())
-                        .with_surface(neenee_core::NoticeSurface::Banner),
+                        .with_surface(neenee_contracts::NoticeSurface::Banner),
                     ),
                 ));
             }
@@ -1339,7 +1342,7 @@ pub async fn prune_and_commit(
     settings: &ContextProjectionSettings,
 ) -> Result<(), String> {
     let before_chars = estimate_bytes(history);
-    let Some(outcome) = neenee_core::prune_tool_results(
+    let Some(outcome) = neenee_contracts::prune_tool_results(
         history,
         settings.prune_protect_chars,
         ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS,
@@ -1489,7 +1492,7 @@ pub fn start_schedule_scheduler(
 mod schedule_tests {
     use super::*;
     use chrono::TimeZone;
-    use neenee_core::ScheduledJob;
+    use neenee_contracts::ScheduledJob;
 
     /// Build an isolated in-memory session for scheduler tests.
     async fn fresh_session() -> SessionStore {

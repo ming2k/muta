@@ -8,14 +8,14 @@
 
 use crate::fsutil;
 use crate::paths;
-use neenee_core::{
+use neenee_contracts::{
     ChannelAuth, CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig,
     RemoteModelMetadata, SecretString, SkillsConfig, VariantSelection, WebSearchConfig,
 };
 
 /// Re-export so server/TUI can use the config-layer path without depending on
 /// core's auth module name directly for `AddProvider`.
-pub use neenee_core::ChannelAuth as ConfigChannelAuth;
+pub use neenee_contracts::ChannelAuth as ConfigChannelAuth;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -90,10 +90,10 @@ pub struct PrincipalConfig {
     pub nudge: DoomGuardConfig,
 }
 
-// `DoomGuardConfig` is defined in `neenee_core::doomguardconfig` and re-exported
-// above via `use neenee_core::DoomGuardConfig`. It is the `[principal.nudge]`
+// `DoomGuardConfig` is defined in `neenee_contracts::doom_guard_config` and re-exported
+// above via `use neenee_contracts::DoomGuardConfig`. It is the `[principal.nudge]`
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
-// `neenee_core::DoomGuardConfig` for the per-field semantics and defaults.
+// `neenee_contracts::DoomGuardConfig` for the per-field semantics and defaults.
 
 /// User-tunable frontend presentation, deserialized from the optional `[tui]`
 /// table of `config.toml`. This is the **pure-data** form shared by every
@@ -132,7 +132,7 @@ pub struct TuiConfig {
     pub color_scheme: String,
     /// User-editable semantic palette retained even when a built-in scheme is
     /// active, so it can be revisited from `/config` without losing changes.
-    pub custom_color_scheme: neenee_core::ColorSchemeConfig,
+    pub custom_color_scheme: neenee_contracts::ColorSchemeConfig,
     /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
     ///
     /// Defaults to `true`: clicking the backdrop of a dismissable overlay (Help,
@@ -165,7 +165,7 @@ impl Default for TuiConfig {
             default_expanded: HashMap::new(),
             transcript_layout: String::new(),
             color_scheme: String::new(),
-            custom_color_scheme: neenee_core::ColorSchemeConfig::default(),
+            custom_color_scheme: neenee_contracts::ColorSchemeConfig::default(),
             click_outside_dismiss: default_click_outside_dismiss(),
         }
     }
@@ -421,7 +421,7 @@ pub enum ModelSource {
 }
 
 /// `Provider` implementation the catalog builds. Mirrors the built-in
-/// `neenee_core::catalog::Transport` variants but stays a plain serializable
+/// `neenee_contracts::catalog::Transport` variants but stays a plain serializable
 /// enum so it round-trips through TOML.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UserTransport {
@@ -432,7 +432,7 @@ pub enum UserTransport {
     /// key — e.g. DeepSeek V4's native surface. Distinct from
     /// [`OpenAi`](Self::OpenAi) (chat completions) in transport only. OAuth
     /// Responses channels (ChatGPT) resolve their transport from
-    /// [`neenee_core::ChannelAuth`] instead.
+    /// [`neenee_contracts::ChannelAuth`] instead.
     #[serde(alias = "openai-responses", alias = "openai_responses")]
     OpenAiResponses,
     /// Anthropic-compatible `/messages` endpoint. Used by opencode-go's
@@ -505,7 +505,7 @@ pub struct UserChannelConfig {
 /// so the metadata survives restarts: live discovery refreshes it in the
 /// background, and a failed fetch leaves the last good values in place. Only
 /// instances created from a fitting-enabled template (trusted official
-/// endpoints) ever carry this. See `neenee_core::model::FittedModel`.
+/// endpoints) ever carry this. See `neenee_contracts::model::FittedModel`.
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct FittedModelInfo {
     /// Advertised context window in tokens (`0` = the endpoint did not say).
@@ -569,7 +569,7 @@ pub struct UserProviderConfig {
     /// by model id — only for ids the client registry does not know, and only
     /// when the instance's template opts in to capability fitting (trusted
     /// official endpoints). Read at startup to build the dynamic model
-    /// overlay (see `neenee_core::model::register_fitted_models`); refreshed
+    /// overlay (see `neenee_contracts::model::register_fitted_models`); refreshed
     /// by every successful live discovery.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub fitted_models: std::collections::BTreeMap<String, FittedModelInfo>,
@@ -938,6 +938,46 @@ pub struct Config {
     /// [`ModelReasoningConfig`].
     #[serde(default)]
     pub model_reasoning: ModelReasoningConfig,
+    /// Daemon lifecycle knobs (ADR-0101): the `[daemon]` table of
+    /// `config.toml`. Controls how the session daemon exits — its shutdown
+    /// grace budget and its idle-empty auto-exit.
+    #[serde(default)]
+    pub daemon: DaemonConfig,
+}
+
+/// Daemon lifecycle configuration, deserialized from the `[daemon]` table of
+/// `config.toml` (ADR-0101).
+///
+/// ```toml
+/// [daemon]
+/// shutdown_grace_secs = 10      # graceful-teardown budget before forced exit
+/// idle_exit_minutes = 5         # auto-exit after N minutes of zero sessions
+///                                # and zero attached clients; 0 = never
+/// ```
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(default)]
+pub struct DaemonConfig {
+    /// Total budget for graceful shutdown (listeners close → connections
+    /// drain → sessions tear down with `SessionEnd` hooks). When the budget
+    /// expires — or a second signal arrives — remaining tasks are aborted and
+    /// the process exits anyway, so a hung external hook can never pin the
+    /// daemon open. A always-on/service deployment should set this at or
+    /// above the supervisor's stop timeout (e.g. systemd's `TimeoutStopSec`).
+    pub shutdown_grace_secs: u64,
+    /// Auto-exit after this many continuous minutes hosting **zero sessions
+    /// with zero attached clients** (ADR-0100 rule 3): the daemon becomes
+    /// born-on-demand, gone-when-useless. `0` disables idle exit for
+    /// always-on deployments.
+    pub idle_exit_minutes: u64,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            shutdown_grace_secs: 10,
+            idle_exit_minutes: 5,
+        }
+    }
 }
 
 /// Per-model tool-variant selection, deserialized from the `[tool_variants]`
@@ -970,7 +1010,7 @@ impl ToolVariantsConfig {
         self.0
             .get(model_id)
             .map(|m| &m.0)
-            .unwrap_or_else(|| neenee_core::empty_variant_selection())
+            .unwrap_or_else(|| neenee_contracts::empty_variant_selection())
     }
 }
 
@@ -1045,7 +1085,7 @@ impl ModelReasoningConfig {
 /// command = ".neenee/hooks/lint.sh"
 /// ```
 ///
-/// The command receives the [`neenee_core::HookContext`] as JSON on stdin and
+/// The command receives the [`neenee_contracts::HookContext`] as JSON on stdin and
 /// communicates a decision via exit code / stdout JSON (see the CLI runner).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookSpec {
@@ -1100,6 +1140,7 @@ impl Default for Config {
             hooks: Vec::new(),
             tool_variants: ToolVariantsConfig::default(),
             model_reasoning: ModelReasoningConfig::default(),
+            daemon: DaemonConfig::default(),
         }
     }
 }
@@ -1405,7 +1446,7 @@ impl Config {
         paths::get().history_file()
     }
 
-    pub fn load_history() -> Vec<neenee_core::HistoryEntry> {
+    pub fn load_history() -> Vec<neenee_contracts::HistoryEntry> {
         let path = Self::history_file_path();
         if let Ok(content) = fs::read_to_string(path) {
             serde_json::from_str(&content).unwrap_or_default()
@@ -1419,12 +1460,12 @@ impl Config {
     /// prompts survive this write (ADR-0018).
     ///
     /// `dedup` selects the merge identity (see
-    /// [`neenee_core::merge_history`]): `true` collapses identical prompt
+    /// [`neenee_contracts::merge_history`]): `true` collapses identical prompt
     /// text into one entry across sessions, `false` keeps `(text, session_id)`
     /// entries distinct. Callers pass the live `[input_history] dedup` value
     /// rather than having this method re-read `config.toml` on every send.
     pub fn save_history(
-        history: &[neenee_core::HistoryEntry],
+        history: &[neenee_contracts::HistoryEntry],
         dedup: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::history_file_path();
@@ -1435,11 +1476,11 @@ impl Config {
         // re-orders newest-first.
         let _lock = fsutil::FileLock::acquire(&path)
             .map_err(|e| format!("could not lock history file: {e}"))?;
-        let existing: Vec<neenee_core::HistoryEntry> = fs::read_to_string(&path)
+        let existing: Vec<neenee_contracts::HistoryEntry> = fs::read_to_string(&path)
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .unwrap_or_default();
-        let merged = neenee_core::merge_history(&existing, history, dedup);
+        let merged = neenee_contracts::merge_history(&existing, history, dedup);
         fsutil::atomic_write_json(&path, &merged).map_err(Box::<dyn std::error::Error>::from)?;
         Ok(())
     }
@@ -1453,7 +1494,7 @@ impl Config {
         let path = Self::history_file_path();
         let _lock = fsutil::FileLock::acquire(&path)
             .map_err(|e| format!("could not lock history file: {e}"))?;
-        fsutil::atomic_write_json(&path, &Vec::<neenee_core::HistoryEntry>::new())
+        fsutil::atomic_write_json(&path, &Vec::<neenee_contracts::HistoryEntry>::new())
             .map_err(Box::<dyn std::error::Error>::from)?;
         Ok(())
     }
@@ -1617,7 +1658,7 @@ mod tests {
     #[test]
     fn tool_variants_round_trip_through_serialise() {
         let mut cfg = Config::default();
-        let mut sel = neenee_core::VariantSelection::new();
+        let mut sel = neenee_contracts::VariantSelection::new();
         sel.insert("read_text".to_string(), "terse".to_string());
         sel.insert("bash".to_string(), "strict".to_string());
         cfg.tool_variants

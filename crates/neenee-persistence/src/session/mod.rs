@@ -14,7 +14,7 @@ use crate::blobs::BlobStore;
 use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
-use neenee_core::{
+use neenee_contracts::{
     InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, count_tokens,
     estimate_bytes, estimate_tokens,
 };
@@ -97,7 +97,7 @@ struct SessionData {
     /// no active task list. `#[serde(default)]` so legacy snapshots load as
     /// an empty list with no migration.
     #[serde(default)]
-    todos: neenee_core::TodoList,
+    todos: neenee_contracts::TodoList,
     /// Session-scoped scheduled-prompt list (`/schedule`, formerly `/repeat`).
     /// Each entry is either a recurring cron job or a one-shot (countdown /
     /// absolute-time) job. The session that created a job owns it; the
@@ -106,7 +106,7 @@ struct SessionData {
     /// snapshots load with whatever they had and no migration is required for
     /// the field rename (only the schema bump records the change).
     #[serde(default, alias = "repeat_jobs")]
-    scheduled_jobs: Vec<neenee_core::ScheduledJob>,
+    scheduled_jobs: Vec<neenee_contracts::ScheduledJob>,
     /// Schema version of this session file. Migrations increment this and are
     /// applied lazily on load.
     schema_version: u32,
@@ -158,7 +158,7 @@ struct SessionData {
     /// process-global ledger, these records survive resume and cannot leak
     /// across `/session open` boundaries.
     #[serde(default)]
-    request_usage_records: Vec<neenee_core::RequestUsageRecord>,
+    request_usage_records: Vec<neenee_contracts::RequestUsageRecord>,
     /// Durable command ledger (ADR-0091): every slash command (and `!cmd`
     /// passthrough) invocation with its typed result. Commands are operations
     /// on the session, not conversation turns, so they live here instead of in
@@ -168,7 +168,7 @@ struct SessionData {
     /// "Vec::is_empty")]` keeps legacy canonical JSON byte-identical so
     /// existing stored checksums stay valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    commands: Vec<neenee_core::CommandRecord>,
+    commands: Vec<neenee_contracts::CommandRecord>,
 }
 
 impl Default for SessionData {
@@ -183,7 +183,7 @@ impl Default for SessionData {
             archived_transcript: Vec::new(),
             last_projection: None,
             project_root: default_project_root(),
-            todos: neenee_core::TodoList::default(),
+            todos: neenee_contracts::TodoList::default(),
             scheduled_jobs: Vec::new(),
             schema_version: CURRENT_SCHEMA_VERSION,
             checksum: None,
@@ -308,11 +308,11 @@ fn migrate_session_data(mut data: SessionData) -> SessionData {
 }
 
 /// Convert a legacy `CommandEcho` message (ADR-0050) into a ledger
-/// [`CommandRecord`](neenee_core::CommandRecord) with `result: None`. The echo
+/// [`CommandRecord`](neenee_contracts::CommandRecord) with `result: None`. The echo
 /// text is the literal `/cmd args` or `!cmd args` the user typed; `!`-prefixed
 /// invocations fold under the `"shell"` name, everything else under its
 /// command word.
-fn command_record_from_echo(message: &Message) -> neenee_core::CommandRecord {
+fn command_record_from_echo(message: &Message) -> neenee_contracts::CommandRecord {
     let text = message.content.trim();
     let (name, args) = if let Some(rest) = text.strip_prefix('!') {
         ("shell", rest.trim().to_string())
@@ -324,11 +324,11 @@ fn command_record_from_echo(message: &Message) -> neenee_core::CommandRecord {
     } else {
         ("echo", text.to_string())
     };
-    let mut record = neenee_core::CommandRecord::new(name, args);
+    let mut record = neenee_contracts::CommandRecord::new(name, args);
     record.timestamp = message
         .timestamp
         .map(|seconds| seconds.saturating_mul(1000))
-        .unwrap_or_else(|| neenee_core::todos::unix_now().saturating_mul(1000));
+        .unwrap_or_else(|| neenee_contracts::todos::unix_now().saturating_mul(1000));
     record
 }
 
@@ -855,14 +855,14 @@ impl SessionStore {
     /// The unified task list, mirrored from `Agent::todos`. Empty means no
     /// active task list. Read on resume to seed the agent and the sticky
     /// panel.
-    pub async fn todos(&self) -> neenee_core::TodoList {
+    pub async fn todos(&self) -> neenee_contracts::TodoList {
         self.state.lock().await.data.todos.clone()
     }
 
     /// Replace the task list. Persists both the snapshot and the event log so
     /// resume restores the same list (and so per-item history is retained in
     /// the log).
-    pub async fn set_todos(&self, todos: neenee_core::TodoList) -> Result<(), String> {
+    pub async fn set_todos(&self, todos: neenee_contracts::TodoList) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             state.data.todos = todos.clone();
@@ -887,7 +887,7 @@ impl SessionStore {
     /// The scheduled-prompt list owned by this session (`/schedule`, formerly
     /// `/repeat`). Empty means no scheduled jobs. Read by the background
     /// scheduler to find due jobs and on resume to re-arm the schedule.
-    pub async fn scheduled_jobs(&self) -> Vec<neenee_core::ScheduledJob> {
+    pub async fn scheduled_jobs(&self) -> Vec<neenee_contracts::ScheduledJob> {
         self.state.lock().await.data.scheduled_jobs.clone()
     }
 
@@ -897,7 +897,7 @@ impl SessionStore {
     /// drop once-jobs).
     pub async fn set_scheduled_jobs(
         &self,
-        jobs: Vec<neenee_core::ScheduledJob>,
+        jobs: Vec<neenee_contracts::ScheduledJob>,
     ) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
@@ -1042,7 +1042,7 @@ impl SessionStore {
     }
 
     /// Durable lifecycle-aware request accounting for the active session.
-    pub async fn request_usage_records(&self) -> Vec<neenee_core::RequestUsageRecord> {
+    pub async fn request_usage_records(&self) -> Vec<neenee_contracts::RequestUsageRecord> {
         self.state.lock().await.data.request_usage_records.clone()
     }
 
@@ -1051,7 +1051,7 @@ impl SessionStore {
     /// appending the snapshot event.
     pub async fn set_request_usage_records(
         &self,
-        records: Vec<neenee_core::RequestUsageRecord>,
+        records: Vec<neenee_contracts::RequestUsageRecord>,
     ) -> Result<(), String> {
         let (path, data) = {
             let mut state = self.state.lock().await;
@@ -1210,7 +1210,7 @@ impl SessionStore {
     /// invocation with its typed result, in invocation order. Commands live
     /// here, not in the message stream, so resume/export/audit reconstruct
     /// them without polluting the dialogue.
-    pub async fn commands(&self) -> Vec<neenee_core::CommandRecord> {
+    pub async fn commands(&self) -> Vec<neenee_contracts::CommandRecord> {
         let state = self.state.lock().await;
         state.data.commands.clone()
     }
@@ -1227,7 +1227,7 @@ impl SessionStore {
     /// ADR-0050's command echo used to carry.
     pub async fn mutate_commands<F>(&self, f: F) -> Result<(), String>
     where
-        F: FnOnce(&mut Vec<neenee_core::CommandRecord>),
+        F: FnOnce(&mut Vec<neenee_contracts::CommandRecord>),
     {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
@@ -2008,11 +2008,11 @@ struct SessionHeader {
 /// so adding it is backward-compatible.
 #[derive(Default, Deserialize)]
 struct MessagePreview {
-    role: Option<neenee_core::Role>,
+    role: Option<neenee_contracts::Role>,
     #[serde(default)]
     content: String,
     #[serde(default)]
-    origin: Option<neenee_core::InjectionOrigin>,
+    origin: Option<neenee_contracts::InjectionOrigin>,
 }
 
 /// Id-only projection of a session snapshot, used by the
@@ -2233,7 +2233,7 @@ fn summary_token_budget(target_tokens: usize, tail: &[Message]) -> usize {
 /// tail sits alongside it), bounded to a sane range so huge windows do not
 /// produce enormous summaries and tiny windows still get a useful digest.
 fn summary_char_budget(target_tokens: usize) -> usize {
-    (target_tokens * neenee_core::CHARS_PER_TOKEN).clamp(8_000, 96_000)
+    (target_tokens * neenee_contracts::CHARS_PER_TOKEN).clamp(8_000, 96_000)
 }
 
 fn label_for(role: Role) -> Option<&'static str> {
@@ -2583,7 +2583,7 @@ pub async fn summarize_with_provider(
     const SUMMARIZATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
     let response = match tokio::time::timeout(
         SUMMARIZATION_TIMEOUT,
-        provider.chat(neenee_core::ModelRequest::new(messages)),
+        provider.chat(neenee_contracts::ModelRequest::new(messages)),
     )
     .await
     {
@@ -2813,7 +2813,7 @@ pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_core::async_trait;
+    use neenee_contracts::async_trait;
 
     /// Tests that touch process-global state (`paths::set_test_default` or
     /// process env vars) cannot run in parallel. We serialise them through
@@ -2841,13 +2841,13 @@ mod tests {
 
     #[async_trait]
     impl Provider for CompactionProvider {
-        async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
             Ok(Message::new(Role::Assistant, "mock AI summary"))
         }
 
         async fn stream_chat(
             &self,
-            _request: neenee_core::ModelRequest,
+            _request: neenee_contracts::ModelRequest,
         ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
             Ok(Box::pin(futures::stream::empty()))
         }
@@ -2856,10 +2856,10 @@ mod tests {
     #[tokio::test]
     async fn session_data_round_trips() {
         let directory =
-            std::env::temp_dir().join(format!("neenee-transport-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-host-test-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
-        let messages = vec![Message::new(neenee_core::Role::User, "hello")];
+        let messages = vec![Message::new(neenee_contracts::Role::User, "hello")];
         store.replace_messages(messages.clone()).await.unwrap();
 
         let data: SessionData = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
@@ -2905,7 +2905,7 @@ mod tests {
     #[test]
     fn checksum_computes_and_verifies() {
         let mut data = SessionData::default();
-        data.model_window = vec![Message::new(neenee_core::Role::User, "hello")];
+        data.model_window = vec![Message::new(neenee_contracts::Role::User, "hello")];
         data.checksum = Some(compute_checksum(&data).unwrap());
         assert!(verify_checksum(&data).is_ok());
 
@@ -2945,27 +2945,27 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
-        let call = neenee_core::ToolCall {
+        let call = neenee_contracts::ToolCall {
             id: "call_sub1".to_string(),
             name: "envoy".to_string(),
             arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
         };
-        let assistant = Message::new(neenee_core::Role::Assistant, "")
+        let assistant = Message::new(neenee_contracts::Role::Assistant, "")
             .with_attribution("kimi-code", "kimi-k2.7-code");
         let assistant = Message {
             tool_calls: Some(vec![call.clone()]),
             ..assistant
         };
         let envoy_transcript = vec![
-            Message::new(neenee_core::Role::User, "find foo"),
-            Message::new(neenee_core::Role::Assistant, "looking..."),
-            Message::new(neenee_core::Role::Assistant, "foo is at src/foo.rs"),
+            Message::new(neenee_contracts::Role::User, "find foo"),
+            Message::new(neenee_contracts::Role::Assistant, "looking..."),
+            Message::new(neenee_contracts::Role::Assistant, "foo is at src/foo.rs"),
         ];
         let tool = Message::tool_result(&call, "[task result]:\nfoo is at src/foo.rs")
             .with_children(envoy_transcript);
         store
             .replace_messages(vec![
-                Message::new(neenee_core::Role::User, "where is foo?"),
+                Message::new(neenee_contracts::Role::User, "where is foo?"),
                 assistant,
                 tool,
             ])
@@ -2978,7 +2978,7 @@ mod tests {
         let tool_msg = data
             .model_window
             .iter()
-            .find(|m| m.role == neenee_core::Role::Tool)
+            .find(|m| m.role == neenee_contracts::Role::Tool)
             .expect("tool result message persisted");
         let children = tool_msg.children.as_ref().expect("children persisted");
         assert_eq!(children.len(), 3);
@@ -3082,11 +3082,11 @@ mod tests {
     #[tokio::test]
     async fn fork_preserves_both_durable_branches() {
         let directory =
-            std::env::temp_dir().join(format!("neenee-transport-fork-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-host-fork-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "parent")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "parent")])
             .await
             .unwrap();
         let parent_id = store.id().await;
@@ -3095,7 +3095,7 @@ mod tests {
         assert_eq!(source_id, parent_id);
         assert_eq!(store.parent_id().await.as_deref(), Some(parent_id.as_str()));
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "fork")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "fork")])
             .await
             .unwrap();
 
@@ -3121,11 +3121,11 @@ mod tests {
         // The primary keeps its id, history, and (by construction) any in-flight
         // turn; only a self-contained sibling file is written.
         let directory =
-            std::env::temp_dir().join(format!("neenee-transport-side-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-host-side-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "parent")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "parent")])
             .await
             .unwrap();
         let parent_id = store.id().await;
@@ -3148,7 +3148,7 @@ mod tests {
         assert_eq!(side.model_window().await[0].content, "parent");
 
         // Writing to the side never reaches the primary.
-        side.replace_messages(vec![Message::new(neenee_core::Role::User, "side")])
+        side.replace_messages(vec![Message::new(neenee_contracts::Role::User, "side")])
             .await
             .unwrap();
         assert_eq!(store.model_window().await[0].content, "parent");
@@ -3168,10 +3168,8 @@ mod tests {
         // The picker should only surface the active session once it has
         // real content (messages, archived messages, a loop checkpoint, or
         // a compaction marker).
-        let directory = std::env::temp_dir().join(format!(
-            "neenee-transport-list-empty-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("neenee-host-list-empty-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
@@ -3179,7 +3177,10 @@ mod tests {
         // then keep the active session empty (the default state).
         let archived = SessionData {
             project_root: directory.clone(),
-            model_window: vec![Message::new(neenee_core::Role::User, "archived branch")],
+            model_window: vec![Message::new(
+                neenee_contracts::Role::User,
+                "archived branch",
+            )],
             ..Default::default()
         };
         store.persist_archive(&archived).unwrap();
@@ -3196,7 +3197,10 @@ mod tests {
         // Once the active session gets content it should reappear, marked
         // active so the picker can badge it.
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "live branch")])
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "live branch",
+            )])
             .await
             .unwrap();
         let sessions = store.list().await.unwrap();
@@ -3225,18 +3229,18 @@ mod tests {
         // large payload — the kind of content that made the old eager parse
         // expensive. The overview is the LAST effective user prompt ("nested
         // envoy prompt"), not the System preamble and not the heavy payloads.
-        let mut envoy_child = Message::new(neenee_core::Role::User, "nested envoy prompt");
+        let mut envoy_child = Message::new(neenee_contracts::Role::User, "nested envoy prompt");
         envoy_child.children = Some(vec![Message::new(
-            neenee_core::Role::Assistant,
+            neenee_contracts::Role::Assistant,
             "envoy reply",
         )]);
-        let mut heavy_tool = Message::new(neenee_core::Role::Tool, "x".repeat(50_000));
+        let mut heavy_tool = Message::new(neenee_contracts::Role::Tool, "x".repeat(50_000));
         heavy_tool.tool_call_id = Some("call_heavy".to_string());
         store
             .replace_messages(vec![
-                Message::new(neenee_core::Role::System, "system preamble"),
-                Message::new(neenee_core::Role::User, "the real first prompt"),
-                Message::new(neenee_core::Role::Assistant, "ack"),
+                Message::new(neenee_contracts::Role::System, "system preamble"),
+                Message::new(neenee_contracts::Role::User, "the real first prompt"),
+                Message::new(neenee_contracts::Role::Assistant, "ack"),
                 heavy_tool,
                 envoy_child,
             ])
@@ -3271,12 +3275,12 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         store
             .replace_messages(vec![
-                Message::new(neenee_core::Role::System, "system preamble"),
-                Message::new(neenee_core::Role::User, "first real prompt"),
-                Message::new(neenee_core::Role::Assistant, "reply"),
+                Message::new(neenee_contracts::Role::System, "system preamble"),
+                Message::new(neenee_contracts::Role::User, "first real prompt"),
+                Message::new(neenee_contracts::Role::Assistant, "reply"),
                 // A genuine later prompt — should win as the freshest.
-                Message::new(neenee_core::Role::User, "second real prompt"),
-                Message::new(neenee_core::Role::Assistant, "reply 2"),
+                Message::new(neenee_contracts::Role::User, "second real prompt"),
+                Message::new(neenee_contracts::Role::Assistant, "reply 2"),
                 // Then non-driving echoes that must NOT become the overview
                 // even though they are the last user-role messages:
                 Message::command_echo("/autopilot on"),
@@ -3307,7 +3311,7 @@ mod tests {
 
         store
             .replace_messages(vec![Message::new(
-                neenee_core::Role::User,
+                neenee_contracts::Role::User,
                 "raw first prompt that should be hidden by the title",
             )])
             .await
@@ -3339,11 +3343,11 @@ mod tests {
                            truncated overview would cut it off with an ellipsis.";
         store
             .replace_messages(vec![
-                Message::new(neenee_core::Role::System, "system preamble"),
-                Message::new(neenee_core::Role::User, "earlier real prompt"),
-                Message::new(neenee_core::Role::Assistant, "reply"),
-                Message::new(neenee_core::Role::User, long_prompt),
-                Message::new(neenee_core::Role::Assistant, "reply 2"),
+                Message::new(neenee_contracts::Role::System, "system preamble"),
+                Message::new(neenee_contracts::Role::User, "earlier real prompt"),
+                Message::new(neenee_contracts::Role::Assistant, "reply"),
+                Message::new(neenee_contracts::Role::User, long_prompt),
+                Message::new(neenee_contracts::Role::Assistant, "reply 2"),
                 // A trailing command echo must NOT become the last prompt.
                 Message::command_echo("/autopilot on"),
             ])
@@ -3391,12 +3395,18 @@ mod tests {
         assert!(store.todos().await.is_empty());
 
         // Seed via reconcile and persist.
-        let mut list = neenee_core::TodoList::new();
+        let mut list = neenee_contracts::TodoList::new();
         list.reconcile(
             &[
-                ("Summary".to_string(), neenee_core::TodoStatus::Pending),
-                ("Key Changes".to_string(), neenee_core::TodoStatus::Pending),
-                ("Test Plan".to_string(), neenee_core::TodoStatus::Pending),
+                ("Summary".to_string(), neenee_contracts::TodoStatus::Pending),
+                (
+                    "Key Changes".to_string(),
+                    neenee_contracts::TodoStatus::Pending,
+                ),
+                (
+                    "Test Plan".to_string(),
+                    neenee_contracts::TodoStatus::Pending,
+                ),
             ],
             1000,
             3,
@@ -3404,7 +3414,7 @@ mod tests {
         store.set_todos(list.clone()).await.unwrap();
 
         // Mutate (mark progress) and persist again — identity must survive.
-        list.update("summary", neenee_core::TodoStatus::Completed, 2000, 4);
+        list.update("summary", neenee_contracts::TodoStatus::Completed, 2000, 4);
         store.set_todos(list.clone()).await.unwrap();
 
         // Reload from disk via the event log + snapshot and confirm round-trip.
@@ -3412,14 +3422,17 @@ mod tests {
         let loaded = reloaded.todos().await;
         assert_eq!(loaded.len(), 3, "all items round-trip through disk");
         assert_eq!(loaded.items[0].content, "Summary");
-        assert_eq!(loaded.items[0].status, neenee_core::TodoStatus::Completed);
+        assert_eq!(
+            loaded.items[0].status,
+            neenee_contracts::TodoStatus::Completed
+        );
         assert_eq!(loaded.updated_at_round, 4);
         // Identity is stable: the first item's id is unchanged after the update.
         assert_eq!(loaded.items[0].id, list.items[0].id);
 
         // Clearing persists (empty list is the "no active list" state).
         reloaded
-            .set_todos(neenee_core::TodoList::default())
+            .set_todos(neenee_contracts::TodoList::default())
             .await
             .unwrap();
         assert!(reloaded.todos().await.is_empty());
@@ -3437,21 +3450,21 @@ mod tests {
 
         // Seed two jobs (one cron, one once) and persist.
         let now = chrono::Utc::now();
-        let job_a = neenee_core::ScheduledJob::cron(
+        let job_a = neenee_contracts::ScheduledJob::cron(
             "aaaa".into(),
             "*/5 * * * *".into(),
             "check the deploy".into(),
             now,
         )
         .unwrap();
-        let job_b = neenee_core::ScheduledJob::cron(
+        let job_b = neenee_contracts::ScheduledJob::cron(
             "bbbb".into(),
             "0 9 * * 1-5".into(),
             "standup".into(),
             now,
         )
         .unwrap();
-        let job_c = neenee_core::ScheduledJob::once(
+        let job_c = neenee_contracts::ScheduledJob::once(
             "cccc".into(),
             now + chrono::Duration::hours(2),
             "one-shot reminder".into(),
@@ -3475,7 +3488,7 @@ mod tests {
         assert_eq!(loaded[0].id, "bbbb");
         assert_eq!(
             loaded[0].trigger,
-            neenee_core::Schedule::Cron {
+            neenee_contracts::Schedule::Cron {
                 cron: "0 9 * * 1-5".to_string()
             }
         );
@@ -3526,7 +3539,7 @@ mod tests {
         assert_eq!(jobs[0].id, "legacy1");
         assert_eq!(
             jobs[0].trigger,
-            neenee_core::Schedule::Cron {
+            neenee_contracts::Schedule::Cron {
                 cron: "0 9 * * 1-5".to_string()
             }
         );
@@ -3547,10 +3560,10 @@ mod tests {
         store
             .mutate_commands(|commands| {
                 commands.push(
-                    neenee_core::CommandRecord::new("search", "foo bar").with_result(
-                        neenee_core::CommandResult::Search {
+                    neenee_contracts::CommandRecord::new("search", "foo bar").with_result(
+                        neenee_contracts::CommandResult::Search {
                             query: "foo bar".to_string(),
-                            hits: vec![neenee_core::SearchHit {
+                            hits: vec![neenee_contracts::SearchHit {
                                 text: "match".to_string(),
                                 score: 0.9,
                             }],
@@ -3558,8 +3571,8 @@ mod tests {
                     ),
                 );
                 commands.push(
-                    neenee_core::CommandRecord::new("permissions", "").with_result(
-                        neenee_core::CommandResult::PermissionList {
+                    neenee_contracts::CommandRecord::new("permissions", "").with_result(
+                        neenee_contracts::CommandResult::PermissionList {
                             allowed: vec!["bash".to_string()],
                         },
                     ),
@@ -3596,7 +3609,7 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         store
             .mutate_commands(|commands| {
-                commands.push(neenee_core::CommandRecord::new("session", "status"));
+                commands.push(neenee_contracts::CommandRecord::new("session", "status"));
             })
             .await
             .unwrap();
@@ -3677,13 +3690,13 @@ mod tests {
         // `CommandsReplaced` event and replay must restore it.
         let data = SessionData {
             commands: vec![
-                neenee_core::CommandRecord::new("search", "foo").with_result(
-                    neenee_core::CommandResult::Search {
+                neenee_contracts::CommandRecord::new("search", "foo").with_result(
+                    neenee_contracts::CommandResult::Search {
                         query: "foo".to_string(),
                         hits: vec![],
                     },
                 ),
-                neenee_core::CommandRecord::new("shell", "!ls -la"),
+                neenee_contracts::CommandRecord::new("shell", "!ls -la"),
             ],
             ..SessionData::default()
         };
@@ -3722,7 +3735,7 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "seed")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "seed")])
             .await
             .unwrap();
         assert!(store.provider_selection().await.is_none());
@@ -3853,9 +3866,9 @@ mod tests {
         assert!(!path.exists(), "title/provider alone never materialise");
 
         // A substantive todo list materialises the same session.
-        let mut todos = neenee_core::TodoList::new();
+        let mut todos = neenee_contracts::TodoList::new();
         todos.reconcile(
-            &[("Task".to_string(), neenee_core::TodoStatus::Pending)],
+            &[("Task".to_string(), neenee_contracts::TodoStatus::Pending)],
             1000,
             1,
         );
@@ -3870,9 +3883,13 @@ mod tests {
         let path2 = directory2.join("session.json");
         let store2 = SessionStore::for_path(path2.clone());
         let now = chrono::Utc::now();
-        let job =
-            neenee_core::ScheduledJob::cron("j1".into(), "* * * * *".into(), "ping".into(), now)
-                .expect("a valid cron expression yields a job");
+        let job = neenee_contracts::ScheduledJob::cron(
+            "j1".into(),
+            "* * * * *".into(),
+            "ping".into(),
+            now,
+        )
+        .expect("a valid cron expression yields a job");
         store2.set_scheduled_jobs(vec![job]).await.unwrap();
         assert!(
             path2.exists(),
@@ -3890,8 +3907,8 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         let session_id = store.id().await;
-        let record = neenee_core::RequestUsageRecord {
-            key: neenee_core::RequestUsageKey {
+        let record = neenee_contracts::RequestUsageRecord {
+            key: neenee_contracts::RequestUsageKey {
                 session_id,
                 actor_id: "principal".to_string(),
                 round: 2,
@@ -3900,8 +3917,8 @@ mod tests {
             },
             provider: "openai".to_string(),
             model: "gpt".to_string(),
-            status: neenee_core::RequestUsageStatus::Completed,
-            source: neenee_core::RequestUsageSource::Reported,
+            status: neenee_contracts::RequestUsageStatus::Completed,
+            source: neenee_contracts::RequestUsageSource::Reported,
             projected_prompt_tokens: 900,
             prompt_tokens: 910,
             completion_tokens: 90,
@@ -3983,11 +4000,11 @@ mod tests {
     #[tokio::test]
     async fn startup_new_session_can_resume_most_recent_cache() {
         let directory =
-            std::env::temp_dir().join(format!("neenee-transport-resume-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-host-resume-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "previous")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "previous")])
             .await
             .unwrap();
         let previous_id = store.id().await;
@@ -4017,7 +4034,7 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         let first_id = store.id().await;
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "first")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "first")])
             .await
             .unwrap();
 
@@ -4028,7 +4045,10 @@ mod tests {
             state
                 .event_log
                 .append(SessionEvent::MessagesAppended {
-                    messages: vec![Message::new(neenee_core::Role::Assistant, "recovered tail")],
+                    messages: vec![Message::new(
+                        neenee_contracts::Role::Assistant,
+                        "recovered tail",
+                    )],
                 })
                 .unwrap();
             // Deliberately do NOT persist the snapshot, so its watermark lags.
@@ -4056,7 +4076,7 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "truth")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "truth")])
             .await
             .unwrap();
 
@@ -4088,7 +4108,7 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "hi")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "hi")])
             .await
             .unwrap();
         store
@@ -4135,7 +4155,7 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         store
             .replace_messages(vec![Message::new(
-                neenee_core::Role::User,
+                neenee_contracts::Role::User,
                 "legacy content",
             )])
             .await
@@ -4179,7 +4199,7 @@ mod tests {
         // Seed real content so the session is persisted (the empty-session
         // deferral would otherwise skip the title-set writes below).
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "seed")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "seed")])
             .await
             .unwrap();
 
@@ -4230,26 +4250,29 @@ mod tests {
 
         // The round opens with one user message, durably written.
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "user prompt")])
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "user prompt",
+            )])
             .await
             .unwrap();
 
         // Turn 1 adds an assistant response + a tool result. The caller
         // passes the *full* current history; the store appends only the tail.
         let turn1 = vec![
-            Message::new(neenee_core::Role::User, "user prompt"),
-            Message::new(neenee_core::Role::Assistant, "I will run a tool"),
-            Message::new(neenee_core::Role::Tool, "tool output"),
+            Message::new(neenee_contracts::Role::User, "user prompt"),
+            Message::new(neenee_contracts::Role::Assistant, "I will run a tool"),
+            Message::new(neenee_contracts::Role::Tool, "tool output"),
         ];
         store.append_turn(&turn1).await.unwrap();
 
         // Turn 2 adds more. The snapshot cache is still at the round-open
         // state (one message); only the event log has grown.
         let turn2 = vec![
-            Message::new(neenee_core::Role::User, "user prompt"),
-            Message::new(neenee_core::Role::Assistant, "I will run a tool"),
-            Message::new(neenee_core::Role::Tool, "tool output"),
-            Message::new(neenee_core::Role::Assistant, "done"),
+            Message::new(neenee_contracts::Role::User, "user prompt"),
+            Message::new(neenee_contracts::Role::Assistant, "I will run a tool"),
+            Message::new(neenee_contracts::Role::Tool, "tool output"),
+            Message::new(neenee_contracts::Role::Assistant, "done"),
         ];
         store.append_turn(&turn2).await.unwrap();
 
@@ -4278,7 +4301,7 @@ mod tests {
             std::env::temp_dir().join(format!("neenee-append-noop-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
-        let messages = vec![Message::new(neenee_core::Role::User, "hi")];
+        let messages = vec![Message::new(neenee_contracts::Role::User, "hi")];
         store.replace_messages(messages.clone()).await.unwrap();
 
         // Same length, same content → no-op.
@@ -4298,15 +4321,15 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, "original")])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "original")])
             .await
             .unwrap();
 
         // Incoming history where the durable prefix was *rewritten* — the
         // first message content differs.
         let divergent = vec![
-            Message::new(neenee_core::Role::User, "rewritten"),
-            Message::new(neenee_core::Role::Assistant, "new"),
+            Message::new(neenee_contracts::Role::User, "rewritten"),
+            Message::new(neenee_contracts::Role::Assistant, "new"),
         ];
         store.append_turn(&divergent).await.unwrap();
 
@@ -4332,8 +4355,8 @@ mod tests {
         let path = directory.join("session.json");
         let blob_store = BlobStore::new(directory.join("blobs"));
         let snapshot = SessionData {
-            model_window: vec![Message::new(neenee_core::Role::User, "live window")],
-            archived_transcript: vec![Message::new(neenee_core::Role::Assistant, "archived")],
+            model_window: vec![Message::new(neenee_contracts::Role::User, "live window")],
+            archived_transcript: vec![Message::new(neenee_contracts::Role::Assistant, "archived")],
             last_projection: Some(ContextProjectionCheckpoint {
                 operation: ContextProjectionKind::Compact,
                 archived_messages: 1,
@@ -4366,7 +4389,7 @@ mod tests {
         let store = SessionStore::for_path(path.clone());
         let big = "x".repeat(8_192);
         store
-            .replace_messages(vec![Message::new(neenee_core::Role::User, &big)])
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, &big)])
             .await
             .unwrap();
 
@@ -4399,14 +4422,14 @@ mod tests {
         // snapshot cache AND the event-log replay path — the contract that lets
         // a resumed session faithfully reconstruct what was injected and why.
         // This is the end-to-end (store-layer) companion to the message-level
-        // round-trip test in neenee-core.
-        use neenee_core::{HookEventKind, InjectionKind, InjectionOrigin};
+        // round-trip test in neenee-contracts.
+        use neenee_contracts::{HookEventKind, InjectionKind, InjectionOrigin};
         let directory =
             std::env::temp_dir().join(format!("neenee-origin-session-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         let injected = Message::injected(
-            neenee_core::Role::User,
+            neenee_contracts::Role::User,
             "setup context",
             InjectionOrigin::new(InjectionKind::Hook(HookEventKind::SessionStart))
                 .with_reason("onstart.sh"),
@@ -4489,18 +4512,18 @@ mod tests {
     #[test]
     fn compaction_keeps_recent_complete_rounds() {
         let messages = vec![
-            Message::new(neenee_core::Role::System, "system"),
-            Message::new(neenee_core::Role::User, "old question"),
-            Message::new(neenee_core::Role::Assistant, "old answer"),
-            Message::new(neenee_core::Role::Tool, "old tool result"),
-            Message::new(neenee_core::Role::User, "recent question"),
-            Message::new(neenee_core::Role::Assistant, "recent answer"),
+            Message::new(neenee_contracts::Role::System, "system"),
+            Message::new(neenee_contracts::Role::User, "old question"),
+            Message::new(neenee_contracts::Role::Assistant, "old answer"),
+            Message::new(neenee_contracts::Role::Tool, "old tool result"),
+            Message::new(neenee_contracts::Role::User, "recent question"),
+            Message::new(neenee_contracts::Role::Assistant, "recent answer"),
         ];
 
         let result = compact_messages(&messages, 10_000, 1).unwrap();
 
         assert_eq!(result.checkpoint.operation, ContextProjectionKind::Compact);
-        assert_eq!(result.model_window[0].role, neenee_core::Role::User);
+        assert_eq!(result.model_window[0].role, neenee_contracts::Role::User);
         assert!(result.model_window[0].hidden);
         assert_eq!(result.model_window[1].content, "recent question");
         assert_eq!(result.model_window[2].content, "recent answer");
@@ -4514,15 +4537,15 @@ mod tests {
             !result
                 .archived_originals
                 .iter()
-                .any(|message| message.role == neenee_core::Role::System)
+                .any(|message| message.role == neenee_contracts::Role::System)
         );
     }
 
     #[test]
     fn compaction_requires_an_older_complete_round() {
         let messages = vec![
-            Message::new(neenee_core::Role::User, "question"),
-            Message::new(neenee_core::Role::Assistant, "answer"),
+            Message::new(neenee_contracts::Role::User, "question"),
+            Message::new(neenee_contracts::Role::Assistant, "answer"),
         ];
         assert!(compact_messages(&messages, 10_000, 1).is_none());
     }
@@ -4640,12 +4663,15 @@ mod tests {
         struct FailingProvider;
         #[async_trait]
         impl Provider for FailingProvider {
-            async fn chat(&self, _request: neenee_core::ModelRequest) -> Result<Message, String> {
+            async fn chat(
+                &self,
+                _request: neenee_contracts::ModelRequest,
+            ) -> Result<Message, String> {
                 Err("boom".to_string())
             }
             async fn stream_chat(
                 &self,
-                _request: neenee_core::ModelRequest,
+                _request: neenee_contracts::ModelRequest,
             ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String>
             {
                 Err("boom".to_string())

@@ -8,7 +8,7 @@
 //! deliberately binary — no active round, or an active round identified by a
 //! generation; display-level nuance ("running" vs. "pursue" vs.
 //! awaiting-permission) lives outside it, in
-//! [`neenee_core::LoopStatus`] and the parked-request tables.
+//! [`neenee_contracts::LoopStatus`] and the parked-request tables.
 //!
 //! The two stop paths differ on purpose:
 //!

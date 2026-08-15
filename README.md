@@ -87,7 +87,7 @@ The daemon speaks one read/write control-plane protocol (create, prompt,
 interrupt, approve, kill, plus the monitor stream) over a Unix socket by
 default and over TCP+token when exposed — which is what a web control panel
 consumes directly. See
-[How to track sessions with a session host](docs/how-to/track-sessions-with-a-session-host.md)
+[How to track sessions with a session daemon](docs/how-to/track-sessions-with-a-session-daemon.md)
 and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 
 ## Key Bindings

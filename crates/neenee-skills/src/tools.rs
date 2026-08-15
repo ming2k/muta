@@ -2,7 +2,7 @@
 
 use super::SkillRegistry;
 use async_trait::async_trait;
-use neenee_core::Tool;
+use neenee_contracts::Tool;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -128,11 +128,11 @@ fn list_skill_files(root: &std::path::Path) -> String {
 // `Arc<SkillRegistry>`. They decline (return `None`) when no registry was
 // provided, so a context that isn't skill-aware simply gets no skill tools.
 
-neenee_core::register_tool!(UseSkillFactory => |ctx| {
+neenee_contracts::register_tool!(UseSkillFactory => |ctx| {
     let registry = ctx.shared::<SkillRegistry>()?;
     UseSkillTool { registry }
 });
-neenee_core::register_tool!(ListSkillsFactory => |ctx| {
+neenee_contracts::register_tool!(ListSkillsFactory => |ctx| {
     let registry = ctx.shared::<SkillRegistry>()?;
     ListSkillsTool { registry }
 });

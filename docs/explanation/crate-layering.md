@@ -7,21 +7,23 @@ head before reading any individual crate or ADR.
 ## The layer diagram
 
 ```text
-neenee-cli ────┐
-               ├──► neenee-transport ──► neenee-agent ──► neenee-persistence
-neenee-server ─┘             │                  ├──► neenee-skills ────────┤
-                             │                  └──► neenee-providers      │
-                             └─────────────────────────────────────────────┴──► neenee-core
+neenee-cli ──► neenee-tui ──┐
+               │            ├──► neenee-runtime ──► neenee-agent ──► neenee-persistence
+               │            │         │   │            ├──► neenee-skills ───────┤
+               │            │         │   │            └──► neenee-providers     │
+               │            │         │   └──► neenee-mcp                        ▼
+               │            │         └──────────────────────────────────► neenee-contracts
+               └────────────┘
 
-neenee-cli ──► neenee-tui-engine
+neenee-tui ──► neenee-tui-engine
 ```
 
 An arrow means “depends on.” The diagram shows the important responsibility
 edges rather than every direct Cargo edge. Higher layers may depend on
-`neenee-core` directly for contracts. Both application binaries depend on
-`neenee-transport`; `neenee-cli` is also the sole consumer of the TUI
-engine, and its TUI view modules (formerly the `neenee-tui-view` crate) now
-live inside the binary (ADR-0079). Provider implementations build on
+`neenee-contracts` directly for contracts. The application binary depends on
+`neenee-runtime`; `neenee-cli` is a thin shell whose entire terminal frontend
+lives in the `neenee-tui` library crate (ADR-0098), the sole consumer of the
+TUI engine. Provider implementations build on
 `neenee-llm-client`, the multi-protocol HTTP client (shared transport +
 OpenAI/Anthropic/Google wire protocols); OAuth credential acquisition for the
 subscription providers lives in `neenee-providers`' `oauth` module.
@@ -34,7 +36,7 @@ from ADR-0005 is dependency direction, not visual symmetry.
 
 ## Per-layer responsibility
 
-### `neenee-core` — shared contracts
+### `neenee-contracts` — shared contracts
 
 Pure domain and wire contracts with no workspace dependencies:
 `AgentRequest` / `AgentResponse` / `Message` / `ModelRequest`, the `Provider`
@@ -42,7 +44,8 @@ and `Tool` traits, `ToolSet`, `AgentIdentity`, principal/envoy profiles,
 `OperationScope`, and token-accounting records. Independent layers import the
 same vocabulary without depending on agent orchestration.
 
-Core is not the default home for all pure code. An item enters core only when
+Contracts is not the default home for all pure code. An item enters
+`neenee-contracts` only when
 multiple independent layers exchange it, it prevents a dependency cycle, or
 it is stable serialized/domain vocabulary. Agent-owned policy stays with the
 agent even when it performs no I/O (ADR-0057).
@@ -67,19 +70,18 @@ These crates implement the contracts below orchestration:
   refreshes it without reaching through Agent internals.
 - **`neenee-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
   repeat store, XDG paths (ADR-0014).
-
-The MCP runtime — stdio JSON-RPC transport, server lifecycle, tool adapters,
-live runtime, and catalog refresh — lives **inside `neenee-agent`** as its
-`mcp` module, co-located with the `ToolManager` it feeds (merged there from a
-former standalone `neenee-mcp` crate). It publishes tools through the core
-`DynamicToolSink` contract.
+- **`neenee-mcp`** — the MCP connector (ADR-0060, re-extracted by ADR-0098):
+  stdio JSON-RPC transport, server lifecycle, tool adapters, the live
+  `McpRuntime`, and catalog refresh. A session (in `neenee-runtime`) owns each
+  runtime; discovered tools reach the agent through the `DynamicToolSink`
+  contract, so `neenee-agent` carries no MCP protocol dependency.
 
 ### `neenee-agent` — orchestration
 
 The engine. `Agent` + the round/turn loop (ADR-0047), model-request and
 system-prompt policy, durable conversation-context injection, tool-call
-dispatch and compatibility parsing, context projection, the **MCP runtime**
-(`mcp` module), shell input policy, `ProxyProvider`, skill context injection,
+dispatch and compatibility parsing, context projection, shell input policy,
+`ProxyProvider`, skill context injection,
 `EnvoyTool`, and the full-duplex envoy registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It also owns the built-in tools
 (`bash`, `read_text`, `grep`, `glob`, `webfetch`, todo management, …) in its
@@ -94,7 +96,7 @@ The `agent -> skills` edge is intentional layering, not a
 cycle: the skills crate does not depend on agent orchestration.
 `EnvoyTool` remains in Agent because it constructs and controls agents.
 
-### `neenee-transport` — session harness
+### `neenee-runtime` — session runtime & control plane
 
 The layer that turns "an engine that can run a turn" into "a running agent
 session a frontend can drive." It owns:
@@ -111,7 +113,7 @@ session a frontend can drive." It owns:
   session across every project, plus the global discovery record and UDS
   listener.
 - **`bootstrap`** — the session-harness assembly factory (ADR-0037 Step 6,
-  landed by ADR-0081) that both application binaries call; identity,
+  landed by ADR-0081) that application binaries call; identity,
   principal profile, and `UiBridge` arrive as parameters.
 - **`serve_discovery`** — the global discovery record the daemon writes so
   clients can find it (one per user, carrying the UDS path + TCP port), plus
@@ -119,6 +121,10 @@ session a frontend can drive." It owns:
 - **`slash_handler`** — the `SlashCommandHandler` extension point so embeddings
   register Rust slash commands without forking the server (ADR-0054).
 - **`UiBridge`** — the one frontend-capability trait (`/export` clipboard).
+- **`client`** — the client side of the control plane (ADR-0098): discovery,
+  the attach handshake, one-shot control verbs, and the monitor stream. Client
+  and server speak the same `serve::Wire` protocol from the same crate, so the
+  two cannot drift.
 
 It depends on `agent` (downward) but **never on an application** (upward).
 Frontends depend on it, never the reverse.
@@ -135,41 +141,20 @@ ADR-0018 invariant, indexed `project → session`. The ADR-0037 Step 6 factory
 pays the assembly cost once per session, not once per process. The
 per-project, one-server-per-session model of ADR-0081 is superseded.
 
-### Application layer — `neenee-cli` and `neenee-server`
+### Application & Frontend layer — `neenee-cli` & `neenee-tui`
 
-The layer now holds two binaries, both assembled through the session
-layer's `bootstrap::assemble` factory:
+The user-facing presentation layers:
 
-1. **`neenee-cli`** (package name; the command is `neenee`) — the
-   interactive TUI and the CLI verbs (`serve` / `attach` / `status`). It binds
-   its principal (`apply_principal_profile(&principal_code())`) — the identity
-   and principal live in the binary, **not** in the transport (ADR-0054).
-   Every invocation is a client of the daemon: bare `neenee` and
-   `neenee resume [id]` attach to a daemon-held session, spawning the daemon
-   on first use (ADR-0096). There is no in-process harness path.
-2. **`neenee-server`** — the unified session daemon described below.
-
-The session-layer factory retires the dependency "reach-through" this page
-used to document: provider/toolset/agent/driver assembly now lives behind
-`bootstrap::assemble`, both application binaries assemble through it, and
-`neenee-cli`'s direct dependencies on tool/runtime crates were pruned
-accordingly — it reaches the MCP runtime through `neenee-agent`, not a
-separate crate.
-
-#### `neenee-server` — the unified session daemon
-
-A thin binary that owns every session across every project, with no terminal
-attached: it assembles each session through `bootstrap::assemble`, drains each
-driver's responses into a per-session broadcast channel, and serves the whole
-registry over the control plane — a Unix domain socket by default (filesystem
-permissions as auth), TCP + bearer token when exposed. One daemon hosts all
-sessions, managed through the control verbs (create / prompt / interrupt /
-approve / kill) and observed through the monitor stream. Clients find it
-through a single global discovery record (written on startup, removed on
-clean shutdown), and any client spawns it on demand. `neenee serve` runs it
-in the foreground, `neenee serve --detach` in the background. See ADR-0096
-for the unified model, ADR-0093 for the monitor protocol, and ADR-0094 for
-the verb vocabulary.
+1. **`neenee-cli`** (package name; binary `neenee`) — the single CLI entrypoint:
+   argument parsing, subcommand routing (`auth`, `config`, `mcp`, `skill`, `session`, `daemon`),
+   and process lifecycle. For interactive sessions, it connects to the session daemon via
+   `neenee-runtime::client`; for daemon serving (`neenee serve`), it launches the host via
+   `neenee-runtime::host`. It depends strictly downwards and holds zero direct dependency on `neenee-agent`.
+2. **`neenee-tui`** — the terminal user interface library built on `neenee-tui-engine`.
+   It acts as a pure remote client attaching to daemon-hosted sessions via WebSocket channels,
+   rendering dialogue messages, interactive modals, and the live status monitor.
+3. **`web/`** — the lightweight web frontend connecting directly to the session daemon's
+   WebSocket listener, enabling browser-based fleet monitoring and agent chat.
 
 ## How a request flows across the layers
 
@@ -177,8 +162,8 @@ the verb vocabulary.
 TUI keystroke / WS client
         │  AgentRequest (over mpsc, no source metadata)
         ▼
-neenee-transport: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
-        │                                                  │
+neenee-runtime: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
+        │                                                     │
         │  AgentResponse (over mpsc → TUI; cloned → broadcast → WS)  ◄──┘
         ▼
 TUI renders + WS clients receive
@@ -219,3 +204,6 @@ multi-frontend transport details.
   vocabulary.
 - [ADR-0096](../adr/0096-unified-session-daemon.md) — the unified session
   daemon and control plane (current model).
+- [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) — the
+  `contracts`/`host` renames and the `neenee-tui` / `neenee-mcp` extractions
+  (current topology).

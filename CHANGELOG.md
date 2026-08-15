@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Unified single-binary architecture (ADR-0102).** The workspace now compiles
+  to exactly one executable binary artifact: `neenee` (produced by `neenee-cli`).
+  Running headless background session daemons is unified via `neenee serve` and
+  `neenee serve --detach`, with automatic client on-demand self-spawning via
+  `current_exe()`.
+- **Daemon shutdown correctness (ADR-0101).** SIGTERM and SIGHUP now run
+  the same graceful drain as Ctrl-C (previously only SIGINT was handled —
+  `kill`/supervisor stops killed the daemon with no SessionEnd hooks and a
+  stale discovery record). The drain is budgeted (`[daemon]
+  shutdown_grace_secs`, default 10s): stop accepting → close live
+  connections (watch clients get a `daemon_draining` monitor frame first) →
+  tear every session down concurrently with per-`SessionEnd`-hook deadlines
+  → remove the discovery record → exit 0. A second signal, or the budget
+  expiring, forces the exit (still 0) and names the stragglers in the log.
+- **`neenee stop`** — remote graceful stop through the new `Shutdown`
+  control verb (`neenee status` shows the pid; `kill <pid>` now drains too).
+- **Idle exit (ADR-0100 rule 3).** The daemon exits on its own after
+  `[daemon] idle_exit_minutes` (default 5) of hosting zero sessions with
+  zero attached clients; `0` disables it. Also surfaced as `--idle-exit` on
+  `neenee serve`.
+- **Version negotiation (ADR-0100 rule 4).** The discovery record carries
+  the daemon's `version`; `Select` carries the client's. A mismatch is
+  refused with a both-versions error naming the fix. Older records/clients
+  are tolerated per the field defaults; a versionless record counts as
+  mismatched (stop the old daemon once after upgrading).
+- **Single-instance lock (ADR-0101).** The daemon holds a `flock` on
+  `daemon.lock` for its lifetime; a second daemon spawned during a drain
+  waits (bounded) instead of stealing the UDS socket.
+- **`assets/neenee.service`** — a documented systemd *user* unit for
+  always-on deployments (`--idle-exit 0`, `TimeoutStopSec` above the
+  daemon's own grace).
+- `MonitorEvent::DaemonDraining` on the monitor stream; `[daemon]` config
+  table; lifecycle integration tests driving the real run loop with
+  injected shutdown triggers.
+
+### Changed
+
+- **Crate renamed: `neenee-host` → `neenee-runtime` (ADR-0102).**
+  The session harness, control-plane wire protocol (`serve`), and daemon runtime
+  have been renamed to `neenee-runtime` to clearly denote the session state and
+  IPC runtime engine.
+- **Startup failures are readable.** A TCP bind failure surfaces as the
+  actual `io::Error` (exit 1) instead of a bare `RecvError`; a contended
+  single-instance lock reports the other daemon.
+- **Deterministic teardown.** Accept tasks are joined (named per task) on
+  shutdown — the UDS socket file removal no longer races the process exit
+  (the old integration test slept 100ms to mask it), accept errors back off
+  exponentially instead of hot-spinning, and session teardown is concurrent
+  rather than serial.
+- **Detached daemons get their own process group** (`process_group(0)`):
+  a terminal Ctrl-C no longer kills a `--detach`-spawned daemon.
+- `SessionRegistry::publish_for_test` is now the production
+  `publish_host_event`.
+
+### Removed
+
+- **`crates/neenee-server` crate (ADR-0102).**
+  The standalone binary crate has been removed and its daemon execution logic
+  consolidated into `neenee serve` in `neenee-cli`.
+- **`neenee-server --project`** — a silent no-op since the ADR-0096
+  project-agnostic daemon; it was previously a hard usage error and is now
+  completely removed with the binary consolidation.
+- **`neenee completions <bash|zsh|fish>`** prints a static shell completion
+  script.
+- **Friendlier usage errors.** Misuse now prints a short error plus a
+  `--help` pointer to stderr with exit 2 (previously a full usage wall);
+  unknown options are no longer misreported as unknown commands, and a
+  near-miss command earns a `tip: a similar command exists: '…'` suggestion.
+- New reference page: [Command line](docs/reference/cli.md).
+
+### Changed
+
+- **Vocabulary normalized on "session daemon" (ADR-0099).** The process is
+  the *(session) daemon* in prose and user-facing strings; `host` stays the
+  code namespace, `serve` the verb, `neenee-server` the binary. The how-to
+  guide moved to
+  `docs/how-to/track-sessions-with-a-session-daemon.md`, and the client
+  identifiers followed (`ensure_daemon`, `DaemonInfo`). No artifact was
+  renamed.
+- **Workspace topology cleanup (ADR-0098).** Crate renames and extractions;
+  no user-visible behavior change (the `neenee` binary, CLI surface, config
+  schema, and wire protocol are unchanged):
+  - `neenee-core` renamed to `neenee-contracts` (its admission rule is in the
+    name now), with module names normalized to snake_case
+    (`color_scheme_config`, `doom_guard_config`, `skills_config`,
+    `web_config`, `channel_auth`).
+  - `neenee-transport` renamed to `neenee-host` — it is the session host, not
+    a transport; it also gains the control-plane `client` module (moved from
+    the CLI), so the `serve::Wire` protocol's client and server live in one
+    crate.
+  - New `neenee-tui` library crate: the entire terminal frontend (app shell,
+    view tree, `showcase`) extracted from the `neenee-cli` binary, which is
+    now a thin shell (~840 lines, down from ~68k).
+  - New `neenee-mcp` crate: the MCP connector re-extracted from
+    `neenee-agent` (restoring ADR-0060); the agent has no MCP protocol
+    dependency.
+  - Removed the dead `neenee-persistence::search_tool` module and the unused
+    `dirs` dependency from `neenee-persistence`.
+
 ## [0.23.0] - 2026-08-13
 
 ### Changed

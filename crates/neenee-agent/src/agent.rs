@@ -60,8 +60,8 @@ pub(crate) fn envoy_result_text(
 }
 
 /// In-memory only mask of tools a hook has temporarily disabled via a
-/// [`neenee_core::HookOutcome::ScopeTools`] outcome, partitioned by the
-/// [`neenee_core::RestorePoint`] at which each should come back.
+/// [`neenee_contracts::HookOutcome::ScopeTools`] outcome, partitioned by the
+/// [`neenee_contracts::RestorePoint`] at which each should come back.
 ///
 /// Deliberately **separate** from the session-level, persisted
 /// [`Agent::disabled_tools`]: scoped disables never reach the session store
@@ -80,10 +80,10 @@ pub(crate) struct ScopedToolDisable {
 impl ScopedToolDisable {
     /// Record a hook-fired disable for `tool` at `restore`. Increments the
     /// refcount so nested disables compose.
-    fn disable(&mut self, tool: &str, restore: neenee_core::RestorePoint) {
+    fn disable(&mut self, tool: &str, restore: neenee_contracts::RestorePoint) {
         let bucket = match restore {
-            neenee_core::RestorePoint::TurnEnd => &mut self.turn_end,
-            neenee_core::RestorePoint::RoundEnd => &mut self.round_end,
+            neenee_contracts::RestorePoint::TurnEnd => &mut self.turn_end,
+            neenee_contracts::RestorePoint::RoundEnd => &mut self.round_end,
         };
         *bucket.entry(tool.to_string()).or_insert(0) += 1;
     }
@@ -138,9 +138,9 @@ pub struct RequestTokenEstimate {
     pub total_tokens: usize,
 }
 
-// `AgentIdentity` now lives in `neenee-core` (`identity.rs`) as pure domain
+// `AgentIdentity` now lives in `neenee-contracts` (`identity.rs`) as pure domain
 // vocabulary, alongside the role profiles. It is re-exported by name at the
-// crate root below and via `pub use neenee_core::*`, so all existing
+// crate root below and via `pub use neenee_contracts::*`, so all existing
 // `neenee_agent::AgentIdentity` / `crate::AgentIdentity` references keep
 // resolving unchanged.
 
@@ -163,7 +163,7 @@ pub struct Agent {
     /// variants. The single source of truth from which the model-visible
     /// [`resolved_tools`](Self::resolved_tools) view is derived for the active
     /// [`variant_selection`](Self::variant_selection).
-    pub(crate) toolset: neenee_core::ToolSet,
+    pub(crate) toolset: neenee_contracts::ToolSet,
     /// The active resolved view: exactly one variant per capability, for the
     /// current model's [`variant_selection`](Self::variant_selection). Both request
     /// assembly (`visible_tools` → `ModelRequest`) and dispatch (`find` by name)
@@ -185,7 +185,7 @@ pub struct Agent {
     /// Hook-installed *temporary* disable mask ([`HookOutcome::ScopeTools`]).
     /// Not persisted: excluded from `disabled_tools_snapshot()` so it never
     /// reaches the session store. Auto-restored at the configured
-    /// [`neenee_core::RestorePoint`]. See [`ScopedToolDisable`].
+    /// [`neenee_contracts::RestorePoint`]. See [`ScopedToolDisable`].
     scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
     /// The unified three-bucket tool manager (kimi-code port). The single
     /// authority for classification, per-turn schema (`loop_tools`), and
@@ -199,7 +199,7 @@ pub struct Agent {
     /// do." Drives the sticky panel and persists across restarts. Shared
     /// with the concrete `todo` / `todo_update` tools installed by
     /// [`crate::tool_integration`].
-    todos: Arc<std::sync::Mutex<neenee_core::TodoList>>,
+    todos: Arc<std::sync::Mutex<neenee_contracts::TodoList>>,
     /// Harness round counter, bumped at the start of every `execute_round`.
     /// Shared with the todo tools so they can stamp
     /// `updated_at_round` for the TUI stale detector.
@@ -225,13 +225,13 @@ pub struct Agent {
     /// is on-demand (`/review`) and never aborts a round.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
     /// Advanced pre-dispatch doom-loop guard configuration. Default
-    /// **disabled** ([`neenee_core::DoomGuardConfig::default`]); seeded from
+    /// **disabled** ([`neenee_contracts::DoomGuardConfig::default`]); seeded from
     /// `[principal.nudge]` in `config.toml` and forced to
-    /// [`neenee_core::DoomGuardConfig::disabled`] for envoys and the review
+    /// [`neenee_contracts::DoomGuardConfig::disabled`] for envoys and the review
     /// diagnostic. Held behind an `Arc<RwLock>` because principal-profile
     /// overlays can replace the configuration atomically; the per-round guard
     /// reads it when `RoundState` is constructed.
-    doom_guard_config: Arc<std::sync::RwLock<neenee_core::DoomGuardConfig>>,
+    doom_guard_config: Arc<std::sync::RwLock<neenee_contracts::DoomGuardConfig>>,
     /// Whether the model may supply stdin bytes for a `bash` call it emits
     /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
     /// `[principal] allow_model_stdin`. Lock-free so the dispatch site reads
@@ -258,13 +258,13 @@ pub struct Agent {
     /// empty on envoys (which have no `/review` path).
     reviews: Vec<Arc<dyn SessionReview>>,
     /// Runtime operation boundary for this agent (ADR-0028). The main agent is
-    /// unrestricted ([`neenee_core::OperationScope::unrestricted`]); an envoy
+    /// unrestricted ([`neenee_contracts::OperationScope::unrestricted`]); an envoy
     /// carries the scope resolved from its profile's `write_paths` and
     /// `command_allowlist` grants. Enforced at the `execute_tool` funnel for
-    /// every admitted tool whose [`neenee_core::ScopeTarget`] falls outside the
+    /// every admitted tool whose [`neenee_contracts::ScopeTarget`] falls outside the
     /// granted scope, before the permission broker — a hard boundary, not a
     /// prompt.
-    operation_scope: std::sync::Mutex<neenee_core::OperationScope>,
+    operation_scope: std::sync::Mutex<neenee_contracts::OperationScope>,
     /// Lifecycle event hooks (ADR-0025). Installed once at startup from the
     /// `[hooks]` config by the CLI; empty by default (envoys, tests). Read
     /// at the PreToolUse / PostToolUse / Stop insertion points. Held as a
@@ -332,23 +332,23 @@ pub struct Agent {
     /// the same overrides by sharing this handle (see
     /// [`Agent::variant_selection_handle`]); the agent decides scope, the
     /// model decides variant.
-    variant_selection: Arc<std::sync::Mutex<neenee_core::VariantSelection>>,
+    variant_selection: Arc<std::sync::Mutex<neenee_contracts::VariantSelection>>,
     /// This agent's **identity-side selection** of the pool (the agent half of
     /// the two-selector model): the capability scope it admits plus any variant
     /// pins it forces. The principal agent is
-    /// [`ToolSelection::unrestricted`](neenee_core::ToolSelection::unrestricted)
+    /// [`ToolSelection::unrestricted`](neenee_contracts::ToolSelection::unrestricted)
     /// — every capability, model-chosen variants. A scoped agent (or a future
     /// role-bound principal) narrows this. Composed with the live model's
-    /// selection by [`neenee_core::ToolSet::resolve_for`] every time the toolset
+    /// selection by [`neenee_contracts::ToolSet::resolve_for`] every time the toolset
     /// is re-resolved: scope by intersection, variants by agent-over-model
     /// precedence, model capability limits applied hard.
-    agent_selection: std::sync::Mutex<neenee_core::ToolSelection>,
+    agent_selection: std::sync::Mutex<neenee_contracts::ToolSelection>,
     /// Token-source accounting: running tally of how many tokens each
     /// provider+model reported authoritatively (upstream `usage`) vs. how many
     /// were filled in by the local estimator. Shared with the TUI so the
     /// token-source report modal renders live. `None` for envoys/tests that
     /// don't surface the report.
-    token_ledger: std::sync::Mutex<Option<Arc<neenee_core::TokenSourceLedger>>>,
+    token_ledger: std::sync::Mutex<Option<Arc<neenee_contracts::TokenSourceLedger>>>,
 }
 
 /// Capability handle for steering a running agent from the outside — the
@@ -469,7 +469,9 @@ impl RoundState {
     /// `Agent::apply_guard_actions` — so the guard state is always present
     /// even when disabled (it just never fires). It lives and dies with this
     /// `RoundState`, so loop state never crosses user rounds.
-    fn guards_default(config: neenee_core::DoomGuardConfig) -> crate::loop_guard::RoundGuardState {
+    fn guards_default(
+        config: neenee_contracts::DoomGuardConfig,
+    ) -> crate::loop_guard::RoundGuardState {
         crate::loop_guard::RoundGuardState::new()
             .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
     }
@@ -515,14 +517,14 @@ pub(crate) struct StreamingRoundState {
     turn_index: usize,
     inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
     started_at: std::time::Instant,
-    pending_request: Option<neenee_core::ModelRequest>,
+    pending_request: Option<neenee_contracts::ModelRequest>,
     user_input_generation: Option<u64>,
 }
 
 struct UserInputRound {
     session_id: String,
     generation: u64,
-    queue: std::collections::VecDeque<neenee_core::QueuedUserInput>,
+    queue: std::collections::VecDeque<neenee_contracts::QueuedUserInput>,
 }
 
 /// Result of one tool-execution phase, returned by the cancellation-aware
@@ -558,8 +560,8 @@ pub(crate) struct SingleToolOutcome {
 /// records the attempt; normal completion explicitly settles it with the
 /// provider usage or the local fallback estimate.
 struct RequestAccountingGuard {
-    ledger: Option<Arc<neenee_core::TokenSourceLedger>>,
-    key: Option<neenee_core::RequestUsageKey>,
+    ledger: Option<Arc<neenee_contracts::TokenSourceLedger>>,
+    key: Option<neenee_contracts::RequestUsageKey>,
     cancel: CancellationToken,
     projected_prompt_tokens: i64,
     observed_completion_tokens: i64,
@@ -629,7 +631,7 @@ impl RequestAccountingGuard {
 
     fn settle(
         &mut self,
-        status: neenee_core::RequestUsageStatus,
+        status: neenee_contracts::RequestUsageStatus,
         usage: Option<TokenUsage>,
         estimated_completion_tokens: i64,
     ) {
@@ -655,9 +657,9 @@ impl Drop for RequestAccountingGuard {
             return;
         }
         let status = if self.cancel.is_cancelled() {
-            neenee_core::RequestUsageStatus::Interrupted
+            neenee_contracts::RequestUsageStatus::Interrupted
         } else {
-            neenee_core::RequestUsageStatus::Failed
+            neenee_contracts::RequestUsageStatus::Failed
         };
         self.settle(status, self.observed_usage, self.observed_completion_tokens);
     }
@@ -671,7 +673,7 @@ impl Drop for RequestAccountingGuard {
 /// specialized agent such as the session reviewer.
 pub struct AgentBuilder {
     provider: Arc<dyn Provider>,
-    toolset: neenee_core::ToolSet,
+    toolset: neenee_contracts::ToolSet,
     skills_registry: skills::SkillRegistry,
     identity: AgentIdentity,
     model_request_assembler: crate::model_request::ModelRequestAssembler,
@@ -680,7 +682,7 @@ pub struct AgentBuilder {
 impl AgentBuilder {
     fn new(
         provider: Arc<dyn Provider>,
-        toolset: neenee_core::ToolSet,
+        toolset: neenee_contracts::ToolSet,
         identity: AgentIdentity,
     ) -> Self {
         Self {
@@ -793,20 +795,24 @@ impl Agent {
         tools: Vec<Arc<dyn Tool>>,
         identity: AgentIdentity,
     ) -> AgentBuilder {
-        AgentBuilder::new(provider, neenee_core::ToolSet::from_tools(tools), identity)
+        AgentBuilder::new(
+            provider,
+            neenee_contracts::ToolSet::from_tools(tools),
+            identity,
+        )
     }
 
     /// Start configuring an agent from a full multi-variant tool set.
     pub fn builder_from_toolset(
         provider: Arc<dyn Provider>,
-        toolset: neenee_core::ToolSet,
+        toolset: neenee_contracts::ToolSet,
         identity: AgentIdentity,
     ) -> AgentBuilder {
         AgentBuilder::new(provider, toolset, identity)
     }
 
     /// Construct an agent from a flat tool list. The tools are grouped into a
-    /// [`neenee_core::ToolSet`] (one capability per [`Tool::name`], one variant
+    /// [`neenee_contracts::ToolSet`] (one capability per [`Tool::name`], one variant
     /// per [`Tool::variant`]) — the common case for a single-variant toolset or
     /// an already-resolved envoy toolset. Use [`Agent::from_toolset`] to
     /// preserve a multi-variant set so per-model variant selection can switch
@@ -816,15 +822,19 @@ impl Agent {
         tools: Vec<Arc<dyn Tool>>,
         identity: AgentIdentity,
     ) -> Self {
-        Self::from_toolset(provider, neenee_core::ToolSet::from_tools(tools), identity)
+        Self::from_toolset(
+            provider,
+            neenee_contracts::ToolSet::from_tools(tools),
+            identity,
+        )
     }
 
-    /// Construct an agent from a full [`neenee_core::ToolSet`], preserving every
+    /// Construct an agent from a full [`neenee_contracts::ToolSet`], preserving every
     /// capability's variants so [`Agent::set_variant_selection`] can swap the
     /// model-visible variant at runtime.
     pub fn from_toolset(
         provider: Arc<dyn Provider>,
-        toolset: neenee_core::ToolSet,
+        toolset: neenee_contracts::ToolSet,
         identity: AgentIdentity,
     ) -> Self {
         Self::builder_from_toolset(provider, toolset, identity).build()
@@ -832,7 +842,7 @@ impl Agent {
 
     fn from_toolset_with_model_request_assembler(
         provider: Arc<dyn Provider>,
-        toolset: neenee_core::ToolSet,
+        toolset: neenee_contracts::ToolSet,
         skills_registry: skills::SkillRegistry,
         identity: AgentIdentity,
         model_request_assembler: crate::model_request::ModelRequestAssembler,
@@ -841,7 +851,7 @@ impl Agent {
 
         let mut toolset = toolset;
         let round_counter = Arc::new(std::sync::Mutex::new(0u64));
-        let todos = Arc::new(std::sync::Mutex::new(neenee_core::TodoList::default()));
+        let todos = Arc::new(std::sync::Mutex::new(neenee_contracts::TodoList::default()));
         crate::tool_integration::install_agent_owned_tools(
             &mut toolset,
             Arc::clone(&todos),
@@ -853,12 +863,12 @@ impl Agent {
         // principal's identity selection (unrestricted) composed with the
         // model's capability limits. `set_variant_selection` re-resolves once
         // the model's `[tool_variants]` selection is known and on every switch.
-        let agent_selection = neenee_core::ToolSelection::unrestricted();
-        let seed_model = neenee_core::resolve_model(&provider.model());
+        let agent_selection = neenee_contracts::ToolSelection::unrestricted();
+        let seed_model = neenee_contracts::resolve_model(&provider.model());
         let resolved_tools = Arc::new(std::sync::RwLock::new(toolset.resolve_for(
             &seed_model,
             &agent_selection,
-            &neenee_core::ToolSelection::unrestricted(),
+            &neenee_contracts::ToolSelection::unrestricted(),
         )));
         let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
         let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
@@ -896,13 +906,13 @@ impl Agent {
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
             doom_guard_config: Arc::new(std::sync::RwLock::new(
-                neenee_core::DoomGuardConfig::default(),
+                neenee_contracts::DoomGuardConfig::default(),
             )),
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_interactive_input: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
             reviews: crate::default_reviews(),
-            operation_scope: std::sync::Mutex::new(neenee_core::OperationScope::unrestricted()),
+            operation_scope: std::sync::Mutex::new(neenee_contracts::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
             inbox_rx: std::sync::Mutex::new(None),
@@ -911,9 +921,9 @@ impl Agent {
             identity: std::sync::RwLock::new(identity),
             turn_persist: std::sync::Mutex::new(None),
             model_request_assembler,
-            variant_selection: Arc::new(
-                std::sync::Mutex::new(neenee_core::VariantSelection::new()),
-            ),
+            variant_selection: Arc::new(std::sync::Mutex::new(
+                neenee_contracts::VariantSelection::new(),
+            )),
             agent_selection: std::sync::Mutex::new(agent_selection),
             token_ledger: std::sync::Mutex::new(None),
         }
@@ -935,7 +945,7 @@ impl Agent {
     /// live model's hard capability limits (e.g. vision) — always track the
     /// live model. An empty map (the default) realizes every capability with its
     /// model-chosen / default variant.
-    pub fn set_variant_selection(&self, selection: neenee_core::VariantSelection) {
+    pub fn set_variant_selection(&self, selection: neenee_contracts::VariantSelection) {
         self.reresolve_tools(&selection);
         *self
             .variant_selection
@@ -948,7 +958,7 @@ impl Agent {
     /// unrestricted by default; this narrows it (e.g. confining a role-bound
     /// principal to a capability subset). The current per-model variant
     /// selection is preserved and re-composed.
-    pub fn set_agent_selection(&self, selection: neenee_core::ToolSelection) {
+    pub fn set_agent_selection(&self, selection: neenee_contracts::ToolSelection) {
         *self
             .agent_selection
             .lock()
@@ -967,15 +977,15 @@ impl Agent {
     /// limits). The single choke point through which both the principal seed and
     /// every model/selection switch flow, so the schema sent to the provider and
     /// the dispatch table always reflect `agent_scope ∩ model_caps`.
-    fn reresolve_tools(&self, model_variants: &neenee_core::VariantSelection) {
-        let model = neenee_core::resolve_model(&self.provider.model());
+    fn reresolve_tools(&self, model_variants: &neenee_contracts::VariantSelection) {
+        let model = neenee_contracts::resolve_model(&self.provider.model());
         let agent_selection = self
             .agent_selection
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let model_selection =
-            neenee_core::ToolSelection::unrestricted().with_variants(model_variants.clone());
+            neenee_contracts::ToolSelection::unrestricted().with_variants(model_variants.clone());
         *self
             .resolved_tools
             .write()
@@ -1012,7 +1022,7 @@ impl Agent {
     /// Snapshot the live state available to declarative system-prompt policy.
     fn system_prompt_context(&self, tools: &[Arc<dyn Tool>]) -> crate::SystemPromptContext {
         let tool_names = tools.iter().map(|tool| tool.name().to_string()).collect();
-        let model_guidance = neenee_core::resolve_model(&self.provider.model()).model_guidance;
+        let model_guidance = neenee_contracts::resolve_model(&self.provider.model()).model_guidance;
         let provider_guidance = self.provider.prompt_hints().system_guidance;
 
         crate::SystemPromptContext {
@@ -1031,7 +1041,7 @@ impl Agent {
     /// Build one immutable provider request from a borrowed conversation window.
     /// Implicit skill loading is evaluated on a private copy so estimates and
     /// debug previews use the same projection without mutating durable state.
-    fn model_request(&self, messages: &[Message]) -> neenee_core::ModelRequest {
+    fn model_request(&self, messages: &[Message]) -> neenee_contracts::ModelRequest {
         let mut enriched = messages.to_vec();
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
         crate::conversation_context::inject_mentioned_files(
@@ -1044,14 +1054,14 @@ impl Agent {
             .assemble(&enriched, &context, &tools)
     }
 
-    fn estimate_model_request(request: &neenee_core::ModelRequest) -> RequestTokenEstimate {
+    fn estimate_model_request(request: &neenee_contracts::ModelRequest) -> RequestTokenEstimate {
         // Use per-message wire weight here rather than `estimate_tokens`: the
         // latter intentionally includes persisted envoy children, while the
         // provider receives only the parent message's rendered result.
         let message_tokens = |messages: &[Message]| {
             messages
                 .iter()
-                .map(neenee_core::estimate_message_tokens)
+                .map(neenee_contracts::estimate_message_tokens)
                 .sum::<i64>()
                 .max(0) as usize
         };
@@ -1070,7 +1080,7 @@ impl Agent {
                 // Estimate over the full spec (name + description + the JSON
                 // Schema parameters), matching the old whole-Value estimate.
                 let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
-                neenee_core::estimate_semantic_json_tokens(&val).max(0) as usize
+                neenee_contracts::estimate_semantic_json_tokens(&val).max(0) as usize
             })
             .sum::<usize>();
         let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
@@ -1104,7 +1114,9 @@ impl Agent {
     /// agent on the same model — resolves its admitted capabilities to the same
     /// variants the parent uses, tracking model switches live. The profile still
     /// owns the orthogonal **scope** axis.
-    pub fn variant_selection_handle(&self) -> Arc<std::sync::Mutex<neenee_core::VariantSelection>> {
+    pub fn variant_selection_handle(
+        &self,
+    ) -> Arc<std::sync::Mutex<neenee_contracts::VariantSelection>> {
         Arc::clone(&self.variant_selection)
     }
 
@@ -1145,9 +1157,9 @@ impl Agent {
     /// round, if any, keeps its already-built guard state.
     ///
     /// Wired from `[principal.nudge]` in `config.toml` at startup and forced to
-    /// [`neenee_core::DoomGuardConfig::disabled`] on envoys and the review
+    /// [`neenee_contracts::DoomGuardConfig::disabled`] on envoys and the review
     /// diagnostic so they run unobstructed regardless of user settings.
-    pub fn set_doom_guard_config(&self, config: neenee_core::DoomGuardConfig) {
+    pub fn set_doom_guard_config(&self, config: neenee_contracts::DoomGuardConfig) {
         *self
             .doom_guard_config
             .write()
@@ -1156,7 +1168,7 @@ impl Agent {
 
     /// Snapshot of the live doom-guard configuration. The turn boundary reads
     /// `enabled` to gate the pre-dispatch doom check.
-    pub fn doom_guard_config(&self) -> neenee_core::DoomGuardConfig {
+    pub fn doom_guard_config(&self) -> neenee_contracts::DoomGuardConfig {
         *self
             .doom_guard_config
             .read()
@@ -1231,13 +1243,13 @@ impl Agent {
     /// same `Arc` with the TUI so the token-source report modal reads live.
     /// No-op for envoys/tests that never call this (the ledger stays `None`
     /// and booking is skipped).
-    pub fn install_token_ledger(&self, ledger: Arc<neenee_core::TokenSourceLedger>) {
+    pub fn install_token_ledger(&self, ledger: Arc<neenee_contracts::TokenSourceLedger>) {
         *self.token_ledger.lock().unwrap_or_else(|e| e.into_inner()) = Some(ledger);
     }
 
     /// A handle to the token-source ledger, if one was installed. The TUI uses
     /// this to snapshot the report for the modal.
-    pub fn token_ledger(&self) -> Option<Arc<neenee_core::TokenSourceLedger>> {
+    pub fn token_ledger(&self) -> Option<Arc<neenee_contracts::TokenSourceLedger>> {
         self.token_ledger
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1276,7 +1288,11 @@ impl Agent {
             state.token_usage.completion_tokens += usage.completion_tokens;
             state.token_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
             state.token_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
-            request.settle(neenee_core::RequestUsageStatus::Completed, Some(usage), 0);
+            request.settle(
+                neenee_contracts::RequestUsageStatus::Completed,
+                Some(usage),
+                0,
+            );
         } else {
             // Estimate both sides of the request. The old fallback counted
             // only the assistant response while the reported path counted
@@ -1287,7 +1303,11 @@ impl Agent {
             state.token_usage.total_tokens += estimated;
             state.token_usage.prompt_tokens += prompt;
             state.token_usage.completion_tokens += completion;
-            request.settle(neenee_core::RequestUsageStatus::Completed, None, completion);
+            request.settle(
+                neenee_contracts::RequestUsageStatus::Completed,
+                None,
+                completion,
+            );
         }
     }
 
@@ -1383,7 +1403,7 @@ impl Agent {
     /// `SessionStart` observers; injected context becomes hidden setup messages.
     pub async fn fire_session_start(
         &self,
-        source: neenee_core::SessionSource,
+        source: neenee_contracts::SessionSource,
         messages: &mut Vec<Message>,
     ) {
         self.hooks()
@@ -1471,18 +1491,19 @@ impl Agent {
 
     /// Current task list snapshot. Read by the harness to mirror into the
     /// session and by the TUI to render the sticky panel.
-    pub fn todos(&self) -> neenee_core::TodoList {
+    pub fn todos(&self) -> neenee_contracts::TodoList {
         self.todos.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Replace the task list. Used by session-restore paths on resume.
-    pub fn set_todos(&self, todos: neenee_core::TodoList) {
+    pub fn set_todos(&self, todos: neenee_contracts::TodoList) {
         *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = todos;
     }
 
     /// Drop the task list.
     pub fn clear_todos(&self) {
-        *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = neenee_core::TodoList::default();
+        *self.todos.lock().unwrap_or_else(|e| e.into_inner()) =
+            neenee_contracts::TodoList::default();
     }
 
     /// Current harness round counter — bumped at the start of every
@@ -1519,7 +1540,7 @@ impl Agent {
     /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
     /// unrestricted; `EnvoyTool` sets the scope resolved from the bound
     /// envoy profile on the child before it runs.
-    pub fn set_operation_scope(&self, scope: neenee_core::OperationScope) {
+    pub fn set_operation_scope(&self, scope: neenee_contracts::OperationScope) {
         *self
             .operation_scope
             .lock()
@@ -1527,24 +1548,24 @@ impl Agent {
     }
 
     /// Apply a declarative principal profile (ADR-0053) — set every knob a
-    /// [`neenee_core::PrincipalProfile`] declares in one call. The
+    /// [`neenee_contracts::PrincipalProfile`] declares in one call. The
     /// principal-side mirror of how `EnvoyTool` binds an
-    /// [`neenee_core::EnvoyProfile`].
+    /// [`neenee_contracts::EnvoyProfile`].
     ///
     /// Sets: the capability scope ([`Self::set_agent_selection`]), the
     /// write/command boundary ([`Self::set_operation_scope`]), and the runtime
     /// execution knobs (`hard_stop` / doom guard / model-stdin /
-    /// attended flag). The profile's [`neenee_core::AgentIdentity`] is **not**
+    /// attended flag). The profile's [`neenee_contracts::AgentIdentity`] is **not**
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
     /// `from_toolset`. A role whose identity should differ per instance composes
-    /// [`neenee_core::PrincipalProfile::with_identity`] before construction.
+    /// [`neenee_contracts::PrincipalProfile::with_identity`] before construction.
     ///
     /// Idempotent over defaults: a profile built with
-    /// [`neenee_core::PrincipalProfile::with_identity`] (no further narrowing)
+    /// [`neenee_contracts::PrincipalProfile::with_identity`] (no further narrowing)
     /// reproduces the agent constructor's built-in values, so binding it is a
     /// no-op for an already-default agent.
-    pub fn apply_principal_profile(&self, profile: &neenee_core::PrincipalProfile) {
+    pub fn apply_principal_profile(&self, profile: &neenee_contracts::PrincipalProfile) {
         // Identity is now live-mutable (plan §3.3): applying a profile re-rolls
         // the system-prompt preamble too, so `/principal architect` changes the
         // persona the model speaks with on the very next request. Previously
@@ -1602,21 +1623,21 @@ impl Agent {
     /// sequence of switches (`code` → `architect` → `reviewer`) each preserve
     /// the product name ("neenee") rather than drifting toward the previous
     /// role's mission.
-    pub fn apply_principal_role(&self, role: &str) -> Option<neenee_core::PrincipalRole> {
-        let resolved = neenee_core::PrincipalRole::parse(role)?;
+    pub fn apply_principal_role(&self, role: &str) -> Option<neenee_contracts::PrincipalRole> {
+        let resolved = neenee_contracts::PrincipalRole::parse(role)?;
         let base = self.identity();
-        let profile = neenee_core::PrincipalProfile::for_role(resolved, &base);
+        let profile = neenee_contracts::PrincipalProfile::for_role(resolved, &base);
         self.apply_principal_profile(&profile);
         Some(resolved)
     }
 
     /// Snapshot of this agent's operation boundary. Used by the `execute_tool`
     /// funnel to gate tools whose target falls outside the granted scope.
-    fn operation_scope(&self) -> neenee_core::OperationScope {
+    fn operation_scope(&self) -> neenee_contracts::OperationScope {
         self.operation_scope
             .lock()
             .map(|guard| guard.clone())
-            .unwrap_or_else(|_| neenee_core::OperationScope::unrestricted())
+            .unwrap_or_else(|_| neenee_contracts::OperationScope::unrestricted())
     }
 
     /// A snapshot of this agent's identity (name + mission, or a persona
@@ -1810,7 +1831,7 @@ impl Agent {
         &self,
         session_id: impl Into<String>,
         generation: u64,
-    ) -> Vec<neenee_core::QueuedUserInput> {
+    ) -> Vec<neenee_contracts::QueuedUserInput> {
         self.user_input_queue
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1827,7 +1848,11 @@ impl Agent {
 
     /// Queue human-authored input for the next safe turn boundary. Returns
     /// `false` once the round has atomically closed its admission gate.
-    pub fn submit_user_input(&self, session_id: &str, input: neenee_core::QueuedUserInput) -> bool {
+    pub fn submit_user_input(
+        &self,
+        session_id: &str,
+        input: neenee_contracts::QueuedUserInput,
+    ) -> bool {
         let mut queue = self
             .user_input_queue
             .lock()
@@ -1849,7 +1874,7 @@ impl Agent {
         &self,
         session_id: &str,
         input_id: &str,
-    ) -> Option<neenee_core::QueuedUserInput> {
+    ) -> Option<neenee_contracts::QueuedUserInput> {
         let mut queue = self
             .user_input_queue
             .lock()
@@ -1863,7 +1888,10 @@ impl Agent {
 
     /// Stop accepting inserts and return anything that never crossed a turn
     /// boundary. Used on interrupted/error/blocked terminal paths.
-    pub fn close_user_input_round(&self, generation: u64) -> Vec<neenee_core::QueuedUserInput> {
+    pub fn close_user_input_round(
+        &self,
+        generation: u64,
+    ) -> Vec<neenee_contracts::QueuedUserInput> {
         let mut queue = self
             .user_input_queue
             .lock()
@@ -1988,7 +2016,7 @@ impl Agent {
     /// modal's Permissions pane. Unlike [`Agent::allowed_tools`] (which collapses
     /// each rule to a single formatted string), this keeps the tool/scope pair
     /// intact so the modal can target an individual rule for revocation.
-    pub fn allowed_tools_structured(&self) -> Vec<neenee_core::PermissionRuleInfo> {
+    pub fn allowed_tools_structured(&self) -> Vec<neenee_contracts::PermissionRuleInfo> {
         self.permissions.allowed_tools_structured()
     }
 
@@ -2025,7 +2053,7 @@ impl Agent {
 
     /// The connector-facing publication port. It deliberately exposes no
     /// agent-owned lock or protocol-specific state.
-    pub fn dynamic_tool_sink(&self) -> Arc<dyn neenee_core::DynamicToolSink> {
+    pub fn dynamic_tool_sink(&self) -> Arc<dyn neenee_contracts::DynamicToolSink> {
         self.dynamic_tools.clone()
     }
 
@@ -2069,7 +2097,7 @@ impl Agent {
     /// Apply hook-fired [`HookOutcome::ScopeTools`] disables: record each name
     /// (only known tools, matching the user-mask contract) under its restore
     /// point. Idempotent across repeated fires via refcounting.
-    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
+    fn apply_scoped_disables(&self, disables: &[(String, neenee_contracts::RestorePoint)]) {
         if disables.is_empty() {
             return;
         }
@@ -2147,7 +2175,7 @@ impl Agent {
     /// Structured view of every installed tool, for the session modal's Tools
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
     /// (`builtin`, `envoy`, or the publisher-provided dynamic source id).
-    pub fn snapshot_tools(&self) -> Vec<neenee_core::ToolInfo> {
+    pub fn snapshot_tools(&self) -> Vec<neenee_contracts::ToolInfo> {
         // Classification delegates to the ToolManager's three-bucket
         // authority for the builtin (with envoy broken out for display) and
         // user buckets; the mcp bucket keeps the publisher-provided dynamic
@@ -2185,11 +2213,11 @@ impl Agent {
             }
         }
 
-        let mut infos: Vec<neenee_core::ToolInfo> = sourced_tools
+        let mut infos: Vec<neenee_contracts::ToolInfo> = sourced_tools
             .into_iter()
             .map(|(source, tool)| {
                 let name = tool.name();
-                neenee_core::ToolInfo {
+                neenee_contracts::ToolInfo {
                     name: name.to_string(),
                     description: tool.description().to_string(),
                     enabled: !disabled.contains(name),
@@ -2204,12 +2232,12 @@ impl Agent {
     /// Structured view of the skills registry, for the session modal's Skills
     /// pane. Mirrors [`skills::RegistryGuard::list`] into the render-friendly
     /// DTO.
-    pub fn snapshot_skills(&self) -> Vec<neenee_core::SkillInfo> {
+    pub fn snapshot_skills(&self) -> Vec<neenee_contracts::SkillInfo> {
         let guard = self.skills_registry.lock();
         guard
             .list()
             .into_iter()
-            .map(|skill| neenee_core::SkillInfo {
+            .map(|skill| neenee_contracts::SkillInfo {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 version: skill.version.clone(),
@@ -2544,7 +2572,7 @@ impl Agent {
                 children: None,
                 envoy_meta: None,
                 origin: None,
-                timestamp: Some(neenee_core::todos::unix_now()),
+                timestamp: Some(neenee_contracts::todos::unix_now()),
                 sent_at_ms: None,
             };
             if !valid_assistant_response(&response) {
@@ -3079,7 +3107,7 @@ impl Agent {
         {
             Some(t) => matches!(
                 t.scope_target(arguments),
-                neenee_core::ScopeTarget::Unspecified
+                neenee_contracts::ScopeTarget::Unspecified
             ),
             None => true,
         }
@@ -3151,7 +3179,7 @@ impl Agent {
     /// canonical use is a fire-and-forget notification so the user notices the
     /// agent is parked); outcomes are ignored by the registry. No-op without a
     /// `[hooks]` config.
-    async fn fire_permission_request_hooks(&self, request: &neenee_core::PermissionRequest) {
+    async fn fire_permission_request_hooks(&self, request: &neenee_contracts::PermissionRequest) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
@@ -3164,7 +3192,7 @@ impl Agent {
     /// Fire `UserQuestion` hooks at the moment the agent is about to block on
     /// an `ask_user` question. Observe-only, same contract as
     /// [`Self::fire_permission_request_hooks`].
-    async fn fire_user_question_hooks(&self, request: &neenee_core::UserQuestionRequest) {
+    async fn fire_user_question_hooks(&self, request: &neenee_contracts::UserQuestionRequest) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
@@ -3512,7 +3540,7 @@ impl Agent {
                 // distinguishes them. Fill the request id, emit, fire
                 // observe hooks, await the user's decision.
                 let one_off = request.one_off;
-                let request = neenee_core::PermissionRequest {
+                let request = neenee_contracts::PermissionRequest {
                     id: format!("permission_{}", uuid::Uuid::new_v4()),
                     ..request
                 };
@@ -3724,7 +3752,7 @@ impl Agent {
     /// yields [`ToolAccesses::none`] (freely parallel) — it will report its
     /// own "not found" error inside `execute_tool`; there's no point
     /// serializing an error.
-    pub(crate) fn accesses_for_call(&self, call: &ToolCall) -> neenee_core::ToolAccesses {
+    pub(crate) fn accesses_for_call(&self, call: &ToolCall) -> neenee_contracts::ToolAccesses {
         let tool: Option<Arc<dyn Tool>> = self
             .resolved_tools
             .read()
@@ -3735,23 +3763,23 @@ impl Agent {
             .or_else(|| self.dynamic_tools.find(&call.name));
         match tool {
             Some(tool) => tool.accesses(&call.arguments),
-            None => neenee_core::ToolAccesses::none(),
+            None => neenee_contracts::ToolAccesses::none(),
         }
     }
 }
 
-/// Render a [`neenee_core::ScopeTarget`] as the stable string used to key and
+/// Render a [`neenee_contracts::ScopeTarget`] as the stable string used to key and
 /// display a permission rule. A path becomes the path string; a command becomes
 /// the command string; [`ScopeTarget::Unspecified`] becomes `"*"` (the legacy
 /// "any scope" sentinel), so tools without a locatable target are ruled as
 /// before. This string is purely a dedup key + UI label — the actual scope
-/// admission decision is made by [`neenee_core::OperationScope::allows`].
+/// admission decision is made by [`neenee_contracts::OperationScope::allows`].
 #[allow(dead_code)]
-fn scope_target_to_rule(target: &neenee_core::ScopeTarget) -> String {
+fn scope_target_to_rule(target: &neenee_contracts::ScopeTarget) -> String {
     match target {
-        neenee_core::ScopeTarget::Path(p) => p.to_string_lossy().into_owned(),
-        neenee_core::ScopeTarget::Command(c) => c.clone(),
-        neenee_core::ScopeTarget::Unspecified => "*".to_string(),
+        neenee_contracts::ScopeTarget::Path(p) => p.to_string_lossy().into_owned(),
+        neenee_contracts::ScopeTarget::Command(c) => c.clone(),
+        neenee_contracts::ScopeTarget::Unspecified => "*".to_string(),
     }
 }
 
@@ -3771,10 +3799,10 @@ fn valid_assistant_response(message: &Message) -> bool {
 /// diagnose why: whether reasoning came through, whether any tool calls were
 /// parsed, and which provider/model was responsible. The matching per-turn
 /// stream summary (chars fed vs emitted, reasoning/tool-call traffic) is logged
-/// by the provider at `neenee_core::provider=debug`.
+/// by the provider at `neenee_contracts::provider=debug`.
 fn empty_response_error(response: &Message) -> HarnessError {
     tracing::warn!(
-        target: "neenee_core::agent",
+        target: "neenee_contracts::agent",
         provider = ?response.provider,
         model = ?response.model,
         content_chars = response.content.len(),
@@ -3823,7 +3851,7 @@ impl crate::permission_policy::PermissionContext for Agent {
             .await
     }
 
-    fn apply_scoped_disables(&self, disables: &[(String, neenee_core::RestorePoint)]) {
+    fn apply_scoped_disables(&self, disables: &[(String, neenee_contracts::RestorePoint)]) {
         // Delegate to the existing agent method (same signature).
         Agent::apply_scoped_disables(self, disables);
     }
@@ -3889,8 +3917,8 @@ impl crate::permission_policy::PermissionContext for Agent {
 mod tests {
     use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, envoy_result_text};
 
-    fn tool_call(id: &str, arguments: &str) -> neenee_core::ToolCall {
-        neenee_core::ToolCall {
+    fn tool_call(id: &str, arguments: &str) -> neenee_contracts::ToolCall {
+        neenee_contracts::ToolCall {
             id: id.to_string(),
             name: "write_file".to_string(),
             arguments: arguments.to_string(),
@@ -4008,7 +4036,7 @@ mod tests {
         );
     }
 
-    use neenee_core::RestorePoint;
+    use neenee_contracts::RestorePoint;
 
     /// A scoped disable hides the tool until its restore point fires.
     #[test]
@@ -4069,13 +4097,16 @@ mod tests {
     struct NoopProvider;
 
     #[async_trait::async_trait]
-    impl neenee_core::Provider for NoopProvider {
-        async fn chat(&self, _: neenee_core::ModelRequest) -> Result<neenee_core::Message, String> {
+    impl neenee_contracts::Provider for NoopProvider {
+        async fn chat(
+            &self,
+            _: neenee_contracts::ModelRequest,
+        ) -> Result<neenee_contracts::Message, String> {
             unreachable!("decide_bash_stdin must not call the provider")
         }
         async fn stream_chat(
             &self,
-            _: neenee_core::ModelRequest,
+            _: neenee_contracts::ModelRequest,
         ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
             unreachable!("decide_bash_stdin must not call the provider")
         }
@@ -4084,9 +4115,9 @@ mod tests {
     fn stdin_test_agent() -> super::Agent {
         use std::sync::Arc;
         super::Agent::new(
-            Arc::new(NoopProvider) as Arc<dyn neenee_core::Provider>,
+            Arc::new(NoopProvider) as Arc<dyn neenee_contracts::Provider>,
             vec![],
-            neenee_core::AgentIdentity::default(),
+            neenee_contracts::AgentIdentity::default(),
         )
     }
 
@@ -4096,7 +4127,7 @@ mod tests {
     /// contract and mirrors the autopilot path.
     #[tokio::test]
     async fn skip_interactive_input_closes_stdin_without_input_request() {
-        use neenee_core::{AgentEvent, StdinPolicy};
+        use neenee_contracts::{AgentEvent, StdinPolicy};
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
         agent.set_autopilot(false);
@@ -4120,7 +4151,7 @@ mod tests {
     /// the interactive path to `Closed` when the opt-out is off.
     #[tokio::test]
     async fn interactive_input_path_emits_request_when_opt_out_is_off() {
-        use neenee_core::AgentEvent;
+        use neenee_contracts::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
         agent.set_autopilot(false);
@@ -4156,11 +4187,11 @@ mod tests {
     fn apply_principal_profile_seeds_skip_interactive_input() {
         let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
-        let profile = neenee_core::PrincipalProfile::with_identity(
+        let profile = neenee_contracts::PrincipalProfile::with_identity(
             "code",
-            neenee_core::AgentIdentity::default(),
+            neenee_contracts::AgentIdentity::default(),
         )
-        .with_runtime_config(neenee_core::PrincipalRuntimeConfig {
+        .with_runtime_config(neenee_contracts::PrincipalRuntimeConfig {
             skip_interactive_input: true,
             ..Default::default()
         });

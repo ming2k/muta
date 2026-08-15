@@ -2,7 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::tools::*;
-    use neenee_core::{Tool, WebSearchConfig, truncate_utf8};
+    use neenee_contracts::{Tool, WebSearchConfig, truncate_utf8};
 
     #[test]
     fn html_to_text_handles_multibyte_before_script_tags() {
@@ -54,7 +54,7 @@ mod tests {
         // are now expressed per-agent via `WriteScope`, not via an
         // `allowed_in_plan_mode` override on the write tools. This test is
         // kept as a placeholder guard that the write tools still build; the
-        // scoping behavior is covered by neenee-core's WriteScope tests.
+        // scoping behavior is covered by neenee-contracts's WriteScope tests.
         let _write = WriteFileTool;
         let _edit = EditFileTool;
     }
@@ -78,7 +78,7 @@ mod tests {
             .await
             .unwrap();
         match full {
-            neenee_core::ToolOutput::Code {
+            neenee_contracts::ToolOutput::Code {
                 start_line, text, ..
             } => {
                 assert_eq!(start_line, 1);
@@ -94,7 +94,7 @@ mod tests {
             .await
             .unwrap();
         match offset {
-            neenee_core::ToolOutput::Code {
+            neenee_contracts::ToolOutput::Code {
                 start_line, text, ..
             } => {
                 assert_eq!(start_line, 3);
@@ -107,9 +107,9 @@ mod tests {
     }
 
     /// Pull `(text, prefix, suffix)` out of a `Code` output for assertions.
-    fn code_parts(out: neenee_core::ToolOutput) -> (String, Option<String>, Option<String>) {
+    fn code_parts(out: neenee_contracts::ToolOutput) -> (String, Option<String>, Option<String>) {
         match out {
-            neenee_core::ToolOutput::Code {
+            neenee_contracts::ToolOutput::Code {
                 text,
                 prefix,
                 suffix,

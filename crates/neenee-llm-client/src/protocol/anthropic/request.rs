@@ -19,7 +19,7 @@
 //!   and the two newest messages) so the stable prefix is cached at 0.1× input
 //!   cost. See `stamp_cache_control` and friends.
 
-use neenee_core::{Message, Role, ThinkingSupport};
+use neenee_contracts::{Message, Role, ThinkingSupport};
 use serde_json::{Value, json};
 
 use super::thinking::ThinkingConfig;
@@ -37,14 +37,14 @@ pub struct BodyInput<'a> {
     pub stream: bool,
     /// OpenAI-shaped tool specs (`{type:"function", function:{...}}`), if any.
     /// Converted to Anthropic's `{name, description, input_schema}` shape.
-    pub tool_specs: Option<&'a [neenee_core::ToolSpec]>,
+    pub tool_specs: Option<&'a [neenee_contracts::ToolSpec]>,
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
 }
 
 /// Build the `/messages` request body from the harness message list.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
-    let capabilities = neenee_core::ModelCapabilities::for_channel(input.model, None);
+    let capabilities = neenee_contracts::ModelCapabilities::for_channel(input.model, None);
     body_with_capabilities(messages, input, &capabilities)
 }
 
@@ -54,7 +54,7 @@ pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
 pub fn body_with_capabilities(
     messages: Vec<Message>,
     input: BodyInput<'_>,
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
 ) -> Value {
     let BodyInput {
         model: model_id,
@@ -142,7 +142,7 @@ pub fn body_with_capabilities(
 /// the resolved model is not a manual-thinking model or the user has thinking
 /// turned off.
 pub fn beta_header(
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
     thinking: ThinkingConfig,
 ) -> Option<&'static str> {
     thinking
@@ -155,7 +155,7 @@ pub fn beta_header(
 /// beta header for manual thinking.
 pub fn headers(
     api_key: &str,
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
     thinking: ThinkingConfig,
     copilot: bool,
 ) -> Vec<(&'static str, String)> {
@@ -279,7 +279,7 @@ fn manual_thinking_budget(max_tokens: u32) -> u32 {
 /// knobs and the opt-in default.
 fn stamp_thinking(
     body: &mut Value,
-    capabilities: &neenee_core::ModelCapabilities,
+    capabilities: &neenee_contracts::ModelCapabilities,
     max_tokens: u32,
     thinking: ThinkingConfig,
 ) {
