@@ -43,3 +43,17 @@
 
 # Local cargo config (iris path override to sibling optics checkout)
 .cargo/config.toml
+
+# Frontend dependencies and build artifacts
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+.pnpm-store/
+.svelte-kit/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
