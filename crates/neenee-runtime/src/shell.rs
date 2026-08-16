@@ -30,6 +30,7 @@ pub async fn run_shell_command(
     lifecycle: Arc<RoundLifecycle>,
     agent: Arc<Agent>,
     session: Arc<SessionStore>,
+    project_root: std::path::PathBuf,
 ) {
     // Record the shell invocation in the durable command ledger so it
     // survives resume/export/audit (ADR-0091, revising ADR-0050's echo-in-
@@ -83,7 +84,10 @@ pub async fn run_shell_command(
         },
     ));
 
-    let bash = BashTool;
+    // Run in the session's workspace root, not the daemon process's cwd
+    // (ADR-0096): the `!` path must land in the same project the model-driven
+    // bash tool does.
+    let bash = BashTool::new(Some(project_root));
     let tx_for_stream = tx.clone();
     let session_id_for_stream = session_id.clone();
     let call_id_for_stream = call_id.clone();

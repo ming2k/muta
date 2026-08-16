@@ -1,6 +1,6 @@
 # 0017. Side conversations: session-native `/btw`
 
-- **Status:** Accepted
+- **Status:** Partially superseded by [ADR-0103](0103-btw-background-asides.md) (exit semantics, single live side, empty side buffer)
 - **Date:** 2026-06-24
 
 ## Context

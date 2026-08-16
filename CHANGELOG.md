@@ -7,6 +7,369 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tests no longer write to the user's real state directory.** Several test
+  suites constructed production persistence objects without path isolation,
+  so a plain `cargo test` leaked into (and damaged) the developer's real
+  `$XDG_STATE_HOME` / `$XDG_DATA_HOME`:
+  - `neenee-tui`'s `App` test constructor now keeps
+    `input_history_persist = false`, so `record_input_history` /
+    `clear_input_history` never merge synthetic rows into — or truncate —
+    the real `history.json`. (This leak is why the Ctrl+R picker once filled
+    with `prompt 0..39` rows stamped `session-a`: the attachment-cache test
+    wrote its synthetic prompts straight into the user's file, and the
+    clear-history test then truncated that same file outright.)
+    Production keeps persistence on (the `run_tui` constructor sets the flag
+    to `true`), and a new regression test asserts the real file is
+    byte-for-byte untouched while the flag is off.
+  - `neenee-persistence`'s `TrustedProjects`/`TrustGate` tests now sandbox
+    `paths::get()` via the sanctioned `set_test_default` +
+    `TEST_OVERRIDE_GUARD` pattern, instead of replacing the real
+    `trusted_projects.json` with an empty set (which silently revoked every
+    project trust grant).
+  - `neenee-runtime` / `neenee-agent` session tests now use
+    `SessionStore::for_path(<tempdir>)` instead of
+    `load_for_project(tempdir)`; the latter resolves the real XDG project
+    bucket and minted `sessions/<id>.json` + blob dirs under
+    `~/.local/share/neenee/projects/`.
+- **The ↑/↓ input history is bound to the session, not the client window.**
+  Three cross-session leaks are closed. First, the origin stamp lagged a
+  mid-run switch: the session id used to tag (and filter) history entries was
+  read from the handshake-time session source, frozen for the process
+  lifetime — after `/session open`, `/resume`, or `/fork`, prompts kept being
+  stamped (and recalled) under the *retired* session's id. The id now comes
+  from a live cell the response listener updates on every
+  `ConversationReplaced`/`ConversationCleared`. Second, a switch no longer
+  carries composer state across the boundary: the ↑/↓ cursor, the stashed
+  draft, and staged attachments are reset when the viewed session changes
+  (entering/leaving a `/btw` aside included), so nothing typed into one
+  conversation leaks into another. Third, `/new` now reports the freshly
+  minted session id (`ConversationCleared { session_id }`) so clients track
+  the switch the same way they track `ConversationReplaced`.
+- **Resuming a session restores its prompt history.** The inline ↑/↓ recall
+  now walks the union of the tagged persisted history and a
+  **transcript-derived backfill**: the genuine chat prompts of the
+  conversation on screen, rebuilt incrementally from the transcript each
+  frame. A resumed session recalls its own earlier turns immediately —
+  including ones typed in another client or before this client's
+  `history.json` existed — instead of coming up empty until new prompts are
+  sent. The backfill is derived state and never persisted (the session file
+  is the durable record, ADR-0018); slash commands and `!shell` passthroughs
+  are excluded, and `Ctrl+R` remains the global cross-session search surface.
+
+### Added
+
+- **Command rows interact by shape (ADR-0106, revising ADR-0091 D4).** The
+  one-size `+ ⚙ /new` disclosure block is gone: a command row now picks its
+  layout from the reply's shape at render time. A short single-line reply
+  (`/new`'s confirmation, acks, `/schedule`) joins inline as
+  `/new · Started new session: a1b2c3` — no `+` marker, since there is no
+  second view worth opening, and the R1 ` · ` join reads the reply as the
+  outcome of the invocation; a result-less record (shell passthroughs,
+  legacy folds) renders as a plain dimmed row; only genuinely long or
+  multi-line replies (`/search`, `/session status`, `/review`) keep the
+  `+`/`-` disclosure with the expandable body. The `⚙` glyph is retired
+  everywhere — the `/` already says "command". The inline classifier is
+  width-aware: a reply that would truncate beside its invocation falls back
+  to the disclosure layout, so an inline reply is never a fragment. The web
+  panel's command blocks follow the same rule (short Text replies and acks
+  render as one flat confirmation row), closing the gap where its acks were
+  flat but the TUI's were expandable blocks.
+- **Command rows restore at their turn seams (ADR-0106 §2).** On resume,
+  `/session open`, `/resume`, fork, and side-view opens, the rebuilt command
+  rows no longer append to the dialogue's tail: each merges before the first
+  prompt sent after its invocation, so a `/compact` run between two rounds
+  renders between those rounds — where it appeared live. Dialogue order is
+  never disturbed; records older than every prompt, or dialogue without
+  message timestamps, keep ledger order at the tail.
+- **The daemon serves the web panel itself, on the same port (ADR-0105).**
+  The TCP listener now peek-splits plain HTTP from WebSocket upgrades:
+  `GET /` serves the panel bundle embedded at build time from `apps/web/dist`
+  (new `neenee-web-assets` crate; a placeholder page is embedded when the
+  dist was never built, so pure-Rust builds never need the Node toolchain),
+  and `GET /healthz` answers an unauthenticated `{version, auth, panel}`
+  probe. The CLI default port is now fixed at 9800 (falling back to an
+  ephemeral port, recorded in the discovery file, when taken), `neenee
+  panel` prints the panel URL including the token, and `Wire::Error` gains
+  an optional machine-readable `code` (`"version_mismatch"` first).
+- **Control-plane hardening (ADR-0105).** The loopback TCP listener now
+  requires a bearer token by default — `[daemon] local_auth` (CLI
+  `--no-local-auth` opts out) — generated per daemon start and published in
+  the owner-only discovery record, which Rust clients already read and
+  present. Browser clients authenticate with a `Sec-WebSocket-Protocol:
+  bearer.<token>` offer (the one channel `new WebSocket()` can customize),
+  echoed on accept; and every loopback handshake carrying a browser `Origin`
+  is refused (403) unless the origin is itself loopback-hosted, closing the
+  drive-by hole where any visited page could drive the daemon (WebSocket is
+  not same-origin-protected).
+- **Project trust now covers skills and slash commands (ADR-0107).** The
+  ADR-0085 §5 gate previously stopped at `.neenee/config.toml` (MCP servers
+  and hooks); project skills (`.neenee/skills`, `.agents/skills`,
+  `.claude/skills` — the highest-priority scope) and project slash commands
+  (`.neenee/commands/`) loaded from any cloned repo unconditionally. For an
+  agent holding tools, project-supplied prompt text is execution by proxy,
+  so both now load only after `/trust`, enforced inside the scan path itself
+  (startup, periodic refresh, and `/skills reload` share the one gate, and
+  command discovery is anchored to the session's project root rather than
+  the daemon's cwd). `/trust` enables them mid-session, `/untrust` drops
+  them immediately, and a project entry that shadows a same-named user-scope
+  skill or command now emits a one-time warning notice naming the winner —
+  silent overrides are impossible.
+- **Sessions can be renamed over the wire.** `Request{RenameSession{id,
+  title}}` sets a session's manual title (ADR-0022: AI titling never
+  overwrites it) or clears it back to the AI/first-prompt fallback with
+  `null`, resolving live and archived sessions by full id or short-id prefix
+  exactly like `DeleteSession`; monitor rows republish with the new title.
+  The web panel exposes it as inline rename in the session sidebar.
+- **The web panel's protocol types are generated, not transcribed.** The 58
+  payload types of the daemon wire protocol now carry `ts-rs` derives in
+  `neenee-contracts` and export `apps/web/src/lib/generated/wire.gen.ts`
+  (`cargo test -p neenee-contracts`); `types.ts` is a thin façade keeping
+  only the serve-layer envelope and helpers. CI fails on drift, so the
+  "client scaffolded against an imagined protocol" bug class is closed by
+  construction.
+- **Empty-state help carousel** (ADR-0104). A blank conversation now shows
+  a rotating help line beneath the logo — one durable capability hint at a
+  time (`/btw`, `Ctrl-R`, `F1`/`?`, `Ctrl-M`, `!` shell, `@` mentions,
+  queue-on-Enter), advancing every 8 s on a wall-clock cadence — a single
+  self-explaining line, no position indicator, and no static tagline above
+  it: the carousel's first page already answers "how do I start" ("Send a
+  message, or `/` command — try `/help`"), so the retired "Type a message
+  below to begin." line was a duplicate. When no keyed LLM provider is configured the carousel
+  is replaced by the pinned `/connections` setup blocker (consuming
+  ADR-0057's `NeedsProvider` guidance), so the setup nudge no longer
+  rotates away.
+
+### Changed
+
+- **The Models picker sorts in two weighted tiers, then ASCII.** The flat
+  (provider, model) list now ranks by status first — the currently-active pair
+  leads, favorites come next, everything else follows — and inside each tier
+  rows sort by the model id in plain ASCII (byte order), with the provider
+  label as the tiebreaker for the same id served by multiple instances. The
+  per-model recency signal no longer participates: the list is deterministic
+  regardless of usage history, so models no longer shuffle after every switch.
+  `models_flat_filtered_from` now takes the current pair
+  (`current_provider`, `current_model`) to compute the tier; the provider-level
+  recency sort of the **Connections** list is unchanged.
+- **Model surfaces are id-first: the wire model id is the label, everywhere.**
+  The curated display-name mapping is gone, root and branch. Upstream
+  discovery cannot provide one consistently — OpenAI-compatible and Google
+  `/models` return only `{id, …}` while Anthropic/Kimi advertise a
+  `display_name` and Copilot a `name` — so the picker used to show a mix of
+  brand names ("Claude Opus 4.8") for registry-known ids and raw ids
+  ("acme-7b") for everything else. Every surface now renders the wire id:
+  the Models picker rows, the hint bar, the model editor title, the custom
+  provider form and its suggestion list, transcript turn headers, and the
+  activity modal. Removed with it: `model_display_name`, `Model::name`,
+  `ModelCapabilities::display_name`, `FittedModel.display_name`,
+  `FittedModelInfo.display_name`, `RemoteModelMetadata.display_name`, and
+  `DiscoveredModel.display_name` (a `display_name` arriving in a discovery
+  payload is simply ignored). `ProviderModelInfo.last_used_ms` is also gone
+  from the wire — the picker no longer sorts by recency (the provider-level
+  `last_used_ms` stays; the Connections list still sorts by it). The web
+  panel's model picker mirrors the same two-tier ASCII ordering, and
+  `wire.gen.ts` is regenerated.
+- **The head band's second row is demand-driven** (ADR-0104, refining
+  ADR-0103 §3). The affordance legend now renders only while the view has
+  page-specific shortcuts to announce: the main view shows it only while
+  asides are live (`btw 2 · 1 running  F5 asides`), `/btw` keeps it always
+  (`Ctrl-C back` is its single exit), and the Envoy page drops it entirely
+  (its permanent footer already carries the same legend — the two copies
+  were exact duplicates). The unconditional `F1 help` pair is gone from
+  every page (modal footers own that discovery), and so is the main view's
+  `Esc interrupt` pair, which both duplicated and contradicted the activity
+  bar's correct `Esc Esc interrupt` hint. The reclaimed row returns to the
+  transcript.
+- **The Envoy footer legend drops its global pair.** The page's permanent
+  footer trims to its own navigation — `Esc back` (plus `[ prev` / `] next`
+  while the focused task has siblings) — because `F1 help` is a global
+  capability, not a property of any view, and every modal footer's
+  mandatory `? help` chip already owns that discovery. `F1` itself still
+  opens help from anywhere, including the Envoy page.
+
+- **The web panel covers the full round-event surface.** Slash-command
+  replies render as distinct command blocks (`RoundEvent::CommandResult`,
+  ADR-0091) instead of vanishing — the composer's `/help` `/status` `/mcp`
+  pills finally show their output; the non-streamed `Text` fallback
+  (interrupted rounds, hook-blocked prompts) appends assistant prose;
+  `HarnessState`/`AutopilotChanged` drive a live round counter and an
+  autopilot badge; `Activity`/`TurnStarted` surface in the header;
+  `RoundCompleted` shows honest per-round throughput (`RoundSummary`'s
+  generation-time TPS); `Compacted`, `RetryScheduled`, and review alerts
+  (`SessionReview` — a retained, dismissible banner) are all visible.
+- **The web panel unblocks envoy approval walls.** `RoundEvent::Envoy`
+  events fold into a nested, expandable envoy view inside the parent `task`
+  tool card (profile, activity, streaming text, nested tool calls), and
+  envoy-raised `PermissionRequest`/`UserQuestionRequest`/`InputRequest`
+  prompts render with their origin label and route the reply's
+  `parent_call_id` back to the parked envoy (ADR-0029) — previously these
+  hung the session silently.
+- **Web panel connection settings.** The daemon endpoint and project scope
+  resolve from `?ws=`/`?host=`+`?port=`/`?project=` query params, then
+  localStorage, then the `ws://127.0.0.1:9800` default, editable through a
+  connection dialog (click the Online/Offline badge) that persists and
+  reconnects. The version handshake now sends the build-time-injected
+  `package.json` version, which CI pins to the workspace `Cargo.toml`
+  version — the previous hardcoded `"web-0.24.0"` never matched the daemon's
+  `"0.24.0"` and was refused before any session work.
+- **Web panel session and model management.** Sessions can be deleted from
+  the sidebar (two-click confirm, `DeleteSession`); the header shows the
+  active provider/model from `Welcome` and opens a Models picker rendered
+  from the `ProviderPicker` snapshot (favorites, effort/thinking flags,
+  key-readiness) that switches via `SetDefaultModel`; `ProviderSwitched`
+  updates the header live.
+- **Web panel todo panel and image support.** `TodosUpdated` renders as a
+  collapsible sticky task list above the composer; the composer accepts
+  pasted/attached images (base64 `ImagePart`s, 10 MB cap) and message
+  history renders `Message.images` and collapsible `reasoning_content`;
+  `UnsentInput` now restores the interrupted prompt (with images) into the
+  composer and drops the optimistic echo, and mid-round
+  `UserInputInserted`/`NextRoundStarted` inserts append with dedupe.
+- **Web panel tests and CI gate.** A vitest suite (happy-dom + a scripted
+  fake WebSocket) covers config resolution, frame shapes, stream/command/
+  tool/envoy folding, reconnect, and markdown sanitization; the CI web job
+  runs it and asserts the web/workspace version match.
+
+### Changed
+
+- **Web panel markdown pipeline hardened.** The hand-rolled sanitizer (which
+  missed `xlink:href`/`srcset`-style vectors) is replaced by DOMPurify's
+  default profile with styles and form controls forbidden; code blocks are
+  highlighted with highlight.js *after* sanitization, and surviving links open
+  in a new tab with `rel="noopener noreferrer"`. Transcript items use
+  `content-visibility: auto` so long sessions stay responsive, and the layout
+  collapses to an overlay sidebar below 900px.
+- **The web panel now speaks the daemon's actual wire protocol.** The client
+  under `apps/web` was scaffolded against an imagined protocol and could not
+  exchange a single valid frame: it read `Monitor` frames through a
+  nonexistent `.event` field, expected `Response` payloads nested under
+  `.response` (they are flattened into the envelope), matched internal
+  `AgentEvent` names (`AssistantDelta`/`AssistantEnd`) instead of the wire's
+  `StreamDelta`/`StreamEnd`, sent requests as `{type:"Request",request:{…}}`
+  instead of the flattened `{type:"Request","Chat":{…}}` (omitting the
+  required `images` field), and modeled enums with the wrong casing
+  (`"user"` vs `"User"`, `"allow_once"` vs `"Once"`). `src/lib/types.ts` is
+  now transcribed from `neenee-contracts` (`events.rs`, `monitor.rs`,
+  `message.rs`, `todos.rs`) and `neenee-runtime`'s `Wire`/`AttachAction`/
+  `ControlRequest`, and the store sends and parses the serde shapes exactly.
+- **The web panel can now answer blocking prompts.** `PermissionRequest`
+  (with `Once`/`Always`/`Reject`, honoring `one_off` and `elevation`),
+  `UserQuestionRequest`, and `InputRequest` render an inline banner wired to
+  `PermissionReply`/`UserQuestionReply`/`InputReply` — previously a session
+  needing approval hung silently forever. Notices and errors (provider
+  retries, turn errors, `UnsentInput`) surface as dismissible toasts instead
+  of vanishing into the console; `Welcome`/`ConversationReplaced` filter
+  `hidden` harness-injected messages out of the transcript; streamed
+  markdown is sanitized (event handlers, dangerous elements, and non-http
+  URLs stripped) before `{@html}`; message timestamps convert Unix seconds
+  correctly (they previously rendered as 1970); tool cards show live
+  stdout/stderr streams and a real failed/cancelled state; and the session
+  sidebar uses the monitor row's actual fields (`overview`, all six
+  statuses, current tool) instead of the nonexistent `title`/`provider`/
+  `model` triple.
+- **The web panel's Node workspace is now governed.** The committed lockfile
+  moved from `apps/web/pnpm-lock.yaml` to the root `pnpm-lock.yaml`
+  (`pnpm-workspace.yaml` already declared `apps/*`, so the nested lockfile
+  was dead weight that workspace installs never read); `@types/marked` (a
+  deprecated stub) was dropped; template leftovers (`Counter.svelte`,
+  `hero.png`, `svelte.svg`, `vite.svg`, `icons.svg`) were removed; and the
+  project README was replaced with the actual client's docs. CI gained a
+  `web` job running `pnpm install --frozen-lockfile` + `check` + `build`,
+  closing the gap where the panel had no gate at all.
+- **Root `.gitignore` no longer shadows project-shared editor config.**
+  `.vscode/` ignored whole directories, defeating `apps/web/.gitignore`'s
+  `!.vscode/extensions.json` exception; it now ignores `.vscode/*` with
+  explicit allow-listed exceptions.
+
+### Fixed
+
+- **The web panel reattaches after a disconnect.** A dropped session socket
+  previously left the panel stuck on "Session detached" until a manual click
+  (the monitor snapshot only auto-attached when no session was active); the
+  session channel now reconnects with capped exponential backoff and replays
+  the transcript from `Welcome`, and a fresh monitor snapshot re-triggers
+  attachment when the channel is down. A global error or unhandled rejection
+  surfaces as a toast instead of dying silently.
+- **AsyncAPI contract drift (part 1 — mechanical defects).** The contract
+  had a duplicate `SessionOverview` schema key (YAML last-wins), a
+  `WelcomeEnvelope` that omitted the `provider`/`model` fields the daemon
+  actually sends (real frames failed its `additionalProperties: false`), a
+  `Message` schema that required fields the Rust struct does not have
+  (`images`/`hidden`/`compacted`/`children` as mandatory, plus phantom
+  `tool_name`/`tool_arguments`/`tool_duration_ms`), phantom
+  `UpdateDoomGuardConfig` request/response variants whose Rust enum
+  counterparts were deleted, a `PermissionRequest` missing `elevation` and
+  `one_off`, a `MonitoredSession` missing `project_root` and `wip` (and the
+  whole `WipStatus` schema), and a `ChannelAuth` enum missing
+  `CopilotOAuth`/`AntigravityOAuth`.
+- **Stale `neenee-server` binary references removed from docs.** ADR-0102
+  deleted that binary; `server-api.md`, `cli.md`,
+  `session-daemon-and-control-plane.md`, and both daemon how-tos now
+  describe the single `neenee serve` entrypoint. `crates/neenee-runtime/
+  README.md` (still titled `neenee-transport`, two renames ago, and claiming
+  the session registry is a stub) was rewritten to the current architecture.
+  `apps/web` is now registered in `docs/dev/workspace-layout.md` and the
+  crate-layering guide (previously mentioned nowhere with the wrong path),
+  and `docs/dev/documentation/contracts.md` points the `api.md` rule at the
+  real server-API surface.
+
+### Changed (prior)
+
+- **`/btw` is now a background aside conversation (ADR-0103).** Leaving an
+  aside view (`Ctrl+C`) detaches without interrupting — the aside keeps
+  running, stays in the new asides list (`F5` / `/btw list`), and can be
+  re-entered with its full transcript. The single live side of ADR-0017 is
+  lifted to a multi-slot registry, so several asides can run concurrently;
+  `/btw <text>` still auto-sends its first turn. An aside opened but never
+  used is discarded on detach (registry entry and session files) so it never
+  litters the list or `/sessions`. Entering an aside now back-fills the view
+  from its full persisted transcript (inherited parent context included) —
+  the model always saw that context; now the pixels match.
+- **`Esc` interrupts, `Ctrl+C` leaves.** Esc inside an aside view now
+  interrupts the viewed aside's round (armed twice, exactly like the main
+  view's Esc interrupt) instead of exiting, and `Ctrl+C` is the single
+  leave-the-view key — matching shell/REPL muscle memory. The aside's
+  interrupt is scoped to its own session and never closes it.
+- **The head band is two rows.** Row 1 keeps identity + status (the old head
+  row); row 2 is a view-level affordance legend: the main view shows the
+  live aside chip (`btw 2 · 1 running`) plus `F5 asides` / `Esc interrupt`,
+  and the aside view shows `Ctrl-C back` / `F5 asides` /
+  `Esc interrupt aside`. View-level shortcuts moved off row 1 (the old
+  `Esc back` right hint is gone).
+- **`F5` opens the asides modal.** One row per live aside (run/open badge,
+  relative time, title), `Enter` to jump back in, `D` to close + discard
+  outright, `F5` to refresh in place. Running badges derive from the
+  per-session running set, so a background round finishing flips them on the
+  next frame without a refetch.
+- **The input box owns a dedicated two-color background pair.** The live
+  input's background was one flat tone that differed from the app background
+  and from the (borrowed) unfocused tone by only ~1/255 of luminance — so the
+  activated and deactivated states were effectively indistinguishable from
+  each other and from the page behind them. Both frontends now give the input
+  component two related but independent tokens, tuned as a unit and shared
+  with no other surface. TUI: `input_bg_active` (26,28,27) — the brightest
+  interactive surface, "typing lands here" — and `input_bg_inactive`
+  (16,17,17), a recessed inert band that is no longer borrowed from the
+  sent-user-message panel; both derive per color scheme in `from_semantic`
+  and are guarded by a test asserting a ≥4-point luminance margin (from the
+  app background and from each other) in every preset. Web panel:
+  `--input-bg-active` / `--input-bg-inactive` replace the single `--bg-input`,
+  with the composer lifting to the active tone on `:focus-within` (previously
+  only the border changed); the sidebar pill, markdown code blocks, and tool
+  cards that incidentally reused `--bg-input` now sit on their own surface
+  tokens so retuning the input never ripples into them.
+- **The head row now spans the terminal's full width.** The `SESSION` /
+  `/btw` / `ENVOY` identity strip at the top of every view used to be inset
+  by the shared 2-col transcript gutter, which punched two `app_bg`-colored
+  notches into its `body` band at either edge — reading as a rendering gap
+  rather than a deliberate margin. The head is top-level chrome pinned to the
+  top edge (the counterpart of the Envoy key-legend band at the bottom edge,
+  which already spans the full width), so its background now owns every cell
+  of the row. The text keeps the same 2-col inset, rendered as padding, so
+  the identity still lines up with the transcript band and the footer bars.
+
 ## [0.24.0] - 2026-08-15
 
 ### Added

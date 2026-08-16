@@ -62,6 +62,7 @@ pub(crate) mod composer;
 pub(crate) mod design;
 pub(crate) mod effort_ignition;
 pub(crate) mod empty_state;
+pub(crate) mod footer_stack;
 pub(crate) mod markdown_table;
 pub(crate) mod message_body;
 pub(crate) mod notice;
@@ -90,8 +91,7 @@ pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{ActivityTab, Modal, Recess};
 pub(crate) use providers::{
-    CustomField, PROVIDER_TEMPLATES, model_display_name, protocol_model_candidates,
-    provider_template_label_for,
+    CustomField, PROVIDER_TEMPLATES, protocol_model_candidates, provider_template_label_for,
 };
 
 use crossterm::{
@@ -123,8 +123,8 @@ use crate::model::document::{
 use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::transcript::{
-    finalize_streaming_reasoning, rebase_transcript_rounds, transcript_commands_from_ledger,
-    transcript_messages_from_core,
+    finalize_streaming_reasoning, merge_command_rows, rebase_transcript_rounds,
+    transcript_commands_from_ledger, transcript_messages_from_core,
 };
 use crate::view::Theme;
 
@@ -227,7 +227,7 @@ pub async fn run_tui(
     terminal::spawn_signal_guard();
     let tui_config = Arc::new(tui_config);
     let mut restored = transcript_messages_from_core(initial_messages, &tui_config);
-    restored.extend(transcript_commands_from_ledger(initial_commands));
+    restored = merge_command_rows(restored, transcript_commands_from_ledger(initial_commands));
     rebase_transcript_rounds(&mut restored, initial_round_count);
     let messages = Arc::new(versioned::Versioned::new(restored));
     let messages_clone = messages.clone();
@@ -324,15 +324,15 @@ pub async fn run_tui(
         None::<neenee_contracts::TokenSourceReport>,
     ));
     let token_report_clone = token_report.clone();
-    // Attached frontends hold no local token-source ledger (the accounting is
-    // daemon-side), so the listener needs the currently-viewed primary session
-    // id to accept/discard `TokenUsageReport` replies. Starts at the
-    // handshake-learned id and follows `/session open|new|fork` switches via
-    // `ConversationReplaced`.
-    let attach_session_id = Arc::new(std::sync::Mutex::new(match &session {
-        SessionSource::Remote { session_id } => Some(session_id.clone()),
-    }));
-    let attach_session_id_clone = attach_session_id.clone();
+    // The **live primary session id**. The handshake-time `SessionSource` is
+    // frozen for the process lifetime, but the harness repoints its shared
+    // store on `/new`, `/session open`, `/resume`, and `/fork` — so anything
+    // session-scoped that must follow a mid-run switch (the ↑/↓ prompt
+    // history's origin tag above all) reads this cell instead. The listener
+    // updates it from `ConversationCleared` / `ConversationReplaced` and the
+    // event loop mirrors it into `App::current_session_id` each frame.
+    let live_session_id = Arc::new(Mutex::new(session.session_id().await));
+    let live_session_id_clone = live_session_id.clone();
     let open_sessions = Arc::new(AtomicBool::new(false));
     let open_sessions_clone = open_sessions.clone();
     // `/host` daemon control panel (ADR-0096): a live monitor snapshot the TUI
@@ -368,15 +368,24 @@ pub async fn run_tui(
     // TUI display config shared with the response listener so live tool steps
     // and reasoning traces honor the per-step-kind default expand state.
     let tui_config_clone = tui_config.clone();
-    // `/btw` side-conversation shared state (ADR-0017). The side transcript
-    // buffer, the parent-status mirror, and the one-shot view-transition
-    // signal all cross the listener → loop boundary here.
+    // `/btw` aside shared state (ADR-0017, ADR-0103). The aside transcript
+    // buffer, the parent-status mirror, the asides list, and the one-shot
+    // view-transition signal all cross the listener → loop boundary here.
     let side_messages = Arc::new(versioned::Versioned::new(Vec::<TranscriptMessage>::new()));
     let side_messages_clone = side_messages.clone();
     let parent_status = Arc::new(Mutex::new(ParentStatus::Idle));
     let parent_status_clone = parent_status.clone();
     let side_view_signal = Arc::new(Mutex::new(None::<event_loop::SideViewSignal>));
     let side_view_signal_clone = side_view_signal.clone();
+    // The asides list (ADR-0103 §5). The modal-open signal lives in
+    // `UiRuntime::open_btw` — armed by F5 / `/btw list` on the loop side.
+    let btw_list = Arc::new(Mutex::new(Vec::<neenee_contracts::BtwAsideSummary>::new()));
+    let btw_list_clone = btw_list.clone();
+    // Which session the frontend is currently viewing (primary id, or the
+    // focused aside's id), written by the event loop each frame and read by
+    // the listener to scope on-demand queries (e.g. `TokenUsageReport`).
+    let viewed_session_id = Arc::new(Mutex::new(None::<String>));
+    let viewed_session_id_clone = viewed_session_id.clone();
     // Phase-1 unsend signal: set by the listener when the harness reports an
     // `UnsentInput`, drained by the event loop to restore the composer.
     let unsent_input_signal = Arc::new(Mutex::new(None::<event_loop::UnsentInput>));
@@ -440,11 +449,15 @@ pub async fn run_tui(
     // Spawn response listener
     tokio::spawn(async move {
         let mut reasoning_start: Option<std::time::Instant> = None;
-        // Listener-local side routing key: the side `session_id` learned from
-        // `SideViewOpened`. Kept here (not in `UiRuntime`) because only the
-        // listener routes per-turn events; the loop reads the already-routed
-        // `side_messages` buffer.
-        let mut listener_side_id: Option<String> = None;
+        // Listener-local side routing keys (ADR-0017, widened by ADR-0103):
+        // every live aside's `session_id`, learned from `SideViewOpened` and
+        // `BtwList`. Kept here (not in `UiRuntime`) because only the listener
+        // routes per-turn events; the loop reads the already-routed
+        // `side_messages` buffer. A *set* (not the single old id) so a
+        // background aside keeps streaming into the side buffer after the
+        // user detaches from its view.
+        let mut listener_side_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         // Per-session `(round, turn)` position. The primary and `/btw` side
         // sessions can stream concurrently, so a single global counter cannot
         // reliably stamp transcript components for semantic spacing.
@@ -469,20 +482,22 @@ pub async fn run_tui(
                 dirty_notify_clone.notify_one();
             }
             match resp {
-                // ADR-0017: per-turn events arrive tagged with the session
-                // they belong to. The listener routes each event to the side
-                // buffer when its `session_id` matches the live side session,
-                // and to the primary transcript otherwise. Permission and
+                // ADR-0017 + ADR-0103: per-turn events arrive tagged with the
+                // session they belong to. The listener routes each event to
+                // the side buffer when its `session_id` belongs to a live
+                // aside — *whether or not that aside is the focused view*
+                // (background asides keep streaming into their buffer), and
+                // to the primary transcript otherwise. Permission and
                 // user-question requests stay global so their modals surface
                 // regardless of which view is focused.
                 AgentResponse::Round { session_id, event } => {
-                    let routes_to_side = listener_side_id.as_deref() == Some(session_id.as_str());
+                    let routes_to_side = listener_side_ids.contains(session_id.as_str());
                     // Select the transcript buffer for this event (ADR-0017):
-                    // the side buffer when the event's `session_id` matches the
-                    // live side session, the primary buffer otherwise. Global
+                    // the side buffer when the event's `session_id` belongs to
+                    // a live aside, the primary buffer otherwise. Global
                     // responding/activity/harness state below is gated on
-                    // `!routes_to_side` so a concurrent side round never
-                    // clobbers the primary view's chrome; the side view reads
+                    // `!routes_to_side` so a concurrent aside round never
+                    // clobbers the primary view's chrome; the aside view reads
                     // its own buffer + the parent-status banner instead.
                     // Permission and user-question requests stay global
                     // regardless of origin so their modals always surface.
@@ -1266,20 +1281,49 @@ pub async fn run_tui(
                     // banner. Mirrored into `App::parent_status` each frame.
                     *parent_status_clone.lock().await = status;
                 }
-                AgentResponse::SideViewOpened { side_id, .. } => {
-                    // ADR-0017: enter the side view. Record the routing key so
-                    // subsequent per-turn events stream into the side buffer,
-                    // and queue the view transition for the event loop.
-                    listener_side_id = Some(side_id.clone());
-                    side_messages_clone.write().await.clear();
+                AgentResponse::SideViewOpened {
+                    side_id,
+                    messages,
+                    commands,
+                    ..
+                } => {
+                    // ADR-0017 + ADR-0103 §6: enter the aside view. Record the
+                    // routing key so subsequent per-turn events stream into the
+                    // side buffer, then back-fill that buffer from the event's
+                    // transcript payload (the aside's full persisted history,
+                    // inherited parent context included) so the viewed pixels
+                    // match the model's actual context window — instead of the
+                    // old behaviour of seeding an empty buffer.
+                    listener_side_ids.insert(side_id.clone());
+                    let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
+                    rebuilt =
+                        merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
+                    *side_messages_clone.write().await = rebuilt;
                     *side_view_signal_clone.lock().await =
                         Some(event_loop::SideViewSignal::Opened { side_id });
                 }
                 AgentResponse::SideViewClosed => {
-                    // ADR-0017: leave the side view. Drop the routing key so
-                    // events route back to the primary buffer.
-                    listener_side_id = None;
+                    // ADR-0103: leave the aside view. The routing keys are
+                    // NOT dropped — the asides keep running in the background
+                    // and their events must keep streaming into the side
+                    // buffer — only the view flips. Which ids stay is
+                    // governed by `BtwList`: the next list refresh prunes ids
+                    // whose asides closed (pristine discard / explicit close).
                     *side_view_signal_clone.lock().await = Some(event_loop::SideViewSignal::Closed);
+                }
+                AgentResponse::BtwList(rows) => {
+                    // ADR-0103 §5: the asides list. Mirrored into the loop's
+                    // `App::btw_list` each frame; the loop also reads the
+                    // `open_btw` signal armed by F5 / `/btw list` to pop the
+                    // modal once the fresh rows land. The list is also the
+                    // routing-truth source: ids absent from it no longer have
+                    // a live aside, so their events stop routing to the side
+                    // buffer.
+                    listener_side_ids.retain(|id| rows.iter().any(|row| &row.id == id));
+                    for row in rows.iter() {
+                        listener_side_ids.insert(row.id.clone());
+                    }
+                    *btw_list_clone.lock().await = rows;
                 }
                 AgentResponse::PermissionsCleared => {
                     pending_permission_clone.lock().await.clear();
@@ -1291,11 +1335,16 @@ pub async fn run_tui(
                 AgentResponse::ProviderPicker(snapshot) => {
                     *provider_picker_clone.lock().await = snapshot;
                 }
-                AgentResponse::ConversationCleared => {
+                AgentResponse::ConversationCleared { session_id } => {
                     messages_clone.write().await.clear();
                     *round_count_clone.lock().await = 0;
                     needs_round_rebase = false;
                     context_tokens_clone.lock().await.clear();
+                    // `/new` minted a fresh session and switched to it. The
+                    // same contract as `ConversationReplaced` below: track the
+                    // post-switch id so session-scoped client state follows.
+                    *live_session_id_clone.lock().await = session_id.clone();
+                    *token_report_clone.lock().await = None;
                 }
                 AgentResponse::ConversationReplaced {
                     session_id,
@@ -1303,7 +1352,8 @@ pub async fn run_tui(
                     commands,
                 } => {
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
-                    rebuilt.extend(transcript_commands_from_ledger(commands));
+                    rebuilt =
+                        merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
                     *messages_clone.write().await = rebuilt;
                     needs_round_rebase = true;
                     // The model-window revision changed; do not reuse an API
@@ -1311,15 +1361,10 @@ pub async fn run_tui(
                     context_tokens_clone.lock().await.clear();
                     // Attached mode: the viewed primary session just switched
                     // (`/session open|new|fork`). Track the new id so
-                    // `TokenUsageReport` replies route correctly, and drop
+                    // session-scoped client state (the ↑/↓ prompt history
+                    // origin, `TokenUsageReport` routing) follows, and drop
                     // the previous session's cached report.
-                    if let Some(id) = attach_session_id_clone
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .as_mut()
-                    {
-                        *id = session_id.clone();
-                    }
+                    *live_session_id_clone.lock().await = session_id.clone();
                     *token_report_clone.lock().await = None;
                 }
                 AgentResponse::SessionsOverview(sessions) => {
@@ -1340,12 +1385,7 @@ pub async fn run_tui(
                     // belongs to the session the frontend is viewing — a
                     // reply that raced a session switch would otherwise
                     // populate the modal with the previous session's rows.
-                    let viewed = listener_side_id.clone().or_else(|| {
-                        attach_session_id_clone
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .clone()
-                    });
+                    let viewed = viewed_session_id_clone.lock().await.clone();
                     if viewed.as_deref() == Some(session_id.as_str()) {
                         *token_report_clone.lock().await = Some(report);
                     }
@@ -1475,6 +1515,9 @@ pub async fn run_tui(
         in_side_view: false,
         side_session_id: None,
         parent_status: ParentStatus::Idle,
+        btw_list: Vec::new(),
+        btw_scroll: 0,
+        btw_modal_follow: true,
         scroll: 0,
         follow_bottom: true,
         content_lines: 0,
@@ -1585,9 +1628,16 @@ pub async fn run_tui(
         history_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
+        session_history_backfill: Vec::new(),
+        session_history_backfill_cursor: 0,
         history_clear_confirm: false,
         input_history_dedup: input_history_config.dedup,
         input_history_record_commands: input_history_config.record_commands,
+        // This is the production TUI path (see `main` → `run_tui`): the
+        // process owns the user's real `history.json`, so disk persistence
+        // is enabled. Tests build `App` directly and keep this `false` so
+        // they never write to (or truncate) the user's state directory.
+        input_history_persist: true,
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
@@ -1617,6 +1667,7 @@ pub async fn run_tui(
         ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
+        carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
         stashed_input: String::new(),
         editor_target: None,
@@ -1664,6 +1715,8 @@ pub async fn run_tui(
         logo: load_user_logo(),
     };
 
+    let open_btw = Arc::new(AtomicBool::new(false));
+
     // Run app
     let res = event_loop::run_app_loop(
         &mut terminal,
@@ -1687,6 +1740,10 @@ pub async fn run_tui(
             side_messages,
             parent_status,
             side_view_signal,
+            btw_list,
+            open_btw,
+            viewed_session_id,
+            live_session_id,
             key_status,
             provider_picker,
             sessions_overview,

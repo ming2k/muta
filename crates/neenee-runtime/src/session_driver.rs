@@ -25,12 +25,11 @@ use neenee_skills::SkillRegistry;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::UiBridge;
 use crate::session_view::{build_sessions_overview, provider_key_status};
-use crate::side::SideSession;
 use crate::startup::StartupMode;
 
 /// The owned state and request loop for one live session.
@@ -80,10 +79,8 @@ pub struct SessionDriver {
     /// Primary round lifecycle: at most one active round, superseded by the
     /// next begin (replaces the old token-slot + generation-counter pair).
     pub lifecycle: Arc<RoundLifecycle>,
-    /// Live `/btw` side session registry (ADR-0017).
-    pub side: Arc<AsyncRwLock<Option<SideSession>>>,
-    /// Whether the user is composing into the side view right now.
-    pub active_view_side: Arc<AtomicBool>,
+    /// Live `/btw` aside registry (ADR-0017, multi-slot per ADR-0103).
+    pub side: Arc<AsyncRwLock<crate::side::SideRegistry>>,
     /// Cached base toolset snapshot for side-session construction
     /// (`base_tools_for_side`).
     pub base_tools: Arc<Vec<Arc<dyn Tool>>>,
@@ -139,7 +136,6 @@ impl SessionDriver {
             embedding_store: embedding_store_for_commands,
             lifecycle,
             side,
-            active_view_side,
             base_tools: base_tools_for_side,
             project_root: project_root_for_side,
             startup,
@@ -483,6 +479,13 @@ impl SessionDriver {
                         crate::handlers_session::delete(&session, &resp_tx, id).await;
                     });
                 }
+                AgentRequest::RenameSession { id, title } => {
+                    let session = session.clone();
+                    let resp_tx = resp_tx.clone();
+                    tokio::spawn(async move {
+                        crate::handlers_session::rename(&session, &resp_tx, id, title).await;
+                    });
+                }
                 AgentRequest::QuerySessionDetail { id } => {
                     let session = session.clone();
                     let resp_tx = resp_tx.clone();
@@ -567,7 +570,6 @@ impl SessionDriver {
                         &session,
                         &lifecycle,
                         &side,
-                        &active_view_side,
                         &base_tools_for_side,
                         &provider_for_task,
                         &mut provider_usage,
@@ -589,15 +591,7 @@ impl SessionDriver {
                     sent_at_ms,
                 } => {
                     crate::handlers_chat::chat(
-                        &active_view_side,
-                        &side,
-                        &agent,
-                        &session,
-                        &lifecycle,
-                        &resp_tx,
-                        &config,
-                        text,
-                        images,
+                        &side, &agent, &session, &lifecycle, &resp_tx, &config, text, images,
                         sent_at_ms,
                     )
                     .await;
@@ -624,12 +618,30 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::ShellCommand { command } => {
-                    crate::handlers_chat::shell(&resp_tx, &lifecycle, &agent, &session, command)
-                        .await;
+                    crate::handlers_chat::shell(
+                        &resp_tx,
+                        &lifecycle,
+                        &agent,
+                        &session,
+                        &project_root_for_side,
+                        command,
+                    )
+                    .await;
                 }
                 AgentRequest::ExitSideView => {
-                    crate::handlers_session::exit_side_view(&side, &active_view_side, &resp_tx)
-                        .await;
+                    crate::handlers_session::detach_side_view(&side, &resp_tx).await;
+                }
+                AgentRequest::FocusSide { side_id } => {
+                    crate::handlers_session::focus_side(&side, &session, &resp_tx, side_id).await;
+                }
+                AgentRequest::InterruptSide { side_id } => {
+                    crate::handlers_session::interrupt_side(&side, &resp_tx, side_id).await;
+                }
+                AgentRequest::CloseSide { side_id } => {
+                    crate::handlers_session::close_side(&side, &resp_tx, side_id).await;
+                }
+                AgentRequest::QueryBtwList => {
+                    crate::side::publish_btw_list(&side, &resp_tx).await;
                 }
                 AgentRequest::UpdateTuiLayout(layout) => {
                     // Persist the updated transcript layout preference. This
@@ -846,11 +858,25 @@ mod tests {
             parent_call_id: None,
         }));
         assert!(!round_owned_request(&AgentRequest::ExitSideView));
+        assert!(!round_owned_request(&AgentRequest::FocusSide {
+            side_id: "s".to_string()
+        }));
+        assert!(!round_owned_request(&AgentRequest::InterruptSide {
+            side_id: "s".to_string()
+        }));
+        assert!(!round_owned_request(&AgentRequest::CloseSide {
+            side_id: "s".to_string()
+        }));
+        assert!(!round_owned_request(&AgentRequest::QueryBtwList));
         assert!(!round_owned_request(&AgentRequest::UpdateTuiLayout(
             "default".to_string()
         )));
         assert!(!round_owned_request(&AgentRequest::DeleteSession {
             id: "s".to_string(),
+        }));
+        assert!(!round_owned_request(&AgentRequest::RenameSession {
+            id: "s".to_string(),
+            title: Some("t".to_string()),
         }));
         assert!(!round_owned_request(&AgentRequest::QuerySessionDetail {
             id: "s".to_string(),

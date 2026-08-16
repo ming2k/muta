@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use crate::session_review::ReviewVerdict;
 
 /// Terminal status of a slash-command invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum CommandStatus {
     /// The command completed and produced a result.
     Success,
@@ -29,7 +30,8 @@ pub enum CommandStatus {
 }
 
 /// One hit from a `/search` over the session-history embedding store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct SearchHit {
     /// The matched transcript excerpt.
     pub text: String,
@@ -49,7 +51,8 @@ pub struct SearchHit {
 /// [`ToolOutput`](crate::ToolOutput) (ADR-0001) — the precedessor this type
 /// mirrors. The ledger (`session.commands`) persists these directly, so resume
 /// and `/export` reconstruct the full result without re-running the command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum CommandResult {
     /// Plain text / markdown. The back-compat bridge variant produced by any
     /// handler that has not yet migrated to a rich variant (the ADR-0001
@@ -171,7 +174,8 @@ impl CommandResult {
 /// stream is pure dialogue; these records are the operations that happened.
 /// `result: None` means the invocation is recorded but the reply was never
 /// persisted (the legacy-echo fold and the shell-passthrough case).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct CommandRecord {
     /// Command word without the leading slash (e.g. `"search"`), or `"shell"`
     /// for a `!command` passthrough.
@@ -184,6 +188,8 @@ pub struct CommandRecord {
     pub timestamp: u64,
     /// Wall-clock duration of the command run, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Skipped when `None`: the key is absent on the wire, never explicit `null`.
+    #[ts(optional)]
     pub duration_ms: Option<u64>,
 }
 
@@ -224,6 +230,14 @@ impl CommandRecord {
 
     pub fn with_duration_ms(mut self, duration_ms: u64) -> Self {
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Set the invocation time (unix ms). Production callers get this from
+    /// [`CommandRecord::new`]; this builder exists for tests that need to
+    /// order records relative to a transcript's message timestamps.
+    pub fn with_timestamp(mut self, timestamp: u64) -> Self {
+        self.timestamp = timestamp;
         self
     }
 }

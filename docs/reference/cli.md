@@ -56,14 +56,16 @@ debug builds and is listed only there.
 - `--attach [id]` is the legacy flag form of `neenee attach`; it still
   parses but is not advertised in help.
 
-## The daemon binary
+## The daemon
 
-`neenee-server` is the same session daemon as a standalone binary (normally
-spawned on demand by `neenee` itself; run it directly under a supervisor).
-It accepts `--port <n>`, `--public`, `--idle-exit <min>`, `--grace <secs>`,
-`-h`/`--help`, and `-V`/`--version`, with the same exit-code conventions.
-(There is no `--project`: the daemon is project-agnostic since the unified
-model, and the old flag did nothing.)
+`neenee serve` runs the session daemon (normally spawned on demand by
+`neenee` itself; run it explicitly — including under a supervisor — with
+`neenee serve --detach`). It accepts `--port <n>`, `--public`,
+`--idle-exit <min>`, `--grace <secs>`, `-h`/`--help`, and `-V`/`--version`,
+with the same exit-code conventions. Since ADR-0102 there is no separate
+server binary: `neenee` is the one executable. (There is no `--project`:
+the daemon is project-agnostic since the unified model, and the old flag
+did nothing.)
 
 The daemon stops gracefully on SIGINT, SIGTERM, or SIGHUP within its grace
 budget (`[daemon] shutdown_grace_secs`, default 10s): it stops accepting,

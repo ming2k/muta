@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 /// Values use `#RRGGBB`. Frontends validate input before persisting it and
 /// fall back to these defaults if an older hand-edited config contains an
 /// invalid value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(default)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ColorSchemeConfig {
     pub background: String,
     pub surface: String,

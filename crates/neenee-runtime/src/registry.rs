@@ -151,12 +151,29 @@ impl SessionRegistry {
         action: AttachAction,
         caller_project: &std::path::Path,
     ) -> ResolveOutcome {
+        self.resolve_with_declaration(action, caller_project, true)
+            .await
+    }
+
+    /// [`Self::resolve`] with the caller's declaration status made explicit.
+    /// A *declared* project (modern client's `Select.project`) forbids
+    /// silently auto-binding a session from another project — that is the
+    /// "launched in project A, working in project B" trap. An undeclared
+    /// project (legacy client; the daemon guessing its own cwd) keeps the
+    /// historical lone-session auto-bind because the daemon cannot tell a
+    /// cross-project attach from a same-project one.
+    pub async fn resolve_with_declaration(
+        &self,
+        action: AttachAction,
+        caller_project: &std::path::Path,
+        declared: bool,
+    ) -> ResolveOutcome {
         match action {
             AttachAction::New => {
                 self.create_session_outcome(caller_project.to_path_buf())
                     .await
             }
-            AttachAction::Attach(None) => self.resolve_auto(caller_project).await,
+            AttachAction::Attach(None) => self.resolve_auto(caller_project, declared).await,
             AttachAction::Attach(Some(id)) => self.resolve_id(&id, caller_project).await,
             // Monitor handshakes are intercepted by the WS layer
             // (`serve::handle_connection`) and never reach `resolve`.
@@ -541,7 +558,11 @@ impl SessionRegistry {
         self.sessions.lock().await.insert(id, Arc::new(entry));
         b
     }
-    async fn resolve_auto(&self, caller_project: &std::path::Path) -> ResolveOutcome {
+    async fn resolve_auto(
+        &self,
+        caller_project: &std::path::Path,
+        declared: bool,
+    ) -> ResolveOutcome {
         // Prefer the caller's own project's sessions; only when that project
         // has none do we consider the global set, and only a single global
         // session auto-binds (otherwise the client must choose).
@@ -566,6 +587,21 @@ impl SessionRegistry {
                     .await
             }
             1 => {
+                // The one hosted session belongs to a *different* project
+                // than the calling client declared. Auto-binding it would
+                // silently attach this client to another project's session —
+                // the "launched in project A, working in project B" trap —
+                // so a declared-project client gets the picker instead (the
+                // cross-project session is one explicit choice; a fresh
+                // session in the caller's project is created by `New`).
+                // A legacy client that declared no project keeps the
+                // historical auto-bind: the daemon cannot distinguish a
+                // cross-project attach from a same-project one.
+                if declared {
+                    return ResolveOutcome::Pick {
+                        sessions: self.overview(&map).await,
+                    };
+                }
                 if let Some(e) = map.values().next() {
                     ResolveOutcome::Welcome(self.bound_from(e))
                 } else {

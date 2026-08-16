@@ -24,14 +24,14 @@ Project and user-defined commands are covered under
 | `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
 | `/sessions` | Browse past sessions |
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
-| `/btw` | Open a side conversation that runs alongside the main session |
+| `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
 | `/resume [id]` | Resume the most recent or selected session |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.neenee/` config tree |
 | `/reload` | Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks) |
-| `/trust` | Trust this project's `.neenee/config.toml` (MCP servers + hooks) and load them |
-| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks) |
+| `/trust` | Trust this project's `.neenee/` contributions (MCP servers, hooks, project skills, project commands) and load them |
+| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks, skills, and commands) |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
@@ -198,11 +198,20 @@ Unknown role names are rejected with the list of valid roles.
 
 | Form | Effect |
 |------|--------|
-| `/btw` | Open a side conversation that runs alongside the main session |
+| `/btw` | Open a **new** aside view — nothing is sent yet |
+| `/btw <text>` | Open a new aside and immediately send `<text>` as its first turn |
+| `/btw list` | Open the asides list modal (same as `F5`) |
 
-Opens a lightweight side conversation for asking quick questions without
-disturbing the main session context
-([ADR-0017](../adr/0017-side-conversations.md)).
+Opens a turn-level aside conversation forked from the current context
+(keeping the complete prior context — especially the previous full turn)
+that runs alongside the main session. Leaving the aside view (`Ctrl+C`)
+**detaches without interrupting**: the aside keeps running in the
+background, stays in the asides list (`F5`), and can be re-entered with its
+full transcript at any time. `Esc` interrupts the viewed aside's round
+without closing it. An aside opened but never used is discarded on detach —
+it never appears in the list or `/sessions`
+([ADR-0103](../adr/0103-btw-background-asides.md), which extends
+[ADR-0017](../adr/0017-side-conversations.md)).
 
 ### `/review`
 
@@ -256,12 +265,24 @@ Re-loads configuration without restarting: MCP servers, permissions,
 
 | Form | Effect |
 |------|--------|
-| `/trust` | Trust this project's `.neenee/config.toml` (MCP servers + hooks) and load them |
-| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks) |
+| `/trust` | Trust this project's `.neenee/` contributions (MCP servers, hooks, project skills, project slash commands) and load them |
+| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks, skills, and commands) |
 
-A project's `.neenee/config.toml` is only loaded after you trust the project;
-`/trust` grants that once, and `/untrust` revokes it. The trust posture is
-defined in [ADR-0085](../adr/0085-config-time-tool-scoping.md).
+Project trust (ADR-0085 §5, extended by ADR-0107) gates every
+project-supplied capability. While a project is untrusted, its
+`.neenee/config.toml` `[mcp.*]` servers and `[[hooks]]`, its project skills
+(`.neenee/skills`, `.agents/skills`, `.claude/skills`), and its project
+slash commands (`.neenee/commands/`) are not loaded at all — the trust store
+is consulted at scan time, so every path (startup, the periodic skills
+refresh, `/skills reload`) is gated identically. `/trust` applies
+immediately: project skills rescan in, and project slash commands become
+runnable through a trust-checked dispatcher fallback. When a trusted
+project's skill or command reuses the name of a user-scope entry, the
+project entry wins by priority and the harness emits a one-time warning
+notice naming the winner, so silent overrides are impossible. Untrusted
+projects get a startup notice listing exactly what stayed disabled until
+`/trust`. The trust root is git-aware: one grant covers the repo's
+subdirectories and linked worktrees.
 
 ### `/export`
 

@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 /// trait (its `Vec<ImagePart>` base64 payloads make structural equality
 /// expensive and uninteresting). Compare via [`ToolOutput::to_text`] or by
 /// pattern-matching on the variant in tests.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ToolOutput {
     /// Plain text or markdown prose. The back-compat variant produced by the
     /// default [`Tool::call_structured`](crate::Tool::call_structured) for any
@@ -159,7 +160,8 @@ pub enum ToolOutput {
 }
 
 /// Kind of file change in a [`ToolOutput::Patch`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum PatchOp {
     /// A new file was created (`old` is empty).
     Create,
@@ -215,7 +217,8 @@ pub enum StdinPolicy {
 /// A healthy `Exited` run is silent; every other variant renders a coloured
 /// marker. Back-compat: restored sessions without this field deserialize as
 /// [`ShellTermination::Exited`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ShellTermination {
     /// The child exited on its own (with whatever `exit` code). The normal
     /// case; the footer reads only `exit N` when non-zero.
@@ -243,7 +246,8 @@ pub enum ShellTermination {
 /// stderr distinctly while still emitting lines in their true arrival order
 /// (interleaved), instead of the all-stdout-then-all-stderr split that lost
 /// timing for tools like `cargo`/`git`/`npm`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ShellStream {
     /// Standard output.
     Out,
@@ -256,7 +260,8 @@ pub enum ShellStream {
 /// only picks the colour), which preserves stdout/stderr interleaving. The
 /// model-facing text path (`to_text`) keeps using the flat `stdout`/`stderr`
 /// fields, so the two audiences stay decoupled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ShellLine {
     pub stream: ShellStream,
     pub text: String,
@@ -619,7 +624,10 @@ impl From<String> for ToolOutput {
 /// [`ToolOutput`] lands. Lets the UI render partial output (e.g. a bash
 /// command's stdout as it arrives) instead of freezing on a spinner until the
 /// process exits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+// The web panel has always called this `ToolStreamFrame` (`ToolStream` is the
+// event variant that carries it); keep the established TS name.
+#[ts(rename = "ToolStreamFrame", export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ToolStream {
     /// Bytes appended to the running stdout buffer.
     Stdout(String),

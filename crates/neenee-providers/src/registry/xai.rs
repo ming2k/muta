@@ -17,7 +17,6 @@ pub const MODELS: &[Model] = &[
     // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
     Model {
         id: "grok-4.5",
-        name: "Grok 4.5",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -29,7 +28,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "grok-4.20",
-        name: "Grok 4.20",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -41,7 +39,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "grok-4.3",
-        name: "Grok 4.3",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -53,7 +50,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "grok-build-0.1",
-        name: "Grok Build 0.1",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,

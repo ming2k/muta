@@ -3,9 +3,17 @@
   --bg-sidebar: #131720;
   --bg-surface: #181d28;
   --bg-surface-hover: #1f2533;
-  --bg-input: #151a24;
+  /* Input-component background pair: two related but independent tokens
+     (not derived from / shared with any other surface) so the input's
+     active vs. inactive states are always distinguishable from each other
+     and from the page background. Inactive sits just above the app
+     background; active clears --bg-surface-hover so the focused prompt is
+     the brightest input state. */
+  --input-bg-inactive: #161a23;
+  --input-bg-active: #1e2433;
   --border-subtle: #232a3b;
   --border-strong: #323b50;
+  --border-input-focus: #3d4a66;
   
   --text-primary: #e6edf3;
   --text-secondary: #8b949e;

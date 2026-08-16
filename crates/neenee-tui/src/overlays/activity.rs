@@ -154,7 +154,7 @@ pub fn draw_activity_modal(
                 }
                 if !current_model.is_empty() {
                     detail.push_str(crate::design::JOIN_MODIFY);
-                    detail.push_str(&crate::providers::model_display_name(current_model));
+                    detail.push_str(current_model);
                 }
                 if let Some(started) = round_started_at {
                     detail.push_str(crate::design::JOIN_MODIFY);

@@ -141,7 +141,7 @@ ADR-0018 invariant, indexed `project → session`. The ADR-0037 Step 6 factory
 pays the assembly cost once per session, not once per process. The
 per-project, one-server-per-session model of ADR-0081 is superseded.
 
-### Application & Frontend layer — `neenee-cli` & `neenee-tui`
+### Application & Frontend layer — `neenee-cli`, `neenee-tui` & `apps/web`
 
 The user-facing presentation layers:
 
@@ -153,8 +153,11 @@ The user-facing presentation layers:
 2. **`neenee-tui`** — the terminal user interface library built on `neenee-tui-engine`.
    It acts as a pure remote client attaching to daemon-hosted sessions via WebSocket channels,
    rendering dialogue messages, interactive modals, and the live status monitor.
-3. **`web/`** — the lightweight web frontend connecting directly to the session daemon's
-   WebSocket listener, enabling browser-based fleet monitoring and agent chat.
+3. **`apps/web/`** — the lightweight web frontend connecting directly to the session daemon's
+   WebSocket listener, enabling browser-based fleet monitoring and agent chat. A pnpm
+   workspace package (`pnpm-workspace.yaml`), not a Rust crate: Svelte 5 + TypeScript +
+   Vite, with its wire types transcribed from `neenee-contracts` in `apps/web/src/lib/types.ts`.
+   Its lockfile is the root `pnpm-lock.yaml`.
 
 ## How a request flows across the layers
 

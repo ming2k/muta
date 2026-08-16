@@ -59,7 +59,6 @@ mod test_baselines {
     const CLAUDE_BASELINES: &[Model] = &[
         Model {
             id: "claude-opus-4-8",
-            name: "Claude Opus 4.8",
             family: "claude",
             context_window: 1_000_000,
             thinking: ThinkingSupport::AnthropicAdaptive,
@@ -71,7 +70,6 @@ mod test_baselines {
         },
         Model {
             id: "claude-sonnet-4-6",
-            name: "Claude Sonnet 4.6",
             family: "claude",
             context_window: 1_000_000,
             thinking: ThinkingSupport::AnthropicAdaptive,
@@ -83,7 +81,6 @@ mod test_baselines {
         },
         Model {
             id: "claude-haiku-4-5-20251001",
-            name: "Claude Haiku 4.5",
             family: "claude",
             context_window: 200_000,
             thinking: ThinkingSupport::AnthropicManual,
@@ -98,7 +95,6 @@ mod test_baselines {
     const OPENAI_BASELINES: &[Model] = &[
         Model {
             id: "gpt-5.5",
-            name: "GPT-5.5",
             family: "gpt",
             context_window: 1_000_000,
             thinking: ThinkingSupport::ReasoningSummary,
@@ -110,7 +106,6 @@ mod test_baselines {
         },
         Model {
             id: "gpt-5.6-sol",
-            name: "GPT-5.6 Sol",
             family: "gpt",
             context_window: 1_000_000,
             thinking: ThinkingSupport::ReasoningSummary,

@@ -38,7 +38,13 @@ pub async fn run(
             if !client::versions_compatible(&info) {
                 return Err(client::version_mismatch(&info).into());
             }
-            client::control(&info, ControlRequest::KillSession { session_id: id.clone() }).await?;
+            client::control(
+                &info,
+                ControlRequest::KillSession {
+                    session_id: id.clone(),
+                },
+            )
+            .await?;
             println!("Session '{}' has been terminated.", id);
         }
         SessionAction::Dashboard => {

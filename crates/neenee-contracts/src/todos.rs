@@ -29,13 +29,15 @@ pub const MAX_TODOS: usize = 50;
 /// Stable, monotonic identifier for a single todo item. Opaque to callers —
 /// display and references use position/content, not this value. Serialized
 /// transparently so persisted lists stay compact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[serde(transparent)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TodoId(pub u64);
 
 /// Lifecycle of a single todo item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum TodoStatus {
     Pending,
     InProgress,
@@ -90,7 +92,8 @@ impl TodoStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TodoItem {
     pub id: TodoId,
     pub content: String,
@@ -110,7 +113,8 @@ pub struct TodoItem {
 /// [`TodoItem::id`]. Invariants (unique ids, ≤ [`MAX_TODOS`] items, ≤ one
 /// `InProgress`) are enforced by the constructors and mutators, never by
 /// callers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TodoList {
     #[serde(default)]
     pub items: Vec<TodoItem>,

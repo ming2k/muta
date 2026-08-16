@@ -257,6 +257,30 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Sandbox the process-wide paths so `add`/`remove`/`trust`/`untrust` —
+    /// which persist through `paths::get()` — write into a throwaway tempdir
+    /// instead of the developer's real `$XDG_STATE_HOME` (regression: these
+    /// tests once replaced the real `trusted_projects.json` with an empty
+    /// set, silently revoking every project trust grant). Uses the
+    /// crate-sanctioned `set_test_default` + `TEST_OVERRIDE_GUARD` pattern
+    /// (see `config::tests::sandbox_config_dir`) so concurrent override
+    /// users stay serialised.
+    fn sandbox_paths() -> (std::path::PathBuf, std::sync::MutexGuard<'static, ()>) {
+        let override_guard = paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("neenee-trust-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        paths::set_test_default(Some(paths::Dirs {
+            config_dir: tmp.clone(),
+            data_dir: tmp.join("data"),
+            state_dir: tmp.join("state"),
+            cache_dir: tmp.join("cache"),
+            runtime_dir: None,
+        }));
+        (tmp, override_guard)
+    }
+
     fn scratch_file() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("neenee-trust-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -265,9 +289,10 @@ mod tests {
 
     #[test]
     fn add_and_remove_track_membership_in_memory() {
+        let _sandbox = sandbox_paths();
         // add/remove mutate the in-memory set; their persistence goes to the
-        // well-known path (exercised via TrustGate in integration). Here we
-        // verify the membership semantics + idempotency.
+        // (sandboxed) well-known path. Here we verify the membership
+        // semantics + idempotency.
         let project = std::env::temp_dir().join(format!("proj-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&project).unwrap();
 
@@ -297,6 +322,7 @@ mod tests {
 
     #[test]
     fn trust_gate_threadsafe_handle() {
+        let _sandbox = sandbox_paths();
         let project = std::env::temp_dir().join(format!("proj-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&project).unwrap();
 
@@ -372,6 +398,7 @@ mod tests {
 
     #[test]
     fn trust_gate_grant_at_repo_root_covers_subdirectory() {
+        let _sandbox = sandbox_paths();
         // Git-awareness lives in TrustGate: trusting the repo root means an
         // is_trusted query from a subdirectory returns true.
         let root = git_repo(&["pkg/inner"]);

@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 /// session-key cache) and surface the hit as a single read count — their
 /// `cache_creation_input_tokens` stays zero. The shared parser lives in
 /// [`crate::cache`]; see [`crate::CachePolicy`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TokenUsage {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,

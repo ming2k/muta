@@ -38,7 +38,6 @@ pub const MODELS: &[Model] = &[
     // `google_base_url`.
     Model {
         id: "gemini-3.5-flash",
-        name: "Gemini 3.5 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -50,7 +49,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-3-pro-preview",
-        name: "Gemini 3 Pro Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -62,7 +60,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -74,7 +71,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -87,7 +83,6 @@ pub const MODELS: &[Model] = &[
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
         id: "gemini-3.1-pro-preview-customtools",
-        name: "Gemini 3.1 Pro Preview (Custom Tools)",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -99,7 +94,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-flash",
-        name: "Gemini 2.5 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -111,7 +105,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -123,7 +116,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-flash-lite",
-        name: "Gemini 2.5 Flash-Lite",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
@@ -135,7 +127,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-2.0-flash",
-        name: "Gemini 2.0 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,

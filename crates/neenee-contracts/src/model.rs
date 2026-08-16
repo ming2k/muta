@@ -49,10 +49,10 @@ pub enum RemoteModelEndpoint {
 /// [`ModelCapabilities::for_channel`] for request-time behavior.
 #[derive(Debug, Clone, Copy)]
 pub struct Model {
-    /// Wire model id sent in API requests, e.g. `"glm-5.2"`.
+    /// Wire model id sent in API requests, e.g. `"glm-5.2"`. This is also the
+    /// only label the UI ever renders for a model — id-first by policy, so
+    /// every surface shows the same string the user must type/see on the wire.
     pub id: &'static str,
-    /// Human-readable display name, e.g. `"GLM-5.2"`.
-    pub name: &'static str,
     /// Model family for grouping, e.g. `"glm"`, `"gpt"`, `"google"`.
     pub family: &'static str,
     /// Context window in tokens. `0` means unknown.
@@ -111,9 +111,6 @@ pub struct RemoteModelMetadata {
     /// the channel's configured transport remains authoritative.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<RemoteModelEndpoint>,
-    /// Provider-supplied picker/display label.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
     /// Provider's model-family label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
@@ -149,7 +146,6 @@ pub struct RemoteModelMetadata {
 /// provider's behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelCapabilities {
-    pub display_name: String,
     pub family: String,
     pub context_window: usize,
     pub max_output_tokens: Option<u32>,
@@ -170,13 +166,6 @@ impl ModelCapabilities {
         let baseline = resolve(model_id);
         let remote = remote.cloned().unwrap_or_default();
         Self {
-            display_name: remote.display_name.unwrap_or_else(|| {
-                if baseline.name.is_empty() {
-                    model_id.to_string()
-                } else {
-                    baseline.name.to_string()
-                }
-            }),
             family: remote.family.unwrap_or_else(|| {
                 if baseline.family.is_empty() {
                     model_id.to_string()
@@ -213,7 +202,6 @@ mod capability_tests {
     #[test]
     fn remote_metadata_overrides_only_the_fields_it_declares() {
         let remote = RemoteModelMetadata {
-            display_name: Some("Copilot GPT-4o".to_string()),
             context_window: Some(64_000),
             vision: Some(false),
             tool_call: Some(false),
@@ -222,7 +210,6 @@ mod capability_tests {
 
         let effective = ModelCapabilities::for_channel("gpt-4o", Some(&remote));
 
-        assert_eq!(effective.display_name, "Copilot GPT-4o");
         assert_eq!(effective.context_window, 64_000);
         assert!(!effective.vision);
         assert!(!effective.tool_call);
@@ -289,7 +276,6 @@ pub fn model_by_id(id: &str) -> Option<&'static Model> {
 pub fn fallback_model(_id: &str) -> Model {
     Model {
         id: "",
-        name: "",
         family: "",
         context_window: 0,
         thinking: ThinkingSupport::None,
@@ -351,8 +337,6 @@ pub fn resolve(id: &str) -> Model {
 pub struct FittedModel {
     /// Wire model id as advertised by the provider.
     pub id: String,
-    /// Provider-supplied display name; falls back to the id when absent.
-    pub display_name: Option<String>,
     /// Grouping family (the feeding template's id, e.g. `"kimi-code"`).
     pub family: String,
     /// Advertised context window in tokens; `0` means the endpoint did not
@@ -418,17 +402,10 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
             continue;
         }
         let id: &'static str = Box::leak(fitted.id.into_boxed_str());
-        let name: &'static str = Box::leak(
-            fitted
-                .display_name
-                .unwrap_or_else(|| id.to_string())
-                .into_boxed_str(),
-        );
         overlay.insert(
             id,
             Model {
                 id,
-                name,
                 family: Box::leak(fitted.family.into_boxed_str()),
                 context_window: fitted.context_window,
                 thinking: if fitted.reasoning {
@@ -460,7 +437,6 @@ mod tests {
     const FIXTURE_A: &[Model] = &[
         Model {
             id: "fixture-alpha",
-            name: "Fixture Alpha",
             family: "fixture",
             context_window: 111_000,
             thinking: ThinkingSupport::ReasoningContent,
@@ -472,7 +448,6 @@ mod tests {
         },
         Model {
             id: "fixture-beta",
-            name: "Fixture Beta",
             family: "fixture",
             context_window: 222_000,
             thinking: ThinkingSupport::None,
@@ -485,7 +460,6 @@ mod tests {
     ];
     const FIXTURE_B: &[Model] = &[Model {
         id: "fixture-gamma",
-        name: "Fixture Gamma",
         family: "fixture",
         context_window: 333_000,
         thinking: ThinkingSupport::None,
@@ -502,7 +476,6 @@ mod tests {
     #[test]
     fn registered_baselines_resolve_by_id() {
         let m = resolve("fixture-alpha");
-        assert_eq!(m.name, "Fixture Alpha");
         assert_eq!(m.context_window, 111_000);
         assert!(m.reasoning());
         assert!(m.vision);
@@ -519,7 +492,6 @@ mod tests {
         );
 
         let g = resolve("fixture-gamma");
-        assert_eq!(g.name, "Fixture Gamma");
         assert_eq!(g.format, WireFormat::Google);
         assert!(!g.tool_call);
     }
@@ -555,7 +527,6 @@ mod tests {
     fn fitted_overlay_supplies_metadata_for_unregistered_ids() {
         register_fitted_models(vec![FittedModel {
             id: "fitted-future-k9".to_string(),
-            display_name: Some("Future K9".to_string()),
             family: "kimi-code".to_string(),
             context_window: 2_000_000,
             reasoning: true,
@@ -570,7 +541,6 @@ mod tests {
         }]);
         let m = resolve("fitted-future-k9");
         assert_eq!(m.id, "fitted-future-k9");
-        assert_eq!(m.name, "Future K9");
         assert_eq!(m.context_window, 2_000_000);
         assert!(m.reasoning());
         assert!(m.vision);
@@ -584,7 +554,6 @@ mod tests {
     fn fitted_overlay_never_overrides_a_registered_baseline() {
         register_fitted_models(vec![FittedModel {
             id: "fixture-alpha".to_string(),
-            display_name: Some("bogus".to_string()),
             family: "bogus".to_string(),
             context_window: 1,
             reasoning: false,
@@ -597,7 +566,6 @@ mod tests {
         // provider's advertised tiers refresh the baseline's ladder while
         // identity, context, format, and vision stay vetted.
         let m = resolve("fixture-alpha");
-        assert_eq!(m.name, "Fixture Alpha");
         assert_eq!(m.context_window, 111_000);
         assert_eq!(m.format, WireFormat::OpenAi);
         assert!(m.vision);
@@ -611,7 +579,6 @@ mod tests {
         // "the endpoint did not say", not "the model lost its knob".
         register_fitted_models(vec![FittedModel {
             id: "fixture-beta".to_string(),
-            display_name: None,
             family: "fixture".to_string(),
             context_window: 0,
             reasoning: false,
@@ -623,7 +590,6 @@ mod tests {
         // the gamma fixture's *sibling* instead: gamma has no fitted entry at
         // all and must be untouched by beta's registration.
         let g = resolve("fixture-gamma");
-        assert_eq!(g.name, "Fixture Gamma");
         assert_eq!(g.context_window, 333_000);
     }
 

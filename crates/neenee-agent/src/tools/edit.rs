@@ -2,10 +2,19 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 
-use crate::tools::helpers::{json_string, save_file_atomic};
+use crate::tools::helpers::{
+    WorkspaceBase, json_string, resolve_workspace_path, save_file_atomic, workspace_base,
+};
 
 /// Apply an edit to a file (safer than write_file — requires old_string match).
-pub struct EditFileTool;
+///
+/// Relative paths resolve against the session's workspace root (captured at
+/// factory time), not the daemon process's cwd — under the unified daemon
+/// (ADR-0096) those differ whenever the daemon was first spawned from another
+/// project, and an edit is exactly where that divergence does damage.
+pub struct EditFileTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 /// Number of unchanged context lines to include above and below the edit in the
 /// diff display (GitHub-style: 3 lines of surrounding context).
@@ -187,8 +196,12 @@ impl Tool for EditFileTool {
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
         let old_str = args["old_string"].as_str().ok_or("Missing 'old_string'")?;
         let new_str = args["new_string"].as_str().ok_or("Missing 'new_string'")?;
+        // Filesystem access goes through the workspace-resolved path; the
+        // model-facing `path` text (errors, diff framing) stays what the
+        // model sent.
+        let resolved = resolve_workspace_path(&self.root, path);
 
-        let content = std::fs::read_to_string(path)
+        let content = std::fs::read_to_string(&resolved)
             .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
         // Exact match first; fall back to a CRLF-normalized comparison so an
@@ -214,7 +227,7 @@ impl Tool for EditFileTool {
 
         // Atomically commit the new content (temp file + fsync + rename) so an
         // interrupted edit never corrupts the file in place.
-        save_file_atomic(std::path::Path::new(path), edit.new_content.as_bytes())
+        save_file_atomic(&resolved, edit.new_content.as_bytes())
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
         Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
@@ -225,7 +238,9 @@ impl Tool for EditFileTool {
         })
     }
 }
-neenee_contracts::register_tool!(EditFileFactory => EditFileTool);
+neenee_contracts::register_tool!(EditFileFactory => |ctx| EditFileTool {
+    root: workspace_base(ctx),
+});
 
 #[cfg(test)]
 mod tests {

@@ -120,9 +120,20 @@ pub struct Theme {
     pub text_hover: Color,
     /// Solid background for panels (modals, sheets).
     pub panel_bg: Color,
-    /// Background for the live input box; brighter than `user_panel_bg` so the
-    /// active prompt stands out from already-sent messages.
-    pub input_bg: Color,
+    /// Background for the live input box while it owns the keyboard — the
+    /// brightest interactive surface, so "I am typing here" reads from
+    /// luminance alone. Input-specific pair token 1 of 2: the input box owns
+    /// both values outright (they are deliberately *not* derived from or
+    /// shared with the user-message panel tokens), so retuning the input
+    /// never ripples into other surfaces and vice versa.
+    pub input_bg_active: Color,
+    /// Background for the input box while it does **not** own the keyboard
+    /// (a transcript step is focused) — a recessed, inert band between
+    /// `app_bg` and `panel_bg`. Input-specific pair token 2 of 2; see
+    /// [`Theme::input_bg_active`]. The active↔inactive step is large enough
+    /// that each state is distinguishable both from the app background and
+    /// from the other state.
+    pub input_bg_inactive: Color,
     /// Used for sent user messages so they read as read-only compared to the
     /// live input box.
     pub user_panel_bg: Color,
@@ -185,7 +196,16 @@ impl Default for Theme {
             text_muted: Color::Rgb(119, 125, 117),
             text_hover: Color::Rgb(175, 180, 172),
             panel_bg: Color::Rgb(14, 15, 15),
-            input_bg: Color::Rgb(18, 19, 19),
+            // The input pair is tuned as a unit, independently of the other
+            // surface tokens: the inactive band sits just above `panel_bg`
+            // (readable but recessed), and the active band jumps another
+            // visible step above `element_bg` so the focused prompt is the
+            // single brightest interactive surface in the frame. A ±1-step
+            // tweak (the old `input_bg` (18,19,19)) was indistinguishable
+            // both from the app background and from the borrowed
+            // `user_panel_bg`, which is what motivated the dedicated pair.
+            input_bg_active: Color::Rgb(26, 28, 27),
+            input_bg_inactive: Color::Rgb(16, 17, 17),
             user_panel_bg: Color::Rgb(17, 22, 19),
             user_panel_bg_queued: Color::Rgb(9, 12, 11),
             element_bg: Color::Rgb(21, 23, 22),
@@ -396,7 +416,14 @@ impl Theme {
             text_muted: muted,
             text_hover: mix(muted, text, 0.55),
             panel_bg: surface,
-            input_bg: mix(surface, text, if light { 0.03 } else { 0.04 }),
+            // The input pair derives from `panel_bg`, keeping the two states
+            // related (same hue family, two distinct luminance steps) while
+            // staying input-owned: inactive sits at the panel's own level of
+            // elevation, active is lifted well clear of every other surface
+            // token so the focused box cannot be confused with the ambient
+            // chrome (element_bg sits at ~5% toward text; active goes to 8%).
+            input_bg_active: mix(surface, text, if light { 0.06 } else { 0.08 }),
+            input_bg_inactive: mix(surface, text, if light { 0.015 } else { 0.02 }),
             user_panel_bg: user_bg,
             user_panel_bg_queued: mix(background, user_bg, 0.45),
             element_bg: mix(surface, text, if light { 0.035 } else { 0.05 }),
@@ -431,9 +458,14 @@ impl Theme {
     pub fn panel(&self) -> Color {
         self.panel_bg
     }
-    /// Live input-box surface.
+    /// Live input-box surface while the box owns the keyboard.
     pub fn input_surface(&self) -> Color {
-        self.input_bg
+        self.input_bg_active
+    }
+    /// Live input-box surface while a transcript step owns the keyboard and
+    /// the box is inert.
+    pub fn input_surface_inactive(&self) -> Color {
+        self.input_bg_inactive
     }
     /// Sent-user-message surface.
     pub fn user_surface(&self) -> Color {
@@ -618,6 +650,48 @@ mod tests {
     fn every_preset_has_a_distinct_canonical_index() {
         for (index, scheme) in COLOR_SCHEMES.iter().enumerate() {
             assert_eq!(Theme::color_scheme_index(scheme.id), index);
+        }
+    }
+
+    /// The input box owns two dedicated background tokens (independent of the
+    /// other surface tokens) and the active/inactive pair must stay
+    /// distinguishable in *every* scheme: each state must clear the app
+    /// background by a visible margin, and the two states must clear each
+    /// other by a visible margin. This is the regression guard for the
+    /// "activated and deactivated input look identical to the background"
+    /// defect that motivated the pair.
+    #[test]
+    fn input_surfaces_stay_distinguishable_in_every_scheme() {
+        const MIN_STEP: f32 = 4.0;
+        let custom = ColorSchemeConfig::default();
+        for scheme in COLOR_SCHEMES {
+            let theme = Theme::from_color_scheme(scheme.id, &custom);
+            let active = theme.input_surface();
+            let inactive = theme.input_surface_inactive();
+            let base = theme.surface();
+
+            // Light schemes mix toward a dark text (surfaces get *darker* as
+            // they elevate), so the margin is measured as an absolute delta.
+            let step_from_app_active = (luminance(active) - luminance(base)).abs();
+            let step_from_app_inactive = (luminance(inactive) - luminance(base)).abs();
+            let step_between_states = (luminance(active) - luminance(inactive)).abs();
+
+            assert!(
+                step_from_app_active >= MIN_STEP,
+                "{scheme:?}: active input only {step_from_app_active:.1} above app_bg"
+            );
+            assert!(
+                step_from_app_inactive >= MIN_STEP,
+                "{scheme:?}: inactive input only {step_from_app_inactive:.1} above app_bg"
+            );
+            assert!(
+                step_between_states >= MIN_STEP,
+                "{scheme:?}: active/inactive input only {step_between_states:.1} apart"
+            );
+            assert_ne!(
+                active, inactive,
+                "{scheme:?}: active and inactive input must be distinct colors"
+            );
         }
     }
 }

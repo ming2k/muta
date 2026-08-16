@@ -16,8 +16,11 @@ use serde::{Deserialize, Serialize};
 /// Serde is transparent: the value (de)serializes exactly like a plain
 /// `String`, so on-disk shapes (`config.toml`, `credentials.toml`,
 /// `auth.toml`) are unchanged and existing files need no migration.
-#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[serde(transparent)]
+// ts-rs cannot see through the redacting wrapper's custom Debug/Display, but
+// the serde shape is exactly a plain JSON string — pin that explicitly.
+#[ts(type = "string", export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct SecretString(String);
 
 impl SecretString {

@@ -490,6 +490,13 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             app.queue_scroll = app.queue_scroll.saturating_sub(1);
             app.queue_modal_follow = false;
         }
+        Modal::Btw => {
+            // Asides list (ADR-0103 §5): wheel/PageUp scrolls the
+            // body; ↑/↓ navigation is handled by the shared
+            // SessionSelect path.
+            app.btw_scroll = app.btw_scroll.saturating_sub(1);
+            app.btw_modal_follow = false;
+        }
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
@@ -583,6 +590,13 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             // navigate with ↑/↓ again.
             app.queue_scroll = app.queue_scroll.saturating_add(1);
             app.queue_modal_follow = false;
+        }
+        Modal::Btw => {
+            // Asides list (ADR-0103 §5): wheel/PageDown scrolls the
+            // body; ↑/↓ navigation is handled by the shared
+            // SessionSelect path.
+            app.btw_scroll = app.btw_scroll.saturating_add(1);
+            app.btw_modal_follow = false;
         }
         Modal::Help
         | Modal::Question

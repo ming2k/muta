@@ -657,7 +657,6 @@ mod tests {
     fn test_model() -> Model {
         Model {
             id: "test",
-            name: "Test",
             family: "test",
             context_window: 100_000,
             thinking: crate::thinking::ThinkingSupport::None,

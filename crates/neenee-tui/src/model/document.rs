@@ -6,6 +6,9 @@
 
 use neenee_contracts::{EnvoyEvent, Role};
 
+use crate::design::JOIN_MODIFY;
+use unicode_width::UnicodeWidthStr;
+
 /// Lifecycle of a tool step, stored explicitly (not inferred from `output`)
 /// so an aborted call has its own terminal state instead of being stuck in
 /// "no output yet". This is the single source of truth for tool-step state —
@@ -143,6 +146,53 @@ pub enum MessageKind {
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
+}
+
+/// How a command row presents its result — derived at render time from the
+/// result's shape, not stored. Commands are operations, not conversation:
+/// most replies are one short line that should simply *be* the row, with no
+/// disclosure marker at all. Only a genuinely long reply earns the `+`/`-`
+/// affordance. See ADR-0106.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandRowLayout {
+    /// No result at all (shell passthroughs, legacy folds) — the row is just
+    /// the invocation, dimmed. Nothing to expand.
+    Plain,
+    /// A single-line, short reply (acks, `/new`'s confirmation, `/schedule`):
+    /// rendered inline on the same row as `invocation · reply`. No marker —
+    /// there is no second view to disclose.
+    Inline,
+    /// A multi-line or long reply (`/search`, `/session status`, `/review`,
+    /// …): the disclosure pattern is correct — a `+`/`-` header row that
+    /// expands to the body.
+    Disclose,
+}
+
+/// The single classifier for [`CommandRowLayout`]: a reply joins inline when
+/// it is exactly one line and fits beside the invocation; otherwise it
+/// discloses. `available_width` is the row's usable columns (the terminal
+/// band minus gutters), not the full terminal width.
+pub fn command_row_layout(
+    result: Option<&neenee_contracts::CommandResult>,
+    invocation: &str,
+    available_width: usize,
+) -> CommandRowLayout {
+    let Some(result) = result else {
+        return CommandRowLayout::Plain;
+    };
+    let text = result.to_text();
+    if text.contains('\n') {
+        return CommandRowLayout::Disclose;
+    }
+    // The inline join is `invocation` + JOIN_MODIFY (` · `) + reply; the row
+    // must hold both without truncation for the reply to read as an
+    // attribute, not a fragment.
+    let used = invocation.width() + JOIN_MODIFY.width() + text.width();
+    if used <= available_width {
+        CommandRowLayout::Inline
+    } else {
+        CommandRowLayout::Disclose
+    }
 }
 
 /// Severity of a [`MessageKind::Notice`]. Drives the color and the leading
@@ -954,6 +1004,21 @@ impl TranscriptMessage {
     pub fn command_result_expanded(&self) -> Option<bool> {
         match &self.kind {
             MessageKind::CommandResult { expanded, .. } => Some(*expanded),
+            _ => None,
+        }
+    }
+
+    /// The render layout for this command row (ADR-0106): `Plain` when there
+    /// is no result, `Inline` when a single-line reply fits beside the
+    /// invocation, `Disclose` otherwise. `available_width` is the row's usable
+    /// columns.
+    pub fn command_row_layout(&self, available_width: usize) -> Option<CommandRowLayout> {
+        match &self.kind {
+            MessageKind::CommandResult { result, .. } => Some(command_row_layout(
+                result.as_deref(),
+                &self.raw,
+                available_width,
+            )),
             _ => None,
         }
     }

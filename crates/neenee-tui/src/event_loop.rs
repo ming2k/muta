@@ -220,6 +220,33 @@ pub(super) struct UiRuntime {
     /// [`App::enter_side_view`]), `Closed` on [`neenee_contracts::AgentResponse::SideViewClosed`]
     /// ([`App::exit_side_view`]). Drained each frame.
     pub side_view_signal: Arc<Mutex<Option<SideViewSignal>>>,
+    /// `/btw` asides list (ADR-0103), written by the listener from
+    /// [`neenee_contracts::AgentResponse::BtwList`] and mirrored into
+    /// [`App::btw_list`] for the asides modal and the main header count.
+    pub btw_list: Arc<Mutex<Vec<neenee_contracts::BtwAsideSummary>>>,
+    /// One-shot request to open the asides modal (ADR-0103 §5): armed by F5 /
+    /// `/btw list`, consumed by the loop. Kept separate from the rows so a
+    /// refresh of the list (registry mutation) never re-pops the modal.
+    pub open_btw: Arc<AtomicBool>,
+    /// Which session the frontend is currently viewing (primary id, or the
+    /// focused aside's id), written by the loop's sync stage each frame and
+    /// read by the listener to scope on-demand query replies
+    /// (`TokenUsageReport`) so a reply that raced a view switch is dropped.
+    pub viewed_session_id: Arc<Mutex<Option<String>>>,
+    /// The **live primary session id**, updated by the response listener on
+    /// every session switch (`ConversationCleared` for `/new`,
+    /// `ConversationReplaced` for `/session open`, `/resume`, `/fork`).
+    ///
+    /// Distinct from [`Self::viewed_session_id`], which the *loop* writes for
+    /// the listener: this one flows the other way, because the handshake-time
+    /// [`crate::SessionSource`] is frozen for the process lifetime and goes
+    /// stale the moment the harness repoints the shared store. Everything
+    /// session-scoped that must follow a mid-run switch reads this instead —
+    /// most importantly the origin tag the inline ↑/↓ prompt recall filters
+    /// `input_history` by (ADR-0018 origin tracking), which would otherwise
+    /// keep stamping (and recalling) the retired session's id after `/new` or
+    /// `/session open`.
+    pub live_session_id: Arc<Mutex<String>>,
     pub key_status: Arc<Mutex<HashMap<String, bool>>>,
     /// Model-picker snapshot shared with the response listener.
     pub provider_picker: Arc<Mutex<ProviderPickerSnapshot>>,
@@ -946,6 +973,20 @@ async fn sync_runtime_state(
             app.modal_keymap_open = false;
         }
     }
+    // `/btw` asides modal (ADR-0103 §5): F5 / `/btw list` arms `open_btw`;
+    // the loop consumes it once rows have arrived (the F5 handler also sends
+    // `QueryBtwList`, so a stale-armed flag simply opens with the last known
+    // rows — the harness refresh lands in place without re-popping).
+    if runtime.open_btw.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
+        let opening = app.active_modal != Modal::Btw;
+        app.active_modal = Modal::Btw;
+        if opening {
+            app.modal_index = 0;
+            app.btw_scroll = 0;
+            app.btw_modal_follow = true;
+            app.modal_keymap_open = false;
+        }
+    }
     // Mirror the on-demand session detail (info sub-view) when the
     // listener has a fresh one. Replacing `None` with `None` is a
     // no-op, so this is cheap when the sub-view is closed.
@@ -1051,6 +1092,24 @@ async fn tick_toast_timers(app: &mut App, runtime: &UiRuntime) {
     }
 }
 
+/// Extract the transcript suffix's user rows as `(text, is_chat_prompt,
+/// sent_at_ms)` triples for [`App::backfill_session_history`]. Assistant and
+/// tool rows are dropped here — only user rows can be prompts — and `is_chat`
+/// distinguishes genuine prompts from slash / shell / insert gestures.
+fn user_prompt_tail(messages: &[TranscriptMessage]) -> Vec<(String, bool, u64)> {
+    messages
+        .iter()
+        .filter(|m| m.role == neenee_contracts::Role::User)
+        .map(|m| {
+            (
+                m.raw.clone(),
+                m.origin == UserMessageOrigin::Chat,
+                m.sent_at_ms.unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
 /// Loop stage: mirror the versioned transcript buffers (primary + `/btw`
 /// side), drain the side-view transition signal, resolve the viewed session
 /// id, keep the origin stampers in sync with it, and mirror the per-session
@@ -1058,11 +1117,7 @@ async fn tick_toast_timers(app: &mut App, runtime: &UiRuntime) {
 /// changed (drives bottom-follow staging) and the viewed session id.
 /// Extracted verbatim from `run_app_loop`; all lock/read guards stay
 /// statement-level temporaries, as in the inline block.
-async fn sync_transcripts_and_session(
-    app: &mut App,
-    runtime: &UiRuntime,
-    session: &crate::SessionSource,
-) -> (bool, String) {
+async fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -> (bool, String) {
     // Pull messages from the shared buffer into app state for rendering,
     // but only when they actually changed. `Versioned` advances a counter
     // on every mutation, so an unchanged transcript — the common case while
@@ -1102,6 +1157,9 @@ async fn sync_transcripts_and_session(
         );
     }
     app.parent_status = *runtime.parent_status.lock().await;
+    // Mirror the `/btw` asides list (ADR-0103 §5) into the app each frame.
+    // Cheap: it is a small Vec replaced only when the registry changed.
+    app.btw_list = runtime.btw_list.lock().await.clone();
     // Drain a pending side-view transition (enter/leave `/btw`).
     let side_view_transitioned = match runtime.side_view_signal.lock().await.take() {
         Some(crate::event_loop::SideViewSignal::Opened { side_id, .. }) => {
@@ -1120,9 +1178,12 @@ async fn sync_transcripts_and_session(
         side_transcript_changed,
         side_view_transitioned,
     );
-    // The primary session id: the local store's when standalone, the
-    // handshake-learned id when attached to a server (SessionSource).
-    let primary_session_id = session.session_id().await;
+    // The primary session id: the **live** id from the listener's switch
+    // tracking, not the handshake-time `SessionSource` — that one is frozen
+    // for the process lifetime and goes stale the moment the harness repoints
+    // the shared store (`/new`, `/session open`, `/resume`, `/fork`), which
+    // would leave the history origin tag pointing at the retired session.
+    let primary_session_id = runtime.live_session_id.lock().await.clone();
     let viewed_session_id = if app.in_side_view {
         app.side_session_id
             .as_deref()
@@ -1135,8 +1196,43 @@ async fn sync_transcripts_and_session(
     // currently composing into: `record_input_history` tags each entry
     // with this id + workspace so the inline ↑/↓ recall can walk only
     // this session's prompts (while Ctrl+R searches the whole history).
+    // A switch also invalidates the navigation state — the cursor and the
+    // stashed draft belong to the composer *of* a session, so crossing the
+    // boundary must not carry them over.
     if app.current_session_id != viewed_session_id {
         app.current_session_id = viewed_session_id.clone();
+        app.on_viewed_session_changed();
+    }
+    // Derive the viewed conversation's prompt rows from its transcript, so
+    // `↑` reflects the conversation on screen — including prompts this
+    // client never recorded (a resumed session's earlier turns, typed in
+    // another client or before this `history.json` existed). Incremental
+    // and cheap: only the transcript tail past the backfill cursor is
+    // scanned, so a long streaming session pays for new rows only.
+    let backfill_from = app.session_history_backfill_cursor;
+    let viewed_len = if app.in_side_view {
+        app.side_messages.len()
+    } else {
+        app.messages.len()
+    };
+    if backfill_from < viewed_len {
+        // `App` is borrowed mutably by the backfill, so the tail is copied
+        // out first — only genuine user Chat prompts make the cut, keeping
+        // the copy at one small (text, origin, time) triple per prompt.
+        let tail: Vec<(String, bool, u64)> = if app.in_side_view {
+            user_prompt_tail(&app.side_messages[backfill_from..])
+        } else {
+            user_prompt_tail(&app.messages[backfill_from..])
+        };
+        app.session_history_backfill_cursor = viewed_len;
+        app.backfill_session_history(&tail, now_epoch_ms());
+    }
+    // Publish the viewed session to the listener (scopes on-demand query
+    // replies; see `UiRuntime::viewed_session_id`). Best-effort lock: a
+    // contended listener simply re-reads on its next event.
+    {
+        let mut cell = runtime.viewed_session_id.lock().await;
+        *cell = Some(viewed_session_id.clone());
     }
     let workspace = crate::chrome::tilde_home(&app.cwd);
     if app.current_workspace != workspace {
@@ -1438,7 +1534,7 @@ pub(super) async fn run_app_loop(
         tick_toast_timers(app, &runtime).await;
 
         let (displayed_transcript_changed, viewed_session_id) =
-            sync_transcripts_and_session(app, &runtime, &session).await;
+            sync_transcripts_and_session(app, &runtime).await;
 
         // Apply protocol acknowledgements before handling the next key. The
         // transcript listener has already committed admitted/started messages;
@@ -1468,6 +1564,12 @@ pub(super) async fn run_app_loop(
         {
             app.effort_ignition_epoch = None;
         }
+        // The empty-state help carousel (ADR-0104) needs a periodic redraw
+        // to advance its slides while the hero is on screen. Keyed off the
+        // *viewed* transcript so an empty background session doesn't keep
+        // the loop hot while the user works elsewhere.
+        let empty_state_showing =
+            app.focused_messages().is_empty() && app.focus_stack.is_empty() && !app.in_side_view;
         let animating = runtime.is_responding.load(Ordering::SeqCst)
             || app.round_started_at.is_some()
             || app.copy_toast_until.is_some()
@@ -1476,6 +1578,7 @@ pub(super) async fn run_app_loop(
             || app.esc_armed_ticks > 0
             || !app.pending_images.is_empty()
             || app.effort_ignition_epoch.is_some()
+            || empty_state_showing
             || copy_pending.load(Ordering::SeqCst) > 0;
         // `swap` consumes the listener's signal exactly once. Folded in: input
         // handled last iteration, background clipboard results this one, and one

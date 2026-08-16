@@ -29,13 +29,19 @@ info:
     reconnect starts from a fresh `Welcome`, a monitor reconnect from a fresh
     `snapshot`.
 
-    Authentication (ADR-0054): the default listeners are a Unix domain socket
-    (filesystem permissions as the boundary) plus a TCP loopback fallback, and
-    require no token. The `--public` flag (`neenee serve`; `--expose` on the
-    `neenee-server` binary) binds all interfaces and **requires** a bearer
-    token sent as `Authorization: Bearer <token>` on the handshake; a missing
-    or wrong token is rejected with HTTP 401 before any session data is
-    exchanged. There is no TLS or subprotocol negotiation yet.
+    Authentication (ADR-0054/0105): the Unix domain socket needs no token
+    (filesystem permissions are the boundary). The TCP listeners accept the
+    token either as `Authorization: Bearer <token>` (clients that can set
+    headers) or as a `Sec-WebSocket-Protocol: bearer.<token>` offer (the
+    browser channel, echoed on accept). `--public` requires a token always
+    (HTTP 401 otherwise); the loopback listener requires one by default via
+    `[daemon] local_auth` (the per-start token lives in the owner-only
+    discovery record; `--no-local-auth` opts out). Loopback handshakes that
+    carry a browser `Origin` are accepted only when the origin host is itself
+    loopback (WebSocket is not same-origin-protected). The TCP port also
+    serves plain HTTP: `GET /` the embedded web panel, `GET /healthz` an
+    unauthenticated `{version, auth, panel}` probe. There is no TLS; front a
+    public deployment with a TLS-terminating reverse proxy.
   license:
     name: MIT
     url: https://opensource.org/license/mit
@@ -55,12 +61,17 @@ servers:
     host: 127.0.0.1:{port}
     protocol: ws
     description: |
-      TCP loopback fallback; no authentication. A local co-process on the same
-      machine is trusted.
+      TCP loopback (ADR-0105). A bearer token is required by default
+      (`[daemon] local_auth`; per-start token in the owner-only discovery
+      record; `--no-local-auth` opts out): `Authorization: Bearer <token>` or
+      the `bearer.<token>` subprotocol. Browser `Origin` headers must be
+      loopback-hosted.
+    security:
+      - bearerAuth: []
     variables:
       port:
-        default: '0'
-        description: Actual bound port printed by the daemon after startup.
+        default: '9800'
+        description: Fixed default port; ephemeral fallback when taken.
   exposed:
     host: 0.0.0.0:{port}
     protocol: ws
@@ -387,6 +398,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Message'
+        provider:
+          type: string
+          description: >
+            Provider instance id the session is currently serving (its own pin
+            when set, else the config default at bind time). Empty when no
+            provider is configured.
+        model:
+          type: string
+          description: Wire model id the session is currently serving. Empty when no model resolves.
       additionalProperties: false
     PickEnvelope:
       type: object
@@ -407,6 +427,10 @@ components:
           const: Error
         message:
           type: string
+        code:
+          type: string
+          enum: [version_mismatch]
+          description: Stable machine-readable reason (ADR-0105); absent on older daemons.
       additionalProperties: false
     SessionOverview:
       type: object
@@ -479,6 +503,26 @@ components:
           type: [integer, "null"]
         note:
           type: [string, "null"]
+        project_root:
+          type: string
+          description: >
+            Absolute workspace path this session belongs to (ADR-0096). Empty
+            for producers that predate the field.
+        wip:
+          allOf:
+            - $ref: '#/components/schemas/WipStatus'
+          nullable: true
+      additionalProperties: false
+    WipStatus:
+      description: A session's declared work-in-progress (ADR-0097 §5).
+      type: object
+      required: [paths, summary]
+      properties:
+        paths:
+          type: array
+          items: { type: string }
+        summary:
+          type: string
       additionalProperties: false
     MonitorEnvelope:
       description: |
@@ -539,6 +583,7 @@ components:
         - $ref: '#/components/schemas/RequestToggleFavorite'
         - $ref: '#/components/schemas/RequestSetDefaultModel'
         - $ref: '#/components/schemas/RequestDeleteSession'
+        - $ref: '#/components/schemas/RequestRenameSession'
         - $ref: '#/components/schemas/RequestQuerySessionContext'
         - $ref: '#/components/schemas/RequestRevokePermission'
         - $ref: '#/components/schemas/RequestClearAllPermissions'
@@ -547,7 +592,6 @@ components:
         - $ref: '#/components/schemas/RequestReconnectMcpServer'
         - $ref: '#/components/schemas/RequestShellCommand'
         - $ref: '#/components/schemas/RequestExitSideView'
-        - $ref: '#/components/schemas/RequestUpdateDoomGuardConfig'
         - $ref: '#/components/schemas/RequestUpdateTuiLayout'
         - $ref: '#/components/schemas/RequestRefreshProviderModels'
     RequestChat:
@@ -765,6 +809,22 @@ components:
       required: [DeleteSession]
       properties: { DeleteSession: { $ref: '#/components/schemas/IdPayload' } }
       additionalProperties: false
+    RequestRenameSession:
+      type: object
+      required: [RenameSession]
+      properties:
+        RenameSession:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              description: Full session id or a 4+ character hex short-id prefix; resolves live and archived sessions exactly like DeleteSession.
+            title:
+              type: [string, 'null']
+              description: Manual title to set (ADR-0022 lock — AI generation never overwrites it). null clears the manual override, returning the row to the AI-title / first-prompt fallback.
+          additionalProperties: false
+      additionalProperties: false
     RequestQuerySessionContext:
       type: object
       required: [QuerySessionContext]
@@ -830,12 +890,6 @@ components:
       required: [ExitSideView]
       properties: { ExitSideView: { type: 'null' } }
       additionalProperties: false
-    RequestUpdateDoomGuardConfig:
-      type: object
-      required: [UpdateDoomGuardConfig]
-      properties:
-        UpdateDoomGuardConfig: { $ref: '#/components/schemas/DoomGuardConfig' }
-      additionalProperties: false
     RequestUpdateTuiLayout:
       type: object
       required: [UpdateTuiLayout]
@@ -874,7 +928,6 @@ components:
         - $ref: '#/components/schemas/ResponseProviderSwitched'
         - $ref: '#/components/schemas/ResponseConnectStatus'
         - $ref: '#/components/schemas/ResponseSessionContext'
-        - $ref: '#/components/schemas/ResponseDoomGuardConfigUpdated'
         - $ref: '#/components/schemas/ResponseTuiLayoutUpdated'
     ResponseRound:
       type: object
@@ -963,11 +1016,6 @@ components:
       type: object
       required: [SessionContext]
       properties: { SessionContext: { $ref: '#/components/schemas/SessionContextSnapshot' } }
-      additionalProperties: false
-    ResponseDoomGuardConfigUpdated:
-      type: object
-      required: [DoomGuardConfigUpdated]
-      properties: { DoomGuardConfigUpdated: { $ref: '#/components/schemas/DoomGuardConfig' } }
       additionalProperties: false
     ResponseTuiLayoutUpdated:
       type: object
@@ -1225,6 +1273,17 @@ components:
         description: { type: string }
         arguments: { type: string, description: JSON encoded as a string }
         scope: { type: string }
+        elevation:
+          type: boolean
+          description: >
+            True when the call is outside the agent's granted OperationScope —
+            the user is authorising access beyond the configured boundary
+            (ADR-0028 soft scope-gate).
+        one_off:
+          type: boolean
+          description: >
+            True when `Always` is not honoured (bash-policy confirm gate);
+            clients should suppress the always-allow option.
       additionalProperties: false
     UserQuestionRequest:
       type: object
@@ -1274,21 +1333,19 @@ components:
         metadata is intentionally open because the transcript model evolves
         independently and the Welcome snapshot must remain forward-compatible.
       type: object
-      required: [role, content, images, hidden, compacted, children]
+      required: [role, content]
       properties:
         role: { enum: [User, Assistant, System, Tool] }
         content: { type: string }
         content_blob: { type: [string, 'null'] }
         display_content: { type: [string, 'null'] }
+        reasoning_content: { type: [string, 'null'] }
         images: { type: array, items: { $ref: '#/components/schemas/ImagePart' } }
         tool_call_id: { type: [string, 'null'] }
-        tool_name: { type: [string, 'null'] }
-        tool_arguments: { type: [string, 'null'] }
-        tool_duration_ms: { type: [integer, 'null'], minimum: 0 }
         hidden: { type: boolean }
-        compacted: { type: boolean }
         children: { type: array, items: { $ref: '#/components/schemas/Message' } }
         sent_at_ms: { type: [integer, 'null'], minimum: 0 }
+        timestamp: { type: [integer, 'null'], minimum: 0, description: Unix-epoch seconds. }
       additionalProperties: true
     ToolStream:
       oneOf:
@@ -1342,14 +1399,7 @@ components:
         next_id: { type: integer, minimum: 1 }
         updated_at_round: { type: integer, minimum: 0 }
       additionalProperties: false
-    DoomGuardConfig:
-      type: object
-      required: [enabled, window]
-      properties:
-        enabled: { type: boolean }
-        window: { type: integer, minimum: 1 }
-      additionalProperties: false
-    ChannelAuth: { enum: [ApiKey, XaiOAuth, ChatGptOAuth] }
+    ChannelAuth: { enum: [ApiKey, XaiOAuth, ChatGptOAuth, CopilotOAuth, AntigravityOAuth] }
     LoginMethod: { enum: [device, browser] }
     ConnectStatus:
       oneOf:
@@ -1370,17 +1420,6 @@ components:
           required: [state, provider, message]
           properties: { state: { const: failed }, provider: { type: string }, message: { type: string } }
           additionalProperties: false
-    SessionOverview:
-      type: object
-      required: [id, overview, created_at, updated_at, message_count, active]
-      properties:
-        id: { type: string }
-        overview: { type: string }
-        created_at: { type: integer, minimum: 0 }
-        updated_at: { type: integer, minimum: 0 }
-        message_count: { type: integer, minimum: 0 }
-        active: { type: boolean }
-      additionalProperties: false
     ProviderPickerSnapshot:
       type: object
       required: [default_id, rows]

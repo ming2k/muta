@@ -8,7 +8,7 @@ CLI, web) talks to it over one control-plane protocol (ADR-0096).
 
 ## Concepts
 
-- **Session daemon** (`neenee serve`, or the `neenee-server` binary): one
+- **Session daemon** (`neenee serve`): one
   process per user that hosts and manages all sessions. It starts on demand
   (the first `neenee` spawns it) or explicitly (`neenee serve`).
 - **Hosted sessions**: every session is daemon-held. It keeps running when

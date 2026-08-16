@@ -11,11 +11,12 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 ## Roles and entry points
 
-The daemon (`neenee serve`, or the `neenee-server` binary) serves one
-control-plane endpoint per user, on a Unix domain socket by default and on
-TCP when exposed (ADR-0096). Three client roles share the protocol,
-distinguished by the first frame the client sends after the upgrade
-(`Select`):
+The daemon (`neenee serve` — the single binary, ADR-0102) serves one
+control-plane endpoint per user, on a Unix domain socket plus a TCP loopback
+listener by default (fixed port 9800, ephemeral fallback), and on all
+interfaces when `--public` (ADR-0096/0105). Three client roles share the
+protocol, distinguished by the first frame the client sends after the
+upgrade (`Select`):
 
 | Role | Handshake | Direction | Purpose |
 |------|-----------|-----------|---------|
@@ -32,27 +33,59 @@ the unified daemon; the protocol below is the daemon's control plane.
   channel at `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700`
   runtime dir. No bearer token — the filesystem permissions are the auth
   boundary. CLI and TUI use this.
-- **TCP loopback:** binds `127.0.0.1` and requires no token — a local
-  co-process is trusted.
-- **TCP exposed (`--expose` / `--public`):** binds `0.0.0.0` and **requires a
-  bearer token** (`Authorization: Bearer <token>` on the handshake, else HTTP
-  401). The daemon generates and prints the token on startup. Exposing is an
-  explicit opt-in that always carries a token; front it with a
-  TLS-terminating reverse proxy for remote use (the token protects the
-  handshake, not the wire).
+- **TCP loopback (default port 9800, ADR-0105):** binds `127.0.0.1` and, with
+  `[daemon] local_auth` on (the default), **requires a bearer token**,
+  generated per daemon start and published in the owner-only (0600)
+  discovery record — co-located CLI/TUI clients read it from there and
+  authenticate transparently. `--no-local-auth` / `local_auth = false`
+  restores trust-the-loopback. When port 9800 is taken, the daemon falls
+  back to an ephemeral port; the record always carries the actual one.
+- **TCP exposed (`--public`):** binds `0.0.0.0` and **requires a bearer
+  token** (else HTTP 401). The daemon generates a token on startup and
+  points at the discovery record. Exposing is an explicit opt-in that always
+  carries a token; front it with a TLS-terminating reverse proxy for remote
+  use (the token protects the handshake, not the wire).
+
+### Credential channels (ADR-0105)
+
+Two equivalent credentials are accepted on an authenticated TCP handshake:
+
+- `Authorization: Bearer <token>` — for clients that can set headers
+  (every Rust client).
+- `Sec-WebSocket-Protocol: bearer.<token>` — the browser channel, since
+  `new WebSocket()` cannot set headers. The daemon echoes the subprotocol
+  when it accepts it.
+
+Additionally, a loopback handshake carrying a browser `Origin` header is
+only accepted when the origin host is itself loopback (`127.0.0.1`,
+`localhost`, `[::1]`, any port) — WebSocket is not same-origin-protected,
+so without this check any visited page could drive the daemon. Non-browser
+clients send no `Origin` and are governed by the token alone; the check is
+skipped on `--public` (the mandatory token is the boundary there).
+
+### HTTP endpoints on the same port (ADR-0105)
+
+The TCP listener splits plain HTTP from WebSocket upgrades by peeking at
+the request head. Plain HTTP serves:
+
+- `GET /` (and any unknown path, SPA fallback) — the embedded web panel
+  bundle (a placeholder page when the daemon was built without
+  `apps/web/dist`).
+- `GET /healthz` — unauthenticated `{"version", "auth", "panel"}` probe so
+  a browser can tell "daemon needs a token" apart from "nothing listening".
 
 ### Security model
 
 | Mode | Bind | Auth | Use |
 |------|------|------|-----|
 | default (Unix socket) | `$XDG_RUNTIME_DIR/neenee/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) are the boundary | local CLI / TUI |
-| default (TCP loopback) | `127.0.0.1` | none | local co-process on the same machine |
-| `--public` (`neenee serve`) / `--expose` (`neenee-server` binary) | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
+| default (TCP loopback) | `127.0.0.1:9800` | bearer token (default; `local_auth = false` disables) + loopback-origin check | local co-processes, the web panel |
+| `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
 
 Because the default binds a Unix socket plus loopback, a casual host exposes
 nothing beyond this machine. Exposure is an explicit opt-in that cannot
-happen without a token. See ADR-0054 for the rationale. For a remote client
-walkthrough see
+happen without a token. See ADR-0054 and ADR-0105 for the rationale. For a
+remote client walkthrough see
 [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 
 ## Attach: drive a session
@@ -83,7 +116,7 @@ The server answers one of:
 ```json
 { "type": "Welcome", "session_id": "…", "round_counter": 6, "messages": [] }
 { "type": "Pick", "sessions": [ { "id": "…", "overview": "…", … } ] }
-{ "type": "Error", "message": "…" }
+{ "type": "Error", "message": "…", "code": "version_mismatch" }
 ```
 
 - `Welcome` binds the connection: `messages` is the full persisted transcript
@@ -91,7 +124,9 @@ The server answers one of:
   monotonic round counter. Process it before rendering subsequent live events.
 - `Pick` means several sessions are hosted and the client must choose
   (`Attach(Some(id))` on a new connection).
-- `Error` is terminal.
+- `Error` is terminal. `code` (ADR-0105, optional) is the stable
+  machine-readable reason — currently only `"version_mismatch"` — so clients
+  can branch without string-sniffing `message`.
 
 From then on the connection carries zero or more live frames in both
 directions — `{ "type": "Request", … }` client → server,
@@ -109,8 +144,19 @@ const socket = new WebSocket("ws://host:8765/", {
 });
 ```
 
-(Browsers cannot set headers on `new WebSocket()`; use a client that can, or a
-proxy that injects the header.)
+Browsers use the `bearer.<token>` subprotocol instead — see
+[Credential channels](#credential-channels-adr-0105).
+
+Sessions can be renamed over the attach channel with
+`Request{RenameSession{id, title}}`: `id` takes a full id or a 4+ character
+hex short-id prefix and resolves live or archived sessions exactly like
+`DeleteSession`. `title` sets the manual title (ADR-0022: AI titling never
+overwrites a manual one); `null` clears the manual override, returning
+pickers and monitor rows to the AI-title / first-prompt fallback. On success
+the harness pushes a fresh `SessionsOverview` snapshot and a hosted
+session's monitor row is republished as a `session_updated` diff carrying
+the new title; an unknown id answers
+`{ "type": "Error", "message": "No session matches '…'." }`.
 
 ## Monitor: observe the host (ADR-0093)
 

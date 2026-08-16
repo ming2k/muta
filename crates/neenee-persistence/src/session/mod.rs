@@ -1598,6 +1598,80 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Set (or clear) a session's manual title by id or short id prefix — the
+    /// storage half of `AgentRequest::RenameSession`. `Some(title)` records a
+    /// user-set title (`manual = true`, so AI generation will not overwrite
+    /// it, ADR-0022); `None` clears the manual override (`manual = false`,
+    /// [`Self::set_title`]'s documented clear form), returning the picker /
+    /// monitor overview to the AI-title / first-prompt fallback.
+    ///
+    /// Renaming the active session delegates to [`Self::set_title`] so the
+    /// in-memory state and the empty-session laziness guard stay
+    /// authoritative. Renaming an archived session mirrors [`Self::delete`]'s
+    /// shape: the one file is loaded, mutated, and re-persisted on a blocking
+    /// thread (with the `TitleSet` event appended to its log), leaving this
+    /// store's pinned session untouched.
+    pub async fn rename(&self, id: &str, title: Option<String>) -> Result<(), String> {
+        let manual = title.is_some();
+        let (path, is_active) = {
+            let state = self.state.lock().await;
+            let (resolved, path) = self.resolve_session(id, &state)?;
+            (path, state.data.id == resolved)
+        };
+        if is_active {
+            return self.set_title(title, manual).await;
+        }
+        let blob_store = self.blob_store.clone();
+        let project_root = self.project_root.clone();
+        tokio::task::spawn_blocking(move || {
+            let log_path = path.with_extension("jsonl");
+            let mut data = load_or_seed(&path, &log_path, &blob_store, &project_root);
+            data.title = title.clone();
+            data.title_manual = manual;
+            data.updated_at = unix_timestamp();
+            let event_log = EventLog::new(log_path.clone());
+            ensure_event_log_started(&event_log, &data)?;
+            event_log.append(SessionEvent::TitleSet { title, manual })?;
+            // Same ordering as `persist_off_runtime`: compact before the
+            // snapshot write so the stamped watermark matches the seed.
+            compact_log_if_needed(&log_path, &data)?;
+            persist_to(&path, &data, &blob_store)
+        })
+        .await
+        .map_err(|e| format!("rename task failed: {e}"))?
+    }
+
+    /// The picker-style summary of the pinned session, synthesized from
+    /// in-memory state. The disk-backed [`Self::list`] only sees persisted
+    /// sessions, so a title change on a live, never-persisted session (empty
+    /// transcript — `set_title` deliberately does not persist those) is
+    /// invisible to every `list()` consumer. Monitor reseeds and overview
+    /// pushes after a rename use this to see it anyway.
+    pub async fn active_summary(&self) -> SessionSummary {
+        let state = self.state.lock().await;
+        let data = &state.data;
+        let overview = match data.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            Some(title) => truncate_preview(title, 64),
+            None => data
+                .model_window
+                .iter()
+                .rev()
+                .chain(data.archived_transcript.iter().rev())
+                .find(|m| m.role == neenee_contracts::Role::User && !m.hidden)
+                .map(|m| truncate_preview(&m.content, 64))
+                .unwrap_or_else(|| "(empty session)".to_string()),
+        };
+        SessionSummary {
+            id: data.id.clone(),
+            parent_id: data.parent_id.clone(),
+            message_count: data.model_window.len() + data.archived_transcript.len(),
+            updated_at: data.updated_at,
+            created_at: data.created_at,
+            overview,
+            active: true,
+        }
+    }
+
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
         let sessions_dir = self.sessions_dir.clone();
@@ -3324,6 +3398,201 @@ mod tests {
         let sessions = store.list().await.unwrap();
         let row = sessions.iter().find(|item| item.active).unwrap();
         assert_eq!(row.overview, "Custom Title");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn rename_live_session_sets_and_clears_the_manual_title() {
+        // `RenameSession` on the active session delegates to `set_title`:
+        // `Some` records a manual title (ADR-0022's lock: AI generation must
+        // not overwrite it) that the picker row prefers over the first-prompt
+        // preview; `None` clears the manual override so the overview falls
+        // back to the AI-title / first-prompt preview.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-rename-live-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "first prompt",
+            )])
+            .await
+            .unwrap();
+        let id = store.id().await;
+
+        // Short-id prefix resolution, exactly like `delete`.
+        store
+            .rename(&id[..8], Some("manual name".to_string()))
+            .await
+            .unwrap();
+        let (title, manual) = store.title().await;
+        assert_eq!(title.as_deref(), Some("manual name"));
+        assert!(manual, "a rename is a user-set (manual) title");
+        let row = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.active)
+            .unwrap();
+        assert_eq!(row.overview, "manual name");
+
+        // `None` clears the manual override: the stored title goes away, the
+        // manual lock is released (AI generation may title it again), and the
+        // picker row falls back to the first-prompt preview.
+        store.rename(&id, None).await.unwrap();
+        let (title, manual) = store.title().await;
+        assert_eq!(title, None);
+        assert!(!manual, "clearing releases the manual lock");
+        let row = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.active)
+            .unwrap();
+        assert_eq!(row.overview, "first prompt");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn rename_archived_session_persists_without_touching_the_active_one() {
+        // `RenameSession` on a non-live session rewrites that session's file
+        // in place (load → set title → append `TitleSet` → re-persist), so
+        // the rename survives a cold reload — and the active session's own
+        // state is never repointed or mutated.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-rename-archived-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "live prompt",
+            )])
+            .await
+            .unwrap();
+        let live_id = store.id().await;
+
+        let archived = SessionData {
+            project_root: directory.clone(),
+            model_window: vec![Message::new(
+                neenee_contracts::Role::User,
+                "archived prompt",
+            )],
+            ..Default::default()
+        };
+        store.persist_archive(&archived).unwrap();
+        let archived_path = directory.join(format!("{}.json", archived.id));
+
+        store
+            .rename(&archived.id[..8], Some("renamed archived".to_string()))
+            .await
+            .unwrap();
+
+        // The picker row now shows the manual title.
+        let sessions = store.list().await.unwrap();
+        let row = sessions.iter().find(|item| item.id == archived.id).unwrap();
+        assert_eq!(row.overview, "renamed archived");
+
+        // The snapshot on disk carries the title + manual lock…
+        let on_disk: SessionData =
+            serde_json::from_str(&fs::read_to_string(&archived_path).unwrap()).unwrap();
+        assert_eq!(on_disk.title.as_deref(), Some("renamed archived"));
+        assert!(on_disk.title_manual);
+
+        // …and a cold reload (snapshot + event-log replay) restores it.
+        let reloaded = SessionStore::for_path(archived_path);
+        let (title, manual) = reloaded.title().await;
+        assert_eq!(title.as_deref(), Some("renamed archived"));
+        assert!(manual);
+
+        // The active session is untouched: same id, no title.
+        assert_eq!(store.id().await, live_id);
+        let (title, manual) = store.title().await;
+        assert_eq!(title, None);
+        assert!(!manual);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn rename_archived_session_clear_restores_the_prompt_fallback() {
+        // Clearing an archived session's manual title must release the
+        // ADR-0022 lock on disk too: the reloaded snapshot has `title = None`
+        // / `manual = false`, so the picker row falls back to the
+        // first-prompt preview and AI generation may title it again.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-rename-archived-clear-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "live prompt",
+            )])
+            .await
+            .unwrap();
+
+        let archived = SessionData {
+            project_root: directory.clone(),
+            title: Some("old manual title".to_string()),
+            title_manual: true,
+            model_window: vec![Message::new(
+                neenee_contracts::Role::User,
+                "archived prompt",
+            )],
+            ..Default::default()
+        };
+        store.persist_archive(&archived).unwrap();
+
+        store.rename(&archived.id, None).await.unwrap();
+
+        let reloaded = SessionStore::for_path(directory.join(format!("{}.json", archived.id)));
+        let (title, manual) = reloaded.title().await;
+        assert_eq!(title, None);
+        assert!(
+            !manual,
+            "clearing an archived title releases the manual lock"
+        );
+        let row = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == archived.id)
+            .unwrap();
+        assert_eq!(row.overview, "archived prompt");
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn rename_unknown_id_errors_like_delete() {
+        // Resolution is shared with `delete`: an unknown prefix surfaces the
+        // same "No session matches" error, and nothing is written.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-rename-unknown-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "live prompt",
+            )])
+            .await
+            .unwrap();
+
+        let error = store
+            .rename("deadbeef", Some("x".to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(error, "No session matches 'deadbeef'.");
 
         let _ = fs::remove_dir_all(directory);
     }

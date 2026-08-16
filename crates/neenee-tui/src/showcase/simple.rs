@@ -182,7 +182,7 @@ pub fn provider() -> io::Result<()> {
 pub fn models() -> io::Result<()> {
     let theme = Theme::default();
     // Seed a snapshot with a couple of providers and a favorited model so the
-    // star glyph, the current dot, and the recency sort all render.
+    // star glyph, the current dot, and the two-tier ASCII sort all render.
     let mk = |id: &str, name: &str, template_id: &str, models: &[&str]| ProviderPickerRow {
         id: id.to_string(),
         name: name.to_string(),
@@ -196,7 +196,6 @@ pub fn models() -> io::Result<()> {
                 effort: None,
                 thinking: None,
                 favorite: *m == "claude-sonnet-4-6",
-                last_used_ms: (*m == "gpt-4o").then_some(1_700_000_000_000),
             })
             .collect(),
         builtin: true,
@@ -239,7 +238,12 @@ pub fn models() -> io::Result<()> {
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut lm = LayoutMap::new();
                 let query = if s.search { s.query.trim() } else { "" };
-                let ranked = crate::providers::models_flat_filtered_from(&s.picker, query);
+                let ranked = crate::providers::models_flat_filtered_from(
+                    &s.picker,
+                    &s.picker.default_id,
+                    "claude-sonnet-4-6",
+                    query,
+                );
                 let mut scroll = s.scroll;
                 draw_models_modal(
                     f,

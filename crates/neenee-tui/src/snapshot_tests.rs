@@ -533,6 +533,7 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 },
                 envoy_bar: None,
                 side_banner: None,
+                page_hints: None,
                 session_head: None,
                 todos: None,
                 review_alert: String::new(),
@@ -540,7 +541,8 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 hovered_step: None,
                 focused_target: None,
                 logo: None,
-                guidance: EmptyStateGuidance::None,
+                guidance: EmptyStateGuidance::Tour,
+                carousel_index: 0,
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache: None,
@@ -733,6 +735,134 @@ fn sent_user_header_has_one_metadata_separator() {
         header.matches('·').count(),
         1,
         "round and timestamp should have one separator:\n{grid}"
+    );
+}
+
+/// ADR-0106: command rows render by shape. A short single-line reply joins
+/// inline (` · `, no marker), a result-less record renders plain, and a
+/// multi-line reply keeps the `+`/`-` disclosure — no row shows `⚙`, and no
+/// row shows `+` unless a body exists to expand into.
+#[test]
+fn command_rows_render_by_shape_without_false_markers() {
+    let messages = vec![
+        // Inline: `/new`'s single-line confirmation.
+        TranscriptMessage::command_result(
+            "new",
+            "",
+            Some(neenee_contracts::CommandResult::Text(
+                "Started new session: a1b2c3".to_string(),
+            )),
+        ),
+        // Plain: shell passthrough, no persisted result.
+        TranscriptMessage::command_result("shell", "!ls -la", None),
+        // Disclose: multi-line permission list.
+        TranscriptMessage::command_result(
+            "permissions",
+            "",
+            Some(neenee_contracts::CommandResult::PermissionList {
+                allowed: vec!["bash".to_string()],
+            }),
+        ),
+    ];
+
+    let grid = render_transcript_grid(&messages, 72, 18);
+    let rows: Vec<&str> = grid.lines().collect();
+
+    let inline_idx = rows
+        .iter()
+        .position(|row| row.contains("/new ·"))
+        .unwrap_or_else(|| panic!("inline reply must join with the R1 dot:\n{grid}"));
+    assert!(
+        rows[inline_idx].contains("Started new session: a1b2c3"),
+        "the inline reply text must be on the same row:\n{grid}"
+    );
+    assert!(
+        !rows[inline_idx].trim_start().starts_with('+'),
+        "an inline row must not carry the disclosure marker:\n{grid}"
+    );
+
+    let plain_idx = rows
+        .iter()
+        .position(|row| row.contains("!ls -la"))
+        .expect("shell passthrough must render its invocation");
+    assert!(
+        !rows[plain_idx].contains('·') || plain_idx == inline_idx,
+        "a plain row carries no join:\n{grid}"
+    );
+
+    let disclose_idx = rows
+        .iter()
+        .position(|row| row.contains("/permissions"))
+        .unwrap_or_else(|| panic!("multi-line result must keep its header:\n{grid}"));
+    assert!(
+        rows[disclose_idx].trim_start().starts_with('+'),
+        "a multi-line result keeps the disclosure affordance:\n{grid}"
+    );
+
+    for (i, row) in rows.iter().enumerate() {
+        assert!(
+            !row.contains('⚙'),
+            "no command row may show the gear glyph (row {i}):\n{grid}"
+        );
+    }
+}
+
+/// ADR-0106: expanding a Disclose command row reveals the typed result body
+/// through the shared block renderer, and pinning is respected.
+#[test]
+fn command_row_disclose_expands_to_result_body() {
+    let mut message = TranscriptMessage::command_result(
+        "permissions",
+        "",
+        Some(neenee_contracts::CommandResult::PermissionList {
+            allowed: vec!["bash".to_string()],
+        }),
+    );
+    message.pin_command_result_expanded(true);
+
+    let grid = render_transcript_grid(&[message], 72, 18);
+    assert!(
+        grid.contains("- /permissions"),
+        "an expanded row shows the open marker:\n{grid}"
+    );
+    assert!(
+        grid.contains("Always-allowed tools:"),
+        "the expanded body must render:\n{grid}"
+    );
+    assert!(
+        grid.contains("• bash"),
+        "the body's list must render through the block renderer:\n{grid}"
+    );
+}
+
+/// ADR-0106: the inline layout is width-aware — a reply that cannot fit
+/// beside its invocation without truncation must fall back to the disclosure
+/// layout rather than render a fragment.
+#[test]
+fn command_row_inline_falls_back_to_disclose_when_narrow() {
+    // A reply long enough that `invocation · reply` overflows even a
+    // conversational band.
+    let message = TranscriptMessage::command_result(
+        "search",
+        "the integration flag",
+        Some(neenee_contracts::CommandResult::Text(
+            "Relevant history (most similar first): the integration flag was introduced in round 7"
+                .to_string(),
+        )),
+    );
+
+    // Wide: inline join.
+    let wide = render_transcript_grid(std::slice::from_ref(&message), 120, 18);
+    assert!(
+        wide.contains("/search the integration flag ·"),
+        "a fitting reply joins inline:\n{wide}"
+    );
+
+    // Narrow: the reply cannot fit, so the row must disclose instead.
+    let narrow = render_transcript_grid(&[message], 40, 18);
+    assert!(
+        narrow.contains("+ /search"),
+        "a non-fitting reply discloses rather than truncating inline:\n{narrow}"
     );
 }
 

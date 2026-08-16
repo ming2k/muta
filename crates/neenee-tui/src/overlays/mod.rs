@@ -18,6 +18,7 @@
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
 
 pub mod activity;
+pub mod btw;
 pub mod common;
 pub mod config;
 pub mod config_layout;
@@ -53,6 +54,7 @@ pub use help::{HelpBinding, draw_help_modal};
 pub use history::draw_history_panel;
 // The old centered `/host` modal (`host.rs`) was superseded by the full-screen
 // `dashboard` surface and removed; `/host` now opens the dashboard.
+pub use btw::{BtwModalView, draw_btw_modal};
 pub use mcp::draw_mcp_modal;
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;

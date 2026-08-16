@@ -47,6 +47,18 @@ jobs:
             archive: tar.gz
     steps:
       - uses: actions/checkout@v4
+      # The release binary embeds the web panel (ADR-0105): build the bundle
+      # first so `neenee-web-assets`' build script finds apps/web/dist.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+        working-directory: apps/web
       - uses: dtolnay/rust-toolchain@stable
       # rust-toolchain.toml pins the build toolchain (channel = "1.95.0"), and
       # that directory override wins over the action's `stable`. Install the

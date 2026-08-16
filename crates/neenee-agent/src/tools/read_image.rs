@@ -12,8 +12,15 @@ use async_trait::async_trait;
 use neenee_contracts::{Tool, ToolOutput};
 use serde_json::json;
 
+use crate::tools::helpers::{WorkspaceBase, resolve_workspace_path, workspace_base};
+
 /// Read an image file so the model can see it.
-pub struct ReadImageTool;
+///
+/// Relative paths resolve against the session's workspace root (captured at
+/// factory time), not the daemon process's cwd (ADR-0096).
+pub struct ReadImageTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 /// Images are downscaled so the longest edge is at most this many pixels
 /// before encoding. The Chat Completions / Responses API treats very large
@@ -62,7 +69,8 @@ impl Tool for ReadImageTool {
         let mime =
             mime_for_path(path).ok_or_else(|| format!("Unsupported image format: {}", path))?;
 
-        let bytes = std::fs::read(path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+        let bytes = std::fs::read(resolve_workspace_path(&self.root, path))
+            .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
         // Resize if the image decodes and is larger than the cap; otherwise
         // pass the original bytes through untouched (fast path for already-
@@ -78,7 +86,9 @@ impl Tool for ReadImageTool {
     }
 }
 
-neenee_contracts::register_tool!(ReadImageFactory => ReadImageTool);
+neenee_contracts::register_tool!(ReadImageFactory => |ctx| ReadImageTool {
+    root: workspace_base(ctx),
+});
 
 /// Map a file extension to the MIME type neenee can encode. We accept the
 /// formats the `image` crate is built with (see Cargo features) and that the
@@ -153,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_image_extension() {
-        let err = ReadImageTool
+        let err = ReadImageTool { root: None }
             .call_structured(r#"{"path":"missing.txt"}"#)
             .await
             .unwrap_err();
@@ -162,7 +172,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_missing_file() {
-        let err = ReadImageTool
+        let err = ReadImageTool { root: None }
             .call_structured(r#"{"path":"nope.png"}"#)
             .await
             .unwrap_err();
@@ -180,7 +190,7 @@ mod tests {
         let path = std::env::temp_dir().join("neenee_read_image_test.png");
         std::fs::write(&path, buf.into_inner()).unwrap();
 
-        let out = ReadImageTool
+        let out = ReadImageTool { root: None }
             .call_structured(&format!(r#"{{"path":"{}"}}"#, path.display()))
             .await
             .unwrap();

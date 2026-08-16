@@ -115,13 +115,78 @@ pub(super) fn transcript_messages_from_core(
 /// source of truth for commands on resume — the message stream is pure
 /// dialogue. Rows carry no round/turn position (a command is not a turn); the
 /// caller rebases round positions over the returned slice as usual.
+///
+/// Each row is stamped with the record's invocation `timestamp` (via
+/// `sent_at_ms`) so [`merge_command_rows`] can place it at its turn seam; the
+/// stamp is projection-only state and never reaches the ledger or the model.
 pub(super) fn transcript_commands_from_ledger(
     commands: Vec<neenee_contracts::CommandRecord>,
 ) -> Vec<TranscriptMessage> {
     commands
         .into_iter()
-        .map(|record| TranscriptMessage::command_result(record.name, record.args, record.result))
+        .map(|record| {
+            TranscriptMessage::command_result(record.name, record.args, record.result)
+                .with_sent_at_ms(record.timestamp)
+        })
         .collect()
+}
+
+/// Merge rebuilt command rows into a restored dialogue transcript (ADR-0106
+/// §2: the transcript is a projection — command rows render *at the moment
+/// they happened*, not appended to the tail).
+///
+/// Ordering rule, stable and total:
+///
+/// 1. Each command row lands **before the first user message whose send time
+///    is later than the command's invocation** — i.e. at the seam between
+///    conversation turns, never inside one. A command issued between turn 2
+///    and turn 3 renders after turn 2's assistant reply and before turn 3's
+///    prompt, exactly where it appeared live.
+/// 2. Commands older than every user seam, or carrying no timestamp, keep
+///    their ledger order at the **tail** (they were the last thing run), and
+///    dialogue with no user timestamps at all simply takes the tail too —
+///    dialogue order is never disturbed.
+/// 3. Ties (a command and the next prompt within the same millisecond) place
+///    the command before the seam, matching how a command is dispatched
+///    before the round it precedes opens.
+///
+/// Timestamps compare against user messages' `sent_at_ms` — assistant/tool
+/// parts of a turn are never split, because a turn's parts share the turn
+/// boundary established by its user message.
+pub(super) fn merge_command_rows(
+    dialogue: Vec<TranscriptMessage>,
+    commands: Vec<TranscriptMessage>,
+) -> Vec<TranscriptMessage> {
+    use neenee_contracts::Role;
+
+    if commands.is_empty() {
+        return dialogue;
+    }
+    let mut out = Vec::with_capacity(dialogue.len() + commands.len());
+    let mut commands = commands.into_iter().peekable();
+
+    for message in dialogue {
+        // Spill every command whose invocation precedes this turn seam.
+        if message.role == Role::User
+            && let Some(seam_ms) = message.sent_at_ms
+        {
+            while let Some(cmd) = commands.peek() {
+                if cmd.sent_at_ms.is_some_and(|ms| ms < seam_ms) {
+                    // The peek above guarantees the item; `expect` documents
+                    // the invariant without a fallible API change.
+                    #[allow(clippy::expect_used)]
+                    out.push(commands.next().expect("peeked command exists"));
+                } else {
+                    break;
+                }
+            }
+        }
+        out.push(message);
+    }
+    // Commands after the last seam (or with no timestamp) land at the tail,
+    // still in ledger order.
+    out.extend(commands);
+    out
 }
 
 /// Rebuild the nested transcript of an envoy run (the `children` carried by a

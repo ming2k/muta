@@ -23,8 +23,9 @@ do not own the principal round lifecycle.
 ### Session round lifecycle
 
 **Subject:** at most one active round for one session, whether that session is
-the primary conversation or a `/btw` side conversation. Separate sessions own
-separate lifecycle instances and may run concurrently.
+the primary conversation or a `/btw` aside. Separate sessions own separate
+lifecycle instances and may run concurrently — including several asides at
+once (ADR-0103).
 
 | Operation | Transition |
 |-----------|------------|

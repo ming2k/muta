@@ -40,6 +40,102 @@ jobs:
       # with Cargo.toml; a clean run proves the lock is committable as-is.
       - run: cargo fetch --locked
 
+  # The web panel is a pnpm workspace package (apps/web) — no Cargo surface,
+  # so it needs its own typecheck/build gate. `--frozen-lockfile` fails when
+  # the committed root pnpm-lock.yaml is out of sync with apps/web/package.json,
+  # mirroring the cargo `lockfile` job's drift check. pnpm is preinstalled on
+  # ubuntu-latest runners (setup-node would shadow it with npm otherwise).
+  web:
+    name: Web panel (check + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      # Install from the root lockfile (workspace resolution needs the root).
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      # Version handshake drift guard (ADR-0100): the daemon refuses clients
+      # whose Select.version does not exactly equal its workspace
+      # CARGO_PKG_VERSION, and the web client injects its package.json version
+      # at build time — so the two must stay in lockstep.
+      - name: Web version matches workspace version
+        working-directory: .
+        run: |
+          cargo_ver=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          web_ver=$(node -p "require('./apps/web/package.json').version")
+          echo "workspace: $cargo_ver, web: $web_ver"
+          test "$cargo_ver" = "$web_ver"
+      # Wire-type drift guard: the web client's protocol types
+      # (apps/web/src/lib/generated/wire.gen.ts) are generated from
+      # neenee-contracts by ts-rs; regenerate them and fail on any diff.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: wire.gen.ts is up to date
+        working-directory: .
+        run: |
+          cargo test -p neenee-contracts --locked
+          if ! git diff --exit-code apps/web/src/lib/generated/; then
+            echo "::error::wire.gen.ts is stale — run cargo test -p neenee-contracts and commit the result"
+            exit 1
+          fi
+      - run: pnpm run check
+      - run: pnpm run test
+      - run: pnpm run build
+
+  # End-to-end smoke (ADR-0105): the only gate that catches handshake/auth/
+  # transport regressions — unit tests on either side cannot see a version
+  # handshake refusal or a mislabeled subprotocol. Builds the web bundle
+  # first so the daemon under test embeds and serves the real panel.
+  e2e:
+    name: Daemon smoke (web panel protocol)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - run: pnpm run build
+        working-directory: apps/web
+      - run: cargo build -p neenee-cli --locked
+      - name: Start an isolated daemon and smoke it
+        working-directory: .
+        env:
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/xdg-runtime
+          XDG_DATA_HOME: ${{ runner.temp }}/xdg-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config
+          XDG_STATE_HOME: ${{ runner.temp }}/xdg-state
+        run: |
+          set -e
+          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          ./target/debug/neenee daemon start --port 9800 &
+          for i in $(seq 1 50); do
+            curl -fsS http://127.0.0.1:9800/healthz > /dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:9800/healthz
+          TOKEN=$(node -p "JSON.parse(require('fs').readFileSync('$XDG_RUNTIME_DIR/neenee/daemon.json','utf8')).token")
+          DAEMON_TOKEN="$TOKEN" node apps/web/e2e/daemon-smoke.mjs
+          ./target/debug/neenee stop || true
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

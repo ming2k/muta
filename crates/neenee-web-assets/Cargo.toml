@@ -1,0 +1,14 @@
+[package]
+name = "neenee-web-assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The web panel's static bundle, embedded into the daemon binary at compile
+# time so `neenee daemon start` can serve the panel over the same port as the
+# WebSocket control plane (ADR-0105). No runtime dependencies: build.rs
+# codegen produces a static file table; see src/lib.rs.
+
+[lints]
+workspace = true

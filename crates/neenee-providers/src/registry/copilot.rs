@@ -20,7 +20,6 @@ pub const COPILOT_SEED_MODELS: &[&str] = &["gpt-4o-mini"];
 /// [`neenee_contracts::model::BaselineModels`]).
 pub const MODELS: &[Model] = &[Model {
     id: "gpt-4o-mini",
-    name: "GPT-4o Mini",
     family: "gpt",
     context_window: 128_000,
     thinking: ThinkingSupport::None,

@@ -66,7 +66,6 @@ pub const MODELS: &[Model] = &[
     // `WireFormat::AnthropicCompat`.
     Model {
         id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
         family: "claude",
         context_window: 1_000_000,
         thinking: ThinkingSupport::AnthropicAdaptive,
@@ -79,7 +78,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
         family: "claude",
         context_window: 1_000_000,
         thinking: ThinkingSupport::AnthropicAdaptive,
@@ -92,7 +90,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "claude-fable-5",
-        name: "Claude Fable 5",
         family: "claude",
         context_window: 1_000_000,
         // Fable 5 thinking is ALWAYS ON; an explicit `{type:"disabled"}` is
@@ -110,7 +107,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
         family: "claude",
         context_window: 1_000_000,
         // Sonnet 5: omitting the `thinking` field RUNS adaptive thinking; to
@@ -129,7 +125,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "claude-haiku-4-5-20251001",
-        name: "Claude Haiku 4.5",
         family: "claude",
         context_window: 200_000,
         // Haiku 4.5 supports only MANUAL extended thinking

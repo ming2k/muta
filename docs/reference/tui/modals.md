@@ -70,6 +70,7 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 | [Permission sheet](#permission-sheet) | Automatic | (inline, not centered) | `draw_permission_sheet` |
 | [Help](#help-modal) | `Ctrl+H` / `?` / `F1` / `/help` | 58 × 70 | `draw_help_modal` |
 | [Activity](#activity-modal) | Click activity bar | 72 × 70 | `draw_activity_modal` |
+| [Asides](#asides-modal) | `F5` / `/btw list` | 66 × 84% | `draw_btw_modal` |
 | [Toasts](#toasts) | Transient | top-right, 3 rows | `draw_armed_toast`, `draw_copy_toast` |
 
 ## Closing
@@ -90,16 +91,19 @@ source of truth is `Modal::dismissable_by_outside_click()`.
 ## Models modal
 
 Flat (provider, model) picker — the daily-driver switch surface. Every model
-served by every configured connection appears as its own row, ranked
-provider-favorite first, then per-model last-used, then name. Borrows the
-composer input as a fuzzy filter over the model label (a query that matches
-only the provider name keeps its rows, unhighlighted).
+served by every configured connection appears as its own row, ranked by a
+**two-tier order**: the currently-active pair first, favorites next, everything
+else last; within each tier rows sort ASCII by the model id (provider label as
+the tiebreaker). Rows are **id-first**: the wire model id is the label (upstream
+discovery only guarantees the id, so the list never mixes curated display names
+with raw ids). Borrows the composer input as a fuzzy filter over the model id
+(a query that matches only the provider name keeps its rows, unhighlighted).
 
 ```text
 ╭───────────────────────────────────────────────╮
 │ Models  ❯ opus                                │  ← header (real caret here)
 │                                               │
-│  ●  Claude Opus 4.8  · anthropic  ◆ think on  │  ← selected → brand bg
+│  ●  claude-opus-4-8   · anthropic  ◆ think on │  ← selected → brand bg
 │  ●  gpt-4o           · openai                 │
 │  ●  gemini-3-pro     · google                 │
 │  …                                            │
@@ -187,6 +191,35 @@ times; `Enter` resumes the selected session.
 
 The `●` badge marks the currently active session. Overview text is
 truncated with `…` when it would collide with the meta column.
+
+## Asides modal
+
+The live `/btw` asides list (ADR-0103 §5), opened by `F5` or `/btw list`.
+Every background aside appears as one row, newest first: a `run` badge while
+its round is in flight (an `open` badge when it is the focused view), a
+relative last-activity time, and the aside's title (its first prompt).
+
+```text
+╭──────────────────────────────────────────────────────────╮
+│ Asides (2)                                               │
+│                                                          │
+│ run  2m   check the migration plan assumptions            │
+│      1h   quick question about the retry logic            │
+│                                                          │
+│ ↑↓ select · Enter open · F5 refresh · D close aside ·     │
+│ Esc close                                                │
+╰──────────────────────────────────────────────────────────╯
+```
+
+- `Enter` jumps back into the aside: the harness answers with
+  `SideViewOpened` carrying the aside's full transcript, so the view shows
+  its complete history (inherited parent context included).
+- `D` closes the aside outright — cancels its round, removes it from the
+  list, and deletes its session files. Deliberately uppercase (matching the
+  queue's delete) so a stray keypress never loses a background aside.
+- `F5` re-queries the list in place; the harness also pushes a fresh list on
+  every registry mutation. The modal stays open across refreshes.
+- `Esc` / outside click closes the modal without touching any aside.
 
 ## Tools modal
 
@@ -479,8 +512,8 @@ left+right borders colored by variant.
 
 Modal-specific renderers live in `crates/neenee-tui/src/overlays/`
 (one renderer file per modal: `provider`, `permission`, `history`, `help`,
-`session`, `tools`, `permissions_manager`, `activity`, `tool_step_detail`,
-`toast`, plus feature-specific helpers). Shared composed pieces live in
+`session`, `tools`, `permissions_manager`, `activity`, `btw`,
+`tool_step_detail`, `toast`, plus feature-specific helpers). Shared composed pieces live in
 `crates/neenee-tui/src/components/`: `modal`, `list`, `scroll`,
 `footer`, `toast`, and `options` cover the common modal shell, selectable list
 body, scroll body, footer hints, notification bubble, and question option

@@ -4,7 +4,8 @@ use crate::hooks::HookEventKind;
 use crate::todos::unix_now;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum Role {
     User,
     Assistant,
@@ -27,7 +28,9 @@ pub enum Role {
 /// shape of a default message is unchanged and legacy snapshots / event-log
 /// lines load as `origin: None` with no migration (per ADR-0017 / ADR-0022
 /// backward-compat contract).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+// `reason` skips serialization when `None`: absent on the wire, never `null`.
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct InjectionOrigin {
     /// Structured source classifier.
     pub kind: InjectionKind,
@@ -55,8 +58,9 @@ impl InjectionOrigin {
 /// Each variant maps 1:1 to a concrete injection site in the harness; the
 /// doc-link in each arm is the single source of truth for "where does this
 /// come from".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum InjectionKind {
     /// A user-configured hook returned `HookOutcome::Inject`. Carries the
     /// lifecycle event so "which hook axis injected this" is recoverable.
@@ -139,7 +143,10 @@ pub enum InjectionKind {
     UntrustedDirective,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+// Every `Option` field here skips serialization when `None`, so the key is
+// absent on the wire (never an explicit `null`) — hence `?: T`, not `?: T | null`.
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -166,6 +173,9 @@ pub struct Message {
     /// `session.json` (so a resumed session replays thinking correctly) but is
     /// never inspected outside the provider that produced it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Provider-opaque map; ts-rs cannot name `serde_json::Value`, and the web
+    // panel never reads keys out of it. Matches the serde shape exactly.
+    #[ts(type = "Record<string, unknown>")]
     pub provider_meta: Option<serde_json::Map<String, serde_json::Value>>,
     /// Optional tool calls attached to an assistant message. Marked
     /// `#[serde(default)]` so hand-written or stripped JSON messages (e.g. test
@@ -245,7 +255,10 @@ pub struct Message {
 /// [`Message::children`] on the same `Tool`-role result message. Captures
 /// information that the live event stream knows but the bare transcript
 /// cannot reconstruct on resume.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS)]
+// Every `Option` field here skips serialization when `None`, so the key is
+// absent on the wire (never an explicit `null`).
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct EnvoyMeta {
     /// The task description supplied by the parent agent (from the `task`
     /// tool_call's `arguments.description` field). Cached here so the TUI
@@ -286,7 +299,8 @@ pub struct EnvoyMeta {
 }
 
 /// An inline image attached to a message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ImagePart {
     /// MIME type, e.g. `"image/png"`.
     pub mime: String,
@@ -480,7 +494,8 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ToolCall {
     pub id: String,
     pub name: String,

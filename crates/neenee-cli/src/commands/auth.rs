@@ -1,6 +1,6 @@
 use neenee_contracts::SecretString;
-use neenee_runtime::startup::AuthAction;
 use neenee_persistence::config::Config;
+use neenee_runtime::startup::AuthAction;
 
 fn mask_key(secret: &Option<SecretString>) -> &'static str {
     if secret.is_some() {
@@ -14,7 +14,10 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         AuthAction::List => {
             let config = Config::load();
-            println!("{:<16} {:<24} {:<16}", "Provider", "Auth Status", "Active Default");
+            println!(
+                "{:<16} {:<24} {:<16}",
+                "Provider", "Auth Status", "Active Default"
+            );
             println!("{:-<16} {:-<24} {:-<16}", "", "", "");
 
             let builtin_providers = [
@@ -28,7 +31,11 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
             ];
 
             for (name, status) in builtin_providers {
-                let is_default = if config.default_provider == name { " [Active]" } else { "" };
+                let is_default = if config.default_provider == name {
+                    " [Active]"
+                } else {
+                    ""
+                };
                 println!("{:<16} {:<24}{}", name, status, is_default);
             }
 
@@ -42,7 +49,11 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "Not Configured"
                 };
-                let is_default = if config.default_provider == p.id { " [Active]" } else { "" };
+                let is_default = if config.default_provider == p.id {
+                    " [Active]"
+                } else {
+                    ""
+                };
                 println!("{:<16} {:<24}{}", p.id, status, is_default);
             }
         }
@@ -58,9 +69,20 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
                 "zai" | "zhipu" => mask_key(&config.zai_api_key),
                 "opencode_go" | "opencode" => mask_key(&config.opencode_go_api_key),
                 custom => {
-                    if let Some(p) = config.providers.iter().find(|p| p.id.eq_ignore_ascii_case(custom)) {
-                        let has_key = p.channels.iter().any(|c| c.api_key.is_some() || c.api_key_env.is_some());
-                        if has_key { "Configured (●●●●●●)" } else { "Not Configured" }
+                    if let Some(p) = config
+                        .providers
+                        .iter()
+                        .find(|p| p.id.eq_ignore_ascii_case(custom))
+                    {
+                        let has_key = p
+                            .channels
+                            .iter()
+                            .any(|c| c.api_key.is_some() || c.api_key_env.is_some());
+                        if has_key {
+                            "Configured (●●●●●●)"
+                        } else {
+                            "Not Configured"
+                        }
                     } else {
                         return Err(format!("unknown provider '{custom}'").into());
                     }
@@ -81,7 +103,11 @@ pub fn run(action: AuthAction) -> Result<(), Box<dyn std::error::Error>> {
                 "zai" | "zhipu" => config.zai_api_key = secret,
                 "opencode_go" | "opencode" => config.opencode_go_api_key = secret,
                 custom => {
-                    if let Some(p) = config.providers.iter_mut().find(|p| p.id.eq_ignore_ascii_case(custom)) {
+                    if let Some(p) = config
+                        .providers
+                        .iter_mut()
+                        .find(|p| p.id.eq_ignore_ascii_case(custom))
+                    {
                         for c in &mut p.channels {
                             c.api_key = secret.clone();
                         }

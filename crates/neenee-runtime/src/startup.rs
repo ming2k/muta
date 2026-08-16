@@ -71,7 +71,7 @@ define_builtin_commands! {
     Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
     Sessions    = "/sessions"     : "Browse past sessions",
     Dashboard   = "/dashboard"    : "Session dashboard — live status and control over every daemon session",
-    Btw         = "/btw"          : "Open a side conversation that runs alongside the main session",
+    Btw         = "/btw"          : "Open a side conversation: /btw [prompt] or /btw list (asides keep running when you leave)",
     Resume      = "/resume"       : "Resume the most recent or selected session",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
     Schedule    = "/schedule"     : "Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot). /schedule <when> <prompt>",
@@ -79,8 +79,8 @@ define_builtin_commands! {
     Skill       = "/skill"        : "Load a skill by name",
     Init        = "/init"         : "Initialize a .neenee/ config tree",
     Reload      = "/reload"       : "Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks)",
-    Trust       = "/trust"        : "Trust this project's .neenee/config.toml (MCP servers + hooks) and load them",
-    Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks)",
+    Trust       = "/trust"        : "Trust this project and load its MCP servers, hooks, project skills and commands",
+    Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks, project skills and commands)",
     Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
     Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
     Help        = "/help"         : "Show available commands and keybindings",
@@ -197,6 +197,11 @@ pub enum SessionAction {
     Dashboard,
 }
 
+/// The CLI default control-plane port (ADR-0105): fixed so browser clients
+/// (which cannot read the discovery record) have a well-known endpoint; the
+/// daemon falls back to an ephemeral port when it is taken.
+pub const DEFAULT_SERVE_PORT: u16 = 9800;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonAction {
     Start {
@@ -205,6 +210,11 @@ pub enum DaemonAction {
         detach: bool,
         idle_exit_minutes: Option<u64>,
         shutdown_grace_secs: Option<u64>,
+        /// `--no-local-auth`: skip the loopback bearer token (ADR-0105).
+        no_local_auth: bool,
+        /// `--port` was given explicitly: bind failure must be fatal, not a
+        /// silent ephemeral-port fallback (ADR-0105).
+        port_explicit: bool,
     },
     Stop,
     Status {
@@ -242,9 +252,17 @@ pub enum StartupMode {
         detach: bool,
         idle_exit_minutes: Option<u64>,
         shutdown_grace_secs: Option<u64>,
+        /// `--no-local-auth`: skip the loopback bearer token (ADR-0105).
+        no_local_auth: bool,
+        /// `--port` was given explicitly: bind failure must be fatal, not a
+        /// silent ephemeral-port fallback (ADR-0105).
+        port_explicit: bool,
     },
     /// `neenee stop` / `neenee daemon stop`: ask running daemon to shut down gracefully.
     Stop,
+    /// `neenee panel`: print the web panel's URL (with the bearer token, when
+    /// the daemon requires one) for the running daemon (ADR-0105).
+    Panel,
     /// `neenee status [--watch] [--json] [--all]`: observe the session daemon.
     Status {
         watch: bool,
@@ -333,6 +351,7 @@ Commands:
   run <prompt>   execute a prompt non-interactively (headless / one-shot)
   session        manage sessions (list, attach, delete, dashboard)
   daemon         manage the session daemon (start, stop, status)
+  panel          print the web panel URL (with token when auth is on)
   config         inspect or update configuration (list, get, set, path)
   auth           manage provider credentials and API keys (list, set, show)
   mcp            inspect configured MCP servers (list)
@@ -401,7 +420,8 @@ neenee daemon [COMMAND] — manage the background session daemon
 Usage: neenee daemon [COMMAND]
 
 Commands:
-  start [OPTIONS]     start the daemon (--port, --public, --detach, --idle-exit, --grace)
+  start [OPTIONS]     start the daemon (--port, --public, --detach, --idle-exit, --grace,
+                      --no-local-auth)
   stop                gracefully stop the running daemon
   status [OPTIONS]    show daemon session status (--watch, --json, --all)
 ";
@@ -478,8 +498,11 @@ its own after 5 idle minutes (zero sessions, zero clients) unless disabled.
 Usage: neenee serve [OPTIONS]
 
 Options:
-      --port <n>          also listen on TCP port <n> (default: OS-assigned)
+      --port <n>          also listen on TCP port <n> (default: 9800, falling
+                          back to an OS-assigned port when taken)
       --public            bind all interfaces and require a bearer token
+      --no-local-auth     do not require a bearer token on loopback (default:
+                          local_auth on — ADR-0105)
       --detach            fork into the background and return
       --idle-exit <min>   auto-exit after <min> idle minutes (0 = never;
                           default: [daemon] idle_exit_minutes, else 5)
@@ -942,9 +965,9 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                 }
                 "attach" => match sub_extra {
                     [] => ok(StartupMode::Session(SessionAction::Attach(None))),
-                    [id] if !id.starts_with('-') => {
-                        ok(StartupMode::Session(SessionAction::Attach(Some(id.clone()))))
-                    }
+                    [id] if !id.starts_with('-') => ok(StartupMode::Session(
+                        SessionAction::Attach(Some(id.clone())),
+                    )),
                     [bad, ..] => unexpected(bad),
                 },
                 "delete" | "kill" | "rm" => match sub_extra {
@@ -973,9 +996,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
             let sub_extra = &extra[1..];
             match sub.as_str() {
                 "start" | "serve" => {
-                    let mut port: u16 = 0;
+                    let mut port: u16 = DEFAULT_SERVE_PORT;
+                    let mut port_explicit = false;
                     let mut public = false;
                     let mut detach = false;
+                    let mut no_local_auth = false;
                     let mut idle_exit: Option<u64> = None;
                     let mut grace_secs: Option<u64> = None;
                     let mut flags = sub_extra.iter();
@@ -986,9 +1011,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                                 port = value
                                     .parse()
                                     .map_err(|_| format!("invalid --port value '{value}'"))?;
+                                port_explicit = true;
                             }
                             "--public" => public = true,
                             "--detach" => detach = true,
+                            "--no-local-auth" => no_local_auth = true,
                             "--idle-exit" => {
                                 let value = flags.next().ok_or("--idle-exit requires a value")?;
                                 idle_exit = Some(value.parse().map_err(|_| {
@@ -1012,6 +1039,8 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                         detach,
                         idle_exit_minutes: idle_exit,
                         shutdown_grace_secs: grace_secs,
+                        no_local_auth,
+                        port_explicit,
                     }))
                 }
                 "stop" => match sub_extra {
@@ -1076,9 +1105,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
             })
         }
         "serve" => {
-            let mut port: u16 = 0;
+            let mut port: u16 = DEFAULT_SERVE_PORT;
+            let mut port_explicit = false;
             let mut public = false;
             let mut detach = false;
+            let mut no_local_auth = false;
             let mut idle_exit: Option<u64> = None;
             let mut grace_secs: Option<u64> = None;
             let mut flags = extra.iter();
@@ -1089,9 +1120,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                         port = value
                             .parse()
                             .map_err(|_| format!("invalid --port value '{value}'"))?;
+                        port_explicit = true;
                     }
                     "--public" => public = true,
                     "--detach" => detach = true,
+                    "--no-local-auth" => no_local_auth = true,
                     "--idle-exit" => {
                         let value = flags.next().ok_or("--idle-exit requires a value")?;
                         idle_exit = Some(value.parse().map_err(|_| {
@@ -1100,9 +1133,10 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                     }
                     "--grace" => {
                         let value = flags.next().ok_or("--grace requires a value")?;
-                        grace_secs = Some(value.parse().map_err(|_| {
-                            format!("invalid --grace value '{value}' (seconds)")
-                        })?);
+                        grace_secs =
+                            Some(value.parse().map_err(|_| {
+                                format!("invalid --grace value '{value}' (seconds)")
+                            })?);
                     }
                     other => return unexpected(other),
                 }
@@ -1113,10 +1147,16 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                 detach,
                 idle_exit_minutes: idle_exit,
                 shutdown_grace_secs: grace_secs,
+                no_local_auth,
+                port_explicit,
             })
         }
         "stop" => match extra {
             [] => ok(StartupMode::Stop),
+            _ => unexpected(extra.first().map(String::as_str).unwrap_or("")),
+        },
+        "panel" => match extra {
+            [] => ok(StartupMode::Panel),
             _ => unexpected(extra.first().map(String::as_str).unwrap_or("")),
         },
         "completions" => match extra {
@@ -1485,11 +1525,13 @@ mod tests {
         assert!(matches!(
             parse(&["serve"]).mode,
             StartupMode::Serve {
-                port: 0,
+                port: DEFAULT_SERVE_PORT,
                 public: false,
                 detach: false,
                 idle_exit_minutes: None,
-                shutdown_grace_secs: None
+                shutdown_grace_secs: None,
+                no_local_auth: false,
+                port_explicit: false
             }
         ));
         assert!(matches!(
@@ -1499,7 +1541,9 @@ mod tests {
                 public: true,
                 detach: true,
                 idle_exit_minutes: None,
-                shutdown_grace_secs: None
+                shutdown_grace_secs: None,
+                no_local_auth: false,
+                port_explicit: true
             }
         ));
         let parsed = parse(&["serve", "--idle-exit", "0", "--grace", "30"]);
@@ -1666,11 +1710,19 @@ mod tests {
     fn session_subcommand_forms() {
         assert!(matches!(
             parse(&["session"]).mode,
-            StartupMode::Session(SessionAction::List { watch: false, json: false, include_idle: false })
+            StartupMode::Session(SessionAction::List {
+                watch: false,
+                json: false,
+                include_idle: false
+            })
         ));
         assert!(matches!(
             parse(&["session", "ls", "--watch"]).mode,
-            StartupMode::Session(SessionAction::List { watch: true, json: false, include_idle: false })
+            StartupMode::Session(SessionAction::List {
+                watch: true,
+                json: false,
+                include_idle: false
+            })
         ));
         assert!(matches!(
             parse(&["session", "attach", "s123"]).mode,

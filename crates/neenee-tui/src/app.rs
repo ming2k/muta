@@ -15,8 +15,8 @@ use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 
 use neenee_contracts::{
-    AgentRequest, ChannelAuth, ImagePart, LoopStatus, ParentStatus,
-    PermissionRequest, ProviderPickerSnapshot, SessionOverview, TodoList,
+    AgentRequest, ChannelAuth, ImagePart, LoopStatus, ParentStatus, PermissionRequest,
+    ProviderPickerSnapshot, SessionOverview, TodoList,
 };
 
 use crate::completion::{CompletionItemKind, PathScan};
@@ -33,7 +33,7 @@ use crate::providers::{
 use crate::view::Theme;
 use crate::{ActivityTab, Modal};
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueuedDispatchState {
@@ -170,9 +170,9 @@ pub struct App {
     /// `messages_version` / `side_messages_version` bump) so a cached height is
     /// only ever read while the message's content is unchanged.
     pub layout_height_cache: crate::view::HeightCache,
-    /// True while the user is composing into the `/btw` side conversation
-    /// (ADR-0017). Drives [`App::focused_messages`] to swap the viewed
-    /// transcript to [`App::side_messages`] and reserves the side banner.
+    /// True while the user is composing into the `/btw` aside view
+    /// (ADR-0017/0103). Drives [`App::focused_messages`] to swap the viewed
+    /// transcript to [`App::side_messages`] and reserves the aside header.
     pub in_side_view: bool,
     /// Active side `session_id`, learned from [`AgentResponse::SideViewOpened`].
     /// The response listener routes a `Turn { session_id, .. }` event into the
@@ -181,6 +181,15 @@ pub struct App {
     /// Coarse primary-session status, mirrored from
     /// [`AgentResponse::ParentStatus`] for the side banner.
     pub parent_status: ParentStatus,
+    /// Live `/btw` asides list (ADR-0103), mirrored from
+    /// [`AgentResponse::BtwList`]. Drives the asides modal and the main view's
+    /// header aside count. Kept even while inside an aside view so jumping
+    /// back never needs a round trip.
+    pub btw_list: Vec<neenee_contracts::BtwAsideSummary>,
+    /// Scroll + follow slots for the asides modal (shared pattern with the
+    /// sessions picker: `session_scroll` / `session_modal_follow`).
+    pub btw_scroll: usize,
+    pub btw_modal_follow: bool,
     pub scroll: u16,
     /// Whether the view follows the newest content (auto-scroll to bottom).
     pub follow_bottom: bool,
@@ -511,6 +520,20 @@ pub struct App {
     pub permission_scroll: usize,
     pub permission_max_scroll: usize,
     pub input_history: Vec<neenee_contracts::HistoryEntry>,
+    /// **Derived** prompt rows for the viewed session, reconstructed from the
+    /// transcript (see [`Self::backfill_session_history`]). Never persisted:
+    /// the session file is the durable source of truth for conversation
+    /// content (ADR-0018), so these rows exist only so the inline ↑/↓ recall
+    /// can walk a resumed conversation's prompts without this client having
+    /// recorded them. Indexed by `input_history.len() + i` in
+    /// [`Self::current_session_history`] — see [`Self::history_entry`].
+    /// Ordered oldest-first (transcript append order) so growth never shifts
+    /// existing indices.
+    pub session_history_backfill: Vec<neenee_contracts::HistoryEntry>,
+    /// How many transcript messages [`Self::backfill_session_history`] has
+    /// already consumed for the current session, so a long streaming session
+    /// rescans only its tail. Reset to `0` on every viewed-session change.
+    pub session_history_backfill_cursor: usize,
     /// Whether identical prompt text collapses to one history entry across
     /// sessions (`[input_history] dedup`, default `true`). Read by
     /// [`Self::record_input_history`] and threaded into the persisted merge.
@@ -518,6 +541,15 @@ pub struct App {
     /// Whether `/slash` command invocations are recorded into the input
     /// history (`[input_history] record_commands`, default `false`).
     pub input_history_record_commands: bool,
+    /// Whether `record_input_history` / `clear_input_history` actually touch
+    /// the on-disk `history.json`. Production keeps this `true` (set from
+    /// `main`'s TUI entry point); tests construct `App` directly and default
+    /// it to `false`, so a unit test can never write (or truncate!) the
+    /// user's real `$XDG_STATE_HOME/neenee/history.json` — a bug that once
+    /// polluted it with synthetic `prompt N` rows stamped `session-a`.
+    /// In-memory history still behaves identically; only the disk write is
+    /// suppressed.
+    pub input_history_persist: bool,
     /// When true, the Ctrl+R history modal is awaiting an explicit clear
     /// confirmation (`y` confirms, any other key / Esc cancels). Armed by the
     /// `Ctrl+X` clear shortcut so a stray keystroke can never wipe history.
@@ -665,6 +697,11 @@ pub struct App {
     /// how often the loop redraws (mouse movement, streaming, paste, etc. all
     /// wake the loop at irregular intervals and would otherwise jitter it).
     pub spinner_epoch: std::time::Instant,
+    /// Epoch the empty-state help carousel is timed against (ADR-0104). The
+    /// slide index is derived from wall-clock elapsed time since this instant
+    /// (same pattern as [`Self::spinner_epoch`]) so the rotation cadence stays
+    /// constant regardless of draw frequency.
+    pub carousel_epoch: std::time::Instant,
     /// Epoch the effort-ignition celebration is timed against. Set when the
     /// model's top reasoning tier (`max`) is selected; `None` once the
     /// animation completes. Wall-clock based (like `spinner_epoch`) so the
@@ -1015,6 +1052,7 @@ impl App {
                 }
             }
             Modal::Queue => Some((&mut self.queue_scroll, Some(&mut self.queue_modal_follow))),
+            Modal::Btw => Some((&mut self.btw_scroll, Some(&mut self.btw_modal_follow))),
             Modal::HistorySearch => Some((
                 &mut self.history_scroll,
                 Some(&mut self.history_modal_follow),
@@ -1308,6 +1346,34 @@ impl App {
         self.history_draft_text_pastes.clear();
     }
 
+    /// Reset every piece of composer navigation state that is **scoped to the
+    /// viewed session** — the ↑/↓ history cursor and the per-session draft
+    /// stash — when the viewed session changes (`/new`, `/session open`,
+    /// `/resume`, `/fork`, entering/leaving a `/btw` aside).
+    ///
+    /// These slots belong to *a conversation's* composer, not the terminal:
+    /// carrying a cursor over a session boundary would make the first `↑` in
+    /// the new session land on a position clamped against the *old* session's
+    /// row count, and a restored draft would leak what the user was typing
+    /// into the previous conversation. The composer itself is emptied the
+    /// same way the send path empties it, so the new session starts from a
+    /// clean slate.
+    pub fn on_viewed_session_changed(&mut self) {
+        self.history_index = None;
+        self.clear_history_draft();
+        self.input.clear();
+        self.pending_images.clear();
+        self.pending_text_pastes.clear();
+        self.cursor_position = 0;
+        self.input_scroll = 0;
+        self.suggestion_index = None;
+        self.completion_dismissed = true;
+        // The backfill belongs to the conversation being left; the next
+        // session rebuilds its own from its transcript.
+        self.session_history_backfill.clear();
+        self.session_history_backfill_cursor = 0;
+    }
+
     /// Splice the `idx`-th live completion's label into [`App::input`] over
     /// its `[replace_start, replace_end)` byte range, landing the cursor
     /// just past the inserted text. Shared by `Tab` cycling and `Enter`
@@ -1588,26 +1654,28 @@ impl App {
         }
     }
 
-    /// Enter the `/btw` side conversation view (ADR-0017). The side transcript
-    /// ([`App::side_messages`]) becomes the viewed stream and a top banner
-    /// reports the primary session's coarse status. Reuses the envoy
+    /// Enter the `/btw` aside view (ADR-0017, ADR-0103). The side transcript
+    /// ([`App::side_messages`]) becomes the viewed stream and the aside page
+    /// header reports the primary session's coarse status. The buffer itself
+    /// was already back-filled from `SideViewOpened`'s payload by the
+    /// listener (ADR-0103 §6), so entering never clears it. Reuses the envoy
     /// zoom's `reset_view_state` so the swap feels identical to focusing a
     /// task step.
     pub fn enter_side_view(&mut self, side_id: String) {
         self.side_session_id = Some(side_id);
         self.in_side_view = true;
-        self.side_messages.clear();
         self.parent_status = ParentStatus::Idle;
         self.reset_view_state();
     }
 
-    /// Leave the `/btw` side view and return to the primary transcript. The
-    /// side buffer is dropped (the side session file remains on disk,
-    /// recoverable via `/sessions`).
+    /// Leave the `/btw` aside view and return to the primary transcript
+    /// (ADR-0103). Detach is non-destructive: the aside keeps running and its
+    /// buffer is **retained** (clipped out of view), so re-entering shows the
+    /// full history without a refetch. The aside session stays live on the
+    /// harness side until explicitly closed.
     pub fn exit_side_view(&mut self) {
         self.in_side_view = false;
         self.side_session_id = None;
-        self.side_messages.clear();
         self.reset_view_state();
     }
 
@@ -1720,22 +1788,136 @@ impl App {
         order
     }
 
-    /// The current session's history, newest-first, as original indices into
-    /// [`App::input_history`]. This is what the inline ↑/↓ recall walks: it
-    /// filters the global history down to entries whose `session_id` matches
-    /// [`App::current_session_id`], so arrow-key recall surfaces only the
-    /// prompts the user typed in *this* conversation. Ctrl+R is unaffected —
-    /// it searches the whole list regardless of session.
+    /// The current session's history, newest-first. This is what the inline
+    /// ↑/↓ recall walks: the union of the **persisted** history
+    /// ([`Self::input_history`], filtered to entries whose `session_id`
+    /// matches [`App::current_session_id`]) and the **derived** transcript
+    /// rows ([`Self::session_history_backfill`]), so arrow-key recall
+    /// surfaces exactly the prompts of *this* conversation — including ones
+    /// this client never recorded (a session resumed from elsewhere). Ctrl+R
+    /// is unaffected — it searches the whole persisted list regardless of
+    /// session.
+    ///
+    /// Returns indices into the combined row space: `0..input_history.len()`
+    /// address the persisted store, `input_history.len() + i` addresses the
+    /// `i`-th backfill row. [`Self::history_entry`] resolves either kind, so
+    /// callers never branch on the boundary.
     pub fn current_session_history(&self) -> Vec<usize> {
         let sid = self.current_session_id.as_str();
-        self.history_order()
-            .into_iter()
-            .filter(|&i| {
-                self.input_history
-                    .get(i)
-                    .is_some_and(|e| e.session_id.as_deref() == Some(sid))
-            })
-            .collect()
+        let mut rows: Vec<(u64, usize)> = self
+            .input_history
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.session_id.as_deref() == Some(sid))
+            .map(|(i, e)| (e.created_at_ms, i))
+            .collect();
+        let base = self.input_history.len();
+        rows.extend(
+            self.session_history_backfill
+                .iter()
+                .enumerate()
+                // Walked newest-first below, so the backfill's oldest-first
+                // storage order must be reversed to reach `created_at_ms`
+                // parity — ties against persisted rows resolve to the
+                // transcript's own (older-first) order via the stable sort.
+                .map(|(i, e)| (e.created_at_ms, base + i)),
+        );
+        // Newest-first: stable sort keeps within-store order on ties, and the
+        // backfill rows (transcript append order) follow persisted rows of the
+        // same millisecond.
+        rows.sort_by_key(|&(created_at_ms, _)| std::cmp::Reverse(created_at_ms));
+        rows.into_iter().map(|(_, i)| i).collect()
+    }
+
+    /// Resolve a row index from [`Self::current_session_history`] to its
+    /// entry, transparently spanning the persisted store (`0..len`) and the
+    /// session backfill (`len..`). `None` when the index is out of range.
+    pub fn history_entry(&self, idx: usize) -> Option<&neenee_contracts::HistoryEntry> {
+        if idx < self.input_history.len() {
+            self.input_history.get(idx)
+        } else {
+            self.session_history_backfill
+                .get(idx - self.input_history.len())
+        }
+    }
+
+    /// Drop backfill rows whose text this session has since **recorded**
+    /// (the send path persisted it, possibly by re-tagging an existing
+    /// global-dedup row into this session). Called after
+    /// [`Self::record_input_history`] so the union the ↑/↓ walk sees never
+    /// contains the same prompt twice: without this, a prompt that was
+    /// backfilled on resume and then re-sent through this client would
+    /// surface as two adjacent rows.
+    pub fn prune_backfill_after_record(&mut self, text: &str) {
+        self.session_history_backfill.retain(|e| e.text != text);
+    }
+
+    /// Seed [`Self::session_history_backfill`] with the **viewed
+    /// transcript's** genuine chat prompts, so the inline ↑/↓ recall reflects
+    /// the conversation the user is actually looking at rather than only what
+    /// this client's `history.json` happens to contain.
+    ///
+    /// This is the resume path: `ConversationReplaced` hands the TUI another
+    /// session's transcript, and prompts typed into that session by a
+    /// *different* client (or before this `history.json` existed) were never
+    /// recorded locally. Without the backfill, `↑` after a resume comes up
+    /// empty even though the conversation visibly contains prompts. The
+    /// initial startup transcript is backfilled the same way before the
+    /// first frame.
+    ///
+    /// Only [`UserMessageOrigin::Chat`] rows count — slash commands
+    /// (`/model`, …) and `!shell` passthroughs are UI gestures excluded from
+    /// the history by contract (`[input_history] record_commands = false`),
+    /// and queued-but-unsent rows are not prompts yet. A prompt already
+    /// recorded by this client (present in the persisted history under this
+    /// session) is skipped, so live sends and backfills never duplicate a
+    /// row.
+    ///
+    /// The backfill is **derived state, never persisted**: transcript rows
+    /// already live in the session file (the durable source of truth,
+    /// ADR-0018), so writing them into `history.json` would duplicate the
+    /// store and race the cross-process merge. Timestamps come from the
+    /// transcript where available (`sent_at_ms`, falling back to `now_ms`
+    /// for legacy rows so ordering stays stable).
+    ///
+    /// `tail` is the transcript's unconsumed suffix as `(text, is_chat,
+    /// sent_at_ms)` triples — copied out by the caller, which cannot lend
+    /// the transcript while `App` is borrowed mutably here.
+    pub fn backfill_session_history(&mut self, tail: &[(String, bool, u64)], now_ms: u64) {
+        let sid = self.current_session_id.as_str();
+        let recorded: HashSet<&str> = self
+            .input_history
+            .iter()
+            .filter(|e| e.session_id.as_deref() == Some(sid))
+            .map(|e| e.text.as_str())
+            .collect();
+        for (text, is_chat, sent_at_ms) in tail {
+            if !is_chat || text.is_empty() || recorded.contains(text.as_str()) {
+                continue;
+            }
+            // Same prompt twice in one conversation (an intentional resend)
+            // is one recallable row — the newest position wins, matching the
+            // persisted history's newest-first contract.
+            if let Some(existing) = self
+                .session_history_backfill
+                .iter_mut()
+                .find(|e| e.text == *text)
+            {
+                existing.created_at_ms = (*sent_at_ms).max(existing.created_at_ms);
+                continue;
+            }
+            self.session_history_backfill
+                .push(neenee_contracts::HistoryEntry::new(
+                    text.clone(),
+                    Some(self.current_session_id.clone()),
+                    Some(self.current_workspace.clone()),
+                    if *sent_at_ms == 0 {
+                        now_ms
+                    } else {
+                        *sent_at_ms
+                    },
+                ));
+        }
     }
 
     /// Record `entry` in the cross-session input history, tagged with the
@@ -1834,22 +2016,30 @@ impl App {
                     existing.workspace = workspace;
                 }
                 let refreshed = existing.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _ = neenee_persistence::config::Config::save_history(
-                        std::slice::from_ref(&refreshed),
-                        true,
-                    );
-                });
+                // The text is now recorded under this session: drop any
+                // transcript-derived backfill row for it so the ↑/↓ union
+                // never shows the same prompt twice.
+                self.prune_backfill_after_record(&refreshed.text);
+                if self.input_history_persist {
+                    tokio::task::spawn_blocking(move || {
+                        let _ = neenee_persistence::config::Config::save_history(
+                            std::slice::from_ref(&refreshed),
+                            true,
+                        );
+                    });
+                }
                 return;
             }
             let recorded = neenee_contracts::HistoryEntry::new(entry, session_id, workspace, now);
             self.input_history.push(recorded.clone());
-            tokio::task::spawn_blocking(move || {
-                let _ = neenee_persistence::config::Config::save_history(
-                    std::slice::from_ref(&recorded),
-                    true,
-                );
-            });
+            if self.input_history_persist {
+                tokio::task::spawn_blocking(move || {
+                    let _ = neenee_persistence::config::Config::save_history(
+                        std::slice::from_ref(&recorded),
+                        true,
+                    );
+                });
+            }
             return;
         }
         // Dedup disabled: dedup against the newest same-text entry in *this*
@@ -1860,22 +2050,28 @@ impl App {
         let already_latest_in_session = self
             .current_session_history()
             .first()
-            .and_then(|&i| self.input_history.get(i))
+            .and_then(|&i| self.history_entry(i))
             .is_some_and(|e| e.text == entry && e.session_id == session_id);
         if already_latest_in_session {
             return;
         }
         let recorded = neenee_contracts::HistoryEntry::new(entry, session_id, workspace, now);
         self.input_history.push(recorded.clone());
+        // Same dedup guard as above: a backfilled row for this text is now
+        // redundant with the recorded one.
+        self.prune_backfill_after_record(&recorded.text);
         // `save_history` lock+merges into the on-disk union, so persisting just
         // the new entry is enough and cheap. Off-thread: the write takes a file
-        // lock and must not block the event loop.
-        tokio::task::spawn_blocking(move || {
-            let _ = neenee_persistence::config::Config::save_history(
-                std::slice::from_ref(&recorded),
-                false,
-            );
-        });
+        // lock and must not block the event loop. Skipped entirely when disk
+        // persistence is disabled (tests).
+        if self.input_history_persist {
+            tokio::task::spawn_blocking(move || {
+                let _ = neenee_persistence::config::Config::save_history(
+                    std::slice::from_ref(&recorded),
+                    false,
+                );
+            });
+        }
     }
 
     /// Wipe the entire input history — the Ctrl+R picker's "clear" action.
@@ -1893,9 +2089,13 @@ impl App {
         self.modal_index = 0;
         self.history_scroll = 0;
         self.history_preview = false;
-        tokio::task::spawn_blocking(|| {
-            let _ = neenee_persistence::config::Config::clear_history();
-        });
+        // Only truncate the real file when disk persistence is enabled — a
+        // test invoking the clear action must never wipe the user's history.
+        if self.input_history_persist {
+            tokio::task::spawn_blocking(|| {
+                let _ = neenee_persistence::config::Config::clear_history();
+            });
+        }
     }
 
     /// Cap on [`App::history_attachments`] — an in-memory cache, so it only
@@ -1926,7 +2126,7 @@ impl App {
     /// `[Image #N …]` / `[Pasted text #N …]` chips, so staging the payloads
     /// is all that is needed to re-arm a resend.
     pub fn restore_history_attachments(&mut self, orig_idx: usize) {
-        let Some(entry) = self.input_history.get(orig_idx) else {
+        let Some(entry) = self.history_entry(orig_idx) else {
             return;
         };
         let identity = (entry.text.clone(), entry.session_id.clone());
@@ -1944,13 +2144,17 @@ impl App {
         }
     }
 
-    /// Load the history entry at `orig_idx` (an index into
-    /// [`App::input_history`]) into the composer: its text, its cached
+    /// Load the history entry at `orig_idx` (an index from
+    /// [`Self::current_session_history`] — spanning the persisted store and
+    /// the session backfill) into the composer: its text, its cached
     /// attachments, cursor at the end, completion popup latched closed.
     /// Shared by the ↑/↓ walk and Ctrl+R insert so every recall path stays
     /// identical on the details.
     fn load_history_row(&mut self, orig_idx: usize) {
-        self.input = self.input_history[orig_idx].text.clone();
+        let Some(entry) = self.history_entry(orig_idx) else {
+            return;
+        };
+        self.input = entry.text.clone();
         self.set_cursor_end();
         self.restore_history_attachments(orig_idx);
         // History navigation is a programmatic input replacement, not an
@@ -2236,9 +2440,7 @@ impl App {
             .custom_model_candidates()
             .into_iter()
             .filter(|id| {
-                q.is_empty()
-                    || id.contains(q)
-                    || crate::fuzzy::fuzzy_match(&crate::model_display_name(id), q).is_some()
+                q.is_empty() || id.contains(q) || crate::fuzzy::fuzzy_match(id, q).is_some()
             })
             .map(|s| s.to_string())
             .collect();
@@ -2387,7 +2589,12 @@ impl App {
     /// `models_flat_filtered_from` so the input handler and the renderer
     /// share one filter+sort implementation.
     pub fn models_flat_filtered(&self) -> Vec<RankedModel> {
-        models_flat_filtered_from(&self.provider_picker, self.picker_query())
+        models_flat_filtered_from(
+            &self.provider_picker,
+            &self.current_provider,
+            &self.current_model,
+            self.picker_query(),
+        )
     }
 
     /// Whether the provider with this snapshot id is user-defined (not a

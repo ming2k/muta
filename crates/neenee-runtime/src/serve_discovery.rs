@@ -36,7 +36,8 @@ pub struct Discovery {
     /// The bound TCP port the WebSocket listener serves.
     pub port: u16,
     /// The bearer token clients must present, when auth is active
-    /// (`--public`); `null` for the unauthenticated loopback default.
+    /// (`--public`, or loopback with `[daemon] local_auth` — ADR-0105);
+    /// `null` for an unauthenticated loopback listener.
     pub token: Option<String>,
     /// The project root the host serves. Empty for the unified daemon
     /// (ADR-0096), which is project-agnostic; retained for the legacy

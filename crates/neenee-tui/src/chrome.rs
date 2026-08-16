@@ -770,7 +770,7 @@ pub fn draw_hint_bar(
             Style::default().fg(theme.muted()).bg(bg),
         )
     } else if !model_available {
-        let name = crate::providers::model_display_name(current_model);
+        let name = current_model;
         (
             format!("{name} [unavailable]"),
             Style::default()
@@ -780,7 +780,7 @@ pub fn draw_hint_bar(
         )
     } else {
         (
-            crate::providers::model_display_name(current_model),
+            current_model.to_string(),
             Style::default()
                 .fg(theme.brand())
                 .add_modifier(Modifier::BOLD)
@@ -1691,7 +1691,7 @@ mod tests {
             !narrow.contains('@'),
             "instance should hide first: {narrow:?}"
         );
-        assert!(narrow.contains("Kimi K2.7 Code"), "{narrow:?}");
+        assert!(narrow.contains("kimi-k2.7-code"), "{narrow:?}");
         assert!(narrow.contains("max"), "{narrow:?}");
         assert!(narrow.contains("(0%)"), "{narrow:?}");
     }
@@ -2090,7 +2090,7 @@ mod tests {
 
         // No ignition at all renders the ordinary cluster.
         let plain = row_text(None);
-        assert!(plain.contains("Kimi K3"), "model name renders: {plain:?}");
+        assert!(plain.contains("k3"), "model id renders: {plain:?}");
     }
 
     /// Paint the completion menu into a test buffer and return the rect the

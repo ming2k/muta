@@ -18,7 +18,6 @@
 
 use neenee_contracts::{
     ChannelAuth, ProviderModelInfo, ProviderPickerSnapshot, WireFormat, baseline_models,
-    resolve_model,
 };
 
 use crate::fuzzy;
@@ -399,27 +398,11 @@ pub fn protocol_model_candidates(protocol_wire: &str) -> Vec<&'static str> {
         .collect()
 }
 
-/// Human-readable model name for the hint bar / status surfaces.
-///
-/// Resolves the wire model id through the [`neenee_contracts::model`] registry so
-/// the always-visible indicator shows the actual model the user is talking to
-/// (e.g. `GLM-5.2`, `Kimi K2.7 Code`), not the provider preset. Falls back to
-/// the raw model id for unknown models (custom / local), where the id is the
-/// only label available.
-pub fn model_display_name(model: &str) -> String {
-    let resolved = resolve_model(model);
-    if resolved.name.is_empty() {
-        model.to_string()
-    } else {
-        resolved.name.to_string()
-    }
-}
-
 /// The context window (in tokens) of a model id, resolved from the registry.
 /// Returns `0` for unknown models. Replaces the former `provider_context_window`
 /// now that the picker carries the active model id directly.
 pub fn model_context_window(model: &str) -> usize {
-    resolve_model(model).context_window
+    neenee_contracts::model::resolve(model).context_window
 }
 
 /// One selectable row in the **flat model picker** ([`crate::modal::Modal::Models`]
@@ -429,12 +412,11 @@ pub fn model_context_window(model: &str) -> usize {
 pub struct RankedModel {
     /// Canonical id of the provider serving this model (its snapshot row id).
     pub provider_id: String,
-    /// Wire model id to activate.
+    /// Wire model id to activate. This is also the rendered label and the
+    /// fuzzy-match target: the picker is id-first by policy — upstream
+    /// discovery only guarantees the wire id, so every row shows the same
+    /// kind of label (never a mix of curated names and raw ids).
     pub model: String,
-    /// The rendered label — the model's display name. The fuzzy match indexes
-    /// directly onto these characters (the provider suffix is rendered but
-    /// never matched).
-    pub label: String,
     /// The provider's display name, rendered as the dim `· <provider>` suffix
     /// so identical model ids served by different instances stay
     /// distinguishable in the flat list.
@@ -444,15 +426,13 @@ pub struct RankedModel {
     pub effort: Option<String>,
     pub thinking: Option<bool>,
     /// Whether this model is favorited (mirrors the snapshot's per-model
-    /// `favorite` flag; ADR-0046). A starred daily-driver model sorts to the
-    /// top of the flat list wherever it is served and shows a `★` glyph.
+    /// `favorite` flag; ADR-0046). A starred daily-driver model sorts into
+    /// the second priority tier of the flat list wherever it is served and
+    /// shows a `★` glyph.
     pub favorite: bool,
-    /// Unix epoch milliseconds of this model's last activation (`None` = never,
-    /// sorts as oldest). Drives the flat list's recency sort.
-    pub last_used_ms: Option<u64>,
-    /// The fuzzy match against `label`, or `None` in browse mode (empty query)
-    /// — and also when the row was included because its PROVIDER name matched
-    /// the query but the model label did not (shown unhighlighted).
+    /// The fuzzy match against the model id, or `None` in browse mode (empty
+    /// query) — and also when the row was included because its PROVIDER name
+    /// matched the query but the model id did not (shown unhighlighted).
     pub m: Option<fuzzy::FuzzyMatch>,
 }
 
@@ -488,19 +468,6 @@ impl RankedProvider {
     #[allow(dead_code)]
     pub fn is_multi_model(&self) -> bool {
         self.models.len() > 1
-    }
-}
-
-/// Most-recently-used-first ordering of two models by their last-activation
-/// timestamps. `None` (never activated) sorts as oldest. The caller applies a
-/// stable tiebreaker (catalog order / label) so this never has to.
-fn model_order(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
-    // Both present → descending; one present → it wins; neither → equal.
-    match (a, b) {
-        (Some(a), Some(b)) => b.cmp(&a),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
     }
 }
 
@@ -562,21 +529,32 @@ pub fn providers_filtered_from(
 
 /// Build the **flat Models** rows: one [`RankedModel`] per (provider, model)
 /// pair across the entire snapshot — the daily-driver switch surface, with no
-/// drill-in. Sorted provider-favorite first → model last-used desc (never-used
-/// oldest) → provider name → model label, so the pairs of a favorited provider
-/// cluster at the top and recently used models lead within it.
+/// drill-in.
 ///
-/// Fuzzy filtering matches `query` against the model label; when the label
-/// does not match but the PROVIDER name fuzzy-matches, that provider's models
-/// are included unhighlighted (`m = None`) so "show me everything Anthropic
+/// **Sorting is two-tiered.** Tier 1 is a status weight: the live pair (the
+/// provider+model currently in use) outranks favorites, which outrank
+/// everything else. Tier 2, within each tier, is a plain ASCII (byte-order)
+/// sort on the model id with the provider label as the tiebreaker, so the
+/// list is deterministic and stable regardless of usage history.
+///
+/// Fuzzy filtering matches `query` against the model **id** (the rendered
+/// label — the picker is id-first: upstream discovery only guarantees the
+/// wire id, so every row shows the same kind of label). When the id does not
+/// match but the PROVIDER name fuzzy-matches, that provider's models are
+/// included unhighlighted (`m = None`) so "show me everything Anthropic
 /// serves" works from the same search box. Match positions always index onto
-/// the model label's characters only.
-pub fn models_flat_filtered_from(picker: &ProviderPickerSnapshot, query: &str) -> Vec<RankedModel> {
+/// the model id's characters only.
+pub fn models_flat_filtered_from(
+    picker: &ProviderPickerSnapshot,
+    current_provider: &str,
+    current_model: &str,
+    query: &str,
+) -> Vec<RankedModel> {
     let mut rows: Vec<RankedModel> = Vec::new();
     for prow in &picker.rows {
         // The provider-name fallback match is computed once per provider: when
         // it hits, every model of that provider is included (unhighlighted)
-        // even if its own label does not match the query.
+        // even if its own id does not match the query.
         let provider_matches = !query.is_empty() && fuzzy::fuzzy_match(&prow.name, query).is_some();
         for model in &prow.models {
             let info = prow
@@ -588,13 +566,12 @@ pub fn models_flat_filtered_from(picker: &ProviderPickerSnapshot, query: &str) -
                     model: model.clone(),
                     ..ProviderModelInfo::default()
                 });
-            let label = model_display_name(model);
             let m = if query.is_empty() {
                 None
             } else {
-                match fuzzy::fuzzy_match(&label, query) {
+                match fuzzy::fuzzy_match(model, query) {
                     Some(m) => Some(m),
-                    // Label missed: keep the row only via the provider-name
+                    // Id missed: keep the row only via the provider-name
                     // fallback, and then without highlight positions.
                     None if provider_matches => None,
                     None => continue,
@@ -603,25 +580,32 @@ pub fn models_flat_filtered_from(picker: &ProviderPickerSnapshot, query: &str) -
             rows.push(RankedModel {
                 provider_id: prow.id.clone(),
                 model: model.clone(),
-                label,
                 provider_label: prow.name.clone(),
                 effort: info.effort,
                 thinking: info.thinking,
                 favorite: info.favorite,
-                last_used_ms: info.last_used_ms,
                 m,
             });
         }
     }
-    // Model-favorite first (ADR-0046: favorite is per-model), then per-model
-    // recency, then provider name and model label as stable, deterministic
-    // tiebreakers.
+    // Two-tier ordering (ADR-0046 made favorite per-model):
+    //   tier 1 — status weight: current pair (2) > favorite (1) > rest (0);
+    //   tier 2 — ASCII model id, then provider label as the stable
+    //            tiebreaker for the same id served by multiple instances.
+    let weight = |r: &RankedModel| {
+        if r.provider_id == current_provider && r.model == current_model {
+            2
+        } else if r.favorite {
+            1
+        } else {
+            0
+        }
+    };
     rows.sort_by(|a, b| {
-        b.favorite
-            .cmp(&a.favorite)
-            .then_with(|| model_order(a.last_used_ms, b.last_used_ms))
+        weight(b)
+            .cmp(&weight(a))
+            .then_with(|| a.model.cmp(&b.model))
             .then_with(|| a.provider_label.cmp(&b.provider_label))
-            .then_with(|| a.label.cmp(&b.label))
     });
     rows
 }
@@ -671,14 +655,99 @@ mod tests {
     }
 
     #[test]
-    fn display_name_resolves_from_model_registry() {
-        assert_eq!(model_display_name("glm-5.2"), "GLM-5.2");
-        assert_eq!(model_display_name("gpt-4o"), "GPT-4o");
+    fn flat_rows_show_the_raw_wire_id() {
+        // Id-first policy: the picker never renders curated display names.
+        // Known and unknown ids alike surface as their raw wire id — the row
+        // label IS `model`, so there is no label mapping left to drift.
+        let snapshot = sample();
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        let glm = rows
+            .iter()
+            .find(|r| r.model == "glm-5.2")
+            .expect("relay pair present");
+        assert_eq!(glm.provider_label, "My Relay");
+        // The rendered label is the id itself (verified via the fuzzy match
+        // target): matching "glm-5.2" hits positions inside the id.
+        assert!(
+            fuzzy::fuzzy_match(&glm.model, "glm52").is_some(),
+            "the match target is the id"
+        );
     }
 
     #[test]
-    fn display_name_falls_back_to_raw_id_for_unknown_models() {
-        assert_eq!(model_display_name("acme-7b"), "acme-7b");
+    fn flat_sorts_current_then_favorite_then_ascii() {
+        // Two-tier ordering: the live (provider, model) pair leads, favorites
+        // come next, and everything else follows — each tier sorted ASCII by
+        // the model id (provider label as tiebreaker). Recency no longer
+        // participates: the list is deterministic regardless of usage.
+        let mut snapshot = sample();
+        let anthropic = snapshot
+            .rows
+            .iter_mut()
+            .find(|r| r.id == "anthropic")
+            .unwrap();
+        anthropic.model_info = vec![
+            ProviderModelInfo {
+                model: "claude-sonnet-5".to_string(),
+                protocol: "anthropic".to_string(),
+                effort: None,
+                thinking: None,
+                favorite: true,
+            },
+            ProviderModelInfo {
+                model: "claude-fable-5".to_string(),
+                protocol: "anthropic".to_string(),
+                effort: None,
+                thinking: None,
+                favorite: false,
+            },
+        ];
+        // The current pair: an un-favorited, never-used model on a provider
+        // whose name sorts late — it must still lead the whole list.
+        let rows = models_flat_filtered_from(&snapshot, "my-relay", "glm-5.1", "");
+        assert_eq!(rows[0].provider_id, "my-relay");
+        assert_eq!(rows[0].model, "glm-5.1");
+        assert!(!rows[0].favorite, "current outranks favorite");
+
+        // Tier 2: the favorited model leads the non-current remainder.
+        assert!(rows[1].favorite);
+        assert_eq!(rows[1].model, "claude-sonnet-5");
+
+        // Tier 3: everything else, ASCII by model id — regardless of recency
+        // (glm-5.1 above has no timestamp at all; glm-5.2 follows it purely by
+        // character order).
+        assert!(rows[2..].iter().all(|r| !r.favorite));
+        let rest: Vec<&str> = rows[2..].iter().map(|r| r.model.as_str()).collect();
+        let mut sorted = rest.clone();
+        sorted.sort();
+        assert_eq!(rest, sorted);
+    }
+
+    #[test]
+    fn flat_sorts_ascii_with_provider_label_tiebreak() {
+        // Full-list invariant: rows never increase across the tier weight,
+        // then ASCII model id, then provider label. Run against the sample
+        // snapshot's every adjacent pair.
+        let snapshot = sample();
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        let keys: Vec<(u8, bool, String, String)> = rows
+            .iter()
+            .map(|r| (0, r.favorite, r.model.clone(), r.provider_label.clone()))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+
+    #[test]
+    fn flat_fuzzy_filters_by_model_id() {
+        // A query matching a model id keeps that pair with highlight
+        // positions indexing onto the id's characters.
+        let snapshot = sample();
+        let rows = models_flat_filtered_from(&snapshot, "", "", "opus");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "claude-opus-4-8");
+        assert!(rows[0].m.is_some(), "id match carries highlight");
     }
 
     #[test]
@@ -897,7 +966,7 @@ mod tests {
         // The flat Models picker has one row per (provider, model) pair across
         // ALL snapshot rows — no drilling, no per-provider scoping.
         let snapshot = sample();
-        let rows = models_flat_filtered_from(&snapshot, "");
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
         let pair_count: usize = snapshot.rows.iter().map(|r| r.models.len()).sum();
         assert_eq!(rows.len(), pair_count);
         // Pairs from different providers coexist, each carrying its provider
@@ -915,11 +984,12 @@ mod tests {
     }
 
     #[test]
-    fn flat_sorts_favorite_model_first_then_recency() {
-        // Favorite is model-level (ADR-0046): a starred model sorts to the top
-        // of the flat list wherever it is served. Give two anthropic models
-        // recency timestamps and favorite one of them: the favorited model
-        // leads, then recency orders the rest.
+    fn flat_sorts_favorite_model_first_then_ascii() {
+        // Favorite is model-level (ADR-0046): a starred model sorts into the
+        // second tier of the flat list wherever it is served. Give two
+        // anthropic models recency timestamps and favorite one of them: the
+        // favorited model leads the non-current rows; recency never
+        // participates (id-first ASCII ordering only).
         let mut snapshot = sample();
         let anthropic = snapshot
             .rows
@@ -933,7 +1003,6 @@ mod tests {
                 effort: None,
                 thinking: None,
                 favorite: true,
-                last_used_ms: Some(9_000),
             },
             ProviderModelInfo {
                 model: "claude-fable-5".to_string(),
@@ -941,41 +1010,68 @@ mod tests {
                 effort: None,
                 thinking: None,
                 favorite: false,
-                last_used_ms: Some(100),
             },
         ];
-        let rows = models_flat_filtered_from(&snapshot, "");
-        // The favorited model leads the whole flat list.
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        // No current pair: the favorited model leads the whole flat list.
         assert!(rows[0].favorite);
         assert_eq!(rows[0].model, "claude-sonnet-5");
         // Everything after the favorited model is not favorited.
         assert!(rows[1..].iter().all(|r| !r.favorite));
-        // Within the non-favorites, recency then provider name → model label.
-        let anthropic_rows: Vec<&RankedModel> = rows
-            .iter()
-            .filter(|r| r.provider_id == "anthropic")
-            .collect();
-        assert_eq!(anthropic_rows[1].model, "claude-fable-5");
+        // The non-favorites order ASCII by id; recency (fable at t=100, the
+        // never-used rest) cannot reorder them.
+        let rest: Vec<&str> = rows[1..].iter().map(|r| r.model.as_str()).collect();
+        let mut sorted = rest.clone();
+        sorted.sort();
+        assert_eq!(rest, sorted);
     }
 
     #[test]
-    fn flat_fuzzy_filters_by_model_label() {
-        // A query matching a model display name keeps that pair with highlight
-        // positions indexing onto the label's characters.
+    fn flat_current_pair_leads_even_over_favorite() {
+        // Two-tier: the live pair outranks favorites. Make glm-5.1 (a
+        // never-used, late-named provider's model) the current pair — it must
+        // lead even though claude-sonnet-5 is favorited.
+        let mut snapshot = sample();
+        let anthropic = snapshot
+            .rows
+            .iter_mut()
+            .find(|r| r.id == "anthropic")
+            .unwrap();
+        anthropic.model_info = vec![ProviderModelInfo {
+            model: "claude-sonnet-5".to_string(),
+            protocol: "anthropic".to_string(),
+            effort: None,
+            thinking: None,
+            favorite: true,
+        }];
+        let rows = models_flat_filtered_from(&snapshot, "my-relay", "glm-5.1", "");
+        assert_eq!(rows[0].provider_id, "my-relay");
+        assert_eq!(rows[0].model, "glm-5.1");
+        assert!(!rows[0].favorite, "current outranks favorite");
+        // The favorite directly follows the current tier.
+        assert!(rows[1].favorite);
+        assert_eq!(rows[1].model, "claude-sonnet-5");
+        // Everything after is plain ASCII order.
+        assert!(rows[2..].iter().all(|r| !r.favorite));
+    }
+
+    #[test]
+    fn flat_current_pair_stays_pinned_under_a_query() {
+        // The tier-1 pin holds inside a fuzzy filter too: when the current
+        // pair survives the filter, it still leads the filtered rows.
         let snapshot = sample();
-        let rows = models_flat_filtered_from(&snapshot, "opus");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].model, "claude-opus-4-8");
-        assert!(rows[0].m.is_some(), "label match carries highlight");
+        let rows = models_flat_filtered_from(&snapshot, "anthropic", "claude-opus-4-8", "claude");
+        assert_eq!(rows[0].model, "claude-opus-4-8", "current leads the filter");
+        assert_eq!(rows.len(), 4);
     }
 
     #[test]
     fn flat_fuzzy_by_provider_name_includes_its_models_unhighlighted() {
-        // "relay" matches no model label but DOES match the "My Relay"
+        // "relay" matches no model id but DOES match the "My Relay"
         // provider name: that provider's models are included with `m = None`
         // (rendered without highlight), while other providers drop out.
         let snapshot = sample();
-        let rows = models_flat_filtered_from(&snapshot, "relay");
+        let rows = models_flat_filtered_from(&snapshot, "", "", "relay");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.provider_id == "my-relay"));
         assert!(
@@ -985,19 +1081,16 @@ mod tests {
     }
 
     #[test]
-    fn flat_never_used_models_fall_back_to_label_order_within_provider() {
-        // With no recency timestamps and no favorites, pairs order by provider
-        // name then model label — a deterministic curated fallback.
+    fn flat_rows_order_ascii_without_current_or_favorite() {
+        // With no favorites and no current pair, rows order purely by ASCII
+        // model id (provider label as the tiebreak) — deterministic
+        // regardless of recency or provider order.
         let snapshot = sample();
-        let rows = models_flat_filtered_from(&snapshot, "");
-        let anthropic: Vec<&str> = rows
-            .iter()
-            .filter(|r| r.provider_id == "anthropic")
-            .map(|r| r.label.as_str())
-            .collect();
-        let mut sorted = anthropic.clone();
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        let ids: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
+        let mut sorted = ids.clone();
         sorted.sort();
-        assert_eq!(anthropic, sorted);
+        assert_eq!(ids, sorted);
     }
 
     #[test]

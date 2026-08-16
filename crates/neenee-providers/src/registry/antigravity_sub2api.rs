@@ -29,7 +29,6 @@ pub const MODELS: &[Model] = &[
     // reason like the rest of the 3.x family.
     Model {
         id: "gemini-3.1-pro-high",
-        name: "Gemini 3.1 Pro High",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -41,7 +40,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-3.1-pro-low",
-        name: "Gemini 3.1 Pro Low",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -53,7 +51,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gemini-3-flash",
-        name: "Gemini 3 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,

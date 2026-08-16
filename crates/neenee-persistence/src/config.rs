@@ -520,9 +520,6 @@ pub struct FittedModelInfo {
     /// Advertised reasoning-effort tiers, as named by the provider.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub efforts: Vec<String>,
-    /// Provider-supplied display name, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
 }
 
 /// A user-defined model entry. When its `id` matches a built-in, the user entry
@@ -953,6 +950,8 @@ pub struct Config {
 /// shutdown_grace_secs = 10      # graceful-teardown budget before forced exit
 /// idle_exit_minutes = 5         # auto-exit after N minutes of zero sessions
 ///                                # and zero attached clients; 0 = never
+/// local_auth = true             # bearer-token the loopback listener too
+///                                # (ADR-0105); false = trust local processes
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
@@ -969,6 +968,15 @@ pub struct DaemonConfig {
     /// born-on-demand, gone-when-useless. `0` disables idle exit for
     /// always-on deployments.
     pub idle_exit_minutes: u64,
+    /// Require a bearer token even on the loopback TCP listener (ADR-0105).
+    /// The token is generated per daemon start and published in the
+    /// owner-only (0600) discovery record, so co-located CLI/TUI clients
+    /// authenticate transparently while other local processes, other users
+    /// on a shared machine, and drive-by browser pages cannot drive the
+    /// control plane. `false` restores the pre-0105 trust-the-loopback
+    /// posture; the UDS listener is always exempt (filesystem permissions
+    /// are its boundary). Default: true.
+    pub local_auth: bool,
 }
 
 impl Default for DaemonConfig {
@@ -976,6 +984,7 @@ impl Default for DaemonConfig {
         Self {
             shutdown_grace_secs: 10,
             idle_exit_minutes: 5,
+            local_auth: true,
         }
     }
 }
@@ -1841,7 +1850,6 @@ mod tests {
                 reasoning: true,
                 vision: true,
                 efforts: vec!["max".to_string()],
-                display_name: Some("kimi-for-coding".to_string()),
             },
         );
         let mut config = Config::default();

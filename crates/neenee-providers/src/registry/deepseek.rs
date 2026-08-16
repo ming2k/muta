@@ -36,7 +36,6 @@ pub const MODELS: &[Model] = &[
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
         id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -48,7 +47,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-flash-0731",
-        name: "DeepSeek V4 Flash (0731)",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -60,7 +58,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -72,7 +69,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-pro-0813",
-        name: "DeepSeek V4 Pro (0813)",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,

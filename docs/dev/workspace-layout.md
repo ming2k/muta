@@ -1,9 +1,10 @@
 # Workspace layout
 
 The repository is one Cargo workspace whose members live directly under
-`crates/`. Cargo package boundaries express dependency and test boundaries; the
-single flat directory keeps every member one level deep so package ownership
-and the `cargo -p <name>` selector stay obvious.
+`crates/`, plus a pnpm workspace for the web frontend under `apps/`. Cargo
+package boundaries express dependency and test boundaries; the single flat
+directory keeps every member one level deep so package ownership and the
+`cargo -p <name>` selector stay obvious.
 
 ## Directory map
 
@@ -21,16 +22,25 @@ crates/
   neenee-llm-client/    # multi-protocol HTTP client (transport + openai/anthropic/google protocols)
   neenee-providers/     # channel registry, factory, discovery + provider facade + OAuth flows
   neenee-tool-derive/   # proc-macro derive for tool adapters (implementation detail of tools)
+
+apps/
+  web/                  # browser frontend (Svelte 5 + TS + Vite): daemon control-panel client
 ```
 
 ## Ownership rules
 
-- Every workspace member lives directly under `crates/`. There is no
+- Every Rust workspace member lives directly under `crates/`. There is no
   intermediate grouping directory; a package is selected by name, not by
   location.
+- Frontend packages live under `apps/` and are managed by pnpm
+  (`pnpm-workspace.yaml` declares `apps/*`); the committed lockfile is the
+  root `pnpm-lock.yaml`. Node dependency state stays out of Cargo's graph:
+  nothing under `crates/` may depend on `apps/`.
 - Put shared contracts in `neenee-contracts`, orchestration in `neenee-agent`, and
-  the application binary in `neenee-cli`. See
-  [Crate layering](../explanation/crate-layering.md) for the dependency DAG.
+  the application binary in `neenee-cli`. The web panel's wire types are
+  transcribed from `neenee-contracts` into `apps/web/src/lib/types.ts` and
+  must be updated in the same change as any wire-visible Rust contract edit.
+  See [Crate layering](../explanation/crate-layering.md) for the dependency DAG.
 - Do not infer a dependency from directory containment. Cargo manifests remain
   the authoritative dependency graph.
 - The product focus is the coding agent. Application-specific support packages

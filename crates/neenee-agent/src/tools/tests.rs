@@ -55,8 +55,8 @@ mod tests {
         // `allowed_in_plan_mode` override on the write tools. This test is
         // kept as a placeholder guard that the write tools still build; the
         // scoping behavior is covered by neenee-contracts's WriteScope tests.
-        let _write = WriteFileTool;
-        let _edit = EditFileTool;
+        let _write = WriteFileTool { root: None };
+        let _edit = EditFileTool { root: None };
     }
 
     #[tokio::test]
@@ -71,7 +71,7 @@ mod tests {
         let path = dir.join("lines.txt");
         std::fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
 
-        let tool = ReadTextTool;
+        let tool = ReadTextTool { root: None };
 
         let full = tool
             .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &path.to_string_lossy()))
@@ -140,7 +140,7 @@ mod tests {
         let path = dir.join("small.txt");
         std::fs::write(&path, "a\nb\nc\n").unwrap();
 
-        let out = ReadTextTool
+        let out = ReadTextTool { root: None }
             .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &path.to_string_lossy()))
             .await
             .unwrap();
@@ -161,7 +161,7 @@ mod tests {
         const LINES: usize = 6000;
         const PAGE: usize = 5000; // 50_000 / (9 + 1)
         let (path, _lines) = make_fixed_width_file(LINES);
-        let tool = ReadTextTool;
+        let tool = ReadTextTool { root: None };
         let arg = |offset: usize| {
             format!(
                 r#"{{"path":"{}","offset":{}}}"#,
@@ -218,7 +218,12 @@ mod tests {
             path.to_string_lossy(),
             LINES
         );
-        let (text, _pre, suf) = code_parts(ReadTextTool.call_structured(&arg).await.unwrap());
+        let (text, _pre, suf) = code_parts(
+            ReadTextTool { root: None }
+                .call_structured(&arg)
+                .await
+                .unwrap(),
+        );
         // Far fewer than the requested 6000 lines — bounded by the budget.
         assert!(text.lines().count() < LINES);
         assert!(
@@ -241,7 +246,7 @@ mod tests {
         let empty = dir.join("empty.txt");
         std::fs::write(&empty, "").unwrap();
         let (text, pre, suf) = code_parts(
-            ReadTextTool
+            ReadTextTool { root: None }
                 .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &empty.to_string_lossy()))
                 .await
                 .unwrap(),
@@ -256,7 +261,7 @@ mod tests {
         let small = dir.join("small.txt");
         std::fs::write(&small, "a\nb\n").unwrap();
         let (text, pre, suf) = code_parts(
-            ReadTextTool
+            ReadTextTool { root: None }
                 .call_structured(
                     &r#"{"path":"PATH","offset":99}"#.replace("PATH", &small.to_string_lossy()),
                 )
@@ -282,7 +287,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("neenee-read-isdir-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let err = ReadTextTool
+        let err = ReadTextTool { root: None }
             .call(&r#"{"path":"PATH"}"#.replace("PATH", &dir.to_string_lossy()))
             .await
             .unwrap_err();

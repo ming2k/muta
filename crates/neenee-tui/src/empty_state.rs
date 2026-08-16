@@ -11,6 +11,16 @@
 //! The footer (input box, status bar, hint bar) renders exactly as in a live
 //! session, so the user lands in a familiar composer immediately.
 //!
+//! Beneath the logo the hero carries a **help carousel** (ADR-0104): one
+//! durable capability hint at a time (`/btw`, `Ctrl-R`, `F1`, `!` shell,
+//! …) rotating on a wall-clock cadence, one line at a time (no position
+//! indicator — the copy is self-explaining) and nothing else — the static
+//! "type a message" tagline is retired, since the carousel's own first page
+//! already answers "how do I start". It is the
+//! same "teach quietly, without a manual" slot that can later host other
+//! contextual tours. A missing provider replaces the carousel with a pinned
+//! setup blocker (ADR-0057) — nothing rotates until the blocker clears.
+//!
 //! The logo source is pluggable: a caller may pass user-supplied lines (loaded
 //! from `$XDG_CONFIG_HOME/neenee/logo.txt`); when absent the built-in figlet
 //! wordmark is used. Either way the art is clamped to a safe bounding box so a
@@ -21,10 +31,12 @@ use neenee_tui_engine::{
 };
 
 use super::theme::Theme;
+#[cfg(test)]
+use unicode_width::UnicodeWidthStr;
 
 /// Hard width cap (in terminal columns) for any logo line. A wider line is
 /// truncated at a character boundary. 60 keeps comfortable side margins inside
-/// an 80-column terminal while leaving room for the tagline beneath.
+/// an 80-column terminal while leaving room for the guidance line beneath.
 pub(crate) const MAX_LOGO_COLS: usize = 60;
 
 /// Hard height cap (in rows) for the logo block. More lines than this are
@@ -32,10 +44,119 @@ pub(crate) const MAX_LOGO_COLS: usize = 60;
 /// 24-row terminal even before vertical centering.
 pub(crate) const MAX_LOGO_ROWS: usize = 20;
 
+/// How long one carousel page stays on screen before rotating to the next
+/// (ADR-0104). Long enough to read a one-line hint at a glance, short
+/// enough that a user who lingers on the empty state sees several pages.
+/// The index is derived from wall-clock elapsed time (`carousel_epoch`), so
+/// the cadence stays constant regardless of how often the loop redraws.
+pub(crate) const CAROUSEL_SLIDE_SECS: u64 = 8;
+
+/// One rotating help page beneath the logo (ADR-0104). Each page is one
+/// centered line: a muted lead sentence followed by keycap/`command` tokens
+/// picked out in the theme's info tone, so the actionable part of each hint
+/// reads as an affordance the way the hint bar's `◆ effort` tag does.
+///
+/// The copy is intentionally **durable**: every page teaches a capability
+/// that remains true for the life of the product (send, queue, asides,
+/// help, history, models, shell escape), never a transient state. The list
+/// is static — there is nothing session-specific to compute — and new pages
+/// can be appended freely: the modulo rotation is derived from the slice
+/// length, so no other code needs to know the count.
+pub(crate) fn carousel_pages() -> Vec<CarouselPage> {
+    use CarouselToken as Tok;
+    vec![
+        CarouselPage {
+            lead: "Send a message, or ",
+            tokens: vec![
+                Tok::Key("/"),
+                Tok::Text(" command — try "),
+                Tok::Key("/help"),
+            ],
+        },
+        CarouselPage {
+            lead: "Mid-round, Enter ",
+            tokens: vec![Tok::Text("queues it")],
+        },
+        CarouselPage {
+            lead: "Start a background side chat with ",
+            tokens: vec![Tok::Key("/btw")],
+        },
+        CarouselPage {
+            lead: "All shortcuts live behind ",
+            tokens: vec![Tok::Key("F1"), Tok::Text(" or "), Tok::Key("?")],
+        },
+        CarouselPage {
+            lead: "Recall what you typed with ",
+            tokens: vec![Tok::Key("Ctrl-R")],
+        },
+        CarouselPage {
+            lead: "Switch models with ",
+            tokens: vec![Tok::Key("Ctrl-M"), Tok::Text(" or "), Tok::Key("/models")],
+        },
+        CarouselPage {
+            lead: "Lead with ",
+            tokens: vec![Tok::Key("!"), Tok::Text(" to run a shell command")],
+        },
+        CarouselPage {
+            lead: "Mention files with ",
+            tokens: vec![Tok::Key("@"), Tok::Text(" — tab completes")],
+        },
+    ]
+}
+
+/// A styled token inside a carousel page: a keycap/command affordance or a
+/// plain-text connective.
+enum CarouselToken {
+    /// Keycap / command / prefix affordance — rendered in the info tone
+    /// (matching how the hint bar highlights actionable tokens).
+    Key(&'static str),
+    /// Plain connective text in the muted tone.
+    Text(&'static str),
+}
+
+/// One page of the empty-state help carousel.
+pub struct CarouselPage {
+    lead: &'static str,
+    tokens: Vec<CarouselToken>,
+}
+
+impl CarouselPage {
+    /// Render the page as one styled line: `lead tokens…` with the keycap
+    /// tokens in the info tone and connectives muted.
+    fn line(&self, theme: &Theme) -> Line<'static> {
+        let muted = Style::default().fg(theme.muted());
+        let info = Style::default().fg(theme.info());
+        let mut spans = vec![Span::styled(self.lead, muted)];
+        for token in &self.tokens {
+            match token {
+                CarouselToken::Key(key) => spans.push(Span::styled(*key, info)),
+                CarouselToken::Text(text) => spans.push(Span::styled(*text, muted)),
+            }
+        }
+        Line::from(spans)
+    }
+
+    /// Display width of the rendered line, used to keep every page inside
+    /// the minimum terminal width (asserted by the tests; see
+    /// `carousel_pages_fit_the_minimum_terminal_width`).
+    #[cfg(test)]
+    fn width(&self) -> usize {
+        self.lead.width()
+            + self
+                .tokens
+                .iter()
+                .map(|token| match token {
+                    CarouselToken::Key(key) => key.width(),
+                    CarouselToken::Text(text) => text.width(),
+                })
+                .sum::<usize>()
+    }
+}
+
 /// The built-in wordmark, rendered when no user logo is supplied (figlet
-/// "small" font). Compact enough to fit an 80-column terminal with room for the
-/// tagline beneath, while still reading as a logo at a glance rather than
-/// competing with the transcript that will replace it.
+/// "small" font). Compact enough to fit an 80-column terminal with room for
+/// the guidance line beneath, while still reading as a logo at a glance
+/// rather than competing with the transcript that will replace it.
 const BUILTIN_LOGO: &[&str] = &[
     " _ _  ___ ___ _ _  ___ ___ ",
     "| ' \\/ -_) -_) ' \\/ -_) -_|",
@@ -82,10 +203,10 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// without drawing. Lets the transcript renderer keep its `content_lines`
 /// accounting honest so the app loop does not treat an empty session as a
 /// zero-height stream. `logo` is the effective lines (user-supplied or
-/// built-in); `guidance` adds the lines beneath the gap (tagline + any
-/// onboarding copy).
+/// built-in); `guidance` adds the lines beneath the gap (the carousel's
+/// current page or the pinned blocker).
 fn empty_state_height(logo: &[&str], guidance: EmptyStateGuidance) -> usize {
-    logo.len() + 2 // logo rows + blank gap before the tagline
+    logo.len() + 2 // logo rows + blank gap before the guidance section
         + guidance_line_count(guidance)
 }
 
@@ -103,63 +224,105 @@ fn effective_logo(user_logo: Option<&[String]>) -> Vec<&str> {
 /// Which guidance variant the empty-state hero shows beneath the logo.
 ///
 /// The empty state is a **contextual** surface (ADR-0057): it adapts to
-/// whether the user has a working LLM configured and whether they have seen
-/// the one-time onboarding, rather than showing every user the same static
-/// tagline. The variants are mutually exclusive and ordered by priority — a
-/// missing provider beats a not-yet-onboarded provider — so the hero never
-/// shows two competing calls to action. [`Self::None`] leaves the classic
-/// minimal tagline, preserving the calm "landing strip" for returning users.
+/// whether the user has a working LLM configured, rather than showing every
+/// user the same static line. The variants are mutually exclusive and
+/// ordered by priority — a missing provider beats everything, since nothing
+/// else matters until the blocker clears.
+///
+/// - [`Self::NeedsProvider`] replaces the carousel with a static
+///   setup blocker: a message the user must act on before anything else is
+///   useful, so it stays pinned instead of rotating.
+/// - [`Self::Tour`] (the default) shows the rotating help carousel
+///   (ADR-0104).
 ///
 /// The app shell selects the variant; the view layer owns the copy and
 /// styling. This keeps the policy (when to nudge) in the shell and the
 /// presentation (what the nudge looks like) in the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EmptyStateGuidance {
-    /// No extra guidance — the classic single-line tagline only. The default
-    /// for a returning, fully-configured user so the hero stays a calm landing
-    /// strip rather than a recurring billboard.
+    /// The rotating tour: the help carousel alone. The default — a calm
+    /// landing strip that teaches one durable capability at a time instead
+    /// of a recurring billboard.
     #[default]
-    None,
+    Tour,
     /// No usable LLM provider is configured. Steers the user to `/connections`
     /// before they type, since a message sent against the mock provider goes
     /// nowhere. This is a real setup blocker, not onboarding — it clears the
-    /// moment a keyed provider exists, independently of the onboarding flag.
-    #[allow(dead_code)]
+    /// moment a keyed provider exists.
     NeedsProvider,
-    /// A provider is configured but the user has not yet sent their first
-    /// message. Surfaces a few distinctive slash commands (`/skills`,
-    /// `/pursue`, `/help`) so the capability set is discoverable without a
-    /// `/help` round-trip. Dismissed permanently on the first send.
-    #[allow(dead_code)]
-    Onboarding,
+}
+
+impl EmptyStateGuidance {
+    /// Whether this variant rotates its help pages (ADR-0104). The setup
+    /// blocker stays pinned — it is an action item, not a tour stop.
+    #[cfg(test)]
+    pub fn is_carousel(&self) -> bool {
+        matches!(self, Self::Tour)
+    }
 }
 
 /// Number of text lines the guidance section renders beneath the logo + gap.
 /// Used by [`empty_state_content_lines`] to keep the app loop's scroll
 /// accounting honest without needing a `Theme` — the count is variant-only,
-/// never wrap-dependent (every guidance line fits the minimum terminal width).
+/// never wrap-dependent (every guidance line fits the minimum terminal width;
+/// the carousel contributes exactly its current page line).
 fn guidance_line_count(guidance: EmptyStateGuidance) -> usize {
     match guidance {
-        EmptyStateGuidance::None => 1,          // tagline only
+        // the current carousel page (no static tagline above it — page 0
+        // already teaches "send a message or /")
+        EmptyStateGuidance::Tour => CAROUSEL_LINES,
         EmptyStateGuidance::NeedsProvider => 2, // blocker + action
-        EmptyStateGuidance::Onboarding => 2,    // tagline + capability hint
     }
+}
+
+/// Rows the carousel itself renders beneath the logo: the current page
+/// line. No tagline above it (page 0 already teaches "send a message or /")
+/// and no indicator row (ADR-0104) — the rotating copy is self-explaining.
+const CAROUSEL_LINES: usize = 1;
+
+/// Resolve the carousel page to show for a wall-clock `elapsed` since the
+/// carousel epoch (ADR-0104). The index is `(elapsed / slide) % pages`, so
+/// the cadence is steady regardless of draw frequency (the same property the
+/// breathing indicator relies on via `spinner_epoch`), and any terminal
+/// size sees the full set over time. Falls back to the first page for an
+/// empty set, which `carousel_pages()` never produces.
+pub(crate) fn carousel_page_for(elapsed_ms: u128) -> usize {
+    let pages = carousel_pages().len().max(1);
+    ((elapsed_ms / (CAROUSEL_SLIDE_SECS as u128 * 1000)) as usize) % pages
+}
+
+/// Build the carousel block for page `index`: the page line only. No dot
+/// indicator — the rotating copy is self-explaining (each page carries its
+/// own affordance), and an indicator row would spend a second row of chrome
+/// restating "this line changes", information the user cannot act on. The
+/// hero stays a minimal landing strip (ADR-0104).
+fn carousel_lines(index: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let pages = carousel_pages();
+    let index = index.min(pages.len().saturating_sub(1));
+    vec![pages[index].line(theme)]
 }
 
 /// Build the styled text lines for the guidance section. The logo + blank gap
 /// are rendered by [`draw_empty_state`]; this owns only the copy beneath. The
-/// `info` tone highlights actionable tokens (`/connections`, `/skills`, …) so the
-/// next step reads as a affordance, not ambient text — mirroring how the hint
+/// `info` tone highlights actionable tokens (`/connections`, keycaps, …) so the
+/// next step reads as an affordance, not ambient text — mirroring how the hint
 /// bar uses `info` for the `◆ effort` tag.
-fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'static>> {
+///
+/// `carousel_index` selects the carousel page for the [`EmptyStateGuidance::Tour`]
+/// variant (ADR-0104); it is ignored by the pinned variants.
+fn guidance_section(
+    guidance: EmptyStateGuidance,
+    carousel_index: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let muted = Style::default().fg(theme.muted());
     let info = Style::default().fg(theme.info());
     let warn = Style::default().fg(theme.warn());
     match guidance {
-        EmptyStateGuidance::None => vec![Line::from(vec![Span::styled(
-            "Type a message below to begin.",
-            muted,
-        )])],
+        // The tour is the carousel alone: page 0 already answers "how do I
+        // start" ("Send a message, or / command — try /help"), so the old
+        // static tagline beneath the logo duplicated it and is retired.
+        EmptyStateGuidance::Tour => carousel_lines(carousel_index, theme),
         EmptyStateGuidance::NeedsProvider => vec![
             Line::from(vec![Span::styled(
                 "No LLM provider is configured yet.",
@@ -169,19 +332,6 @@ fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'st
                 Span::styled("Run ", muted),
                 Span::styled("/connections", info),
                 Span::styled(" to set one up.", muted),
-            ]),
-        ],
-        EmptyStateGuidance::Onboarding => vec![
-            Line::from(vec![Span::styled("Type a message below to begin.", muted)]),
-            Line::from(vec![
-                Span::styled("Try ", muted),
-                Span::styled("/skills", info),
-                // R2: the command suggestions are same-rank peers — plain
-                // whitespace, no dot.
-                Span::styled(" ".repeat(crate::design::JOIN_ENUMERATE_COLS), muted),
-                Span::styled("/repeat", info),
-                Span::styled(" ".repeat(crate::design::JOIN_ENUMERATE_COLS), muted),
-                Span::styled("/help", info),
             ]),
         ],
     }
@@ -194,14 +344,18 @@ fn guidance_section(guidance: EmptyStateGuidance, theme: &Theme) -> Vec<Line<'st
 /// The caller is responsible for having loaded + parsed it (clamped here as a
 /// safety net regardless).
 ///
-/// `guidance` selects the copy shown beneath the logo+gap (ADR-0057). It is
-/// the app shell's policy decision — the view layer only renders what it is
-/// given. `None` reproduces the classic single-line tagline.
+/// `guidance` selects the copy shown beneath the logo+gap (ADR-0057): the
+/// rotating tour (ADR-0104) or the pinned provider blocker. It is the app
+/// shell's policy decision — the view layer only renders what it is given.
+///
+/// `carousel_index` picks the tour page (see [`carousel_page_for`]); the
+/// caller derives it from wall-clock elapsed time.
 pub(crate) fn draw_empty_state(
     frame: &mut Frame,
     area: Rect,
     user_logo: Option<&[String]>,
     guidance: EmptyStateGuidance,
+    carousel_index: usize,
     theme: &Theme,
 ) {
     // If the user logo somehow slipped through un-clamped, clamp it here too so
@@ -221,13 +375,13 @@ pub(crate) fn draw_empty_state(
     let logo_fg = theme.brand();
     let logo_style = Style::default().fg(logo_fg).add_modifier(Modifier::BOLD);
 
-    let section = guidance_section(guidance, theme);
+    let section = guidance_section(guidance, carousel_index, theme);
 
     let mut lines: Vec<Line> = Vec::with_capacity(logo_refs.len() + 2 + section.len());
     for row in &logo_refs {
         lines.push(Line::from(vec![Span::styled(*row, logo_style)]));
     }
-    // Blank gap, then the guidance section (tagline + optional onboarding).
+    // Blank gap, then the guidance section (carousel page or blocker).
     lines.push(Line::raw(""));
     lines.extend(section);
 
@@ -263,7 +417,7 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
         let theme = Theme::default();
         terminal.draw(|f| {
-            draw_empty_state(f, f.area(), None, EmptyStateGuidance::None, &theme);
+            draw_empty_state(f, f.area(), None, EmptyStateGuidance::Tour, 0, &theme);
         });
     }
 
@@ -277,7 +431,8 @@ mod tests {
                 f,
                 f.area(),
                 Some(&logo),
-                EmptyStateGuidance::Onboarding,
+                EmptyStateGuidance::Tour,
+                3,
                 &theme,
             );
         });
@@ -288,8 +443,82 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
         let theme = Theme::default();
         terminal.draw(|f| {
-            draw_empty_state(f, f.area(), None, EmptyStateGuidance::NeedsProvider, &theme);
+            draw_empty_state(
+                f,
+                f.area(),
+                None,
+                EmptyStateGuidance::NeedsProvider,
+                0,
+                &theme,
+            );
         });
+    }
+
+    #[test]
+    fn carousel_rotates_on_a_wall_clock_cadence() {
+        let pages = carousel_pages().len();
+        assert!(pages >= 4, "the tour must teach several capabilities");
+        // Slide boundaries: within one slide the page holds, then advances.
+        assert_eq!(carousel_page_for(0), 0);
+        assert_eq!(carousel_page_for(CAROUSEL_SLIDE_SECS as u128 * 1000 - 1), 0);
+        assert_eq!(carousel_page_for(CAROUSEL_SLIDE_SECS as u128 * 1000), 1);
+        // Full-cycle wrap.
+        let cycle = CAROUSEL_SLIDE_SECS as u128 * 1000 * pages as u128;
+        assert_eq!(carousel_page_for(cycle), 0);
+        assert_eq!(carousel_page_for(cycle + 1), 0);
+    }
+
+    #[test]
+    fn carousel_pages_fit_the_minimum_terminal_width() {
+        // MIN_TERMINAL_COLS = 40: every page must stay on one centered line
+        // even there, or the copy would wrap and break the height accounting
+        // (`guidance_line_count` is wrap-independent by contract).
+        for page in carousel_pages() {
+            assert!(
+                page.width() <= 40,
+                "carousel page too wide ({} cols): {:?}",
+                page.width(),
+                page.lead
+            );
+        }
+    }
+
+    #[test]
+    fn tour_carousel_renders_only_the_current_page_line() {
+        let theme = Theme::default();
+        let lines = guidance_section(EmptyStateGuidance::Tour, 1, &theme);
+        // Just the page line — no static tagline above it, no indicator row.
+        assert_eq!(lines.len(), CAROUSEL_LINES);
+        let page_line: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.clone().into_owned())
+            .collect();
+        assert!(
+            page_line.contains(carousel_pages()[1].lead),
+            "page 1 shows its lead: {page_line}"
+        );
+        // No dot indicator anywhere (ADR-0104): the rotation is
+        // self-explaining, so no chrome restates it.
+        let joined = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone().into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!joined.contains('●'), "no dot indicator: {joined}");
+    }
+
+    #[test]
+    fn needs_provider_does_not_rotate() {
+        assert!(!EmptyStateGuidance::NeedsProvider.is_carousel());
+        let theme = Theme::default();
+        let lines = guidance_section(EmptyStateGuidance::NeedsProvider, 5, &theme);
+        assert_eq!(lines.len(), 2, "blocker + action only: {lines:?}");
     }
 
     #[test]
@@ -328,38 +557,37 @@ mod tests {
     fn builtin_height_matches_logo_plus_gap() {
         let refs = effective_logo(None);
         assert_eq!(
-            empty_state_height(&refs, EmptyStateGuidance::None),
-            BUILTIN_LOGO.len() + 2 + 1
+            empty_state_height(&refs, EmptyStateGuidance::Tour),
+            BUILTIN_LOGO.len() + 2 + CAROUSEL_LINES
         );
     }
 
     #[test]
     fn content_lines_reflects_user_logo_size() {
         let user = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        // None guidance: 3 logo + 2 (blank gap) + 1 (tagline) = 6.
+        // Tour guidance: 3 logo + 2 (blank gap) + 1 carousel page = 6.
         assert_eq!(
-            empty_state_content_lines(Some(&user), EmptyStateGuidance::None),
+            empty_state_content_lines(Some(&user), EmptyStateGuidance::Tour),
             6
         );
         assert_eq!(
-            empty_state_content_lines(None, EmptyStateGuidance::None),
-            BUILTIN_LOGO.len() + 2 + 1
+            empty_state_content_lines(None, EmptyStateGuidance::Tour),
+            BUILTIN_LOGO.len() + 2 + CAROUSEL_LINES
         );
     }
 
     #[test]
     fn content_lines_reflects_guidance_variant() {
-        // Same logo, three guidance tiers — height rises with extra copy.
+        // Same logo, two guidance tiers — tour (one page line) and blocker
+        // (blocker + action). The blocker is one row taller.
         let base_logo = None::<&[String]>;
-        let none = empty_state_content_lines(base_logo, EmptyStateGuidance::None);
-        let onboarding = empty_state_content_lines(base_logo, EmptyStateGuidance::Onboarding);
+        let tour = empty_state_content_lines(base_logo, EmptyStateGuidance::Tour);
         let needs = empty_state_content_lines(base_logo, EmptyStateGuidance::NeedsProvider);
-        // None = tagline (1); Onboarding = tagline + hint (2); Needs = blocker
-        // + action (2). Onboarding/Needs each add one line over None.
-        assert_eq!(onboarding, none + 1, "Onboarding adds one line over None");
-        assert_eq!(needs, none + 1, "NeedsProvider adds one line over None");
-        assert_eq!(guidance_line_count(EmptyStateGuidance::None), 1);
-        assert_eq!(guidance_line_count(EmptyStateGuidance::Onboarding), 2);
+        assert_eq!(
+            guidance_line_count(EmptyStateGuidance::Tour),
+            CAROUSEL_LINES
+        );
         assert_eq!(guidance_line_count(EmptyStateGuidance::NeedsProvider), 2);
+        assert_eq!(needs, tour + 1, "blocker adds its action row");
     }
 }

@@ -148,7 +148,7 @@ default_channel = 0
 
 | `favorites` | Default | Meaning |
 |-----|---------|---------|
-| `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts to the top wherever it is served |
+| `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts into the second priority tier (below the currently-active pair) wherever it is served |
 
 ## Permissions, bash policy, and tool variants
 

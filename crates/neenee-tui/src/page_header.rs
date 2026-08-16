@@ -4,23 +4,107 @@
 //! Every view — Main (session), `/btw`, Envoy, and future focused pages —
 //! shares one layout rule for the head row: identity and page-specific
 //! context on the left, mode / index metadata on the right. Navigation
-//! shortcuts do **not** live on the head row; the Envoy page carries them on
-//! its permanent three-row footer ([`draw_envoy_footer`]) instead. Keeping
-//! this outside disclosure rendering also leaves one clear extension point
-//! for future focused pages.
+//! shortcuts do **not** live on the head row; the aside view carries them on
+//! its second header row (ADR-0103 §3) and the Envoy page on its permanent
+//! three-row footer ([`draw_envoy_footer`]) instead. Row 2 is demand-driven
+//! (ADR-0104): it exists only while the view has something to say that no
+//! other surface already says. Keeping this outside disclosure rendering
+//! also leaves one clear extension point for future focused pages.
 
 use neenee_tui_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{EnvoyBarInfo, STEP_MIN_WIDTH, Theme};
+use super::{EnvoyBarInfo, STEP_MIN_WIDTH, TRANSCRIPT_H_INSET, Theme};
 
 pub(crate) enum PageHeader<'a> {
     /// The Main session view: `SESSION` identity, the session's persistent-id
     /// tail, and the workspace on the left; the session mode (e.g.
     /// `autopilot`) on the right.
     Session(&'a SessionHead<'a>),
-    Btw(neenee_contracts::ParentStatus),
+    /// The `/btw` aside view (ADR-0103): identity + parent status on row 1;
+    /// its shortcuts live on row 2 via [`draw_page_header_hints`].
+    Btw(BtwHead),
     Envoy(&'a EnvoyBarInfo),
+}
+
+/// Row-1 content for the `/btw` aside view's head.
+#[derive(Clone, Copy)]
+pub(crate) struct BtwHead {
+    /// Coarse primary-session status, rendered as the left context's meta
+    /// segment ("main running", …).
+    pub parent: neenee_contracts::ParentStatus,
+}
+
+/// Row-2 (view affordance) context for every page kind. One struct because
+/// the legend's *shape* is shared: a leading descriptive segment (the main
+/// view's live aside count, the aside view's parent state) followed by
+/// keycap pairs for the view's own shortcuts.
+///
+/// The band is **demand-driven** (ADR-0104): row 2 renders only when
+/// [`PageHints::has_content`] is `true` — i.e. when this view genuinely has
+/// page-specific affordances to announce. Nothing renders a row for pairs
+/// that are either global (`F1 help` — every modal footer and the Help modal
+/// own that discovery) or already carried by a *more specific* surface: the
+/// main view's interrupt lives on the activity bar (which spells the real
+/// double-Esc arming, `Esc Esc interrupt`), and the Envoy page's legend
+/// lives on its permanent footer ([`draw_envoy_footer`]).
+pub(crate) struct PageHints<'a> {
+    /// Which page the legend belongs to — decides the keycap set.
+    pub kind: PageKind,
+    /// Live aside count + how many have a round in flight (main view only,
+    /// ADR-0103 §3). `None` renders no aside segment.
+    pub asides: Option<AsidesChip>,
+    /// `true` when the viewed page has an in-flight round the user can
+    /// interrupt (drives whether the interrupt pair is offered).
+    pub interruptible: bool,
+    /// Marker text for the aside view's legend (its parent's coarse state),
+    /// already formatted; empty renders none.
+    pub parent_note: &'a str,
+}
+
+impl PageHints<'_> {
+    /// Whether row 2 has anything view-specific to say (ADR-0104). `false`
+    /// means the caller must not reserve the row at all — the head collapses
+    /// to a single row and the transcript reclaims the line.
+    ///
+    /// - **Main**: only while at least one aside is live (the aside chip +
+    ///   `F5 asides` are exactly the affordances this row exists for).
+    /// - **Btw**: always — `Ctrl-C back` is the view's single exit, and
+    ///   no other surface repeats it.
+    /// - **Envoy**: never — its permanent footer already carries the same
+    ///   legend (`draw_envoy_footer`), so a row-2 copy would duplicate the
+    ///   exact keycaps one screen apart.
+    pub(crate) fn has_content(&self) -> bool {
+        match self.kind {
+            PageKind::Main => self.asides.is_some(),
+            PageKind::Btw => true,
+            PageKind::Envoy => false,
+        }
+    }
+}
+
+/// The main view's live-asides chip: count + running count.
+pub(crate) struct AsidesChip {
+    pub total: usize,
+    pub running: usize,
+}
+
+/// Which page the header band is describing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageKind {
+    Main,
+    Btw,
+    Envoy,
+}
+
+impl From<&PageHeader<'_>> for PageKind {
+    fn from(header: &PageHeader<'_>) -> Self {
+        match header {
+            PageHeader::Session(_) => PageKind::Main,
+            PageHeader::Btw(_) => PageKind::Btw,
+            PageHeader::Envoy(_) => PageKind::Envoy,
+        }
+    }
 }
 
 /// Left/right content for the Main session view's head row.
@@ -53,6 +137,12 @@ struct HeaderContent {
 /// Draw a single contextual header row. The primary action is always retained
 /// on narrow terminals; descriptive text truncates first, while Envoy sibling
 /// shortcuts appear when there is enough room for them to remain legible.
+///
+/// The band's background spans the rect's full width — the head is top-level
+/// chrome pinned to the terminal's top edge, so its `body` surface reaches
+/// both edges like the Envoy key-legend band at the bottom edge. The *text*
+/// keeps the shared [`TRANSCRIPT_H_INSET`] horizontal inset (rendered as pad
+/// spans) so it stays aligned with the transcript band below.
 pub(crate) fn draw_page_header(
     frame: &mut Frame,
     rect: Rect,
@@ -78,13 +168,15 @@ pub(crate) fn draw_page_header(
             },
         },
         // Envoy and /btw are contextual pages that replace the session head.
-        PageHeader::Btw(status) => HeaderContent {
+        PageHeader::Btw(head) => HeaderContent {
             title: " /btw ",
             tag: String::new(),
             badge: String::new(),
             primary: "Side conversation".to_string(),
-            meta: parent_status_label(*status).to_string(),
-            action: "Esc back ".to_string(),
+            meta: parent_status_label(head.parent).to_string(),
+            // Row 1 is identity + status only — the exit affordance moved to
+            // the row-2 legend (ADR-0103 §3), so "Esc back" is gone here.
+            action: String::new(),
         },
         // The Envoy head shares the Session head's shape: uppercase identity
         // + `[ROLE]` tag + task title on the left, and pure index metadata on
@@ -125,6 +217,12 @@ pub(crate) fn draw_page_header(
         fill.fg(theme.muted())
     };
 
+    // The text column is the full row minus the shared horizontal inset on
+    // each side; the inset itself is painted as pad spans so the band's
+    // background still owns every cell of the row.
+    let pad = TRANSCRIPT_H_INSET as usize;
+    let text_width = full_width.saturating_sub(2 * pad);
+
     let title_width = content.title.width();
     // The tag renders as `<tag> ` (tag + one trailing space) right after the
     // title — the title already ends with a space, so the tag needs no
@@ -141,13 +239,14 @@ pub(crate) fn draw_page_header(
     };
     let action_width = content.action.width();
     let left_budget =
-        full_width.saturating_sub(title_width + tag_width + badge_width + action_width + 1);
+        text_width.saturating_sub(title_width + tag_width + badge_width + action_width + 1);
     let left = fit_context(&content.primary, &content.meta, left_budget);
     let left_width: usize = left.iter().map(|(text, _)| text.width()).sum();
-    let gap = full_width
+    let gap = text_width
         .saturating_sub(title_width + tag_width + badge_width + left_width + action_width);
 
-    let mut spans = vec![Span::styled(content.title, title_style)];
+    let mut spans = vec![Span::styled(" ".repeat(pad), fill)];
+    spans.push(Span::styled(content.title, title_style));
     if !content.tag.is_empty() {
         spans.push(Span::styled(format!("{} ", content.tag), tag_style));
     }
@@ -165,6 +264,141 @@ pub(crate) fn draw_page_header(
     if !content.action.is_empty() {
         spans.push(Span::styled(content.action, action_style));
     }
+    // Trailing pad (plus any shortfall after the right-aligned action) so the
+    // band's background owns the row out to the terminal's right edge.
+    let used = pad + title_width + tag_width + badge_width + left_width + gap + action_width;
+    spans.push(Span::styled(
+        " ".repeat(full_width.saturating_sub(used)),
+        fill,
+    ));
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+}
+
+/// Draw the header band's second row: the view-level affordance legend
+/// (ADR-0103 §3, demand-gated by ADR-0104). Row 1 carries identity +
+/// status; this row carries *what the keys do in this view*.
+///
+/// Content by page kind, all horizontally centered on the band background:
+/// - **Main**: the live aside chip (`btw 2 · 1 running`) and `F5 asides` —
+///   rendered only while asides exist (the caller gates the row itself on
+///   [`PageHints::has_content`]). No interrupt pair: the activity bar's
+///   hint is the authoritative one and spells the real double-Esc arming
+///   (`Esc Esc interrupt`), so a single-Esc copy here would both duplicate
+///   and contradict it.
+/// - **Btw**: `Ctrl-C back`, `F5 asides`, `Esc interrupt aside`, with the
+///   parent note as the leading descriptive segment when set.
+/// - **Envoy**: never rendered — the Envoy page's permanent footer already
+///   carries the same legend, so the caller collapses the band to row 1.
+///
+/// No global affordances (`F1 help`) live here: every modal footer already
+/// carries `? help`, so repeating it on a persistent top band is noise.
+///
+/// Pairs drop from the least page-specific end as the row narrows; the page's
+/// single exit pair (Ctrl-C back) never drops.
+pub(crate) fn draw_page_header_hints(
+    frame: &mut Frame,
+    rect: Rect,
+    hints: &PageHints<'_>,
+    theme: &Theme,
+) {
+    if rect.height == 0 || (rect.width as usize) < STEP_MIN_WIDTH {
+        return;
+    }
+
+    let bg = theme.body();
+    let fill = Style::default().bg(bg);
+    let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
+    let hint_style = fill.fg(theme.muted());
+    let note_style = fill.fg(theme.dim());
+
+    // Leading descriptive segment (before the keycaps): the main view's live
+    // aside chip, the aside view's parent note.
+    let note: Option<String> = match hints.kind {
+        PageKind::Main => hints.asides.as_ref().map(|chip| {
+            if chip.running > 0 {
+                format!("btw {} · {} running", chip.total, chip.running)
+            } else {
+                format!("btw {}", chip.total)
+            }
+        }),
+        PageKind::Btw => {
+            let note = hints.parent_note.trim();
+            (!note.is_empty()).then(|| note.to_string())
+        }
+        PageKind::Envoy => None,
+    };
+
+    let pairs: Vec<(&'static str, &'static str)> = match hints.kind {
+        // No interrupt pair on the main view (ADR-0104): the activity bar's
+        // `Esc Esc interrupt` hint is the authoritative copy — it names the
+        // real double-Esc arming — so a single-Esc legend here would both
+        // duplicate it and misstate the gesture.
+        PageKind::Main => {
+            let mut pairs = Vec::new();
+            if hints.asides.is_some() {
+                pairs.push(("F5", "asides"));
+            }
+            pairs
+        }
+        PageKind::Btw => {
+            let mut pairs = vec![("Ctrl-C", "back"), ("F5", "asides")];
+            if hints.interruptible {
+                pairs.push(("Esc", "interrupt aside"));
+            }
+            pairs
+        }
+        // The Envoy legend lives on the page's permanent footer
+        // (`draw_envoy_footer`); row 2 never renders for this page kind.
+        PageKind::Envoy => Vec::new(),
+    };
+
+    let width = rect.width as usize;
+    // Drop from the least page-specific pair first; the first pair (the
+    // page's exit) never drops.
+    let chosen: Vec<(&'static str, &'static str)> = {
+        let mut chosen = pairs.clone();
+        loop {
+            let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
+            let pairs_width: usize = chosen
+                .iter()
+                .map(|(key, label)| key.width() + 1 + label.width())
+                .sum();
+            let needed =
+                note_width + pairs_width + ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
+            if needed <= width.saturating_sub(2 * ENVOY_FOOTER_MARGIN_MIN) || chosen.len() <= 1 {
+                break;
+            }
+            chosen.pop();
+        }
+        chosen
+    };
+
+    let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
+    let pairs_width: usize = chosen
+        .iter()
+        .map(|(key, label)| key.width() + 1 + label.width())
+        .sum();
+    let gaps =
+        ENVOY_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };
+    let content_width = note_width + pairs_width + gaps;
+    let margin = ((width.saturating_sub(content_width)) / 2).max(ENVOY_FOOTER_MARGIN_MIN);
+
+    let mut spans = vec![Span::styled(" ".repeat(margin), fill)];
+    if let Some(note) = note {
+        spans.push(Span::styled(format!("{note}    "), note_style));
+    }
+    for (i, (key, label)) in chosen.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" ".repeat(ENVOY_FOOTER_PAIR_GAP), fill));
+        }
+        spans.push(Span::styled(*key, key_style));
+        spans.push(Span::styled(format!(" {label}"), hint_style));
+    }
+    spans.push(Span::styled(
+        " ".repeat(width.saturating_sub(margin + content_width)),
+        fill,
+    ));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
@@ -176,10 +410,13 @@ pub(crate) fn draw_page_header(
 /// the legend reads as one continuous surface pinned to the terminal's
 /// bottom edge.
 ///
-/// The legend always leads with the Envoy-specific navigation — `Esc back`,
-/// and `[ prev` / `] next` when the focused envoy has siblings — followed by
-/// the global `F1 help` affordance when the row is wide enough to keep it
-/// legible. Content is horizontally centered with a minimum left margin.
+/// The legend carries only the Envoy-specific navigation — `Esc back`, and
+/// `[ prev` / `] next` when the focused envoy has siblings. No global
+/// affordances (`F1 help`) live here either (ADR-0104): help is a global
+/// capability whose discovery every modal footer (`? help`) and the Help
+/// modal already own, not a property of *this* view — the same rule that
+/// keeps the head band's row 2 free of it. Content is horizontally centered
+/// with a minimum left margin.
 pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarInfo, theme: &Theme) {
     if rect.height == 0 || (rect.width as usize) < STEP_MIN_WIDTH {
         return;
@@ -190,18 +427,19 @@ pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarIn
     let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
     let hint_style = fill.fg(theme.muted());
 
-    // Build the legend as keycap + label pairs joined by a wide gap, leading
-    // with the page's own navigation (back, siblings) and ending with the
-    // global help affordance. On narrow rows the help pair drops first; the
-    // sibling pair drops next (it is already absent when `total < 2`); the
-    // back action never drops — it is the page's single exit.
+    // Build the legend as keycap + label pairs joined by a wide gap, all of
+    // them Envoy-specific: the page's own navigation (back, siblings). The
+    // global `F1 help` pair is deliberately absent (ADR-0104) — help is not
+    // a view-level affordance; the modal footers' `? help` chip and the Help
+    // modal own its discovery. On narrow rows the sibling pair drops first
+    // (it is already absent when `total < 2`); the back action never drops —
+    // it is the page's single exit.
     let has_siblings = info.total > 1;
     let mut pairs: Vec<(&'static str, &'static str)> = vec![("Esc", "back")];
     if has_siblings {
         pairs.push(("[", "prev"));
         pairs.push(("]", "next"));
     }
-    pairs.push(("F1", "help"));
 
     let width = rect.width as usize;
     let content: Vec<(&'static str, &'static str)> = {
@@ -215,7 +453,7 @@ pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarIn
             if needed <= width.saturating_sub(2 * ENVOY_FOOTER_MARGIN_MIN) || chosen.len() == 1 {
                 break;
             }
-            // Drop the last pair (the least Envoy-specific one) and retry.
+            // Drop the last pair (the least navigational one) and retry.
             chosen.pop();
         }
         chosen
@@ -375,10 +613,150 @@ mod tests {
     fn btw_header_identifies_page_parent_state_and_return_action() {
         let row = rendered_row(
             64,
-            PageHeader::Btw(neenee_contracts::ParentStatus::NeedsApproval),
+            PageHeader::Btw(BtwHead {
+                parent: neenee_contracts::ParentStatus::NeedsApproval,
+            }),
         );
-        assert!(row.starts_with(" /btw Side conversation · main needs approval"));
-        assert!(row.ends_with("Esc back "));
+        assert!(row.starts_with("   /btw Side conversation · main needs approval"));
+        // ADR-0103: the exit affordance moved to the row-2 legend; row 1 is
+        // pure identity + status now.
+        assert!(!row.trim_end().contains("Esc back"));
+    }
+
+    #[test]
+    fn btw_hints_legend_leads_with_exit_and_asides() {
+        let theme = Theme::default();
+        let hints = PageHints {
+            kind: PageKind::Btw,
+            asides: None,
+            interruptible: true,
+            parent_note: "main running",
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_page_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            row.contains("Ctrl-C"),
+            "legend must lead with the exit pair: {row}"
+        );
+        assert!(
+            row.contains("asides"),
+            "legend must offer the asides modal: {row}"
+        );
+        assert!(
+            row.contains("interrupt aside"),
+            "legend must offer the aside interrupt: {row}"
+        );
+        assert!(
+            !row.contains("F1"),
+            "global help is not a view-level affordance: {row}"
+        );
+    }
+
+    #[test]
+    fn main_hints_legend_omits_interrupt_even_while_running() {
+        // ADR-0104: the activity bar's `Esc Esc interrupt` hint is the
+        // authoritative interrupt copy (it names the double-Esc arming), so
+        // the main view's row-2 legend must never carry a single-Esc pair —
+        // not even while a round is running.
+        let theme = Theme::default();
+        let hints = PageHints {
+            kind: PageKind::Main,
+            asides: None,
+            interruptible: true,
+            parent_note: "",
+        };
+        assert!(!hints.has_content(), "no asides → no row at all");
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_page_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!row.contains("Esc"), "no interrupt pair: {row}");
+        assert!(!row.contains("F1"), "no global help pair: {row}");
+    }
+
+    #[test]
+    fn hints_presence_is_demand_driven_per_page_kind() {
+        let mk = |kind: PageKind, asides: bool| PageHints {
+            kind,
+            asides: asides.then_some(AsidesChip {
+                total: 1,
+                running: 0,
+            }),
+            interruptible: false,
+            parent_note: "",
+        };
+        // Main: only while asides are live.
+        assert!(!mk(PageKind::Main, false).has_content());
+        assert!(mk(PageKind::Main, true).has_content());
+        // Btw: always (its exit pair exists on no other surface).
+        assert!(mk(PageKind::Btw, false).has_content());
+        // Envoy: never (the permanent footer owns the legend).
+        assert!(!mk(PageKind::Envoy, false).has_content());
+        assert!(!mk(PageKind::Envoy, true).has_content());
+    }
+
+    #[test]
+    fn main_hints_legend_shows_aside_chip_when_live() {
+        let theme = Theme::default();
+        let hints = PageHints {
+            kind: PageKind::Main,
+            asides: Some(AsidesChip {
+                total: 2,
+                running: 1,
+            }),
+            interruptible: false,
+            parent_note: "",
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_page_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(row.contains("btw 2 · 1 running"), "aside chip: {row}");
+        assert!(row.contains("asides"), "F5 pair: {row}");
+        assert!(!row.contains("Esc"), "no interrupt pair: {row}");
+    }
+
+    #[test]
+    fn main_hints_legend_is_quiet_without_asides() {
+        let theme = Theme::default();
+        let hints = PageHints {
+            kind: PageKind::Main,
+            asides: None,
+            interruptible: false,
+            parent_note: "",
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_page_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!row.contains("btw"), "no chip without asides: {row}");
+        assert!(!row.contains("asides"), "no F5 pair without asides: {row}");
     }
 
     #[test]
@@ -392,7 +770,7 @@ mod tests {
         let row = rendered_row(80, PageHeader::Envoy(&info));
         assert_eq!(
             row,
-            " ENVOY [EXPLORE] inspect the renderer                                     (1/2) "
+            "   ENVOY [EXPLORE] inspect the renderer                                 (1/2)   "
         );
     }
 
@@ -405,7 +783,7 @@ mod tests {
             total: 1,
         };
         let row = rendered_row(48, PageHeader::Envoy(&info));
-        assert!(row.starts_with(" ENVOY a task without a role yet"));
+        assert!(row.starts_with("   ENVOY a task without a role yet"));
         assert!(!row.contains('['));
         assert!(!row.contains("(1/1)"));
         assert_eq!(row.width(), 48);
@@ -420,7 +798,7 @@ mod tests {
             total: 24,
         };
         let row = rendered_row(36, PageHeader::Envoy(&info));
-        assert!(row.starts_with(" ENVOY [PLAN] "));
+        assert!(row.starts_with("   ENVOY [PLAN] "));
         assert!(row.contains("(12/24)"));
         assert_eq!(row.width(), 36);
     }
@@ -449,8 +827,10 @@ mod tests {
         // The legend lives on the middle row only; the padding rows are blank.
         assert_eq!(row_text(0), " ".repeat(40));
         let mid = row_text(1);
-        // Width 40 fits back + siblings but not `F1 help` (dropped first).
+        // Width 40 fits back + siblings; the global help pair no longer
+        // exists on this surface at all (ADR-0104).
         assert!(mid.trim() == "Esc back    [ prev    ] next", "{mid:?}");
+        assert!(!mid.contains("F1"), "no global help pair: {mid:?}");
         let lead = mid.len() - mid.trim_start().len();
         let trail = mid.len() - mid.trim_end().len();
         assert!(
@@ -485,17 +865,19 @@ mod tests {
                 .map(|cell| cell.symbol())
                 .collect()
         };
-        // No siblings: the prev/next pair never renders.
+        // No siblings: the prev/next pair never renders, and the legend is
+        // the exit pair alone — help is global, not an Envoy affordance
+        // (ADR-0104).
         let single = footer_text(40, 1);
         assert!(
-            single.contains("Esc back") && single.contains("F1 help"),
+            single.contains("Esc back") && !single.contains("prev"),
             "{single:?}"
         );
         assert!(
-            !single.contains("prev") && !single.contains("next"),
+            !single.contains("next") && !single.contains("F1"),
             "{single:?}"
         );
-        // Narrow: help drops first, then the sibling pair; back never drops.
+        // Narrow: the sibling pair drops; back never drops.
         let narrow = footer_text(28, 2);
         assert!(
             narrow.contains("Esc back") && narrow.contains("[ prev"),
@@ -515,8 +897,8 @@ mod tests {
             autopilot: true,
         };
         let row = rendered_row(80, PageHeader::Session(&head));
-        assert!(row.starts_with(" SESSION b3c4 ~/projects/xx"));
-        assert!(row.ends_with("autopilot "));
+        assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
+        assert!(row.trim_end().ends_with("autopilot"));
     }
 
     #[test]
@@ -527,7 +909,35 @@ mod tests {
             autopilot: false,
         };
         let row = rendered_row(40, PageHeader::Session(&head));
-        assert!(row.starts_with(" SESSION ab ~/work"));
+        assert!(row.starts_with("   SESSION ab ~/work"));
         assert!(!row.contains("autopilot"));
+    }
+
+    /// The head band is top-level chrome: its `body` background owns every
+    /// cell of the terminal row — no `app_bg` gap at either edge — while the
+    /// text keeps the shared 2-col inset.
+    #[test]
+    fn header_band_paints_the_full_row_width() {
+        let theme = Theme::default();
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "~/projects/xx",
+            autopilot: true,
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(40, 1);
+        terminal.draw(|frame| {
+            draw_page_header(frame, frame.area(), &PageHeader::Session(&head), &theme);
+        });
+        for cell in &terminal.buffer().content {
+            assert_eq!(cell.bg, theme.body());
+        }
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(row.starts_with("  "), "left pad: {row:?}");
+        assert!(row.ends_with("  "), "right pad: {row:?}");
     }
 }

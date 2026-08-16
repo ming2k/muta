@@ -52,6 +52,35 @@ impl ToolContext {
     }
 }
 
+/// The directory every workspace-relative tool operation resolves against,
+/// and the directory shell commands run in.
+///
+/// Under the unified session daemon (ADR-0096) one process hosts sessions for
+/// *many* projects, so the daemon's own process cwd is whichever directory the
+/// first client happened to spawn it from — correct only by coincidence. A
+/// session-scoped tool must therefore never consult the process cwd: it
+/// resolves relative paths and spawns subprocesses against the session's
+/// project root, provided here as a context service. The mapping is a
+/// newtype (not a bare `PathBuf`) so a future provider of the same path under
+/// a different meaning cannot collide with it in the type-keyed map.
+///
+/// Provided by the bootstrap that assembles the session (`neenee-runtime`).
+/// A context without one (unit tests, envoy sub-agents built from a static
+/// snapshot) leaves the service unset and tools fall back to the process cwd —
+/// the historical behaviour — which remains correct wherever one process
+/// serves exactly one project.
+#[derive(Debug, Clone)]
+pub struct WorkspaceRoot(pub std::path::PathBuf);
+
+impl ToolContext {
+    /// The session's workspace root, when the assembling bootstrap provided
+    /// one. `None` in contexts that predate or decline the service (tests,
+    /// side sessions); callers treat that as "use the process cwd".
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.get::<WorkspaceRoot>().map(|root| root.0.as_path())
+    }
+}
+
 /// Builder for [`ToolContext`]. Provide services by concrete type, then
 /// [`build`](Self::build) to freeze an immutable, cheaply cloneable context.
 #[derive(Default)]
@@ -924,7 +953,6 @@ mod tests {
     fn model(vision: bool) -> Model {
         Model {
             id: "test",
-            name: "Test",
             family: "test",
             context_window: 100_000,
             thinking: crate::thinking::ThinkingSupport::None,

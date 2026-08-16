@@ -29,7 +29,6 @@ pub const OPENAI_SUB2API_MODELS: &[&str] = &[
 pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -41,7 +40,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -53,7 +51,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -70,7 +67,6 @@ pub const MODELS: &[Model] = &[
     // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
     Model {
         id: "gpt-5.5",
-        name: "GPT-5.5",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -82,7 +78,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.4",
-        name: "GPT-5.4",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -94,7 +89,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
         family: "gpt",
         context_window: 400_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -109,7 +103,6 @@ pub const MODELS: &[Model] = &[
     // exact serving contract is relay-defined.
     Model {
         id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -121,7 +114,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.2",
-        name: "GPT-5.2",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -133,7 +125,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.2-chat-latest",
-        name: "GPT-5.2 Chat Latest",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -145,7 +136,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.2-pro",
-        name: "GPT-5.2 Pro",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,

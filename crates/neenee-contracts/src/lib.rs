@@ -93,13 +93,13 @@ pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
 pub use events::{
-    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, ConnectStatus,
+    AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
     ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    RoundSummary, SessionContextSnapshot, SessionDetail, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo,
-    UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    RoundSummary, SessionContextSnapshot, SessionDetail, SessionOverview, SessionSnapshot,
+    SkillInfo, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub mod monitor;
 pub use hooks::{
@@ -129,6 +129,6 @@ pub use skills_config::SkillsConfig;
 pub use tool_output::truncate_utf8;
 pub use tool_registry::{
     Capability, ToolContext, ToolContextBuilder, ToolFactory, ToolScope, ToolSelection, ToolSet,
-    collect_toolset,
+    WorkspaceRoot, collect_toolset,
 };
 pub use web_config::WebSearchConfig;

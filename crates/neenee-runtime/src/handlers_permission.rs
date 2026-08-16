@@ -13,7 +13,7 @@ use neenee_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
-use crate::side::SideSession;
+use crate::side::SideRegistry;
 
 /// `AgentRequest::Interrupt` — reject every pending permission, question, and
 /// interactive-input waiter; flip the harness to idle eagerly (before the
@@ -87,7 +87,7 @@ pub async fn reply(
 pub async fn reply_question(
     agent: &Agent,
     envoy_registry: &Arc<EnvoyRegistry>,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     request_id: String,
     answers: Vec<Vec<String>>,
@@ -99,10 +99,15 @@ pub async fn reply_question(
             .is_some_and(|handle| handle.reply_user_question(&request_id, answers.clone()))
     } else if agent.reply_user_question(&request_id, answers.clone()) {
         true
-    } else if let Some(s) = side.read().await.as_ref() {
-        s.agent.reply_user_question(&request_id, answers)
     } else {
-        false
+        let mut routed = false;
+        for s in side.read().await.iter() {
+            if s.agent.reply_user_question(&request_id, answers.clone()) {
+                routed = true;
+                break;
+            }
+        }
+        routed
     };
     if !resolved {
         let _ = resp_tx.send(AgentResponse::Error(
@@ -117,7 +122,7 @@ pub async fn reply_question(
 pub async fn reply_input(
     agent: &Agent,
     envoy_registry: &Arc<EnvoyRegistry>,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     request_id: String,
     text: String,
@@ -129,10 +134,15 @@ pub async fn reply_input(
             .is_some_and(|handle| handle.reply_input(&request_id, text.clone()))
     } else if agent.reply_input(&request_id, text.clone()) {
         true
-    } else if let Some(s) = side.read().await.as_ref() {
-        s.agent.reply_input(&request_id, text)
     } else {
-        false
+        let mut routed = false;
+        for s in side.read().await.iter() {
+            if s.agent.reply_input(&request_id, text.clone()) {
+                routed = true;
+                break;
+            }
+        }
+        routed
     };
     if !resolved {
         let _ = resp_tx.send(AgentResponse::Error(

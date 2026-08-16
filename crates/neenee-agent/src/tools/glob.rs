@@ -3,11 +3,16 @@ use neenee_contracts::Tool;
 use serde_json::json;
 
 /// Fast file pattern matching using globs.
-pub struct GlobTool;
+///
+/// Relative patterns and bases resolve against the session's workspace root
+/// (captured at factory time), not the daemon process's cwd (ADR-0096).
+pub struct GlobTool {
+    pub(crate) root: crate::tools::helpers::WorkspaceBase,
+}
 
 const GLOB_MAX_RESULTS: usize = 200;
 
-use crate::tools::helpers::should_skip_path;
+use crate::tools::helpers::{should_skip_path, workspace_base};
 
 #[async_trait]
 impl Tool for GlobTool {
@@ -33,7 +38,14 @@ impl Tool for GlobTool {
         let pattern = args["pattern"].as_str().ok_or("Missing 'pattern'")?;
         let base = args["path"].as_str().unwrap_or(".");
 
-        let base_path = std::path::Path::new(base);
+        // Resolve the base against the session's workspace root so a default
+        // `.` (or any relative base) scans the session's project, never the
+        // daemon's coincidental process cwd. `join` passes absolute bases
+        // through unchanged.
+        let base_path = match &self.root {
+            Some(root) => root.join(base),
+            None => std::path::PathBuf::from(base),
+        };
         let candidates = if pattern.contains('/') || base != "." {
             vec![base_path.join(pattern).to_string_lossy().to_string()]
         } else {
@@ -47,7 +59,10 @@ impl Tool for GlobTool {
             ]
         };
 
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = self
+            .root
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let mut results = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for candidate in &candidates {
@@ -83,4 +98,6 @@ impl Tool for GlobTool {
         }
     }
 }
-neenee_contracts::register_tool!(GlobFactory => GlobTool);
+neenee_contracts::register_tool!(GlobFactory => |ctx| GlobTool {
+    root: workspace_base(ctx),
+});

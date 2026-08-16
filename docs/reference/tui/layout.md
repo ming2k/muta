@@ -59,11 +59,17 @@ The default. A two-chunk vertical split inside `draw_transcript`:
   (bottom edge: the hint bar pins flush — no bottom viewport margin)
 ```
 
-The top of every view carries a **head row** — a single-row identity strip.
-On the Main session view it shows `SESSION`, the session-id tail, and the
-workspace path on the left, plus the session mode (`autopilot`) on the right.
-Contextual pages (`/btw`, Envoy, Dashboard) replace it with their own
-contextual header. See [Head row](status-bar.md).
+The top of every view carries a **head band** — an identity strip
+(ADR-0103 §3) whose second row is demand-driven (ADR-0104). Row 1 is
+identity and status; on the Main session view it shows `SESSION`, the
+session-id tail, and the workspace path on the left, plus the session mode
+(`autopilot`) on the right. Row 2 — the view-affordance legend — renders
+only while the view has something page-specific to announce: the main
+view's live aside chip + `F5 asides` while asides are live, or the aside
+view's `Ctrl-C back` / `F5 asides` / `Esc interrupt aside`. Contextual
+pages (`/btw`, Envoy, Dashboard) replace row 1 with their own contextual
+header; the Envoy page renders no row 2 (its permanent footer owns the
+legend). See [Head band](status-bar.md).
 
 ### Footer stack
 
@@ -191,6 +197,12 @@ gutters stay `app_bg` via the global frame fill. Solid-background regions
 panels and code blocks render their own equivalent gutters; markdown text
 wraps with `TRANSCRIPT_H_INSET` cells of slack on the right.
 
+The **head row** is the one deliberate exception: it is top-level chrome, not
+a transcript-area component, so its `body` background spans the terminal's
+full width (like the Envoy key-legend band pinned to the bottom edge) and the
+inset is applied to its *text* only — as pad spans inside `draw_page_header`
+— so the identity still lines up with the transcript band below.
+
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │columns: 0 1 2 3                                 ... W-1      │
@@ -228,7 +240,7 @@ with the transcript content above.
 | Top viewport margin | 1 row (`app_bg`) | `VIEWPORT_TOP_MARGIN` |
 | Bottom viewport margin | 0 rows — chrome pins flush to the terminal's bottom edge | `VIEWPORT_BOTTOM_MARGIN` |
 | Left/right viewport margin | 0 cols | `VIEWPORT_H_MARGIN` |
-| Left/right gutter (all content) | 2 cols `app_bg` | `TRANSCRIPT_H_INSET`, applied via `transcript_band_rect` (steps) / explicit spans (user panel, code block) / wrap-width slack (markdown) |
+| Left/right gutter (transcript content) | 2 cols `app_bg` | `TRANSCRIPT_H_INSET`, applied via `transcript_band_rect` (steps) / explicit spans (user panel, code block, head-row text pad) / wrap-width slack (markdown) |
 | Footer side inset | 2 cols (matches `TRANSCRIPT_H_INSET`) | `FOOTER_H_INSET` |
 | Activity bar height | 1 row | `ACTIVITY_BAR_ROWS` |
 | Todo bar height | 1 row | `TODO_BAR_ROWS` |
@@ -260,6 +272,7 @@ with the transcript content above.
 | File | Responsibility |
 |------|----------------|
 | `view.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
+| `footer_stack.rs` | Declarative footer stack — row list, `measure`/`place` single-pass layout, hit-rect registry (`FooterRowId`) |
 | `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `HINT_BAR_ROWS`, `STATUS_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
 | `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |

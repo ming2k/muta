@@ -148,6 +148,12 @@ pub enum Modal {
     /// Opened by clicking the context meter in the hint bar. Esc /
     /// outside-click closes.
     TokenReport,
+    /// `/btw` asides list (ADR-0103 §5): one row per live aside conversation,
+    /// newest first, with `Enter` = jump back into the aside and `D` =
+    /// close-and-discard it. Opened by F5 or `/btw list`. A read-only-style
+    /// picker: no text entry, scrolls its body, refreshes in place when the
+    /// harness pushes a new list.
+    Btw,
     /// Interactive-input injection panel (L3.5 β): shown when a `bash` command
     /// is classified interactive and the agent cannot supply its own input.
     /// Borrows the composer input line (like `Models`/`ModelEditor`) for
@@ -238,6 +244,7 @@ impl Modal {
                 | Modal::Models
                 | Modal::Connections
                 | Modal::TokenReport
+                | Modal::Btw
         )
     }
 

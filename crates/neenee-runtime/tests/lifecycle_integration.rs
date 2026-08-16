@@ -24,11 +24,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neenee_contracts::MonitorEvent;
+use neenee_persistence::session::SessionStore;
 use neenee_runtime::host::{HostIdentity, HostOptions, LifecycleOptions, RunOutcome};
 use neenee_runtime::registry::{HostedSession, SessionRegistry};
 use neenee_runtime::serve::ServeExpose;
 use neenee_runtime::shutdown::{DrainProbe, ShutdownGate, ShutdownReason};
-use neenee_persistence::session::SessionStore;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 /// Sandbox the process-wide dirs once, before any `paths::get()` call can
@@ -87,10 +87,12 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
     let (req_tx, _req_rx) = mpsc::unbounded_channel::<neenee_contracts::AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<neenee_contracts::AgentResponse>(16);
     let id = session.id().await;
-    let tracker = Arc::new(Mutex::new(neenee_runtime::monitor::MonitorTracker::bootstrap(
-        neenee_contracts::MonitoredSession::empty(id),
-        neenee_contracts::SessionStatus::Idle,
-    )));
+    let tracker = Arc::new(Mutex::new(
+        neenee_runtime::monitor::MonitorTracker::bootstrap(
+            neenee_contracts::MonitoredSession::empty(id),
+            neenee_contracts::SessionStatus::Idle,
+        ),
+    ));
     registry
         .host(HostedSession {
             project_root: project.into(),
@@ -111,6 +113,9 @@ fn options(uds: std::path::PathBuf, port: u16) -> HostOptions {
         port,
         expose: ServeExpose::Local,
         token: None,
+        // Tests drive the control plane without credentials.
+        local_auth: false,
+        port_fallback: false,
         #[cfg(unix)]
         uds_path: Some(uds),
     }

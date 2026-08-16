@@ -37,8 +37,9 @@ pub struct MonitorAction {
 /// always [`Hosted`](Self::Hosted); the field is kept on the wire (with its
 /// serde default) so rows produced before the distinction was removed still
 /// deserialize.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum SessionHosting {
     /// The session's driver lives inside the serving host process (an
     /// `attach`-created or lazily resumed session). The host owns its
@@ -62,8 +63,9 @@ impl std::fmt::Display for SessionHosting {
 }
 
 /// A stream frame about the daemon as a whole.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum MonitorEvent {
     /// The full current state, sent exactly once as the first frame after the
     /// monitor handshake. Sessions are sorted by `updated_at`, newest first.
@@ -90,7 +92,8 @@ pub enum MonitorEvent {
 }
 
 /// The daemon-level snapshot: who is serving and what is happening right now.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct MonitorSnapshot {
     pub project_root: String,
     /// Unix seconds when the daemon process started (from the discovery
@@ -103,7 +106,8 @@ pub struct MonitorSnapshot {
 /// One row of the control panel: a hosted session's identity, status, and
 /// accounting. Deliberately a superset of nothing — every field is cheap and
 /// content-free (see module docs).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct MonitoredSession {
     pub id: String,
     /// Stored AI/manual title, falling back to the first-prompt preview.
@@ -153,7 +157,8 @@ pub struct MonitoredSession {
 /// A session's declared work-in-progress (ADR-0097 §5): the paths it is
 /// mid-edit on plus a one-line summary, so peers in the same workspace can
 /// avoid colliding verification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct WipStatus {
     /// Paths the session is actively editing (as declared; workspace-relative
     /// or absolute, normalized at comparison time).
@@ -238,8 +243,9 @@ impl MonitoredSession {
 /// [`ParentStatus`](crate::ParentStatus) badge (ADR-0017): a coarse,
 /// panel-facing classification, not the protocol state — the round lifecycle
 /// itself stays binary (`RoundLifecycle`, ADR-0078).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum SessionStatus {
     /// No round running, nothing waiting on a human.
     Idle,

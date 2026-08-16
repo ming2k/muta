@@ -444,7 +444,8 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
 /// standard. Each row is a two-column layout spread across the width:
 /// - a status group (fixed): the `●` current-state dot and the `★` favorite
 ///   star;
-/// - column 1 (fixed): the model name (bold, fuzzy-highlighted in search);
+/// - column 1 (fixed): the model's wire id (bold, fuzzy-highlighted in
+///   search) — id-first policy, never a curated display name;
 /// - column 2 (midpoint): the provider label (dim), anchored at the horizontal
 ///   center so identical model ids served by different instances stay cleanly
 ///   separated as a second column — no `·`;
@@ -502,7 +503,7 @@ fn model_list_body(
             _ => String::new(),
         };
 
-        // Column 1 (model name) is capped to the left half so it never runs
+        // Column 1 (model id) is capped to the left half so it never runs
         // into the midpoint provider column. Reserve the status group width,
         // its gutter + following GROUP_GAP, and the trailing tag if any.
         let status_w = 4; // dot + gap + star
@@ -511,9 +512,11 @@ fn model_list_body(
             .saturating_sub(GUTTER + status_w + GROUP_GAP)
             .saturating_sub(tag_w)
             .max(1);
-        let name = truncate_ellipsis(&rm.label, name_budget);
+        // Id-first policy: the row label IS the wire id (never a curated
+        // display name), so every row reads the same kind of label.
+        let name = truncate_ellipsis(&rm.model, name_budget);
 
-        // Column 1: the model name, one styled atom per char so fuzzy matches
+        // Column 1: the model id, one styled atom per char so fuzzy matches
         // lift to the brand / contrast color.
         let matched = match_set(rm.m.as_ref());
         let mut identity = RowGroup::fixed();

@@ -1,8 +1,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-use neenee_runtime::client;
 use neenee_persistence::config::Config;
 use neenee_persistence::session;
+use neenee_runtime::client;
 use neenee_tui::start_tui;
 mod commands;
 mod headless;
@@ -158,6 +158,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 detach,
                 idle_exit_minutes,
                 shutdown_grace_secs,
+                no_local_auth,
+                port_explicit,
             } => {
                 return run_serve(
                     port,
@@ -165,6 +167,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     detach,
                     idle_exit_minutes,
                     shutdown_grace_secs,
+                    no_local_auth,
+                    port_explicit,
                 )
                 .await;
             }
@@ -176,9 +180,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 json,
                 include_idle,
             } => {
-                let project_root = project_override
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let project_root = project_override.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
                 return status::run(
                     &project_root,
                     status::StatusOptions {
@@ -236,12 +240,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return stop_daemon().await.map_err(Into::into);
     }
 
+    if matches!(mode, StartupMode::Panel) {
+        return print_panel_url();
+    }
+
     if let StartupMode::Serve {
         port,
         public,
         detach,
         idle_exit_minutes,
         shutdown_grace_secs,
+        no_local_auth,
+        port_explicit,
     } = &mode
     {
         return run_serve(
@@ -250,6 +260,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             *detach,
             *idle_exit_minutes,
             *shutdown_grace_secs,
+            *no_local_auth,
+            *port_explicit,
         )
         .await;
     }
@@ -344,8 +356,7 @@ fn detach_daemon() -> Result<(), String> {
             info.pid, info.port
         ));
     }
-    let program = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("neenee"));
+    let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("neenee"));
     let mut command = std::process::Command::new(&program);
     command.arg("serve");
     command
@@ -368,6 +379,25 @@ fn detach_daemon() -> Result<(), String> {
         "neenee: daemon started in the background (`neenee status` to observe, `neenee stop` to stop it)"
     );
     Ok(())
+}
+
+/// `neenee panel` (ADR-0105): print the web panel URL for the running
+/// daemon — with the bearer token as a query param when the daemon requires
+/// one. The token is only ever printed on this explicit, operator-initiated
+/// request (never in daemon logs or banners); the panel persists it to
+/// localStorage on first visit.
+fn print_panel_url() -> Result<(), Box<dyn std::error::Error>> {
+    match client::discover(std::path::Path::new(".")) {
+        Some(info) => {
+            let mut url = format!("http://127.0.0.1:{}", info.port);
+            if let Some(token) = &info.token {
+                url.push_str(&format!("/?token={token}"));
+            }
+            println!("{url}");
+            Ok(())
+        }
+        None => Err("no neenee daemon is running (start one with `neenee daemon start`)".into()),
+    }
 }
 
 /// `neenee stop` (ADR-0100): stop the running daemon through the `Shutdown`
@@ -462,6 +492,8 @@ async fn run_serve(
     detach: bool,
     idle_exit_minutes: Option<u64>,
     shutdown_grace_secs: Option<u64>,
+    no_local_auth: bool,
+    port_explicit: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if detach {
         return detach_daemon().map_err(Into::into);
@@ -490,6 +522,13 @@ async fn run_serve(
                 neenee_runtime::serve::ServeExpose::Local
             },
             token: None,
+            // CLI flag wins over config; both default to the secure posture
+            // (loopback token on, ADR-0105).
+            local_auth: !no_local_auth
+                && neenee_persistence::config::Config::load().daemon.local_auth,
+            // An explicitly requested port must fail loudly when taken; only
+            // the default port falls back to ephemeral (ADR-0105).
+            port_fallback: !port_explicit,
             #[cfg(unix)]
             uds_path: Some(neenee_runtime::serve_discovery::default_uds_path()),
         },

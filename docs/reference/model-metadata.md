@@ -32,7 +32,7 @@ the corresponding value.
 
 | Field | Remote behavior |
 |-------|-----------------|
-| Display name and family | Replaces the baseline label or family |
+| Family | Replaces the baseline family |
 | Context window and output limit | Replaces the baseline value when present |
 | Reasoning representation | Replaces the baseline thinking type when present |
 | Tool calling and vision | An explicit `true` or `false` replaces the baseline |
@@ -91,7 +91,6 @@ auth = "CopilotOAuth"
 
   [providers.channels.remote]
   endpoint = "responses"
-  display_name = "GPT-5"
   context_window = 200000
   max_output_tokens = 16384
   tool_call = true

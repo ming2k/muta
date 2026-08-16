@@ -116,7 +116,7 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
         .model
         .as_deref()
         .filter(|m| !m.is_empty())
-        .map(crate::providers::model_display_name)
+        .map(str::to_string)
     {
         strip = strip.detail(name);
     }

@@ -116,10 +116,41 @@ pub(super) fn render_frame(
     // show a contextual first-row header; otherwise render the
     // root conversation.
     let view_messages = app.focused_messages();
-    // `/btw` page-header context (ADR-0017): shown only while the
-    // side view is active. Envoy zoom and the side view are
-    // mutually exclusive, so the two modes never coexist.
-    let side_banner = app.in_side_view.then_some(app.parent_status);
+    // `/btw` aside page-header context (ADR-0017/0103): shown only while the
+    // aside view is active. Envoy zoom and the aside view are mutually
+    // exclusive, so the two modes never coexist.
+    let side_banner = app.in_side_view.then_some(view::BtwHead {
+        parent: app.parent_status,
+    });
+    // Row-2 affordance legend inputs (ADR-0103 §3): the aside chip is
+    // offered on the main view only (inside an aside, `F5 asides` is a bare
+    // pair without the count); interruptibility follows whether the viewed
+    // page's session has a live round. The running count is derived from
+    // `running_sessions` (maintained per session id by the HarnessState
+    // outbox signal), not the list snapshot — so a background aside's
+    // round finishing flips the chip on the very next frame without a list
+    // refetch.
+    let viewed_running = app.running_sessions.contains(viewed_session_id);
+    let aside_running = app
+        .btw_list
+        .iter()
+        .filter(|row| app.running_sessions.contains(row.id.as_str()))
+        .count();
+    let page_hints = view::PageHints {
+        kind: if side_banner.is_some() {
+            view::PageKind::Btw
+        } else if app.in_envoy_view() {
+            view::PageKind::Envoy
+        } else {
+            view::PageKind::Main
+        },
+        asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(view::AsidesChip {
+            total: app.btw_list.len(),
+            running: aside_running,
+        }),
+        interruptible: viewed_running,
+        parent_note: "",
+    };
     let envoy_bar = app.focus_stack.last().and_then(|current| {
         let tasks: Vec<&TranscriptMessage> = app
             .messages
@@ -136,6 +167,30 @@ pub(super) fn render_frame(
             total: tasks.len(),
         })
     });
+
+    // Empty-state guidance policy (ADR-0057/0104): the app shell picks the
+    // variant, the view paints it. A setup blocker beats the tour — nothing
+    // rotates until a keyed provider exists. The blocker reads from
+    // `provider_picker` rows (a row exists ⇒ the provider is configured;
+    // `key_status` refines key readiness), mirroring what `/connections`
+    // manages, so the nudge clears the moment the user fixes the real thing.
+    // An empty snapshot means "not synced yet" — the daemon's startup
+    // snapshot arrives within the first loop iterations — so the tour
+    // renders in that window rather than flashing a false no-provider
+    // warning at an already-configured user. A genuinely provider-less
+    // install is indistinguishable until its snapshot lands; the cost is a
+    // few tour frames before the blocker appears, never a false warning.
+    let has_keyed_provider = app
+        .provider_picker
+        .rows
+        .iter()
+        .any(|row| row.key_ready || app.key_status.get(&row.id).copied().unwrap_or(true))
+        || app.provider_picker.rows.is_empty();
+    let guidance = if has_keyed_provider {
+        view::EmptyStateGuidance::Tour
+    } else {
+        view::EmptyStateGuidance::NeedsProvider
+    };
 
     // Suppress the hover affordance whenever a full-overlay modal is
     // open so no stale highlight bleeds through. The permission sheet
@@ -199,6 +254,7 @@ pub(super) fn render_frame(
             },
             envoy_bar,
             side_banner,
+            page_hints: Some(page_hints),
             session_head: Some(view::SessionHead {
                 session_id: viewed_session_id,
                 workspace: &app.current_workspace,
@@ -210,7 +266,10 @@ pub(super) fn render_frame(
             hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
             focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
             logo: app.logo.as_deref(),
-            guidance: Default::default(),
+            guidance,
+            carousel_index: crate::empty_state::carousel_page_for(
+                app.carousel_epoch.elapsed().as_millis(),
+            ),
             theme: &app.theme,
             layout: app.transcript_layout,
             height_cache: Some(&mut height_cache),
@@ -218,9 +277,6 @@ pub(super) fn render_frame(
     );
     let input_rect = transcript_render.input_rect;
     let hint_rect = transcript_render.hint_rect;
-    let activity_rect = transcript_render.activity_rect;
-    let todos_rect = transcript_render.todos_rect;
-    let queue_rect = transcript_render.queue_rect;
     let content_lines = transcript_render.content_lines;
     let view_height = transcript_render.view_height;
     let sticky = transcript_render.sticky;
@@ -420,9 +476,12 @@ pub(super) fn render_frame(
     app.layout_height_cache = height_cache;
     app.content_lines = content_lines;
     app.view_height = view_height;
-    app.activity_rect = activity_rect;
-    app.todos_rect = todos_rect;
-    app.queue_rect = queue_rect;
+    // Hit-test rects for the footer bars, resolved from the one registry the
+    // renderer placed this frame (`TranscriptRender::footer`) — one source
+    // of truth instead of per-bar plumbing.
+    app.activity_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity);
+    app.todos_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Todos);
+    app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
     // Feed the observed composer rect back so the *next* iteration's
     // immediate cursor flush (which runs before this draw closure
     // re-runs) places the caret against the geometry the user is
@@ -551,10 +610,12 @@ pub(super) fn render_frame(
             let ranked = app.history_rows();
             // The activity bar sits directly above the composer, so
             // reserve its rows: the dropdown must never paint over
-            // the live status bar above it. `activity_rect` carries
+            // the live status bar above it. The footer registry carries
             // the bar's exact footprint this frame (None when idle,
             // height 0).
-            let activity_height = activity_rect.map_or(0, |r| r.height);
+            let activity_height =
+                view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity)
+                    .map_or(0, |r| r.height);
             view::draw_history_panel(
                 f,
                 &app.input_history,
@@ -604,7 +665,7 @@ pub(super) fn render_frame(
         }
         Modal::ModelEditor => {
             let title = if app.editor_model_settings_only {
-                crate::model_display_name(&app.editor_model)
+                app.editor_model.clone()
             } else {
                 app.editor_target
                     .as_deref()
@@ -684,15 +745,12 @@ pub(super) fn render_frame(
             let model_display = if app.custom_model.is_empty() {
                 "—".to_string()
             } else {
-                crate::model_display_name(&app.custom_model)
+                app.custom_model.clone()
             };
             // Suggestion dropdown for the Model filter field.
             let suggestions: Vec<String> =
                 if app.current_custom_field() == Some(crate::CustomField::Model) {
                     app.custom_model_suggestions()
-                        .iter()
-                        .map(|v| crate::model_display_name(v))
-                        .collect()
                 } else {
                     Vec::new()
                 };
@@ -929,6 +987,26 @@ pub(super) fn render_frame(
             app.modal_index,
             &mut app.queue_scroll,
             app.queue_modal_follow,
+            &app.theme,
+        )),
+        Modal::Btw => Some(view::draw_btw_modal(
+            f,
+            view::BtwModalView {
+                asides: &app.btw_list,
+                // Derived from the per-session running set (live via
+                // HarnessState) rather than the list snapshot, so a round
+                // finishing updates the badge without a list refetch.
+                running: &app
+                    .btw_list
+                    .iter()
+                    .map(|row| app.running_sessions.contains(row.id.as_str()))
+                    .collect::<Vec<bool>>(),
+                active_id: app.side_session_id.as_deref(),
+            },
+            app.modal_index,
+            &mut app.btw_scroll,
+            app.btw_modal_follow,
+            app.modal_keymap_open,
             &app.theme,
         )),
         Modal::None => None,

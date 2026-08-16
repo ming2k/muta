@@ -2,10 +2,19 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 
-use crate::tools::helpers::{json_string, save_file_atomic};
+use crate::tools::helpers::{
+    WorkspaceBase, json_string, resolve_workspace_path, save_file_atomic, workspace_base,
+};
 
 /// Write content to a file (overwrites).
-pub struct WriteFileTool;
+///
+/// Relative paths resolve against the session's workspace root (captured at
+/// factory time), not the daemon process's cwd — under the unified daemon
+/// (ADR-0096) those differ whenever the daemon was first spawned from another
+/// project, and a write is exactly where that divergence does damage.
+pub struct WriteFileTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 #[async_trait]
 impl Tool for WriteFileTool {
@@ -50,8 +59,11 @@ impl Tool for WriteFileTool {
 
         // Write atomically (temp file + fsync + rename) so an interrupted write
         // never leaves a half-written, corrupt file in place of the original.
-        save_file_atomic(std::path::Path::new(path), content.as_bytes())
-            .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
+        save_file_atomic(
+            &resolve_workspace_path(&self.root, path),
+            content.as_bytes(),
+        )
+        .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
         Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
             op: neenee_contracts::PatchOp::Create,
@@ -61,4 +73,6 @@ impl Tool for WriteFileTool {
         })
     }
 }
-neenee_contracts::register_tool!(WriteFileFactory => WriteFileTool);
+neenee_contracts::register_tool!(WriteFileFactory => |ctx| WriteFileTool {
+    root: workspace_base(ctx),
+});

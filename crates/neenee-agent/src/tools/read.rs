@@ -3,6 +3,8 @@ use neenee_contracts::Tool;
 use neenee_tool_derive::ToolSchema;
 use serde_json::json;
 
+use crate::tools::helpers::{WorkspaceBase, resolve_workspace_path, workspace_base};
+
 /// Typed parameters for [`ReadTextTool`]. Deriving `ToolSchema` generates the
 /// JSON Schema the model sees, eliminating hand-written-schema drift: the
 /// schema and this struct can never disagree.
@@ -20,7 +22,14 @@ struct ReadArgs {
 }
 
 /// Read a text file from disk.
-pub struct ReadTextTool;
+///
+/// Relative paths resolve against the session's workspace root (captured at
+/// factory time), not the daemon process's cwd — under the unified daemon
+/// (ADR-0096) those differ whenever the daemon was first spawned from another
+/// project.
+pub struct ReadTextTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 #[async_trait]
 impl Tool for ReadTextTool {
@@ -53,13 +62,17 @@ impl Tool for ReadTextTool {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
+        // Filesystem access goes through the workspace-resolved path; the
+        // model-facing `path` text (errors, framing, display) stays exactly
+        // what the model sent.
+        let resolved = resolve_workspace_path(&self.root, path);
 
         // Reject directories with an explicit, actionable message instead of
         // the raw OS "Is a directory (os error 21)". A model that sees the OS
         // error cannot infer it should switch to `list_dir`, and may re-read
         // the same directory in a loop. This mirrors the empty/EOF guidance
         // pattern: a clear reason breaks the loop.
-        if std::path::Path::new(path).is_dir() {
+        if resolved.is_dir() {
             return Err(format!(
                 "'{}' is a directory, not a file. Use the `list_dir` tool to see its contents.",
                 path
@@ -83,7 +96,7 @@ impl Tool for ReadTextTool {
         {
             use std::io::Read;
             let mut head = [0u8; 4096];
-            let mut file = std::fs::File::open(path)
+            let mut file = std::fs::File::open(&resolved)
                 .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
             let n = file
                 .read(&mut head)
@@ -93,7 +106,8 @@ impl Tool for ReadTextTool {
             }
         }
 
-        let bytes = std::fs::read(path).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+        let bytes =
+            std::fs::read(&resolved).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
         let content =
             String::from_utf8(bytes).map_err(|_| format!("File '{}' is not valid UTF-8", path))?;
@@ -221,7 +235,9 @@ impl Tool for ReadTextTool {
         })
     }
 }
-neenee_contracts::register_tool!(ReadTextFactory => ReadTextTool);
+neenee_contracts::register_tool!(ReadTextFactory => |ctx| ReadTextTool {
+    root: workspace_base(ctx),
+});
 
 /// The terse `read_text` variant: same capability name and identical behaviour
 /// (it delegates execution to [`ReadTextTool`]), but a stripped-down,
@@ -232,7 +248,12 @@ neenee_contracts::register_tool!(ReadTextFactory => ReadTextTool);
 /// the profile's). This is the concrete demonstration that a capability can
 /// offer a genuinely different *presentation* of the same tool rather than a
 /// re-worded copy patched in at schema-build time.
-pub struct ReadTextTerseTool;
+///
+/// Delegates execution to [`ReadTextTool`], forwarding its own captured
+/// workspace root so both variants resolve paths identically.
+pub struct ReadTextTerseTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 #[async_trait]
 impl Tool for ReadTextTerseTool {
@@ -259,16 +280,26 @@ impl Tool for ReadTextTerseTool {
         })
     }
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        ReadTextTool.call(arguments).await
+        ReadTextTool {
+            root: self.root.clone(),
+        }
+        .call(arguments)
+        .await
     }
     async fn call_structured(
         &self,
         arguments: &str,
     ) -> Result<neenee_contracts::ToolOutput, String> {
-        ReadTextTool.call_structured(arguments).await
+        ReadTextTool {
+            root: self.root.clone(),
+        }
+        .call_structured(arguments)
+        .await
     }
 }
-neenee_contracts::register_tool!(ReadTextTerseFactory => ReadTextTerseTool);
+neenee_contracts::register_tool!(ReadTextTerseFactory => |ctx| ReadTextTerseTool {
+    root: workspace_base(ctx),
+});
 
 /// Extensions that are always treated as binary and never read as text.
 const BINARY_EXTENSIONS: &[&str] = &[

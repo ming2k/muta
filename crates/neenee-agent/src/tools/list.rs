@@ -2,10 +2,16 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 
-use crate::tools::helpers::should_skip_path;
+use crate::tools::helpers::{WorkspaceBase, should_skip_path, workspace_base};
 
 /// List directory contents.
-pub struct ListDirTool;
+///
+/// The listed directory (default `.`) resolves against the session's
+/// workspace root (captured at factory time), not the daemon process's cwd
+/// (ADR-0096).
+pub struct ListDirTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 #[async_trait]
 impl Tool for ListDirTool {
@@ -35,8 +41,23 @@ impl Tool for ListDirTool {
         let recursive = args["recursive"].as_bool().unwrap_or(false);
         let max_results = args["max_results"].as_u64().unwrap_or(100) as usize;
 
+        // Resolve the listed directory against the session's workspace root
+        // so a default `.` lists the session's project, never the daemon's
+        // coincidental process cwd. `join` passes absolute paths through.
+        let resolved = match &self.root {
+            Some(root) => root.join(path),
+            None => std::path::PathBuf::from(path),
+        };
+        let path = resolved.to_string_lossy().to_string();
+        // Display strips the workspace root (not the process cwd) so results
+        // stay relative to what the model asked about.
+        let display_base = self
+            .root
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
         let mut results = Vec::new();
-        let _base = std::path::Path::new(path);
+        let _base = std::path::Path::new(&path);
 
         if let Some(glob_pat) = pattern {
             let full_pattern = if recursive {
@@ -52,9 +73,7 @@ impl Tool for ListDirTool {
                     if results.len() >= max_results {
                         break;
                     }
-                    let display = path
-                        .strip_prefix(std::env::current_dir().unwrap_or_default())
-                        .unwrap_or(&path);
+                    let display = path.strip_prefix(&display_base).unwrap_or(&path);
                     results.push(display.to_string_lossy().to_string());
                 }
                 if results.len() >= max_results {
@@ -62,7 +81,7 @@ impl Tool for ListDirTool {
                 }
             }
         } else if recursive {
-            for entry in walkdir::WalkDir::new(path)
+            for entry in walkdir::WalkDir::new(&path)
                 .max_depth(10)
                 .into_iter()
                 // Prune ignored dirs (build output / deps) the same way grep and
@@ -80,13 +99,11 @@ impl Tool for ListDirTool {
                     break;
                 }
                 let p = entry.path();
-                let display = p
-                    .strip_prefix(std::env::current_dir().unwrap_or_default())
-                    .unwrap_or(p);
+                let display = p.strip_prefix(&display_base).unwrap_or(p);
                 results.push(display.to_string_lossy().to_string());
             }
         } else {
-            let entries = std::fs::read_dir(path)
+            let entries = std::fs::read_dir(&path)
                 .map_err(|e| format!("Failed to read dir '{}': {}", path, e))?;
             for entry in entries.filter_map(|e| e.ok()) {
                 if results.len() >= max_results {
@@ -119,4 +136,6 @@ impl Tool for ListDirTool {
         })
     }
 }
-neenee_contracts::register_tool!(ListDirFactory => ListDirTool);
+neenee_contracts::register_tool!(ListDirFactory => |ctx| ListDirTool {
+    root: workspace_base(ctx),
+});

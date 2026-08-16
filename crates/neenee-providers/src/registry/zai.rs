@@ -33,7 +33,6 @@ pub const MODELS: &[Model] = &[
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
     Model {
         id: "glm-5.3",
-        name: "GLM-5.3",
         family: "glm",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -45,7 +44,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-5.2",
-        name: "GLM-5.2",
         family: "glm",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -57,7 +55,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-5.1",
-        name: "GLM-5.1",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -69,7 +66,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-5",
-        name: "GLM-5",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -81,7 +77,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-4.7",
-        name: "GLM-4.7",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,

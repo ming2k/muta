@@ -896,7 +896,6 @@ fn fitted_model_info(model: &neenee_providers::DiscoveredModel) -> FittedModelIn
         reasoning: model.reasoning.unwrap_or(false),
         vision: model.vision.unwrap_or(false),
         efforts: model.effort_levels.clone().unwrap_or_default(),
-        display_name: model.display_name.clone(),
     }
 }
 
@@ -966,7 +965,6 @@ pub fn sync_fitted_model_registry(config: &Config) {
                 };
                 neenee_contracts::model::FittedModel {
                     id: id.clone(),
-                    display_name: info.display_name.clone(),
                     family,
                     context_window: info.context_window,
                     reasoning: info.reasoning,
@@ -1309,7 +1307,6 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 .iter()
                 .map(channel_model_info)
                 .map(|mut info| {
-                    info.last_used_ms = usage.model_last_used_ms(&info.model);
                     // Favorite is model-level (ADR-0046): a starred
                     // daily-driver model carries its flag into the flat
                     // Models picker wherever it is served.
@@ -1399,7 +1396,6 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 protocol: "anthropic".to_string(),
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
-                last_used_ms: None,
                 favorite: false,
             }
         }
@@ -1429,7 +1425,6 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 protocol: "openai".to_string(),
                 effort: effective,
                 thinking: None,
-                last_used_ms: None,
                 favorite: false,
             }
         }
@@ -1453,7 +1448,6 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 protocol: "openai".to_string(),
                 effort: effective,
                 thinking: None,
-                last_used_ms: None,
                 favorite: false,
             }
         }
@@ -1462,7 +1456,6 @@ fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             protocol: "google".to_string(),
             effort: None,
             thinking: None,
-            last_used_ms: None,
             favorite: false,
         },
     }
@@ -2281,9 +2274,8 @@ mod tests {
         let picker = build_picker_state(&config, &usage);
         let row = picker.rows.iter().find(|r| r.id == "relay").unwrap();
         assert_eq!(row.model, "beta");
-        // And the stage-2 model list surfaces beta's recency on its info row.
-        let beta_info = row.model_info.iter().find(|i| i.model == "beta").unwrap();
-        assert!(beta_info.last_used_ms.is_some());
+        // And the stage-2 model list carries beta's info row.
+        assert!(row.model_info.iter().any(|i| i.model == "beta"));
     }
 
     #[test]
@@ -3246,7 +3238,6 @@ mod tests {
                 reasoning: true,
                 vision: true,
                 efforts: Vec::new(),
-                display_name: None,
             },
         );
         config.providers.push(instance);
@@ -3305,10 +3296,9 @@ mod tests {
         assert_eq!(kimi_for_coding.context_window, 262_144);
         assert!(kimi_for_coding.reasoning);
         assert!(kimi_for_coding.vision);
-        assert_eq!(
-            fitted["kimi-for-coding-highspeed"].display_name.as_deref(),
-            Some("kimi-for-coding-highspeed")
-        );
+        let highspeed = &fitted["kimi-for-coding-highspeed"];
+        assert_eq!(highspeed.context_window, 262_144);
+        assert!(highspeed.reasoning);
     }
 
     #[tokio::test]
@@ -3411,7 +3401,6 @@ mod tests {
                 vision: true,
                 // Unsorted: the overlay stores levels ascending.
                 efforts: vec!["high".to_string(), "low".to_string()],
-                display_name: Some("Sync K9".to_string()),
             },
         );
         config.providers.push(instance);
@@ -3419,7 +3408,6 @@ mod tests {
         sync_fitted_model_registry(&config);
 
         let model = neenee_contracts::model::resolve("fitted-sync-k9");
-        assert_eq!(model.name, "Sync K9");
         assert_eq!(model.family, "kimi-code");
         assert_eq!(model.context_window, 512_000);
         assert!(model.reasoning());
@@ -3482,7 +3470,6 @@ mod tests {
                 tool_call: Some(true),
                 vision: Some(true),
                 effort_levels: Some(vec!["low".to_string(), "high".to_string()]),
-                display_name: Some("GPT-5".to_string()),
             },
             neenee_providers::DiscoveredModel {
                 id: "internal-title".to_string(),

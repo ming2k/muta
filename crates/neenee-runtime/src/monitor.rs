@@ -15,8 +15,10 @@
 use neenee_contracts::{AgentResponse, MonitoredSession, RoundEvent, SessionStatus, WipStatus};
 
 /// Tracks one hosted session. `base` is the cheap header row (from the same
-/// deferred parse that feeds the sessions picker); every other field is
-/// folded from the live event stream, starting at [`Self::bootstrap`].
+/// deferred parse that feeds the sessions picker), re-seeded whenever a
+/// `SessionsOverview` snapshot flows by (a rename/delete pushes one); every
+/// other field is folded from the live event stream, starting at
+/// [`Self::bootstrap`].
 pub struct MonitorTracker {
     base: MonitoredSession,
     status: SessionStatus,
@@ -90,6 +92,21 @@ impl MonitorTracker {
 
     /// Fold one broadcast response into the tracked state.
     pub fn observe(&mut self, response: &AgentResponse) {
+        // A sessions-overview snapshot (pushed after a rename or delete)
+        // carries the store-authoritative picker header for every session;
+        // fold ours in so a `RenameSession` repaints the row. The live event
+        // stream never carries the title — the base header was seeded once at
+        // bootstrap — so without this the row would show the stale overview
+        // forever. `updated_at` is deliberately left alone: [`Self::row`]
+        // re-stamps it on every projection.
+        if let AgentResponse::SessionsOverview(items) = response {
+            if let Some(item) = items.iter().find(|item| item.id == self.base.id) {
+                self.base.overview.clone_from(&item.overview);
+                self.base.message_count = item.message_count;
+                self.base.created_at = item.created_at;
+            }
+            return;
+        }
         let AgentResponse::Round { event, .. } = response else {
             return;
         };
@@ -270,6 +287,58 @@ mod tests {
         assert_eq!(wip.summary, "mid-refactor");
         t.set_wip(None);
         assert!(t.row().wip.is_none());
+    }
+
+    #[test]
+    fn sessions_overview_refreshes_the_base_header() {
+        // A rename pushes a sessions-overview snapshot through the broadcast;
+        // the tracker must re-seed its base header from it so the republished
+        // row shows the new title (the overview derives from the stored
+        // title, which the live event stream never carries).
+        let mut t = tracker();
+        t.observe(&AgentResponse::SessionsOverview(vec![
+            neenee_contracts::SessionOverview {
+                id: "s".into(),
+                overview: "renamed title".into(),
+                created_at: 7,
+                updated_at: 8,
+                message_count: 9,
+                active: true,
+            },
+            // Another session's row must not leak into ours.
+            neenee_contracts::SessionOverview {
+                id: "other".into(),
+                overview: "someone else".into(),
+                created_at: 1,
+                updated_at: 1,
+                message_count: 1,
+                active: false,
+            },
+        ]));
+        let row = t.row();
+        assert_eq!(row.overview, "renamed title");
+        assert_eq!(row.message_count, 9);
+        assert_eq!(row.created_at, 7);
+    }
+
+    #[test]
+    fn sessions_overview_without_our_id_leaves_the_header_alone() {
+        // After a delete (or before first persist) the snapshot may not carry
+        // our session at all; the seeded header must survive untouched.
+        let mut t = tracker();
+        t.observe(&AgentResponse::SessionsOverview(vec![
+            neenee_contracts::SessionOverview {
+                id: "other".into(),
+                overview: "someone else".into(),
+                created_at: 1,
+                updated_at: 1,
+                message_count: 1,
+                active: false,
+            },
+        ]));
+        let row = t.row();
+        assert_eq!(row.overview, "task");
+        assert_eq!(row.message_count, 2);
     }
 
     #[test]

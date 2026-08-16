@@ -166,9 +166,17 @@ pub async fn run_headless(
                             _ => false,
                         };
                         let status_label = if !is_error {
-                            if is_tty { "\x1b[32mcompleted\x1b[0m" } else { "completed" }
+                            if is_tty {
+                                "\x1b[32mcompleted\x1b[0m"
+                            } else {
+                                "completed"
+                            }
                         } else {
-                            if is_tty { "\x1b[31mfailed\x1b[0m" } else { "failed" }
+                            if is_tty {
+                                "\x1b[31mfailed\x1b[0m"
+                            } else {
+                                "failed"
+                            }
                         };
                         eprintln!("[Tool {status_label}] {name} ({duration_ms}ms)");
                         io::stderr().flush()?;

@@ -100,16 +100,16 @@ ADR-0079; paths below are relative to that directory.
 | `tools/` | Per-tool-step renderers (one file per tool: `bash`, `edit`, `read`, `grep`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
 | `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
-| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` — the unified head row at the top of every view |
+| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `PageHints::has_content` — the unified head band at the top of every view (demand-driven row 2) |
 | `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_layout`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
-| `empty_state.rs` | Empty-transcript placeholder view; `parse_logo` |
+| `empty_state.rs` | Empty-transcript placeholder view: logo hero, rotating help carousel (`carousel_pages`), `parse_logo` |
 | `notice.rs` | Transcript notice entry point; delegates glyph/color/wrapping to `components/notice.rs` |
 | `markdown_table.rs` | `build_table_render`, `shrink_column_widths` |
 | `model/document.rs` | Document model: `TranscriptMessage`, `Block` enum, `MessageKind`, markdown parsing, `parse_arguments_kv` |
 | `model/layout.rs` | `LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing |
 | `model/selection.rs` | `SelectionState`, `get_selected_text`, character-boundary snapping |
 | `fuzzy.rs` | Fuzzy matcher for history / provider search |
-| `providers.rs` | Provider/model picker ranking + display helpers (`model_display_name`, `RankedProvider`, …) |
+| `providers.rs` | Provider/model picker ranking (`RankedProvider`, `RankedModel`, …) |
 | `modal.rs` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` |
 | `completion.rs` | Completion-menu data types: `Completion`, `CompletionKind` (matching logic stays in the shell) |
 

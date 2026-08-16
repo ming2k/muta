@@ -14,32 +14,32 @@ row directly below this one.
 Normal chat, reasoning model:
 
 ```text
- Enter send          Claude Opus 4.8 high @anthropic  89.2k (8%)
+ Enter send          claude-opus-4-8 high @anthropic  89.2k (8%)
 ```
 
-Fixed-effort reasoning model (Kimi K3's single `max` tier always shows):
+Fixed-effort reasoning model (Kimi K3's single `max` tier always shows; the id-first policy renders the wire id `k3`):
 
 ```text
- Enter send            Kimi K3 max @kimi-code  89.2k (8%)
+ Enter send                k3 max @kimi-code  89.2k (8%)
 ```
 
 Non-reasoning model (effort tag absent):
 
 ```text
- Enter send           Kimi K2.7 Code @kimi-code   89.2k (8%)
+ Enter send        kimi-k2.7-code @kimi-code   89.2k (8%)
 ```
 
 While a turn is running, the left side explains where the next message lands:
 
 ```text
- Enter queue message    Kimi K3 max @kimi-code  89.2k (8%)
+ Enter queue message        k3 max @kimi-code  89.2k (8%)
 ```
 
 With a `!`-prefixed shell command staged, the Enter action becomes
 `run command`:
 
 ```text
- Enter run command      Kimi K3 max @kimi-code  89.2k (8%)
+ Enter run command          k3 max @kimi-code  89.2k (8%)
 ```
 
 On narrow terminals the row degrades in a fixed order: the action sentence

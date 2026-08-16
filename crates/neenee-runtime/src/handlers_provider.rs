@@ -1332,7 +1332,10 @@ mod tests {
         // command ledger (the toast is its ephemeral live surface). The record
         // rides under the `models` command word with the selection as args.
         let tmp = tempfile::tempdir().unwrap();
-        let session = SessionStore::load_for_project(tmp.path().to_path_buf());
+        // `for_path` keeps every artifact inside the tempdir; the
+        // `record_provider_ack` mutation would otherwise persist a real
+        // session file into the XDG project bucket.
+        let session = SessionStore::for_path(tmp.path().join("session.json"));
         record_provider_ack(
             &session,
             "111xianyu",

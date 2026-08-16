@@ -328,9 +328,13 @@ pub(super) fn handle_ctrl_c(
     } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
         app.active_modal = Modal::None;
     } else if app.in_side_view {
-        // `/btw` side view: Ctrl+C leaves the side
-        // conversation (ADR-0017), mirroring Esc. Slotted
-        // after modal-close so an open overlay still wins.
+        // `/btw` aside view: Ctrl+C detaches back to the primary
+        // transcript (ADR-0103 §2) — the aside keeps running, so
+        // this is the "get me out" gesture, matching the shell/REPL
+        // muscle memory. Slotted after modal-close so an open
+        // overlay still wins. The composer draft is deliberately
+        // preserved (it belongs to the aside's next turn, not to a
+        // quit intent).
         app.exit_side_view();
         let _ = app.tx.send(AgentRequest::ExitSideView);
     } else if !app.input.is_empty() {

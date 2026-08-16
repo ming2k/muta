@@ -2,29 +2,27 @@
 //! the agent background task's `match req { … }` dispatch.
 //!
 //! Each handler is one match arm, lifted unchanged. Parameters are named to
-//! match the original loop locals (`active_view_side`, `side`, `agent`,
-//! `history`, `session`, `lifecycle`, `resp_tx`, `pursuit_service`, `config`,
-//! …) so the body reads exactly as it did inline.
+//! match the original loop locals (`side`, `agent`, `history`, `session`,
+//! `lifecycle`, `resp_tx`, `pursuit_service`, `config`, …) so the body reads
+//! exactly as it did inline.
 
 use neenee_agent::orchestration::{RoundInput, round_response};
 use neenee_agent::{Agent, RoundLifecycle};
 use neenee_contracts::{AgentResponse, QueuedUserInput, RoundEvent};
 use neenee_persistence::{config::Config, session::SessionStore};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
 use crate::side::{
-    SideSession, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
+    SideRegistry, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
 };
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
 #[allow(clippy::too_many_arguments)]
 pub async fn chat(
-    active_view_side: &AtomicBool,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
     lifecycle: &Arc<RoundLifecycle>,
@@ -47,7 +45,6 @@ pub async fn chat(
         return;
     }
     start_active_turn(
-        active_view_side,
         side,
         agent,
         session,
@@ -69,7 +66,7 @@ pub async fn chat(
 /// returned as a scoped event so the frontend can retain the text as a paused
 /// next-round item instead of dropping it.
 pub async fn insert_user_input(
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -91,7 +88,7 @@ pub async fn insert_user_input(
 /// Cancel an insert if it has not crossed the agent boundary yet. The agent's
 /// queue mutex linearizes this against admission, so the response is final.
 pub async fn cancel_inserted_input(
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -115,7 +112,7 @@ pub async fn cancel_inserted_input(
 /// to the outbox through `UserInputUnavailable`.
 #[allow(clippy::too_many_arguments)]
 pub async fn chat_to_session(
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
     lifecycle: &Arc<RoundLifecycle>,
@@ -164,12 +161,14 @@ pub async fn shell(
     lifecycle: &Arc<RoundLifecycle>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
+    project_root: &std::path::Path,
     command: String,
 ) {
     let shell_tx = resp_tx.clone();
     let shell_lifecycle = lifecycle.clone();
     let shell_agent = agent.clone();
     let shell_session = session.clone();
+    let shell_root = project_root.to_path_buf();
     let shell_session_id = session.id().await;
     tokio::spawn(async move {
         run_shell_command(
@@ -179,6 +178,7 @@ pub async fn shell(
             shell_lifecycle,
             shell_agent,
             shell_session,
+            shell_root,
         )
         .await;
     });

@@ -750,8 +750,8 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         .expect("anthropic discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-5"]);
-    // The display name rides along; capability fields stay None on this shape.
-    assert_eq!(models[0].display_name.as_deref(), Some("Opus"));
+    // Capability fields stay None on this shape (a display_name may ride
+    // along in the payload but is not consumed — id-first policy).
     assert_eq!(models[0].context_window, None);
 }
 

@@ -27,8 +27,9 @@ pub struct InputContext {
     pub permission_show_details: bool,
     /// Whether the view is zoomed into an envoy task (focus stack non-empty).
     pub in_envoy_view: bool,
-    /// Whether the view is inside a `/btw` side conversation (ADR-0017). Esc
-    /// and Ctrl+C return to the primary transcript instead of interrupting.
+    /// Whether the view is inside a `/btw` aside view (ADR-0103). Esc
+    /// interrupts the viewed aside's round; Ctrl+C detaches to the primary
+    /// transcript.
     pub in_side_view: bool,
     /// Whether a transcript step/action target currently holds keyboard focus.
     ///
@@ -158,6 +159,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Queue
             | super::Modal::TokenReport
             | super::Modal::Host
+            | super::Modal::Btw
     )
 }
 
@@ -191,6 +193,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Skills
             | super::Modal::Sessions
             | super::Modal::Queue
+            | super::Modal::Btw
             | super::Modal::HistorySearch
             | super::Modal::Connections
             | super::Modal::Models
@@ -627,9 +630,20 @@ pub enum InputAction {
     },
     /// Leave the current envoy view and return to the parent.
     ExitEnvoy,
-    /// Leave the `/btw` side conversation and return to the primary transcript
-    /// (ADR-0017). Mapped from Esc / Ctrl+C while the side view is focused.
+    /// Detach from the `/btw` aside view and return to the primary transcript
+    /// (ADR-0103). Non-destructive: the aside keeps running. Mapped from
+    /// Ctrl+C while the aside view is focused.
     ExitSideView,
+    /// Open the `/btw` asides list modal (ADR-0103 §5). Mapped from F5.
+    OpenBtwList,
+    /// Jump into the aside highlighted in the asides modal (ADR-0103 §5).
+    BtwFocusSelected,
+    /// Close + discard the aside highlighted in the asides modal
+    /// (`D`, ADR-0103 §5).
+    BtwCloseSelected,
+    /// Interrupt the viewed aside's in-flight round (Esc inside an aside
+    /// view, ADR-0103 §2). Interrupting never closes the aside.
+    InterruptSide,
     /// Move to the previous sibling envoy task.
     PrevSibling,
     /// Move to the next sibling envoy task.
@@ -1223,10 +1237,13 @@ pub fn process_event(
                     } else if context.active_modal != super::Modal::None {
                         InputAction::CloseModal
                     } else if context.in_side_view {
-                        // `/btw` side view: Esc returns to the primary
-                        // transcript (ADR-0017). Takes priority over focus
-                        // clearing and completion so one Esc always exits.
-                        InputAction::ExitSideView
+                        // `/btw` aside view (ADR-0103 §2): Esc interrupts the
+                        // *viewed aside's* round — the same armed
+                        // press-twice-to-confirm contract as the main view —
+                        // and never leaves the view. Leaving is Ctrl+C's one
+                        // job. Takes priority over focus clearing and
+                        // completion so the interrupt intent is unambiguous.
+                        InputAction::InterruptSide
                     } else if context.in_envoy_view {
                         // Envoy zoom: Esc returns to the parent view.
                         // Takes priority over focus clearing so one Esc
@@ -1289,6 +1306,17 @@ pub fn process_event(
                 // only reaches this arm inside a modal, where the composer is
                 // borrowed (or hidden) — so it is a no-op there.
                 KeyCode::F(4) => InputAction::None,
+                // F5 is a declared global binding (registry → OpenBtwList).
+                // Inside the asides modal itself it re-queries the list (a
+                // refresh) rather than toggling the modal closed; inside any
+                // other modal it is a no-op.
+                KeyCode::F(5) => {
+                    if context.active_modal == super::Modal::Btw {
+                        InputAction::OpenBtwList
+                    } else {
+                        InputAction::None
+                    }
+                }
                 // Ctrl+H opens help only when the Kitty enhanced-keyboard
                 // protocol is active (enabled in `run_tui`). In a raw
                 // terminal Ctrl+H is byte-identical to Backspace (0x08), so
@@ -1360,6 +1388,7 @@ pub fn process_event(
                         super::Modal::Skills => InputAction::SkillsToggleDetail,
                         super::Modal::Permissions => InputAction::CloseModal,
                         super::Modal::Queue => InputAction::RecallQueuedSelected,
+                        super::Modal::Btw => InputAction::BtwFocusSelected,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::ConfigTheme => InputAction::ConfigThemeActivate,
                         super::Modal::ConfigThemeCustom => InputAction::ConfigThemeCustomSave,
@@ -1914,6 +1943,14 @@ pub fn process_event(
                         // text, and the queue is a staging surface, not
                         // permanent storage.
                         InputAction::QueueDelete
+                    } else if context.active_modal == super::Modal::Btw && c == 'D' {
+                        // Asides modal (ADR-0103 §5): `Shift+D` closes and
+                        // discards the highlighted aside — cancels its round,
+                        // drops it from the list, and deletes its session
+                        // files. Deliberate destruction stays a two-surface
+                        // gesture (uppercase, like the queue's delete) so a
+                        // stray keypress never loses a background aside.
+                        InputAction::BtwCloseSelected
                     } else if context.active_modal == super::Modal::Queue && c == 'K' {
                         // Queue modal: `K` moves the highlighted item toward
                         // the front (next to pop). Vim convention.
@@ -2188,7 +2225,9 @@ pub fn process_event(
                         super::Modal::Tools => InputAction::SessionSelect { forward: false },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: false },
                         super::Modal::Skills => InputAction::SessionSelect { forward: false },
-                        super::Modal::Queue => InputAction::SessionSelect { forward: false },
+                        super::Modal::Queue | super::Modal::Btw => {
+                            InputAction::SessionSelect { forward: false }
+                        }
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
                         super::Modal::ConfigTheme => InputAction::ModalUp,
@@ -2265,7 +2304,9 @@ pub fn process_event(
                         super::Modal::Tools => InputAction::SessionSelect { forward: true },
                         super::Modal::Mcp => InputAction::SessionSelect { forward: true },
                         super::Modal::Skills => InputAction::SessionSelect { forward: true },
-                        super::Modal::Queue => InputAction::SessionSelect { forward: true },
+                        super::Modal::Queue | super::Modal::Btw => {
+                            InputAction::SessionSelect { forward: true }
+                        }
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
                         super::Modal::ConfigTheme => InputAction::ModalDown,

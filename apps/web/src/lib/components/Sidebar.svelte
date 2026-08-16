@@ -1,20 +1,92 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
+  import type { MonitoredSession } from "../types.js";
+
+  interface Props {
+    open: boolean;
+    onClose: () => void;
+    onOpenConnection: () => void;
+  }
+
+  let { open, onClose, onOpenConnection }: Props = $props();
+
+  /** Session id pending a second click to confirm deletion. */
+  let confirmDeleteId = $state<string | null>(null);
+  /** Session id whose title is being edited inline. */
+  let editingId = $state<string | null>(null);
+  let editValue = $state("");
+
+  const statusLabels: Record<string, string> = {
+    idle: "idle",
+    running: "running",
+    needs_approval: "approval",
+    needs_input: "input",
+    interrupted: "stopped",
+    failed: "failed",
+  };
+
+  function sessionTitle(s: MonitoredSession): string {
+    return s.overview || s.id.slice(0, 8);
+  }
+
+  function select(id: string) {
+    if (editingId === id) return;
+    daemon.attach(id);
+    onClose();
+  }
+
+  function startRename(s: MonitoredSession) {
+    editingId = s.id;
+    editValue = s.overview ?? "";
+  }
+
+  /** Svelte action: focus the inline rename input on mount. */
+  function focusOnMount(el: HTMLInputElement) {
+    el.focus();
+    el.select();
+  }
+
+  function commitRename(id: string) {
+    const title = editValue.trim();
+    if (title) daemon.renameSession(id, title);
+    editingId = null;
+  }
+
+  function requestDelete(id: string) {
+    if (confirmDeleteId === id) {
+      daemon.deleteSession(id);
+      confirmDeleteId = null;
+    } else {
+      confirmDeleteId = id;
+      window.setTimeout(() => {
+        if (confirmDeleteId === id) confirmDeleteId = null;
+      }, 4000);
+    }
+  }
 </script>
 
-<aside class="sidebar">
+{#if open}
+  <div class="backdrop" onclick={onClose} role="presentation"></div>
+{/if}
+
+<aside class="sidebar" class:open>
   <div class="brand-header">
     <div class="brand-logo">
-      <span class="dot" class:online={daemon.connected}></span>
+      <span class="dot" class:online={daemon.connection === "connected"}></span>
       <span class="title">neenee</span>
     </div>
-    <span class="badge" class:online={daemon.connected}>
-      {daemon.connected ? "Online" : "Connecting"}
-    </span>
+    <button
+      class="badge"
+      class:online={daemon.connection === "connected"}
+      onclick={onOpenConnection}
+      title="Connection settings"
+    >
+      {daemon.connection === "connected" ? "Online" : daemon.connection === "connecting" ? "Connecting" : "Offline"}
+    </button>
   </div>
 
   <div class="action-bar">
-    <button class="btn btn-primary" onclick={() => daemon.newSession()}>
+    <button class="btn-primary" onclick={() => daemon.newSession()}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M12 5v14M5 12h14"/>
       </svg>
@@ -29,29 +101,73 @@
         <div class="empty">No active sessions</div>
       {:else}
         {#each daemon.sessions as s (s.id)}
-          <button
+          <div
             class="session-item"
             class:active={s.id === daemon.activeSessionId}
-            onclick={() => daemon.attach(s.id)}
+            role="button"
+            tabindex="0"
+            onclick={() => select(s.id)}
+            onkeydown={(e) => e.key === "Enter" && select(s.id)}
           >
             <div class="session-header">
-              <span class="session-title">{s.title || s.id.slice(0, 8)}</span>
-              <span class="status-pill status-{s.status}">{s.status}</span>
+              {#if editingId === s.id}
+                <input
+                  class="rename-input"
+                  bind:value={editValue}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") commitRename(s.id);
+                    if (e.key === "Escape") editingId = null;
+                    e.stopPropagation();
+                  }}
+                  onclick={(e) => e.stopPropagation()}
+                  onfocusout={() => commitRename(s.id)}
+                  aria-label="Rename session"
+                  use:focusOnMount
+                />
+              {:else}
+                <span class="session-title">{sessionTitle(s)}</span>
+              {/if}
+              <span class="status-pill status-{s.status}">
+                {statusLabels[s.status] ?? s.status}
+              </span>
             </div>
             <div class="session-meta">
-              <span>{s.provider} / {s.model}</span>
-              {#if s.context_tokens}
-                <span>{s.context_tokens.toLocaleString()} tok</span>
-              {/if}
+              <span class="activity">{s.current_tool ?? s.activity ?? ""}</span>
+              <span class="meta-right">
+                {#if s.context_tokens}
+                  <span>{s.context_tokens.toLocaleString()} tok</span>
+                {/if}
+                <button
+                  class="icon-action rename-btn"
+                  title="Rename session"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    startRename(s);
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  class="icon-action delete-btn"
+                  class:confirm={confirmDeleteId === s.id}
+                  title={confirmDeleteId === s.id ? "Click again to confirm deletion" : "Delete session"}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    requestDelete(s.id);
+                  }}
+                >
+                  {confirmDeleteId === s.id ? "confirm?" : "×"}
+                </button>
+              </span>
             </div>
-          </button>
+          </div>
         {/each}
       {/if}
     </div>
   </div>
 
   <div class="sidebar-footer">
-    <span class="footer-text">{daemon.wsUrl}</span>
+    <span class="footer-text">{daemon.daemonProjectRoot || daemon.wsUrl}</span>
   </div>
 </aside>
 
@@ -64,6 +180,10 @@
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+  }
+
+  .backdrop {
+    display: none;
   }
 
   .brand-header {
@@ -107,6 +227,8 @@
     background: rgba(248, 81, 73, 0.15);
     color: var(--accent-danger);
     text-transform: uppercase;
+    border: none;
+    cursor: pointer;
   }
 
   .badge.online {
@@ -184,6 +306,7 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 4px;
+    gap: 6px;
   }
 
   .session-title {
@@ -193,7 +316,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 160px;
+    max-width: 150px;
   }
 
   .status-pill {
@@ -202,10 +325,11 @@
     padding: 1px 5px;
     border-radius: var(--radius-sm);
     text-transform: uppercase;
+    flex-shrink: 0;
   }
 
   .status-idle {
-    background: var(--bg-input);
+    background: var(--bg-surface-hover);
     color: var(--text-muted);
   }
 
@@ -214,11 +338,88 @@
     color: var(--accent-info);
   }
 
+  .status-needs_approval,
+  .status-needs_input {
+    background: rgba(210, 153, 34, 0.15);
+    color: var(--accent-warning);
+  }
+
+  .status-interrupted {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .status-failed {
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--accent-danger);
+  }
+
   .session-meta {
     font-size: 11px;
     color: var(--text-muted);
     display: flex;
     justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .activity {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .meta-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .icon-action {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .session-item:hover .icon-action,
+  .delete-btn.confirm {
+    opacity: 1;
+  }
+
+  .icon-action:hover {
+    color: var(--text-secondary);
+  }
+
+  .delete-btn:hover {
+    color: var(--accent-danger) !important;
+  }
+
+  .delete-btn.confirm {
+    color: var(--accent-danger);
+    font-size: 10px;
+    font-family: var(--font-mono);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    border-radius: var(--radius-sm);
+    padding: 1px 4px;
+  }
+
+  .rename-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--input-bg-inactive);
+    border: 1px solid var(--border-input-focus);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 2px 6px;
+    outline: none;
   }
 
   .empty {
@@ -234,5 +435,33 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  @media (max-width: 900px) {
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      z-index: 90;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease-out;
+      box-shadow: 8px 0 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .sidebar.open {
+      transform: translateX(0);
+    }
+
+    .backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 80;
+    }
   }
 </style>

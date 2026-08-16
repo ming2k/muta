@@ -6,6 +6,7 @@
 //! does not depend on that implementation crate.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Skill configuration stored under `[skills]` in `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -17,6 +18,17 @@ pub struct SkillsConfig {
     pub urls: Vec<String>,
     /// Skill names to disable (case-sensitive).
     pub disabled: Vec<String>,
+    /// Project root the project-local skill sources (`.neenee/skills`,
+    /// `.agents/skills`, `.claude/skills`) resolve from. Runtime-populated
+    /// by the session bootstrap — never deserialized from `config.toml`
+    /// (a config file must not name a workspace) — and `None` in contexts
+    /// without a designated project (tests, `neenee config`), where
+    /// discovery falls back to the process cwd. Under the unified daemon
+    /// (ADR-0096) one process hosts sessions for many projects, so this
+    /// field is what keeps each session's skill catalog scoped to its own
+    /// project instead of whichever directory first spawned the daemon.
+    #[serde(skip)]
+    pub project_root: Option<PathBuf>,
 }
 
 impl SkillsConfig {

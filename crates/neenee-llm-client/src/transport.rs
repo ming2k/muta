@@ -112,6 +112,17 @@ fn is_transient_transport_error(error: &reqwest::Error) -> bool {
     if error.is_timeout() || error.is_connect() || error.is_request() || error.is_body() {
         return true;
     }
+    // `Kind::Decode` covers the streaming path: `bytes_stream()` wraps *every*
+    // body error (including mid-stream connection resets and truncation) in
+    // `Kind::Decode`, and that error carries no URL — exactly the bare
+    // "<provider> transport error: error decoding response body" seen when a
+    // long SSE generation is cut off mid-stream. A reset that surfaces as
+    // `Kind::Body` on the same wire is already retryable above; classifying
+    // the decode wrapper the same way keeps one physical failure from being
+    // retryable or terminal depending on which reqwest API observed it.
+    if error.is_decode() {
+        return true;
+    }
     chain_has_transient_io(error)
 }
 
@@ -150,8 +161,46 @@ fn redact_url_credentials(message: &str) -> String {
     redacted
 }
 
+/// Render a `reqwest::Error`'s *cause chain* for inclusion in an error
+/// message. `reqwest::Error`'s `Display` prints only the kind description
+/// ("error decoding response body", "error sending request") and stops — the
+/// `source()` chain (hyper "connection closed before message completed",
+/// gzip "corrupt deflate stream", io "connection reset by peer") never
+/// reaches the user, so a truncated stream is undiagnosable from the error
+/// alone. Join the sources with `: ` and cap the total to keep the message
+/// bounded.
+fn error_source_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    const MAX_CHAIN_CHARS: usize = 240;
+    let mut chain = String::new();
+    let mut next = error.source();
+    while let Some(err) = next {
+        let display = err.to_string();
+        if !display.is_empty() {
+            if !chain.is_empty() {
+                chain.push_str(": ");
+            }
+            chain.push_str(&display);
+        }
+        next = err.source();
+        if chain.chars().count() >= MAX_CHAIN_CHARS {
+            break;
+        }
+    }
+    if chain.chars().count() > MAX_CHAIN_CHARS {
+        let truncated: String = chain.chars().take(MAX_CHAIN_CHARS).collect();
+        chain = truncated;
+    }
+    chain
+}
+
 pub fn transport_error(provider: &str, error: reqwest::Error) -> String {
-    let message = redact_url_credentials(&format!("{} transport error: {}", provider, error));
+    let sources = error_source_chain(&error);
+    let detail = if sources.is_empty() {
+        format!("{provider} transport error: {error}")
+    } else {
+        format!("{provider} transport error: {error} ({sources})")
+    };
+    let message = redact_url_credentials(&detail);
     if is_transient_transport_error(&error) {
         retryable_error(message, None)
     } else {
@@ -243,6 +292,100 @@ mod tests {
                 "{kind:?} must not be transient"
             );
         }
+    }
+
+    #[test]
+    fn transport_error_includes_source_chain() {
+        // Unit-check the chain renderer directly: a nested source chain must
+        // be flattened into the message, not dropped. (`reqwest::Error`
+        // itself is constructed in the async test below.)
+        #[derive(Debug)]
+        struct Nested(&'static str);
+        impl std::fmt::Display for Nested {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for Nested {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self.0 {
+                    "outer" => Some(Box::leak(Box::new(Nested("hyper: incomplete message")))),
+                    _ => None,
+                }
+            }
+        }
+        assert_eq!(
+            error_source_chain(&Nested("outer")),
+            "hyper: incomplete message"
+        );
+        assert_eq!(error_source_chain(&Nested("leaf")), "");
+    }
+
+    #[tokio::test]
+    async fn decode_kind_stream_truncation_is_retryable() {
+        // Reproduce the exact error shape the streaming path produces: the
+        // server declares Content-Length larger than what it sends, then
+        // closes — reqwest's `bytes_stream()` wraps the resulting body error
+        // in `Kind::Decode` (its `map_err(crate::error::decode)`), which is
+        // exactly how a cut-off SSE generation surfaces. Before the
+        // `is_decode()` arm this classified as terminal, so one truncated
+        // stream killed the whole envoy sub-task with no retry.
+        use std::io::Write;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            use tokio::io::AsyncReadExt;
+            let _ = socket.read(&mut buf).await; // consume the request
+            let mut connection = socket.into_std().unwrap();
+            // Promise 1024 bytes of SSE body but deliver only a fragment,
+            // then hard-close: hyper reports "connection closed before
+            // message completed" through the body layer.
+            let _ = connection.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                   Content-Length: 1024\r\n\r\ndata: {\"a\":1}",
+            );
+            let _ = connection.shutdown(std::net::Shutdown::Both);
+        });
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/v1/chat/completions"))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .unwrap();
+        let mut stream = Box::pin(response.bytes_stream());
+        let mut decode_error: Option<reqwest::Error> = None;
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            if let Err(error) = item {
+                decode_error = Some(error);
+                break;
+            }
+        }
+        server.abort();
+        let error = decode_error.expect("the truncated body must fail the stream");
+        assert!(error.is_decode(), "BodyDataStream wraps errors in Decode");
+        assert!(
+            is_transient_transport_error(&error),
+            "a Decode error from a cut-off stream must classify as transient"
+        );
+        let message = transport_error("OpenAI", error);
+        let chain_was_captured = !message.is_empty();
+        let retryable = neenee_contracts::parse_retryable_error(&message)
+            .unwrap_or_else(|| panic!("decode-kind transport errors must be retryable: {message}"));
+        assert!(chain_was_captured);
+        assert!(
+            retryable.message.contains("error decoding response body"),
+            "reqwest kind text expected: {}",
+            retryable.message
+        );
+        // The source chain (hyper/io detail like "connection closed before
+        // message completed") must have been folded into the message; the
+        // bare reqwest Display never includes it.
+        assert_ne!(
+            retryable.message, "OpenAI transport error: error decoding response body",
+            "the underlying cause must be included for diagnosis"
+        );
     }
 
     #[test]

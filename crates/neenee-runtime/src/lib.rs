@@ -83,6 +83,7 @@ pub mod registry;
 pub mod review;
 pub mod serve;
 pub mod serve_discovery;
+pub mod serve_http;
 pub mod session_driver;
 pub mod session_view;
 pub mod shell;

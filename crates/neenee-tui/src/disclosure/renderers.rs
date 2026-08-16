@@ -21,6 +21,7 @@ use crate::model::layout::{
 use crate::model::selection::{CellDragInfo, SelectionState};
 
 use crate::message_body::draw_message_body;
+use crate::model::document::CommandRowLayout;
 use crate::text_layout::{
     WrappedLine, block_selection_range, code_gutter_line, line_selection, line_spans,
     line_spans_rich, padded_tail, wrap_text,
@@ -32,6 +33,8 @@ use crate::view::{
     TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
     TRANSCRIPT_BODY_LEADING_INDENT, Theme,
 };
+
+use crate::design::JOIN_MODIFY;
 
 /// Cursor + environment carried through the tool-step body renderers.
 ///
@@ -2256,12 +2259,25 @@ pub fn draw_reasoning_trace(
 }
 
 /// Render a slash-command invocation as a compact, dimmed, non-conversational
-/// command block (ADR-0091): a one-line disclosure header (`+ ⚙ /search foo`)
-/// that expands to the typed result body. The result body renders through the
-/// shared block renderer so lists/code/tables all survive. Commands are never
-/// assistant prose — the header uses the reasoning summary's disclosure ×
-/// interaction tone (muted when collapsed+idle), and no sticky summary is
-/// produced (command bodies are short).
+/// command row (ADR-0091, layout per ADR-0106). Commands are operations, not
+/// conversation, so the row never uses the conversational step chrome — and
+/// crucially, the disclosure `+`/`-` marker is reserved for rows that actually
+/// have something to disclose:
+///
+/// - **Plain** — no result (shell passthroughs, legacy folds): just the
+///   invocation, dimmed.
+/// - **Inline** — a short single-line reply (`/new`, acks, `/schedule`):
+///   `invocation · reply` on one row. The `·` is the R1 "attribute" join —
+///   the reply is the outcome of the invocation — and there is no marker
+///   because there is no second view to open.
+/// - **Disclose** — a long or multi-line reply (`/search`, `/session
+///   status`, `/review`): the `+`/`-` header expands to the typed result
+///   body through the shared block renderer, so lists/code/tables survive.
+///
+/// The `+` prefix on a one-line ack was a false affordance: it promised an
+/// expansion that was at most one more line. Tone follows the same ladder as
+/// reasoning summaries (muted when idle, hover on pointer/focus, bright when
+/// expanded) so the row still reads as quietly interactive where it is.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_command_result(
     frame: &mut Frame,
@@ -2278,7 +2294,7 @@ pub fn draw_command_result(
     hovered: bool,
     focused: bool,
 ) {
-    let Some(summary) = msg.command_result_summary() else {
+    let Some(invocation) = msg.command_result_summary() else {
         return;
     };
     let expanded = msg.command_result_expanded() == Some(true);
@@ -2302,8 +2318,100 @@ pub fn draw_command_result(
         return;
     }
 
-    let summary_line = format!("⚙ {summary}");
-    let _summary_line_idx = {
+    let layout = msg
+        .command_row_layout(full_width)
+        .unwrap_or(CommandRowLayout::Plain);
+
+    if layout == CommandRowLayout::Disclose {
+        // The summary is the invocation alone; the marker (`+`/`-`) comes from
+        // the shared disclosure header, which also records the clickable rect.
+        let _summary_line_idx = {
+            let mut ctx = RenderCtx::from_cursor(
+                frame,
+                transcript_area,
+                full_width,
+                theme,
+                layout_map,
+                skip_rows,
+                current_y,
+                content_lines,
+            );
+            draw_reasoning_summary(
+                &mut ctx,
+                mi,
+                expanded,
+                None,
+                &invocation,
+                hovered,
+                focused,
+                COMMAND_RESULT_BLOCK_IDX,
+            )
+        };
+
+        if expanded && msg.command_result_text().is_some() {
+            advance_plain_blank_rows(
+                transcript_area,
+                REASONING_TRACE_BODY_TOP_GAP_ROWS,
+                skip_rows,
+                current_y,
+                content_lines,
+            );
+            // `blocks` holds the parsed result text (`CommandResult::to_text`),
+            // empty when the record carried no result — then there is nothing to
+            // expand into, and `draw_message_body` advances zero rows.
+            draw_message_body(
+                frame,
+                transcript_area,
+                msg,
+                mi,
+                selection,
+                cell_selection,
+                theme,
+                layout_map,
+                skip_rows,
+                current_y,
+                content_lines,
+                true,
+            );
+        }
+        return;
+    }
+
+    // Plain / Inline: a single self-contained row, no disclosure affordance.
+    // Inline joins the reply with the R1 attribute dot (` · `); the reply is
+    // clamped to the remaining columns so the row can never spill.
+    let summary_color = summary_text_color(
+        None,
+        Disclosure::from_expanded(false),
+        Interaction::from_hover_focused(hovered, focused),
+        theme,
+    );
+    let line = {
+        let mut spans = vec![Span::styled(
+            invocation.clone(),
+            Style::default()
+                .fg(summary_color)
+                .add_modifier(Modifier::BOLD),
+        )];
+        let mut used = invocation.width();
+        if layout == CommandRowLayout::Inline
+            && let Some(reply) = msg.command_result_text()
+        {
+            let join = JOIN_MODIFY.to_string();
+            used += join.width();
+            spans.push(Span::styled(join, Style::default().fg(summary_color)));
+            let budget = full_width.saturating_sub(used);
+            let clamped = truncate_to_width(&reply, budget);
+            used += clamped.width();
+            spans.push(Span::styled(clamped, Style::default().fg(summary_color)));
+        }
+        spans.push(Span::styled(
+            padded_tail(full_width, used),
+            Style::default(),
+        ));
+        Line::from(spans)
+    };
+    {
         let mut ctx = RenderCtx::from_cursor(
             frame,
             transcript_area,
@@ -2314,43 +2422,22 @@ pub fn draw_command_result(
             current_y,
             content_lines,
         );
-        draw_reasoning_summary(
-            &mut ctx,
-            mi,
-            expanded,
-            None,
-            &summary_line,
-            hovered,
-            focused,
-            COMMAND_RESULT_BLOCK_IDX,
-        )
-    };
-
-    if expanded && msg.command_result_text().is_some() {
-        advance_plain_blank_rows(
-            transcript_area,
-            REASONING_TRACE_BODY_TOP_GAP_ROWS,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
-        // `blocks` holds the parsed result text (`CommandResult::to_text`),
-        // empty when the record carried no result — then there is nothing to
-        // expand into, and `draw_message_body` advances zero rows.
-        draw_message_body(
-            frame,
-            transcript_area,
-            msg,
-            mi,
-            selection,
-            cell_selection,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-            true,
-        );
+        if let Some(rect) = ctx.paint(line) {
+            // The rect is recorded even for non-disclosing rows: hovering
+            // lights the row up (the shared hover affordance), and keeping
+            // the entry means keyboard focus navigation can still land on it
+            // — a no-op toggle, same as a collapsed row with an empty body.
+            ctx.layout_map.push(BlockRegion {
+                message_idx: mi,
+                block_idx: COMMAND_RESULT_BLOCK_IDX,
+                start_byte: 0,
+                end_byte: 0,
+                text: String::new(),
+                prefix_cols: 0,
+                rect,
+                hidden_ranges: Vec::new(),
+            });
+        }
     }
 }
 

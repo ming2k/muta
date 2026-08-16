@@ -4,6 +4,7 @@ use super::SkillsConfig;
 use super::metadata::{Skill, SkillScope, parse_skill_metadata};
 use super::remote::{cached_remote_roots, fetch_remote_repo};
 use neenee_persistence::paths;
+use neenee_persistence::trusted_projects::TrustGate;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -14,25 +15,67 @@ const PROJECT_NEENEE_SKILLS_DIR: &str = ".neenee/skills";
 const EXTERNAL_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
 const MAX_SCAN_DEPTH: usize = 8;
 
+/// A project-local ([`SkillScope::Repo`]) skill that overrode a same-named
+/// skill from a lower-priority scope during discovery.
+///
+/// Surfaced to the user as a warning notice by the runtime: a cloned or
+/// vendored repo can shadow a user's own skill merely by reusing its name,
+/// and a silent override would make that injection invisible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowedSkill {
+    /// The skill name claimed by both scopes.
+    pub name: String,
+    /// The scope that lost (the skill the user would otherwise have gotten).
+    pub overridden_scope: SkillScope,
+    /// `SKILL.md` path of the winning project-local skill.
+    pub winner_source: PathBuf,
+}
+
 /// Result of scanning every configured skill source.
 #[derive(Debug, Default, Clone)]
 pub struct DiscoveryResult {
     pub skills: Vec<Skill>,
     pub errors: Vec<String>,
+    /// Project-local skills that shadowed a same-named lower-scope skill in
+    /// this scan (empty when the project is untrusted — Repo sources are not
+    /// scanned at all then).
+    pub shadowed: Vec<ShadowedSkill>,
 }
 
 /// Discover all skills using the provided configuration.
 ///
 /// Sources are scanned from lowest to highest priority so that higher-priority
 /// skills override lower-priority skills with the same name.
+///
+/// Project-local sources (`.neenee/skills`, `.agents/skills`, `.claude/skills`)
+/// are gated by the ADR-0085 §5 trust decision, consulted live at scan time
+/// from the on-disk trust store: an untrusted project's skills are not
+/// discovered at all. A cloned/vendored repo's `SKILL.md` files are prompt
+/// content; loading them just because the directory was opened is the same
+/// hazard class as project MCP servers and hooks. Because the check happens
+/// here, every scan path — startup, the periodic background refresh, and
+/// `/skills reload` — is gated identically, and a `/trust` grant takes effect
+/// on the very next scan.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
+    let project_trusted = TrustGate::load().is_trusted(&resolve_project_root(config));
+    discover_all_with_trust(config, project_trusted).await
+}
+
+/// Discovery with the trust decision supplied by the caller. Production code
+/// uses [`discover_all`] (which resolves trust from the store); this seam
+/// exists so tests can exercise both trust states without touching the
+/// on-disk trust store.
+pub async fn discover_all_with_trust(
+    config: &SkillsConfig,
+    project_trusted: bool,
+) -> DiscoveryResult {
     let mut result = DiscoveryResult::default();
     // name -> position in `result.skills`. Scanning runs lowest- to
     // highest-priority; `upsert_skill` makes the last claimant of a name win
     // while preserving the first-seen position for stable catalog ordering.
     let mut index: HashMap<String, usize> = HashMap::new();
 
-    for source in skill_sources(config).await {
+    for source in skill_sources(config, project_trusted).await {
         match source {
             SkillSource::Local { root, scope } => {
                 discover_local_skills(&root, scope, config, &mut index, &mut result);
@@ -59,7 +102,7 @@ enum SkillSource {
     Remote { roots: Vec<PathBuf> },
 }
 
-async fn skill_sources(config: &SkillsConfig) -> Vec<SkillSource> {
+async fn skill_sources(config: &SkillsConfig, project_trusted: bool) -> Vec<SkillSource> {
     let mut sources: Vec<SkillSource> = Vec::new();
     let dirs = paths::get();
 
@@ -114,35 +157,90 @@ async fn skill_sources(config: &SkillsConfig) -> Vec<SkillSource> {
         });
     }
 
-    // 5. Project-local external skills.
-    let project_root =
-        find_project_root(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    for dir in EXTERNAL_SKILL_DIRS {
+    // 5/6. Project-local skills (highest priority) — GATED by the ADR-0085
+    //    §5 trust decision: an untrusted project's sources are not even
+    //    scanned, so a cloned/vendored repo cannot inject or shadow skills
+    //    merely because the directory was opened. The project root comes from
+    //    the config when the session bootstrap designated one (ADR-0096: the
+    //    daemon's process cwd belongs to whichever client first spawned it,
+    //    not necessarily this session's project); otherwise fall back to the
+    //    process cwd for contexts without a designated project.
+    if project_trusted {
+        let project_root = resolve_project_root(config);
+        // 5. Project-local external skills.
+        for dir in EXTERNAL_SKILL_DIRS {
+            sources.push(SkillSource::Local {
+                root: project_root.join(dir),
+                scope: SkillScope::Repo,
+            });
+        }
+        // 6. Project-local neenee skills.
         sources.push(SkillSource::Local {
-            root: project_root.join(dir),
+            root: project_root.join(PROJECT_NEENEE_SKILLS_DIR),
             scope: SkillScope::Repo,
         });
     }
 
-    // 6. Project-local neenee skills (highest priority).
-    sources.push(SkillSource::Local {
-        root: project_root.join(PROJECT_NEENEE_SKILLS_DIR),
-        scope: SkillScope::Repo,
-    });
-
     sources
+}
+
+/// The project root project-local sources resolve from: the config-pinned
+/// root when the session bootstrap designated one, else the nearest marker
+/// directory above the process cwd.
+fn resolve_project_root(config: &SkillsConfig) -> PathBuf {
+    match &config.project_root {
+        Some(root) => root.clone(),
+        None => find_project_root(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+    }
+}
+
+/// Whether the project tree declares any project-local skills. Used to word
+/// the trust-gate user notices (bootstrap, `/trust`) without running a full
+/// scan; deliberately cheap and purely local.
+pub fn project_skills_present(project_root: &Path) -> bool {
+    EXTERNAL_SKILL_DIRS
+        .iter()
+        .chain(std::iter::once(&PROJECT_NEENEE_SKILLS_DIR))
+        .any(|dir| {
+            walkdir::WalkDir::new(project_root.join(dir))
+                .max_depth(MAX_SCAN_DEPTH)
+                .follow_links(true)
+                .into_iter()
+                .filter_map(|entry| entry.ok())
+                .any(|entry| entry.file_type().is_file() && entry.file_name() == "SKILL.md")
+        })
 }
 
 /// Insert a skill, or — when a higher-priority source already claimed the
 /// same name — override the earlier entry in place. Scanning runs from lowest
 /// to highest priority, so the last source to claim a name wins, while the
 /// first-seen position is preserved for stable catalog ordering.
-fn upsert_skill(skills: &mut Vec<Skill>, index: &mut HashMap<String, usize>, skill: Skill) {
+///
+/// Returns a [`ShadowedSkill`] record when the winner is project-local
+/// ([`SkillScope::Repo`]) and the loser was not: that is the injection-visible
+/// case (a repo silently overriding the user's own skill). Same-scope and
+/// lower-scope-wins replacements are routine priority resolution and are not
+/// reported.
+fn upsert_skill(
+    skills: &mut Vec<Skill>,
+    index: &mut HashMap<String, usize>,
+    skill: Skill,
+) -> Option<ShadowedSkill> {
     match index.get(&skill.name).copied() {
-        Some(i) => skills[i] = skill,
+        Some(i) => {
+            let shadowed = (skill.scope == SkillScope::Repo && skills[i].scope != SkillScope::Repo)
+                .then(|| ShadowedSkill {
+                    name: skill.name.clone(),
+                    overridden_scope: skills[i].scope,
+                    winner_source: skill.source.clone(),
+                });
+            skills[i] = skill;
+            shadowed
+        }
         None => {
             index.insert(skill.name.clone(), skills.len());
             skills.push(skill);
+            None
         }
     }
 }
@@ -184,7 +282,9 @@ fn discover_local_skills(
                     if config.is_disabled(&skill.name) {
                         skill.enabled = false;
                     }
-                    upsert_skill(&mut result.skills, index, skill);
+                    if let Some(shadowed) = upsert_skill(&mut result.skills, index, skill) {
+                        result.shadowed.push(shadowed);
+                    }
                 }
                 Err(e) => result.errors.push(e),
             }
@@ -256,6 +356,97 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(find_project_root(&dir), dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (the "wrong workspace" bug): a config whose `project_root`
+    /// is pinned (the session bootstrap does this under the unified daemon,
+    /// ADR-0096) discovers project-local skills from that root, not from the
+    /// process cwd — which under the daemon belongs to a different project
+    /// than the session invoking discovery.
+    ///
+    /// Uses the `_with_trust` seam: `discover_all` itself consults the real
+    /// on-disk trust store, which a temp test project is not in.
+    #[tokio::test]
+    async fn pinned_project_root_scopes_project_local_skills() {
+        let root = std::env::temp_dir().join(format!("neenee-skills-{}", uuid::Uuid::new_v4()));
+        let skill_dir = root.join(".neenee/skills/pinned");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: pinned\ndescription: pinned to the session project\n---\n# Pinned\n",
+        )
+        .unwrap();
+
+        let config = neenee_contracts::SkillsConfig {
+            project_root: Some(root.clone()),
+            ..Default::default()
+        };
+        let result = discover_all_with_trust(&config, true).await;
+        assert!(
+            result.skills.iter().any(|skill| skill.name == "pinned"),
+            "project-local skill must be discovered from the pinned root"
+        );
+
+        // Without a pinned root the same config discovers nothing here: the
+        // process cwd (the test binary's) has no `.neenee/skills/pinned`.
+        let unpinned = neenee_contracts::SkillsConfig::default();
+        let result = discover_all_with_trust(&unpinned, true).await;
+        assert!(
+            !result.skills.iter().any(|skill| skill.name == "pinned"),
+            "unpinned discovery must not reach into an unrelated directory"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// ADR-0085 §5 extended to skills: an untrusted project's Repo-scope
+    /// sources (`.neenee/skills`, `.agents/skills`, `.claude/skills`) are not
+    /// scanned at all, so a cloned/vendored repo cannot inject skills or
+    /// shadow user skills merely because the directory was opened.
+    #[tokio::test]
+    async fn untrusted_project_skips_repo_scoped_sources() {
+        let root = std::env::temp_dir().join(format!("neenee-skills-{}", uuid::Uuid::new_v4()));
+        for dir in [".neenee/skills/evil", ".agents/skills/evil2"] {
+            let skill_dir = root.join(dir);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            let name = skill_dir.file_name().unwrap().to_string_lossy().to_string();
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: planted\n---\n# Planted\n"),
+            )
+            .unwrap();
+        }
+
+        let config = neenee_contracts::SkillsConfig {
+            project_root: Some(root.clone()),
+            ..Default::default()
+        };
+
+        // Untrusted: no Repo-scope skill appears, and no shadow is reported
+        // (the project sources were never scanned).
+        let result = discover_all_with_trust(&config, false).await;
+        assert!(
+            !result
+                .skills
+                .iter()
+                .any(|skill| skill.scope == SkillScope::Repo),
+            "untrusted project must contribute no repo skills"
+        );
+        assert!(
+            !result
+                .skills
+                .iter()
+                .any(|s| s.name == "evil" || s.name == "evil2"),
+            "planted skills must not load while untrusted"
+        );
+        assert!(result.shadowed.is_empty());
+
+        // Trusted: both project skills load.
+        let result = discover_all_with_trust(&config, true).await;
+        assert!(result.skills.iter().any(|s| s.name == "evil"));
+        assert!(result.skills.iter().any(|s| s.name == "evil2"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -330,6 +521,74 @@ mod tests {
         assert!(
             !result.skills[0].enabled,
             "disabled config applies to the overriding skill"
+        );
+
+        let _ = std::fs::remove_dir_all(&low);
+        let _ = std::fs::remove_dir_all(&high);
+    }
+
+    #[test]
+    fn repo_skill_shadowing_user_skill_is_recorded_exactly_once() {
+        // A project-local (Repo) skill that claims a name already held by a
+        // user-scope skill wins by priority — and must leave exactly one
+        // shadow record so the runtime can warn about the silent override.
+        let user = std::env::temp_dir().join(format!("neenee-skill-{}", uuid::Uuid::new_v4()));
+        let repo = std::env::temp_dir().join(format!("neenee-skill-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(user.join("shared")).unwrap();
+        std::fs::create_dir_all(repo.join("shared")).unwrap();
+        std::fs::write(
+            user.join("shared").join("SKILL.md"),
+            "---\nname: shared\ndescription: user\n---\nuser body",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("shared").join("SKILL.md"),
+            "---\nname: shared\ndescription: repo\n---\nrepo body",
+        )
+        .unwrap();
+
+        let config = SkillsConfig::default();
+        let mut result = DiscoveryResult::default();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        discover_local_skills(&user, SkillScope::User, &config, &mut index, &mut result);
+        discover_local_skills(&repo, SkillScope::Repo, &config, &mut index, &mut result);
+
+        assert_eq!(result.skills.len(), 1);
+        assert_eq!(result.skills[0].scope, SkillScope::Repo);
+        assert_eq!(
+            result.shadowed.len(),
+            1,
+            "exactly one shadow record per shadowed name"
+        );
+        let shadow = &result.shadowed[0];
+        assert_eq!(shadow.name, "shared");
+        assert_eq!(shadow.overridden_scope, SkillScope::User);
+        assert!(shadow.winner_source.ends_with("SKILL.md"));
+
+        let _ = std::fs::remove_dir_all(&user);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn same_scope_or_lower_scope_overrides_are_not_shadow_records() {
+        // Repo-over-Repo (two project dirs) and User-over-Remote are routine
+        // priority resolution within one trust domain — no warning.
+        let low = std::env::temp_dir().join(format!("neenee-skill-{}", uuid::Uuid::new_v4()));
+        let high = std::env::temp_dir().join(format!("neenee-skill-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(low.join("x")).unwrap();
+        std::fs::create_dir_all(high.join("x")).unwrap();
+        std::fs::write(low.join("x").join("SKILL.md"), "---\nname: x\n---\nlow").unwrap();
+        std::fs::write(high.join("x").join("SKILL.md"), "---\nname: x\n---\nhigh").unwrap();
+
+        let config = SkillsConfig::default();
+        let mut result = DiscoveryResult::default();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        discover_local_skills(&low, SkillScope::Repo, &config, &mut index, &mut result);
+        discover_local_skills(&high, SkillScope::Repo, &config, &mut index, &mut result);
+        assert_eq!(result.skills.len(), 1);
+        assert!(
+            result.shadowed.is_empty(),
+            "repo-over-repo is not a user-visible shadow"
         );
 
         let _ = std::fs::remove_dir_all(&low);

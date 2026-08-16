@@ -1501,8 +1501,10 @@ mod schedule_tests {
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        // `load_for_project` pins a fresh session file under the project dir.
-        SessionStore::load_for_project(dir)
+        // `for_path` pins the fresh session file (and its blobs) under the
+        // throwaway dir — `load_for_project` would resolve the real XDG
+        // project bucket and mint files under ~/.local/share/neenee.
+        SessionStore::for_path(dir.join("session.json"))
     }
 
     /// Build a cron `ScheduledJob` with an explicit `next_fire` (so the test

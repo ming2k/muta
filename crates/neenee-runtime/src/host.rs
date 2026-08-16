@@ -41,6 +41,13 @@ pub struct HostOptions {
     pub port: u16,
     pub expose: ServeExpose,
     pub token: Option<String>,
+    /// Require a bearer token on the loopback TCP listener (ADR-0105);
+    /// resolved by the CLI from `[daemon] local_auth` + `--no-local-auth`.
+    pub local_auth: bool,
+    /// Fall back to an OS-assigned port when the requested one is taken
+    /// (ADR-0105): on for the CLI default port, off for an explicit `--port`
+    /// (a stated bind must fail loudly, not silently move).
+    pub port_fallback: bool,
     /// Serve the control plane over a Unix domain socket at this path
     /// (ADR-0096). `None` disables the UDS listener (unix-only).
     #[cfg(unix)]
@@ -238,6 +245,8 @@ async fn run_inner(
             port: opts.port,
             expose: opts.expose,
             token: opts.token,
+            local_auth: opts.local_auth,
+            port_fallback: opts.port_fallback,
             #[cfg(unix)]
             uds_path: opts.uds_path.clone(),
         },
@@ -294,7 +303,7 @@ async fn run_inner(
 
     // Foreground banner: where the daemon listens and how to reach it, on
     // stderr so piping stays clean.
-    let bind = if handle.token.is_some() {
+    let bind = if opts.expose == crate::serve::ServeExpose::Public {
         "0.0.0.0"
     } else {
         "127.0.0.1"
@@ -303,21 +312,28 @@ async fn run_inner(
         eprintln!("neenee-server: control plane on unix://{}", uds.display());
     }
     eprintln!("neenee-server: serving sessions on ws://{bind}:{port}");
+    if opts.expose != crate::serve::ServeExpose::Public {
+        eprintln!("neenee-server: web panel on http://{bind}:{port}");
+    }
     eprintln!(
         "neenee: observe with `neenee status --watch`, drive with `neenee attach [id]`, stop with `neenee stop`"
     );
     if handle.token.is_some() {
-        // Never print the token itself: it is a LAN-facing credential and
-        // stderr lands in scrollback, logs, and terminal sharing. The
-        // discovery record carries it, written owner-only (0600) — point
-        // the operator there instead.
+        // Never print the token itself: it is a credential and stderr lands
+        // in scrollback, logs, and terminal sharing. The discovery record
+        // carries it, written owner-only (0600) — point the operator there.
+        let scope = if opts.expose == crate::serve::ServeExpose::Public {
+            "exposed listener"
+        } else {
+            "listener (local_auth)"
+        };
         match discovery::global_discovery_path().exists() {
             true => eprintln!(
-                "neenee: exposed listener requires a bearer token; read it from the discovery file {}",
+                "neenee: {scope} requires a bearer token; read it from the discovery file {}",
                 discovery::global_discovery_path().display()
             ),
             false => eprintln!(
-                "neenee: exposed listener requires a bearer token, but the discovery file could not be written — check the logs"
+                "neenee: {scope} requires a bearer token, but the discovery file could not be written — check the logs"
             ),
         }
     }

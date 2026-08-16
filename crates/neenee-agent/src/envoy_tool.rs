@@ -48,6 +48,27 @@ for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
+/// Maximum attempts (initial run + retries) an envoy makes when the provider
+/// fails with a *transient* error mid-run. Mirrors the spirit of the
+/// top-level `provider_retry_max_attempts` loop in `orchestration`, but fixed
+/// and deliberately tighter: an envoy is a bounded sub-task, so it should not
+/// spend unbounded wall-clock on a flaky upstream the parent can re-dispatch.
+const ENVOY_TRANSIENT_RETRY_LIMIT: usize = 3;
+
+/// Backoff for an envoy transient-provider retry: exponential base with a
+/// cap, honouring a server-provided `retry_after_ms` when present (the same
+/// contract as the top-level loop's `retry_delay_ms`).
+fn envoy_retry_delay_ms(attempt: usize, retry_after_ms: Option<u64>) -> u64 {
+    const BASE_MS: u64 = 1_000;
+    const MAX_MS: u64 = 15_000;
+    if let Some(after) = retry_after_ms {
+        return after.min(MAX_MS);
+    }
+    BASE_MS
+        .saturating_mul(1_u64 << (attempt - 1).min(4))
+        .min(MAX_MS)
+}
+
 /// Live envoy handles keyed by the parent tool-call id — the lookup table
 /// that lets the harness route a down-direction reply (a permission decision
 /// or `ask_user` answer the user gave in the TUI) back into the specific
@@ -147,6 +168,11 @@ pub struct EnvoyTool {
     /// Entries are removed when the child's run ends, so a late
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// The session's workspace root, captured at bootstrap so the child's
+    /// operation scope resolves relative `write_paths` against the session's
+    /// project — not the daemon process's cwd (ADR-0096). `None` falls back
+    /// to the process cwd (tests, single-project processes).
+    workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
 }
 
 #[derive(Clone)]
@@ -220,6 +246,7 @@ impl EnvoyTool {
             registry: Arc::new(EnvoyRegistry::default()),
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            workspace_root: std::sync::Mutex::new(None),
         }
     }
 
@@ -244,7 +271,19 @@ impl EnvoyTool {
             registry,
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            workspace_root: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Pin the session's workspace root so spawned envoys resolve relative
+    /// `write_paths` (ADR-0028) against the session's project rather than the
+    /// daemon process's cwd (ADR-0096). Called by the bootstrap right after
+    /// construction; `None` (the default) keeps the process-cwd fallback.
+    pub fn set_workspace_root(&self, root: Option<std::path::PathBuf>) {
+        self.workspace_root
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone_from(&root);
     }
 
     /// Bind the parent's session-scoped accounting handles. Each spawned
@@ -538,12 +577,18 @@ impl EnvoyTool {
         // drain needed).
         envoy.set_autopilot(self.profile.autopilot);
         // Resolve the bound profile's write grant (ADR-0028) against the
-        // process cwd and set it on the child. All built-in profiles
+        // session's workspace root (falling back to the process cwd when no
+        // root was captured) and set it on the child. All built-in profiles
         // (EXPLORE/REVIEW/TITLE: empty `write_paths`) resolve to
         // `WriteScope::None`, consistent with their admission (no write tools
-        // admitted anyway). The `INTERACTIVE` role carries an unrestricted
+        // admitted anyway). The INTERACTIVE role carries an unrestricted
         // scope via its `Write` ceiling.
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cwd = self
+            .workspace_root
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         envoy.set_operation_scope(self.profile.resolve_operation_scope(&cwd));
         // Envoys are short-lived and read-only by profile, and session
         // review is on-demand (`/review`) with no automatic firing — so a
@@ -585,16 +630,65 @@ impl EnvoyTool {
         // events arrive so the streamed `StreamStart` / `ToolCall` events can
         // carry it (mirroring the main session's `(round, turn)` stamping).
         let mut position: (u64, usize) = (1, 0);
-        let result = envoy
-            .run_streaming_with_events(&mut messages, &child_cancel, |event| {
-                if let neenee_contracts::AgentEvent::ModelRequestStarted { round, turn, .. } =
-                    &event
-                {
-                    position = (*round, *turn);
+        // Transient-provider-retry loop. The top-level interactive round
+        // retries `HarnessError::Retryable` in `orchestration::execute_round`
+        // (config: `provider_retry_max_attempts`), but an envoy runs through
+        // `run_streaming_with_events` directly and had *no* retry at all —
+        // one flaky long SSE generation (the GLM `xhigh`-effort stream that
+        // gets cut mid-body) killed the whole sub-task after minutes of
+        // work. Mirror the top-level contract here, bounded and simpler:
+        // reuse the same round state across attempts so completed turns are
+        // not replayed, back off exponentially, and never retry an
+        // interruption, a hard terminal error, or a non-retryable one.
+        let mut round = envoy.begin_streaming_round();
+        let mut attempt: usize = 0;
+        let result = loop {
+            attempt += 1;
+            let run = envoy
+                .resume_streaming_with_events(&mut messages, &child_cancel, &mut round, |event| {
+                    if let neenee_contracts::AgentEvent::ModelRequestStarted {
+                        round, turn, ..
+                    } = &event
+                    {
+                        position = (*round, *turn);
+                    }
+                    Self::forward_event(event, position, &mut on_event)
+                })
+                .await;
+            match run {
+                Ok(outcome) => break Ok(outcome),
+                Err(neenee_contracts::HarnessError::Retryable {
+                    message,
+                    retry_after_ms,
+                }) if attempt < ENVOY_TRANSIENT_RETRY_LIMIT => {
+                    tracing::warn!(
+                        attempt,
+                        max_attempts = ENVOY_TRANSIENT_RETRY_LIMIT,
+                        error = %message,
+                        "envoy hit a transient provider error; retrying"
+                    );
+                    on_event(neenee_contracts::EnvoyEvent::Notice(
+                        neenee_contracts::AgentNotice::new(
+                            neenee_contracts::NoticeKind::ProviderRetry,
+                            neenee_contracts::NoticeSeverity::Warning,
+                            format!(
+                                "Envoy retrying after transient provider error \
+                                 ({attempt}/{ENVOY_TRANSIENT_RETRY_LIMIT})"
+                            ),
+                            neenee_contracts::NoticeSource::Harness,
+                        ),
+                    ));
+                    let base_ms = envoy_retry_delay_ms(attempt, retry_after_ms);
+                    tokio::select! {
+                        _ = child_cancel.cancelled() => {
+                            break Err(neenee_contracts::HarnessError::Interrupted)
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(base_ms)) => {}
+                    }
                 }
-                Self::forward_event(event, position, &mut on_event)
-            })
-            .await;
+                Err(error) => break Err(error),
+            }
+        };
         // Drop the registry entry for this call regardless of outcome so it
         // never holds a dead handle. The child `Arc` is also dropped here
         // (the last strong ref besides the registry's `Weak`), so any late
@@ -807,6 +901,56 @@ mod tests {
         request: std::sync::Mutex<Option<neenee_contracts::ModelRequest>>,
     }
 
+    /// Fails the first `stream_chat_events` call with a retryable transport
+    /// error, succeeds afterwards — the exact shape of a GLM long SSE stream
+    /// cut off mid-body (`Kind::Decode` → `[NEENEE_RETRYABLE]`), which before
+    /// the envoy retry loop killed the sub-task outright.
+    struct FlakyThenOkProvider {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FlakyThenOkProvider {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for FlakyThenOkProvider {
+        async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+            Ok(Message::new(Role::Assistant, "recovered"))
+        }
+
+        async fn stream_chat(
+            &self,
+            _request: neenee_contracts::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::once(async {
+                Ok("recovered".to_string())
+            })))
+        }
+
+        async fn stream_chat_events(
+            &self,
+            _request: neenee_contracts::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            let seen = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if seen == 0 {
+                // Retryable mid-stream failure (what `transport_error` now
+                // produces for `Kind::Decode` stream truncation).
+                return Err(neenee_contracts::retryable_error(
+                    "OpenAI transport error: error decoding response body \
+                     (connection closed before message completed)",
+                    None,
+                ));
+            }
+            Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::TextDelta("recovered".to_string()),
+            )])))
+        }
+    }
     #[async_trait::async_trait]
     impl Provider for RecordingProvider {
         async fn chat(&self, request: neenee_contracts::ModelRequest) -> Result<Message, String> {
@@ -900,6 +1044,33 @@ mod tests {
         let read = scoped.iter().find(|t| t.name() == "read_text");
         assert_eq!(read.map(|t| t.variant()), Some("terse"));
         assert!(scoped.iter().all(|t| t.name() != "stub_write"));
+    }
+
+    #[tokio::test]
+    async fn envoy_retries_after_transient_stream_failure() {
+        let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
+        let tool = EnvoyTool::new(
+            std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
+            neenee_contracts::ToolSet::from_tools([
+                std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
+            ]),
+            &EXPLORE,
+        );
+
+        let output = tool
+            .call(r#"{"description":"find files","prompt":"where are the handlers?"}"#)
+            .await
+            .expect("the envoy must recover from one transient stream failure");
+
+        assert_eq!(
+            output, "recovered",
+            "the retry must reach the successful attempt's answer"
+        );
+        assert_eq!(
+            provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly one transient failure then one success"
+        );
     }
 
     #[tokio::test]
@@ -1176,7 +1347,7 @@ mod tests {
 
         let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool),
+            std::sync::Arc::new(crate::tools::BashTool { root: None }),
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(envoy_tool),
@@ -1209,9 +1380,9 @@ mod tests {
 
         let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool),
-            std::sync::Arc::new(crate::tools::WriteFileTool),
-            std::sync::Arc::new(crate::tools::EditFileTool),
+            std::sync::Arc::new(crate::tools::BashTool { root: None }),
+            std::sync::Arc::new(crate::tools::WriteFileTool { root: None }),
+            std::sync::Arc::new(crate::tools::EditFileTool { root: None }),
             std::sync::Arc::new(crate::tools::AskUserTool),
             envoy_code_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);

@@ -76,7 +76,10 @@ pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 0;
 /// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the composer's top
 /// panel-bg padding row already separates its text from the live status line,
 /// so the activity bar sits flush against the composer with zero extra
-/// breathing room.
+/// breathing room. Test-only since the footer stack made the zero structural
+/// (adjacent rows place flush by construction in `footer_stack::place`); the
+/// token stays as the recorded decision, asserted by `footer_stack`'s tests.
+#[cfg(test)]
 pub(crate) const ACTIVITY_COMPOSER_GAP_ROWS: u16 = 0;
 
 /// Hint bar: a single-line strip pinned directly below the input box that
@@ -161,15 +164,21 @@ pub(crate) const QUEUE_BAR_ROWS: u16 = 1;
 /// from visually running into the composer when the active row appears or
 /// disappears.
 pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 1;
-/// Height of the head row shown at the top of every transcript page — Main
-/// (session identity + workspace + mode), `/btw`, Envoy, and future focused
-/// pages all share this single chrome slot.
-pub(crate) const PAGE_HEADER_ROWS: u16 = 1;
+/// Maximum height of the head band shown at the top of every transcript
+/// page — Main (session identity + workspace + mode), `/btw`, Envoy, and
+/// future focused pages all share this single chrome slot. Row 1 is always
+/// identity + status; row 2 is the view-level affordance legend (ADR-0103
+/// §3), reserved only while the view has page-specific affordances that no
+/// other surface already carries — demand-driven per ADR-0104 (see
+/// `PageHints::has_content`), so the common cases render a single-row band
+/// and the transcript reclaims the line.
+pub(crate) const PAGE_HEADER_ROWS: u16 = 2;
 
 /// Height of the Envoy page's permanent key-legend footer. Three rows on the
 /// page background: a top and bottom blank padding row around a middle row
-/// that carries the actual shortcuts (`Esc back`, `[ prev`, `] next` —
-/// plus `F1 help` when there is room).
+/// that carries the actual shortcuts (`Esc back`, `[ prev`, `] next` — the
+/// page's own navigation only; the global `F1 help` pair lives on no
+/// persistent chrome, ADR-0104).
 pub(crate) const ENVOY_FOOTER_ROWS: u16 = 3;
 
 /// Horizontal inset applied to the footer area containing status/composer/hints.
@@ -200,9 +209,9 @@ pub(crate) const USER_MESSAGE_TEXT_GAP_COLS: usize = 2;
 /// sent message never runs its text into the panel's right edge.
 pub(crate) const USER_MESSAGE_RIGHT_PAD_COLS: usize = 2;
 
-/// Inner right padding (in `input_bg`) kept clear of wrapped text inside the
-/// composer, mirroring the left prompt prefix so the box reads as a balanced
-/// panel.
+/// Inner right padding (in the input box's active/inactive background) kept
+/// clear of wrapped text inside the composer, mirroring the left prompt
+/// prefix so the box reads as a balanced panel.
 pub(crate) const COMPOSER_RIGHT_PAD_COLS: usize = 2;
 
 // ── Modal overlays ───────────────────────────────────────────────────────

@@ -27,7 +27,8 @@ pub enum SessionSource {
 /// Which lifecycle point a hook fires on — the routing key only. The payload
 /// travels in [`HookContext`]; matcher evaluation lives in the registry
 /// (`neenee_agent::hooks`), not here, so core stays free of the `regex` crate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum HookEventKind {
     SessionStart,
     SessionEnd,

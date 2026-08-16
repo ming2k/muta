@@ -163,10 +163,11 @@ pub fn cursor_screen_pos(
 
 /// Draw the flat input box panel at the bottom of the screen.
 ///
-/// `focused` selects the panel palette. The live composer passes `true` when
+/// `focused` selects the panel palette (the input's dedicated active /
+/// inactive background pair). The live composer passes `true` when
 /// no transcript step carries keyboard focus, and `false` when the user has
-/// navigated into the transcript with Ctrl+↑/↓ — the dimmer "read-only"
-/// palette signals that the next keypress targets the step, not the input box.
+/// navigated into the transcript with Ctrl+↑/↓ — the recessed "read-only"
+/// band signals that the next keypress targets the step, not the input box.
 ///
 /// `image_count` / `paste_count` are the numbers of attachments actually
 /// staged behind the input's chips (`pending_images.len()` /
@@ -323,16 +324,18 @@ fn draw_composer_impl(
     // identical across terminals, since a cell can only carry one bg color.
     //
     // `focused` drives only the palette: when `false` the panel drops to the
-    // dimmer `user_panel_bg` and the prompt glyph uses `text_muted`, matching
-    // the already-sent user-message styling so the box visibly recedes. The
-    // live composer passes `true`. The caret is gated separately by `show_caret`:
-    // it is suppressed whenever a modal owns the keyboard (the full-screen
-    // modal backdrop already signals "typing lands elsewhere"), so the panel
-    // never shows a live caret inside a surface that no longer accepts input.
+    // recessed input-inactive band and the prompt glyph uses `text_muted`, so
+    // the box visibly recedes — while staying an input-owned surface (it is
+    // deliberately *not* the sent-user-message panel, so the input's two
+    // states remain a related but independent pair). The live composer passes
+    // `true`. The caret is gated separately by `show_caret`: it is suppressed
+    // whenever a modal owns the keyboard (the full-screen modal backdrop
+    // already signals "typing lands elsewhere"), so the panel never shows a
+    // live caret inside a surface that no longer accepts input.
     let panel_bg = if focused {
         theme.input_surface()
     } else {
-        theme.user_surface()
+        theme.input_surface_inactive()
     };
     let prompt_fg = if focused {
         theme.brand()

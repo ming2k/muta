@@ -12,7 +12,6 @@ const PRE_MIGRATION: &[Model] = &[
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
     Model {
         id: "glm-5.2",
-        name: "GLM-5.2",
         family: "glm",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -24,7 +23,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "glm-5.1",
-        name: "GLM-5.1",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -36,7 +34,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "glm-5",
-        name: "GLM-5",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -48,7 +45,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "glm-4.7",
-        name: "GLM-4.7",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -71,7 +67,6 @@ const PRE_MIGRATION: &[Model] = &[
         // after the migration, so the effort pin flows onto the wire and the
         // pickers/hint bar can show the effective level.
         id: "k3",
-        name: "Kimi K3",
         family: "kimi",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -83,7 +78,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "kimi-k2.7-code",
-        name: "Kimi K2.7 Code",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -95,7 +89,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "kimi-k2.6",
-        name: "Kimi K2.6",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -107,7 +100,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "kimi-k2.5",
-        name: "Kimi K2.5",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -123,7 +115,6 @@ const PRE_MIGRATION: &[Model] = &[
     // `WireFormat::AnthropicCompat`.
     Model {
         id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
         family: "claude",
         context_window: 1_000_000,
         thinking: ThinkingSupport::AnthropicAdaptive,
@@ -136,7 +127,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
         family: "claude",
         context_window: 1_000_000,
         thinking: ThinkingSupport::AnthropicAdaptive,
@@ -149,7 +139,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "claude-fable-5",
-        name: "Claude Fable 5",
         family: "claude",
         context_window: 1_000_000,
         // Fable 5 thinking is ALWAYS ON; an explicit `{type:"disabled"}` is
@@ -167,7 +156,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
         family: "claude",
         context_window: 1_000_000,
         // Sonnet 5: omitting the `thinking` field RUNS adaptive thinking; to
@@ -186,7 +174,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "claude-haiku-4-5-20251001",
-        name: "Claude Haiku 4.5",
         family: "claude",
         context_window: 200_000,
         // Haiku 4.5 supports only MANUAL extended thinking
@@ -210,7 +197,6 @@ const PRE_MIGRATION: &[Model] = &[
     // window conservatively for all three tiers and the alias.
     Model {
         id: "gpt-5.6",
-        name: "GPT-5.6",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -222,7 +208,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -234,7 +219,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -246,7 +230,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -263,7 +246,6 @@ const PRE_MIGRATION: &[Model] = &[
     // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
     Model {
         id: "gpt-5.5",
-        name: "GPT-5.5",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -275,7 +257,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.4",
-        name: "GPT-5.4",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -287,7 +268,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
         family: "gpt",
         context_window: 400_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -302,7 +282,6 @@ const PRE_MIGRATION: &[Model] = &[
     // exact serving contract is relay-defined.
     Model {
         id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -314,7 +293,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.2",
-        name: "GPT-5.2",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -326,7 +304,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.2-chat-latest",
-        name: "GPT-5.2 Chat Latest",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -338,7 +315,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-5.2-pro",
-        name: "GPT-5.2 Pro",
         family: "gpt",
         context_window: 0,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -353,7 +329,6 @@ const PRE_MIGRATION: &[Model] = &[
     // registered so existing configs and older sessions still resolve metadata.
     Model {
         id: "gpt-4o",
-        name: "GPT-4o",
         family: "gpt",
         context_window: 128_000,
         thinking: ThinkingSupport::None,
@@ -365,7 +340,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
         family: "gpt",
         context_window: 128_000,
         thinking: ThinkingSupport::None,
@@ -383,7 +357,6 @@ const PRE_MIGRATION: &[Model] = &[
     // `google_base_url`.
     Model {
         id: "gemini-3.5-flash",
-        name: "Gemini 3.5 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -395,7 +368,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-3-pro-preview",
-        name: "Gemini 3 Pro Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -407,7 +379,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -419,7 +390,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -432,7 +402,6 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
         id: "gemini-3.1-pro-preview-customtools",
-        name: "Gemini 3.1 Pro Preview (Custom Tools)",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -451,7 +420,6 @@ const PRE_MIGRATION: &[Model] = &[
     // reason like the rest of the 3.x family.
     Model {
         id: "gemini-3.1-pro-high",
-        name: "Gemini 3.1 Pro High",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -463,7 +431,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-3.1-pro-low",
-        name: "Gemini 3.1 Pro Low",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -475,7 +442,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-3-flash",
-        name: "Gemini 3 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -487,7 +453,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-flash",
-        name: "Gemini 2.5 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -499,7 +464,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -511,7 +475,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-2.5-flash-lite",
-        name: "Gemini 2.5 Flash-Lite",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
@@ -523,7 +486,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "gemini-2.0-flash",
-        name: "Gemini 2.0 Flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::None,
@@ -536,7 +498,6 @@ const PRE_MIGRATION: &[Model] = &[
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
         id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -548,7 +509,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-flash-0731",
-        name: "DeepSeek V4 Flash (0731)",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -560,7 +520,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -572,7 +531,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-pro-0813",
-        name: "DeepSeek V4 Pro (0813)",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -585,7 +543,6 @@ const PRE_MIGRATION: &[Model] = &[
     // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
     Model {
         id: "mimo-v2.5",
-        name: "MiMo V2.5",
         family: "mimo",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -597,7 +554,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "mimo-v2.5-pro",
-        name: "MiMo V2.5 Pro",
         family: "mimo",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -609,7 +565,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "mimo-v2-pro",
-        name: "MiMo V2 Pro",
         family: "mimo",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -621,7 +576,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "mimo-v2-omni",
-        name: "MiMo V2 Omni",
         family: "mimo",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -634,7 +588,6 @@ const PRE_MIGRATION: &[Model] = &[
     // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
     Model {
         id: "minimax-m3",
-        name: "MiniMax M3",
         family: "minimax",
         context_window: 512_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -646,7 +599,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "minimax-m2.7",
-        name: "MiniMax M2.7",
         family: "minimax",
         context_window: 204_800,
         thinking: ThinkingSupport::ReasoningContent,
@@ -658,7 +610,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "minimax-m2.5",
-        name: "MiniMax M2.5",
         family: "minimax",
         context_window: 204_800,
         thinking: ThinkingSupport::ReasoningContent,
@@ -674,7 +625,6 @@ const PRE_MIGRATION: &[Model] = &[
     // fallback path matches the live catalog.
     Model {
         id: "qwen3.7-max",
-        name: "Qwen3.7 Max",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -686,7 +636,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "qwen3.7-plus",
-        name: "Qwen3.7 Plus",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -698,7 +647,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "qwen3.6-plus",
-        name: "Qwen3.6 Plus",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -710,7 +658,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "qwen3.5-plus",
-        name: "Qwen3.5 Plus",
         family: "qwen",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -723,7 +670,6 @@ const PRE_MIGRATION: &[Model] = &[
     // ── xAI Grok (OpenAI-compatible; SuperGrok OAuth or XAI_API_KEY) ──
     Model {
         id: "grok-4.5",
-        name: "Grok 4.5",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -735,7 +681,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "grok-4.20",
-        name: "Grok 4.20",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -747,7 +692,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "grok-4.3",
-        name: "Grok 4.3",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -759,7 +703,6 @@ const PRE_MIGRATION: &[Model] = &[
     },
     Model {
         id: "grok-build-0.1",
-        name: "Grok Build 0.1",
         family: "grok",
         context_window: 256_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -777,7 +720,6 @@ fn resolve_matches_the_pre_migration_registry_for_every_model() {
     for expected in PRE_MIGRATION {
         let m = resolve_model(expected.id);
         assert_eq!(m.id, expected.id, "id");
-        assert_eq!(m.name, expected.name, "{}: name", expected.id);
         assert_eq!(m.family, expected.family, "{}: family", expected.id);
         assert_eq!(
             m.context_window, expected.context_window,

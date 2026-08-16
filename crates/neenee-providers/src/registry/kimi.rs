@@ -48,7 +48,6 @@ pub const MODELS: &[Model] = &[
         // pickers/hint bar can show the effective level and the editor can cycle
         // it; the fitted overlay refreshes it from the live `/models` list.
         id: "k3",
-        name: "Kimi K3",
         family: "kimi",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -60,7 +59,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.7-code",
-        name: "Kimi K2.7 Code",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -72,7 +70,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.6",
-        name: "Kimi K2.6",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -84,7 +81,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.5",
-        name: "Kimi K2.5",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,

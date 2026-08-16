@@ -4,6 +4,8 @@ use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
+use crate::tools::helpers::{WorkspaceBase, workspace_base};
+
 /// Maximum wall-clock time for a single `rg` invocation. A slow or wedged
 /// ripgrep (huge tree, catastrophic-backtracking pattern) is released rather
 /// than pinning the async executor — the old code blocked a runtime worker
@@ -21,7 +23,12 @@ const GREP_MAX_LINES: usize = 200;
 const GREP_MAX_BYTES: usize = 32 * 1024;
 
 /// Search file contents with ripgrep.
-pub struct GrepTool;
+///
+/// The search root (default `.`) resolves against the session's workspace
+/// root (captured at factory time), not the daemon process's cwd (ADR-0096).
+pub struct GrepTool {
+    pub(crate) root: WorkspaceBase,
+}
 
 #[async_trait]
 impl Tool for GrepTool {
@@ -55,6 +62,14 @@ impl Tool for GrepTool {
         // can read the file when it needs surroundings. Clamp to a sane ceiling.
         let context = args["context"].as_u64().unwrap_or(0).min(10);
 
+        // Search the session's workspace root, not the daemon process's cwd
+        // (ADR-0096): a default `.` must scan the invoking session's project.
+        // `join` passes an absolute search path through unchanged.
+        let search_root = match &self.root {
+            Some(root) => root.join(path),
+            None => std::path::PathBuf::from(path),
+        };
+
         let mut cmd = Command::new("rg");
         cmd.args(["-n", "--color=never", "--max-count", "50"]);
         if context > 0 {
@@ -68,7 +83,7 @@ impl Tool for GrepTool {
         for dir in crate::tools::helpers::IGNORED_DIRS {
             cmd.arg("-g").arg(format!("!{}", dir));
         }
-        cmd.arg(pattern).arg(path);
+        cmd.arg(pattern).arg(&search_root);
 
         // Spawn under tokio (releasing the runtime while rg runs) and bound the
         // whole invocation by `GREP_TIMEOUT`. On timeout the child is killed
@@ -117,7 +132,9 @@ impl Tool for GrepTool {
         })
     }
 }
-neenee_contracts::register_tool!(GrepFactory => GrepTool);
+neenee_contracts::register_tool!(GrepFactory => |ctx| GrepTool {
+    root: workspace_base(ctx),
+});
 
 /// Bound ripgrep's stdout to [`GREP_MAX_LINES`] / [`GREP_MAX_BYTES`], whichever
 /// trips first, appending a one-line truncation notice. This is the grep

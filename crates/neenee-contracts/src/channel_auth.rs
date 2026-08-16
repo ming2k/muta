@@ -10,7 +10,8 @@
 use serde::{Deserialize, Serialize};
 
 /// How a user-defined channel authenticates.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ChannelAuth {
     /// Bearer from `api_key_env` (env first) or inline `api_key`. The
     /// historical behavior — every provider except OAuth ones.
@@ -78,8 +79,9 @@ impl ChannelAuth {
 
 /// Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
 /// ConnectProvider`] so the TUI picks the method, not the harness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum LoginMethod {
     /// RFC 8628 device-code grant — headless / VPS / SSH / Docker. The default:
     /// works anywhere, prints a URL + short code the user enters on any device.

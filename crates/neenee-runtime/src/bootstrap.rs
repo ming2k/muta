@@ -25,8 +25,9 @@ use neenee_agent::orchestration::{
 };
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_contracts::{
-    AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, Provider,
-    RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
+    AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, NoticeKind,
+    NoticeSeverity, NoticeSource, Provider, RoundEvent, ToolContextBuilder, ToolSet,
+    collect_toolset,
 };
 use neenee_mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
@@ -164,7 +165,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     debug_assert!(
         matches!(
             startup,
-            StartupMode::Fresh | StartupMode::FreshWithPrompt(_) | StartupMode::Resume(_) | StartupMode::Picker
+            StartupMode::Fresh
+                | StartupMode::FreshWithPrompt(_)
+                | StartupMode::Resume(_)
+                | StartupMode::Picker
         ),
         "assemble only handles Fresh/FreshWithPrompt/Resume/Picker; other modes must short-circuit in the caller"
     );
@@ -347,7 +351,49 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // sources immediately on spawn and then every hour. The `Arc` is shared
     // across the skill tools, the envoy profile, and the frontend, so once the
     // background load lands they all observe the populated state.
-    let skills_registry = Arc::new(SkillRegistry::empty_with_config(&config.skills));
+    //
+    // Pin the session's project root into the skills config so the
+    // project-local sources (`.neenee/skills` etc.) resolve from this
+    // session's project — not the daemon process's cwd, which under the
+    // unified daemon (ADR-0096) belongs to whichever client first spawned it.
+    let mut skills_config = config.skills.clone();
+    skills_config.project_root = Some(project_root.clone());
+    let skills_registry = Arc::new(SkillRegistry::empty_with_config(&skills_config));
+    // Shadowing alert (ADR-0085 §5 extended to skills): a trusted project's
+    // `.neenee/skills/<name>/SKILL.md` wins over a same-named user/remote
+    // skill by priority — a silent override would be invisible prompt
+    // injection, so every scan that newly observes one surfaces a warning
+    // notice (deduped per name per session inside the registry). The sink is
+    // installed BEFORE the background refresh is spawned so the startup scan
+    // is covered; `/skills reload` and `/trust` rescan through the same path.
+    {
+        let resp_tx_for_shadows = resp_tx.clone();
+        let session_id_for_shadows = session.id().await;
+        skills_registry.set_shadow_sink(Some(Arc::new(move |shadowed| {
+            for shadow in shadowed {
+                let _ = resp_tx_for_shadows.send(round_response(
+                    &session_id_for_shadows,
+                    RoundEvent::Notice(
+                        AgentNotice::new(
+                            NoticeKind::ReviewAlert,
+                            NoticeSeverity::Warning,
+                            format!(
+                                "Project skill '{}' overrides the {}-scope skill of the same name",
+                                shadow.name, shadow.overridden_scope
+                            ),
+                            NoticeSource::Harness,
+                        )
+                        .with_body(format!(
+                            "Loading {} instead. Project-local skills win by priority; \
+                             if this is unexpected, inspect the project's skills directories \
+                             (.neenee/skills, .agents/skills, .claude/skills) or /untrust.",
+                            shadow.winner_source.display()
+                        )),
+                    ),
+                ));
+            }
+        })));
+    }
     neenee_agent::dynamic::spawn_refresh(SkillCatalog::new((*skills_registry).clone()));
 
     // Built-in tools self-register via `inventory` (most tools carry a
@@ -366,6 +412,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(skills_registry.clone());
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
+        // The session's workspace root: every workspace-relative tool
+        // operation (bash cwd, relative path resolution, search bases)
+        // anchors here instead of the daemon process's cwd. Under the
+        // unified daemon (ADR-0096) one process hosts sessions for many
+        // projects, so the process cwd is whichever directory the first
+        // client spawned it from — correct only by coincidence. This is the
+        // fix for "launched in project A, session edits project B".
+        builder.provide(neenee_contracts::WorkspaceRoot(project_root.clone()));
         builder.build()
     };
     let mut toolset: ToolSet = collect_toolset(&tool_ctx);
@@ -387,6 +441,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         toolset.clone(),
         &EXPLORE,
     ));
+    // Envoys resolve relative write-grants against the session's project
+    // root, not the daemon process's cwd (ADR-0096).
+    envoy_tool.set_workspace_root(Some(project_root.clone()));
     // Full-duplex (ADR-0029): capture the envoy tool's envoy registry so the
     // request loop can route a user's permission / ask_user reply down into the
     // specific live child that surfaced the request (looked up by the parent
@@ -418,14 +475,19 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Project-scope trust gate (ADR-0085 §5, extended). A project's
     // `.neenee/config.toml` may declare `[mcp.*]` servers (which execute
     // processes) and `[[hooks]]` entries (which run shell commands at lifecycle
-    // points). Loading those automatically from a cloned or vendored working
-    // tree is the same class of hazard as an npm `postinstall` script or a git
-    // hook: a malicious repo must not gain code execution merely because the
-    // user opened it. The whole package — MCP servers AND hooks — loads only
-    // after the user has explicitly trusted this project root (`/trust`). The
-    // trust root is git-aware (resolve_trust_root), so one grant covers every
-    // subdirectory and linked worktree of the repo. Global config is
-    // user-authored and trusted unconditionally.
+    // points); its `.neenee/skills` and `.neenee/commands` trees inject
+    // project-authored prompt text (skills can also shadow the user's own
+    // same-named skills by priority). Loading those automatically from a
+    // cloned or vendored working tree is the same class of hazard as an npm
+    // `postinstall` script or a git hook: a malicious repo must not gain code
+    // execution — or prompt injection, which for an agent holding tools is
+    // execution-by-proxy — merely because the user opened it. The whole
+    // package — MCP servers, hooks, project skills AND project slash
+    // commands — loads only after the user has explicitly trusted this
+    // project root (`/trust`). The trust root is git-aware
+    // (resolve_trust_root), so one grant covers every subdirectory and linked
+    // worktree of the repo. Global config is user-authored and trusted
+    // unconditionally.
     let trust_gate = Arc::new(TrustGate::load());
     let project_trusted = trust_gate.is_trusted(&project_root);
     let project_mcp = Config::load_project_mcp(&project_root);
@@ -439,27 +501,80 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             config.merge_project_hooks(project_hooks);
         }
     }
-    if !project_trusted && has_project_external {
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Text(
-                "This project declares MCP servers and/or hooks in .neenee/config.toml. \
-                 They run project-supplied commands, so they stay disabled until you run \
-                 /trust to load them."
-                    .to_string(),
-            ),
-        ));
+    // Skills are gated inside discovery itself (the scan consults the trust
+    // store), so bootstrap only needs the presence checks for the notice; the
+    // background refresh will simply find no Repo-scope sources while
+    // untrusted.
+    if !project_trusted {
+        let mut gated: Vec<&str> = Vec::new();
+        if has_project_external {
+            gated.push("MCP servers and/or hooks in .neenee/config.toml");
+        }
+        if neenee_skills::discovery::project_skills_present(&project_root) {
+            gated.push("project skills (.neenee/skills, .agents/skills, .claude/skills)");
+        }
+        if crate::commands::project_commands_present(&project_root) {
+            gated.push("project slash commands (.neenee/commands)");
+        }
+        if !gated.is_empty() {
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Text(format!(
+                    "This project declares {}. They run project-supplied commands or inject \
+                     project-supplied prompt text, so they stay disabled until you run /trust \
+                     to load them.",
+                    gated.join(", ")
+                )),
+            ));
+        }
     }
     // Project-local slash commands (`.neenee/commands/`) are prompt-text
     // templates: a malicious repo must not inject `/<name>` commands just
     // because the directory was opened. Only the user-global commands dir
     // loads when the project is untrusted; project commands join once trusted.
-    let custom_commands = discover_commands_trusted(project_trusted)
+    let command_discovery = discover_commands_trusted(&project_root, project_trusted);
+    // Shadowing alert: a project command that reuses a user command's name
+    // wins by priority — warn once per shadowed name so the override cannot
+    // happen silently. Built-in-named entries are skipped: built-ins always
+    // win at dispatch, so those project files override nothing.
+    for shadow in &command_discovery.shadowed {
+        if BuiltinCmd::ALL
+            .iter()
+            .any(|(name, _)| name.trim_start_matches('/') == shadow.name)
+        {
+            continue;
+        }
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    NoticeKind::ReviewAlert,
+                    NoticeSeverity::Warning,
+                    format!(
+                        "Project command '/{}' overrides the user command of the same name",
+                        shadow.name
+                    ),
+                    NoticeSource::Harness,
+                )
+                .with_body(format!(
+                    "Running /{} uses {}. Project-local commands win by priority; \
+                     if this is unexpected, inspect the project's .neenee/commands \
+                     directory or /untrust.",
+                    shadow.name,
+                    shadow.winner_source.display()
+                )),
+            ),
+        ));
+    }
+    let custom_commands = command_discovery
+        .commands
         .into_iter()
         .filter(|command| {
+            // ALL holds slash-prefixed names ("/trust"); command names are
+            // slash-less — compare against the stripped form.
             !BuiltinCmd::ALL
                 .iter()
-                .any(|(name, _)| *name == command.name)
+                .any(|(name, _)| name.trim_start_matches('/') == command.name)
         })
         .map(|command| (command.name.clone(), command))
         .collect::<HashMap<String, CustomCommand>>();
@@ -644,12 +759,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let commands_for_task = Arc::new(custom_commands);
     let embedding_store_for_commands = embedding_store.clone();
     let req_tx_for_commands = req_tx.clone();
-    // `/btw` side-conversation state (ADR-0017). The primary round machinery is
-    // left exactly as-is; this slot peers it with an optional live side
-    // session + an "active view" flag that routes `Chat` to whichever session
-    // the user is currently composing into.
-    let side: Arc<AsyncRwLock<Option<crate::side::SideSession>>> = Arc::new(AsyncRwLock::new(None));
-    let active_view_side = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // `/btw` aside state (ADR-0017, lifted to a multi-slot registry by
+    // ADR-0103). The primary round machinery is left exactly as-is; the
+    // registry peers it with any number of live asides + an explicit
+    // "which aside is the composer targeting" pointer that routes `Chat` to
+    // whichever session the user is currently composing into. Leaving an
+    // aside view detaches non-destructively — the aside keeps running.
+    let side: Arc<AsyncRwLock<crate::side::SideRegistry>> =
+        Arc::new(AsyncRwLock::new(crate::side::SideRegistry::new()));
     let base_tools_for_side = base_tools.clone();
     let project_root_for_side = project_root.clone();
 
@@ -693,7 +810,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         embedding_store: embedding_store_for_commands,
         lifecycle,
         side,
-        active_view_side,
         base_tools: base_tools_for_side,
         project_root: project_root_for_side,
         startup,

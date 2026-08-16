@@ -12,7 +12,7 @@ The live editable prompt at the bottom of the frame.
 
 | Attribute | Value |
 |-----------|-------|
-| Background | `input_bg` (18, 19, 19) — brighter = "editable" |
+| Background | `input_bg_active` (26, 28, 27) when the box owns the keyboard; `input_bg_inactive` (16, 17, 17) while a transcript step has focus (the pair is independent of every other surface token) |
 | Left/right margin | 2 cols of `app_bg` |
 | Accent bar | `┃` in `accent` (Build mode) or Plan-mode blue |
 | Text color | `text` (brighter than sent messages) |
@@ -104,6 +104,29 @@ What counts as "the newest / unsent" slot is defined by **send success**:
 The draft is a per-session, in-memory slot — it survives an accidental `↑`/`↓`
 round-trip, but not a restart or a session switch. History rows themselves are
 never edited by recall; only the recorded prompt text is shown.
+
+### Session scoping and resume
+
+The rows `↑`/`↓` walk are **bound to the session, not the client window**:
+
+- Rows come from the union of the persisted cross-session history (`history.json`,
+  filtered to entries tagged with the current session) and a **transcript-derived
+  backfill** — the genuine chat prompts of the conversation on screen, rebuilt
+  from the session file. The backfill is derived state and never persisted: the
+  session file already is the durable record.
+- **Resuming restores history.** After `neenee resume`, `/resume`,
+  `/session open`, or picking a session from `/sessions`, the transcript's own
+  prompts are backfilled automatically — including turns typed in another
+  client or before this client's `history.json` existed. `↑` in a resumed
+  session recalls that session's prompts immediately.
+- **Switching never carries state across.** `/new`, `/resume`, `/session open`,
+  and `/fork` reset the pointer, the stashed draft, and the staged attachments:
+  the new conversation's composer starts from a clean slate, and what you were
+  typing in the previous conversation never leaks into it. Slash commands and
+  `!shell` passthroughs are never part of the recall rows (they are UI
+  gestures, not prompts).
+- `Ctrl+R` stays **global**: it searches every prompt across every session and
+  workspace, independent of which conversation is on screen.
 
 ## Source
 

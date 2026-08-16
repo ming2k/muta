@@ -148,6 +148,11 @@ pub enum Wire {
     },
     Error {
         message: String,
+        /// Stable machine-readable reason (ADR-0105) so a client can render
+        /// targeted guidance instead of string-sniffing. Currently defined:
+        /// `"version_mismatch"`. Absent on older daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
     Request {
         #[serde(flatten)]
@@ -283,6 +288,19 @@ pub struct ServeOptions {
     pub port: u16,
     pub expose: ServeExpose,
     pub token: Option<String>,
+    /// Require a bearer token even on loopback (ADR-0105): when `true` and no
+    /// explicit `token` is set, the listener generates one and publishes it
+    /// via the discovery record (owner-only, 0600). Defends the control plane
+    /// against drive-by connections from other local processes and other
+    /// users on a shared machine. The production daemon defaults this on via
+    /// `[daemon] local_auth`; the field defaults off so existing
+    /// `ServeOptions::default()` tests keep their unauthenticated loopback.
+    pub local_auth: bool,
+    /// When the requested `port` is taken, fall back to an OS-assigned
+    /// ephemeral port (the discovery record then carries the real one) instead
+    /// of failing startup. Used by the production daemon, whose CLI default
+    /// port is fixed (9800); tests keep the strict default.
+    pub port_fallback: bool,
     /// `Some(path)` additionally serves the same protocol over a Unix domain
     /// socket (ADR-0096). UDS connections are exempt from the bearer token —
     /// the socket's filesystem permissions are the auth boundary (0600 in a
@@ -296,6 +314,8 @@ impl Default for ServeOptions {
             port: 0,
             expose: ServeExpose::Local,
             token: None,
+            local_auth: false,
+            port_fallback: false,
             #[cfg(unix)]
             uds_path: None,
         }
@@ -384,14 +404,20 @@ pub fn start_server(
     // handshake refusal names it even when the serve layer runs standalone
     // (host::run attaches its own run-loop gate on top of this one).
     let gate = Arc::new(ShutdownGate::new().with_version(daemon_version()));
-    let token = match (opts.expose, opts.token.clone()) {
-        (ServeExpose::Public, None) => Some(generate_token()),
-        (_, t) => t,
-    };
+    let token = opts.token.clone().or_else(|| match opts.expose {
+        ServeExpose::Public => Some(generate_token()),
+        // Loopback auth (ADR-0105): generated per start, published owner-only
+        // in the discovery record; Rust clients read and present it, browser
+        // clients use the `bearer.` subprotocol.
+        ServeExpose::Local if opts.local_auth => Some(generate_token()),
+        ServeExpose::Local => None,
+    });
     let bind_addr: SocketAddr = match opts.expose {
         ServeExpose::Local => ([127, 0, 0, 1], opts.port).into(),
         ServeExpose::Public => ([0, 0, 0, 0], opts.port).into(),
     };
+    let port_fallback = opts.port_fallback;
+    let expose = opts.expose;
     {
         let cc = cancel.clone();
         let tf = token.clone();
@@ -400,9 +426,8 @@ pub fn start_server(
         let tasks = tasks.clone();
         let gate = gate.clone();
         let handle = tokio::spawn(async move {
-            let listener = match TcpListener::bind(bind_addr).await {
-                Ok(l) => {
-                    let actual = l.local_addr().map(|a| a.port()).unwrap_or(opts.port);
+            let listener = match bind_tcp(bind_addr, port_fallback).await {
+                Ok((l, actual)) => {
                     let _ = actual_port_tx.send(Ok(actual));
                     tracing::info!(%bind_addr,actual_port=actual,auth=tf.is_some(),"neenee serve: listener started");
                     l
@@ -426,7 +451,7 @@ pub fn start_server(
                 tokio::select! {_=cc.cancelled()=>{tracing::info!("neenee serve: cancelled");break;}
                 ac=listener.accept()=>{let(stream,peer)=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"neenee serve: accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
                 backoff=std::time::Duration::from_millis(5);
-                spawn_connection(stream, registry.clone(), tf.clone(), conns.clone(), gate.clone(), cc.clone(), peer.to_string());}}
+                spawn_tcp_connection(stream, registry.clone(), tf.clone(), expose, conns.clone(), gate.clone(), cc.clone(), peer.to_string());}}
             }
         });
         tasks.track("tcp-accept", handle);
@@ -461,7 +486,7 @@ pub fn start_server(
                     backoff=std::time::Duration::from_millis(5);
                     // UDS is the local control channel: the socket's 0600
                     // permissions are the auth boundary, so no bearer token.
-                    spawn_connection(stream, registry.clone(), None, conns.clone(), gate.clone(), cc.clone(), format!("uds:{}", path.display()));}}
+                    spawn_connection(stream, registry.clone(), None, ServeExpose::Local, conns.clone(), gate.clone(), cc.clone(), format!("uds:{}", path.display()));}}
                 }
                 // Deterministic socket-file cleanup: this runs *inside* the
                 // supervised task, and `host::run` joins the task before
@@ -491,13 +516,77 @@ pub fn start_server(
     }
 }
 
+/// Bind the TCP listener, falling back to an OS-assigned port when the
+/// requested one is taken and `port_fallback` is on (the discovery record
+/// carries the actual port either way). Returns the listener and the port.
+async fn bind_tcp(addr: SocketAddr, port_fallback: bool) -> std::io::Result<(TcpListener, u16)> {
+    match TcpListener::bind(addr).await {
+        Ok(l) => {
+            let actual = l.local_addr().map(|a| a.port()).unwrap_or(addr.port());
+            Ok((l, actual))
+        }
+        Err(e)
+            if port_fallback && addr.port() != 0 && e.kind() == std::io::ErrorKind::AddrInUse =>
+        {
+            tracing::warn!(%addr, "neenee serve: requested port in use; falling back to an ephemeral port");
+            let fallback: SocketAddr = (addr.ip(), 0).into();
+            let l = TcpListener::bind(fallback).await?;
+            let actual = l.local_addr().map(|a| a.port()).unwrap_or(0);
+            Ok((l, actual))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Spawn one accepted-TCP task: peek at the request head, then dispatch to
+/// the static HTTP responder or the WebSocket control plane (ADR-0105 — one
+/// port, two protocols). The classification runs inside the per-connection
+/// task, never inline in the accept loop, so a slowloris peer cannot stall
+/// accepts.
+#[allow(clippy::too_many_arguments)]
+fn spawn_tcp_connection(
+    stream: tokio::net::TcpStream,
+    registry: Arc<crate::registry::SessionRegistry>,
+    token: Option<String>,
+    expose: ServeExpose,
+    conns: Arc<ConnTable>,
+    gate: Arc<ShutdownGate>,
+    listeners: CancellationToken,
+    peer: String,
+) {
+    tokio::spawn(async move {
+        let auth_required = token.is_some();
+        match classify(&stream).await {
+            Ok(TcpTransport::Http) => {
+                // Static responses are momentary and stateless; they stay out
+                // of the drain-tracked connection table by design.
+                if let Err(e) =
+                    crate::serve_http::serve(stream, gate.version_of_daemon(), auth_required).await
+                {
+                    tracing::debug!(%peer, error=%e, "neenee serve: http error");
+                }
+            }
+            Ok(TcpTransport::WebSocket) => {
+                spawn_connection(
+                    stream, registry, token, expose, conns, gate, listeners, peer,
+                );
+            }
+            Err(e) => {
+                tracing::debug!(%peer, error=%e, "neenee serve: transport classify failed");
+            }
+        }
+    });
+}
+
 /// Spawn one connection task, registered in the connection table for the
 /// drain phase. Every accepted socket funnels through here so the table can
 /// never miss one; the guard unregisters on every exit path.
+#[allow(clippy::too_many_arguments)]
 fn spawn_connection<S>(
     stream: S,
     registry: Arc<crate::registry::SessionRegistry>,
     token: Option<String>,
+    expose: ServeExpose,
     conns: Arc<ConnTable>,
     gate: Arc<ShutdownGate>,
     listeners: CancellationToken,
@@ -514,7 +603,7 @@ fn spawn_connection<S>(
             id,
         };
         let result = tokio::select! {
-            r = handle_connection(stream, registry, token, gate, listeners) => r,
+            r = handle_connection(stream, registry, token, expose, gate, listeners) => r,
             // Draining daemon (ADR-0101): cancel the connection's future.
             // The socket drops with it, closing the TCP stream; clients
             // treat the disconnect exactly like a Close frame — reconnect
@@ -673,28 +762,40 @@ async fn handle_connection<S>(
     stream: S,
     registry: Arc<crate::registry::SessionRegistry>,
     token: Option<String>,
+    expose: ServeExpose,
     gate: Arc<ShutdownGate>,
     listeners: CancellationToken,
 ) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let ws_stream = if let Some(expected) = token.as_deref() {
-        let expected = expected.to_string();
-        tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp| {
-            if check_bearer(req, &expected) {
-                Ok(resp)
-            } else {
-                reject_unauthorized()
+    // One handshake path for every TCP connection (ADR-0105), token or not:
+    // the callback is where browser-origin and Host validation live, and
+    // those checks apply to unauthenticated loopback listeners too.
+    let ws_stream = tokio_tungstenite::accept_hdr_async(
+        stream,
+        move |req: &Request, mut resp: tungstenite::handshake::server::Response| {
+            validate_origin(req, expose)?;
+            if let Some(expected) = token.as_deref() {
+                match check_credentials(req, expected) {
+                    Ok(Some(protocol)) => {
+                        // The browser channel (ADR-0105): the token arrives as
+                        // a `bearer.<token>` subprotocol offer; the handshake
+                        // must echo it or the browser aborts the connection.
+                        if let Ok(value) = tungstenite::http::HeaderValue::from_str(&protocol) {
+                            resp.headers_mut()
+                                .insert(tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL, value);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(rejection) => return Err(rejection),
+                }
             }
-        })
-        .await
-        .map_err(|e| format!("ws handshake (auth): {e}"))?
-    } else {
-        tokio_tungstenite::accept_async(stream)
-            .await
-            .map_err(|e| format!("ws handshake: {e}"))?
-    };
+            Ok(resp)
+        },
+    )
+    .await
+    .map_err(|e| format!("ws handshake: {e}"))?;
     let (mut ws_sink, mut ws_source) = ws_stream.split();
     let (action, project, client_version) = loop {
         match ws_source.next().await {
@@ -725,9 +826,10 @@ where
     if let Some(client) = client_version
         && client != gate.version_of_daemon()
     {
-        send_error(
+        send_error_with_code(
             &mut ws_sink,
             &version_mismatch_error(&client, gate.version_of_daemon()),
+            Some("version_mismatch"),
         )
         .await?;
         return Ok(());
@@ -745,10 +847,19 @@ where
     // falls back to its own process cwd — which is whatever the first client
     // that spawned the daemon happened to use, so it is only correct by
     // coincidence.
-    let caller_project = project.unwrap_or_else(|| {
+    let caller_project = project.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
-    let bound = match registry.resolve(action, &caller_project).await {
+    // A modern client *declared* its project; a legacy client did not and the
+    // daemon is guessing from its own cwd. Auto-binding a lone cross-project
+    // session is the "launched in project A, working in project B" trap, but
+    // only the declared case can know it is cross-project — so the guard
+    // applies there, and the legacy path keeps its historical behaviour.
+    let declared_project = project.is_some();
+    let bound = match registry
+        .resolve_with_declaration(action, &caller_project, declared_project)
+        .await
+    {
         crate::registry::ResolveOutcome::Welcome(s) => s,
         crate::registry::ResolveOutcome::Pick { sessions } => {
             let text = serde_json::to_string(&Wire::Pick { sessions })
@@ -918,8 +1029,19 @@ async fn send_error<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
     message: &str,
 ) -> Result<(), String> {
+    send_error_with_code(ws_sink, message, None).await
+}
+
+/// `send_error` with a stable machine-readable `code` (ADR-0105) so clients
+/// can branch on the reason instead of string-sniffing the message.
+async fn send_error_with_code<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+    message: &str,
+    code: Option<&str>,
+) -> Result<(), String> {
     let text = serde_json::to_string(&Wire::Error {
         message: message.to_string(),
+        code: code.map(str::to_string),
     })
     .map_err(|e| format!("serialize error: {e}"))?;
     ws_sink
@@ -954,15 +1076,157 @@ fn constant_time_eq(given: &[u8], expected: &[u8]) -> bool {
     diff == 0
 }
 
-#[allow(clippy::result_large_err)]
-fn reject_unauthorized() -> Result<tungstenite::handshake::server::Response, ErrorResponse> {
+fn reject_unauthorized() -> ErrorResponse {
     let body = "Unauthorized".to_string();
-    let resp = tungstenite::handshake::server::Response::builder()
+    tungstenite::handshake::server::Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header("WWW-Authenticate", "Bearer")
         .body(Some(body))
-        .unwrap_or_default();
-    Err(resp)
+        .unwrap_or_default()
+}
+
+/// 403 for a handshake that fails the origin policy (distinct from 401: the
+/// client presented no credential problem — its *provenance* is disallowed).
+#[allow(clippy::result_large_err)]
+fn reject_forbidden(reason: &str) -> ErrorResponse {
+    tungstenite::handshake::server::Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .body(Some(reason.to_string()))
+        .unwrap_or_default()
+}
+
+/// The host part of a `Host` header or origin URL, lowercased, port stripped.
+fn host_part(authority: &str) -> String {
+    let authority = authority.trim();
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed IPv6: [::1]:9800 → ::1
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    host.to_ascii_lowercase()
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1") || host.strip_suffix(".localhost").is_some()
+}
+
+/// Browser drive-by defense (ADR-0105). WebSocket handshakes are not subject
+/// to the same-origin policy: any page the user visits can open
+/// `ws://127.0.0.1:<port>` and drive the daemon — *unless* the server checks.
+/// Browsers always send `Origin` on a WebSocket upgrade, so on a loopback
+/// listener we refuse handshakes whose origin is an http(s) page not itself
+/// served from loopback (the panel served by this daemon, or a local dev
+/// server, qualifies). Non-browser clients (TUI, CLI) send no `Origin` and
+/// are governed by the bearer token instead. On a `--public` listener the
+/// token is mandatory and the origin check is moot — remote origins are
+/// legitimate there.
+#[allow(clippy::result_large_err)]
+fn validate_origin(req: &Request, expose: ServeExpose) -> Result<(), ErrorResponse> {
+    if expose == ServeExpose::Public {
+        return Ok(());
+    }
+    let Some(origin) = req.headers().get("Origin").and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+    let without_scheme = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    let allowed = without_scheme
+        .map(|rest| is_loopback_host(&host_part(rest.split('/').next().unwrap_or(rest))))
+        .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else {
+        tracing::warn!(%origin, "neenee serve: refused WebSocket handshake from foreign browser origin");
+        Err(reject_forbidden(
+            "browser origin not allowed: the neenee control plane only serves pages hosted on loopback",
+        ))
+    }
+}
+
+/// Subprotocol carrying a bearer token from clients that cannot set headers
+/// (browsers): `Sec-WebSocket-Protocol: bearer.<token>` (ADR-0105).
+const BEARER_SUBPROTOCOL_PREFIX: &str = "bearer.";
+
+/// Credential check for the handshake: `Authorization: Bearer` first, then
+/// the `bearer.<token>` subprotocol. `Ok(Some(protocol))` means the
+/// subprotocol channel was used and the handshake response must echo it.
+#[allow(clippy::result_large_err)]
+fn check_credentials(req: &Request, expected: &str) -> Result<Option<String>, ErrorResponse> {
+    if check_bearer(req, expected) {
+        return Ok(None);
+    }
+    if let Some(offers) = req
+        .headers()
+        .get("Sec-WebSocket-Protocol")
+        .and_then(|v| v.to_str().ok())
+    {
+        for offer in offers.split(',').map(str::trim) {
+            if let Some(token) = offer.strip_prefix(BEARER_SUBPROTOCOL_PREFIX)
+                && constant_time_eq(token.as_bytes(), expected.as_bytes())
+            {
+                return Ok(Some(offer.to_string()));
+            }
+        }
+    }
+    Err(reject_unauthorized())
+}
+
+/// What the first bytes of an accepted TCP connection ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TcpTransport {
+    /// `Upgrade: websocket` — the control plane.
+    WebSocket,
+    /// Plain HTTP — the embedded web panel / health endpoint.
+    Http,
+}
+
+/// Cap on header bytes examined when splitting HTTP from WebSocket on the
+/// single port. A handshake that does not terminate its headers within this
+/// budget is handed to the WebSocket path to reject.
+const PEEK_CAP: usize = 16 * 1024;
+
+/// Split an accepted TCP connection into the WebSocket control plane or the
+/// plain-HTTP static path by peeking at (not consuming) the request head.
+async fn classify(stream: &tokio::net::TcpStream) -> std::io::Result<TcpTransport> {
+    let mut head = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.peek(&mut chunk).await?;
+        if n == 0 {
+            // Peer connected and sent nothing: let the WS handshake path own
+            // the (failing) parse so behavior matches a direct WS client.
+            return Ok(TcpTransport::WebSocket);
+        }
+        head.extend_from_slice(&chunk[..n]);
+        if head.windows(4).any(|w| w == b"\r\n\r\n") {
+            return Ok(classify_head(&head));
+        }
+        if head.len() >= PEEK_CAP {
+            return Ok(TcpTransport::WebSocket);
+        }
+    }
+}
+
+fn classify_head(head: &[u8]) -> TcpTransport {
+    let text = String::from_utf8_lossy(head);
+    let mut lines = text.split("\r\n");
+    let request_line = lines.next().unwrap_or("");
+    let looks_http = request_line.ends_with("HTTP/1.1") || request_line.ends_with("HTTP/1.0");
+    let ws_upgrade = lines.any(|line| {
+        let line = line.trim_start();
+        line.len() >= "upgrade:".len()
+            && line[.."upgrade:".len()].eq_ignore_ascii_case("upgrade:")
+            && line["upgrade:".len()..]
+                .trim()
+                .eq_ignore_ascii_case("websocket")
+    });
+    if looks_http && !ws_upgrade {
+        TcpTransport::Http
+    } else {
+        TcpTransport::WebSocket
+    }
 }
 
 #[cfg(test)]
@@ -1041,5 +1305,110 @@ mod tests {
         );
         let back: AttachAction = serde_json::from_str(r#"{"attach":"abc"}"#).unwrap();
         assert_eq!(back, AttachAction::Attach(Some("abc".into())));
+    }
+
+    fn handshake_req(headers: &[(&str, &str)]) -> Request {
+        let mut builder = tungstenite::http::Request::builder();
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        builder.body(()).unwrap()
+    }
+
+    #[test]
+    fn loopback_host_detection() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("foo.localhost"));
+        assert!(is_loopback_host("::1"));
+        assert!(!is_loopback_host("example.com"));
+        assert!(!is_loopback_host("127.0.0.1.evil.com"));
+        assert_eq!(host_part("127.0.0.1:9800"), "127.0.0.1");
+        assert_eq!(host_part("[::1]:9800"), "::1");
+        assert_eq!(host_part("Example.COM:443"), "example.com");
+    }
+
+    #[test]
+    fn origin_policy_refuses_foreign_browser_pages_on_loopback() {
+        // A page served from an external site: rejected.
+        let foreign = handshake_req(&[("Origin", "https://evil.example")]);
+        assert!(validate_origin(&foreign, ServeExpose::Local).is_err());
+        // The panel served by this daemon (or a local dev server): allowed.
+        let local = handshake_req(&[("Origin", "http://127.0.0.1:9800")]);
+        assert!(validate_origin(&local, ServeExpose::Local).is_ok());
+        let localhost = handshake_req(&[("Origin", "http://localhost:5173")]);
+        assert!(validate_origin(&localhost, ServeExpose::Local).is_ok());
+        // Non-browser clients send no Origin: governed by the token instead.
+        let none = handshake_req(&[]);
+        assert!(validate_origin(&none, ServeExpose::Local).is_ok());
+        // A sandboxed/file page ("null" origin) is foreign.
+        let null = handshake_req(&[("Origin", "null")]);
+        assert!(validate_origin(&null, ServeExpose::Local).is_err());
+        // Public listeners skip the origin policy (token is the boundary).
+        assert!(validate_origin(&foreign, ServeExpose::Public).is_ok());
+    }
+
+    #[test]
+    fn credentials_accept_bearer_or_subprotocol() {
+        let expected = "0123456789abcdef";
+        // Authorization header wins.
+        let bearer = handshake_req(&[("Authorization", &format!("Bearer {expected}"))]);
+        assert_eq!(check_credentials(&bearer, expected).unwrap(), None);
+        // The browser channel: bearer.<token> subprotocol offer is accepted
+        // and must be echoed (Ok(Some(..))).
+        let sub = handshake_req(&[("Sec-WebSocket-Protocol", &format!("bearer.{expected}"))]);
+        assert_eq!(
+            check_credentials(&sub, expected).unwrap(),
+            Some(format!("bearer.{expected}"))
+        );
+        // Among several offers, the matching one is picked.
+        let multi = handshake_req(&[(
+            "Sec-WebSocket-Protocol",
+            &format!("chat, bearer.{expected}, other"),
+        )]);
+        assert!(check_credentials(&multi, expected).unwrap().is_some());
+        // Wrong token / no credentials: rejected.
+        let wrong = handshake_req(&[("Sec-WebSocket-Protocol", "bearer.nope")]);
+        assert!(check_credentials(&wrong, expected).is_err());
+        let none = handshake_req(&[]);
+        assert!(check_credentials(&none, expected).is_err());
+    }
+
+    #[test]
+    fn classify_splits_websocket_from_plain_http() {
+        let ws = b"GET / HTTP/1.1\r\nHost: 127.0.0.1:9800\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+        assert_eq!(classify_head(ws), TcpTransport::WebSocket);
+        let ws_lower = b"GET / HTTP/1.1\r\nupgrade: WebSocket\r\n\r\n";
+        assert_eq!(classify_head(ws_lower), TcpTransport::WebSocket);
+        let http = b"GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+        assert_eq!(classify_head(http), TcpTransport::Http);
+        let head = b"HEAD /healthz HTTP/1.0\r\n\r\n";
+        assert_eq!(classify_head(head), TcpTransport::Http);
+        // Not HTTP at all: handed to the WS path to reject properly.
+        let garbage = b"nonsense\r\n\r\n";
+        assert_eq!(classify_head(garbage), TcpTransport::WebSocket);
+    }
+
+    #[test]
+    fn error_frame_carries_an_optional_code() {
+        let with_code = serde_json::to_string(&Wire::Error {
+            message: "m".to_string(),
+            code: Some("version_mismatch".to_string()),
+        })
+        .unwrap();
+        assert_eq!(
+            with_code,
+            r#"{"type":"Error","message":"m","code":"version_mismatch"}"#
+        );
+        // Absent code stays absent on the wire (older clients unaffected).
+        let without = serde_json::to_string(&Wire::Error {
+            message: "m".to_string(),
+            code: None,
+        })
+        .unwrap();
+        assert_eq!(without, r#"{"type":"Error","message":"m"}"#);
+        // And a frame from an older daemon (no code) still parses.
+        let back: Wire = serde_json::from_str(r#"{"type":"Error","message":"m"}"#).unwrap();
+        assert!(matches!(back, Wire::Error { code: None, .. }));
     }
 }

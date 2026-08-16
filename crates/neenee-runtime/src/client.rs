@@ -110,14 +110,21 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
 }
 
 fn spawn_daemon() -> Result<(), String> {
-    let program = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("neenee"));
+    let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("neenee"));
     let mut command = std::process::Command::new(&program);
     command.arg("serve");
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    // Pin the daemon's cwd to a stable, always-existing directory instead of
+    // inheriting this client's project. ADR-0096 made the daemon the host for
+    // *every* project's sessions, so a project directory inherited from the
+    // first lucky client is exactly the wrong default — any code path that
+    // still consults the daemon's cwd (rather than a session-scoped root)
+    // would silently land in that project. Per-session scoping is explicit
+    // via the Select frame's `project` field.
+    command.current_dir("/");
     // Own process group (ADR-0101): a daemon spawned from an interactive
     // shell must not share the shell's foreground group, or the terminal's
     // Ctrl-C SIGINTs the "background" daemon along with everything else in
@@ -230,7 +237,7 @@ where
                         }));
                     }
                     Ok(Wire::Pick { sessions }) => return Ok(Reply::Pick(sessions)),
-                    Ok(Wire::Error { message }) => {
+                    Ok(Wire::Error { message, .. }) => {
                         return Err(format!("daemon rejected the attach: {message}"));
                     }
                     Ok(_) => tracing::warn!("attach: unexpected frame during handshake, ignored"),
@@ -383,7 +390,7 @@ where
                             Err(error.unwrap_or_else(|| "control verb rejected".to_string()))
                         };
                     }
-                    Ok(Wire::Error { message }) => return Err(message),
+                    Ok(Wire::Error { message, .. }) => return Err(message),
                     Ok(_) => tracing::warn!("control: unexpected frame during handshake, ignored"),
                     Err(error) => tracing::warn!(%error, "control: bad frame during handshake"),
                 },
@@ -483,7 +490,7 @@ where
             match ws_source.next().await {
                 Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
                     Ok(Wire::Monitor { event }) => return Ok(event),
-                    Ok(Wire::Error { message }) => return Err(message),
+                    Ok(Wire::Error { message, .. }) => return Err(message),
                     Ok(_) => tracing::warn!("status: unexpected frame during handshake, ignored"),
                     Err(error) => tracing::warn!(%error, "status: bad frame during handshake"),
                 },

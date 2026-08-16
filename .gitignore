@@ -25,7 +25,10 @@
 /kimi-export-session_*.md
 
 # IDE files
-.vscode/
+# Project-shared settings are tracked; only per-machine state is ignored.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo

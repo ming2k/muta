@@ -51,7 +51,6 @@ pub const MODELS: &[Model] = &[
     // ── DeepSeek (opencode-go / direct) ────────────────────────────────────
     Model {
         id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -63,7 +62,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-flash-0731",
-        name: "DeepSeek V4 Flash (0731)",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -75,7 +73,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
         family: "deepseek",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -87,7 +84,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-5",
-        name: "GLM-5",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -99,7 +95,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "glm-5.1",
-        name: "GLM-5.1",
         family: "glm",
         context_window: 200_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -112,7 +107,6 @@ pub const MODELS: &[Model] = &[
     // ── GLM family (Zhipu / Z.AI / opencode-go) ───────────────────────────
     Model {
         id: "glm-5.2",
-        name: "GLM-5.2",
         family: "glm",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -124,7 +118,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.5",
-        name: "Kimi K2.5",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -136,7 +129,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.6",
-        name: "Kimi K2.6",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -148,7 +140,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "kimi-k2.7-code",
-        name: "Kimi K2.7 Code",
         family: "kimi",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -160,7 +151,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "mimo-v2-omni",
-        name: "MiMo V2 Omni",
         family: "mimo",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -172,7 +162,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "mimo-v2-pro",
-        name: "MiMo V2 Pro",
         family: "mimo",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -185,7 +174,6 @@ pub const MODELS: &[Model] = &[
     // ── MiMo (Xiaomi / opencode-go, OpenAI format) ─────────────────────────
     Model {
         id: "mimo-v2.5",
-        name: "MiMo V2.5",
         family: "mimo",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -197,7 +185,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "mimo-v2.5-pro",
-        name: "MiMo V2.5 Pro",
         family: "mimo",
         context_window: 1_048_576,
         thinking: ThinkingSupport::ReasoningContent,
@@ -209,7 +196,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "minimax-m2.5",
-        name: "MiniMax M2.5",
         family: "minimax",
         context_window: 204_800,
         thinking: ThinkingSupport::ReasoningContent,
@@ -221,7 +207,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "minimax-m2.7",
-        name: "MiniMax M2.7",
         family: "minimax",
         context_window: 204_800,
         thinking: ThinkingSupport::ReasoningContent,
@@ -234,7 +219,6 @@ pub const MODELS: &[Model] = &[
     // ── MiniMax (opencode-go, Anthropic /messages format) ──────────────────
     Model {
         id: "minimax-m3",
-        name: "MiniMax M3",
         family: "minimax",
         context_window: 512_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -246,7 +230,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "qwen3.5-plus",
-        name: "Qwen3.5 Plus",
         family: "qwen",
         context_window: 262_144,
         thinking: ThinkingSupport::ReasoningContent,
@@ -258,7 +241,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "qwen3.6-plus",
-        name: "Qwen3.6 Plus",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -274,7 +256,6 @@ pub const MODELS: &[Model] = &[
     // fallback path matches the live catalog.
     Model {
         id: "qwen3.7-max",
-        name: "Qwen3.7 Max",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -286,7 +267,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "qwen3.7-plus",
-        name: "Qwen3.7 Plus",
         family: "qwen",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,

@@ -65,7 +65,7 @@ Same-rank peers — two things the row treats equally — are separated by
 equal gaps are what make the group read as a list.
 
 - `turn 2  sonnet` (turn header: anchor  model)
-- `/skills  /repeat  /help` (empty-state suggestions)
+- `Ctrl-M  /models` (carousel keycap + command peers)
 - `F4 insert  F3 block  F2 expand` (queue-bar legend: three independent affordances)
 - `type filter  ↑↓ navigate  Enter activate` (modal footer hints)
 - `v1.2.3  local  #rust #tui` (skill metadata: version, source, tags)

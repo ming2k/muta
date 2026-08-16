@@ -12,6 +12,7 @@ neenee-providers = { path = "../neenee-providers" }
 neenee-skills = { path = "../neenee-skills" }
 neenee-agent = { path = "../neenee-agent" }
 neenee-mcp = { path = "../neenee-mcp" }
+neenee-web-assets = { path = "../neenee-web-assets" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-util = { workspace = true }

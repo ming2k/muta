@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, RwLock};
 
 use crate::commands::CustomCommand;
 use neenee_agent::{Agent, RoundLifecycle};
@@ -40,7 +40,7 @@ use neenee_skills::SkillRegistry;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::UiBridge;
-use crate::side::SideSession;
+use crate::side::SideRegistry;
 use crate::startup::StartupMode;
 
 /// The slice of the dispatcher context an extension slash command may touch.
@@ -68,8 +68,7 @@ pub struct SlashContext<'a> {
     /// Primary round lifecycle: begin/supersede/cancel rounds, replacing the
     /// old token-slot + generation-counter pair.
     pub lifecycle: &'a Arc<RoundLifecycle>,
-    pub side: &'a Arc<AsyncRwLock<Option<SideSession>>>,
-    pub active_view_side: &'a AtomicBool,
+    pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
     pub base_tools: &'a Arc<Vec<Arc<dyn Tool>>>,
     pub provider_holder: &'a Arc<RwLock<Arc<dyn Provider>>>,
     pub provider_usage: &'a mut ProviderUsage,

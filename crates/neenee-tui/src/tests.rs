@@ -294,6 +294,78 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
     assert_eq!(shell.command_result_text(), None);
 }
 
+/// ADR-0106 §2: on resume, command rows merge at their turn seams — a
+/// command issued between two prompts renders between those rounds, exactly
+/// where it appeared live — instead of all appending to the dialogue's tail.
+#[test]
+fn command_rows_merge_at_their_turn_seams_on_restore() {
+    use crate::model::document::TranscriptMessage;
+    use crate::transcript::merge_command_rows;
+    use neenee_contracts::Role;
+
+    // Dialogue: two rounds, timestamps 1000 and 3000.
+    let dialogue = vec![
+        TranscriptMessage::new(Role::User, "first prompt")
+            .with_sent_at_ms(1000)
+            .with_origin(crate::model::document::UserMessageOrigin::Chat),
+        TranscriptMessage::new(Role::Assistant, "first reply"),
+        TranscriptMessage::new(Role::User, "second prompt")
+            .with_sent_at_ms(3000)
+            .with_origin(crate::model::document::UserMessageOrigin::Chat),
+        TranscriptMessage::new(Role::Assistant, "second reply"),
+    ];
+    // Ledger: one command run between the rounds (2000), one after the last
+    // (4000). Rebuild stamps each row with the record's timestamp.
+    let commands = crate::transcript::transcript_commands_from_ledger(vec![
+        neenee_contracts::CommandRecord::new("compact", "")
+            .with_result(neenee_contracts::CommandResult::Ack {
+                title: "Compacted".to_string(),
+            })
+            .with_timestamp(2000),
+        neenee_contracts::CommandRecord::new("new", "")
+            .with_result(neenee_contracts::CommandResult::Text(
+                "Started new session: c3".to_string(),
+            ))
+            .with_timestamp(4000),
+    ]);
+
+    let merged = merge_command_rows(dialogue, commands);
+    let texts: Vec<&str> = merged.iter().map(|m| m.raw.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec![
+            "first prompt",
+            "first reply",
+            "/compact",
+            "second prompt",
+            "second reply",
+            "/new",
+        ],
+        "the mid-round command lands at its seam; the post-dialogue one at the tail"
+    );
+}
+
+/// ADR-0106 §2: dialogue with no user timestamps is never reordered — the
+/// command rows keep ledger order at the tail rather than guessing.
+#[test]
+fn command_rows_tail_when_dialogue_has_no_timestamps() {
+    use crate::model::document::TranscriptMessage;
+    use crate::transcript::merge_command_rows;
+    use neenee_contracts::Role;
+
+    let dialogue = vec![
+        TranscriptMessage::new(Role::User, "prompt"),
+        TranscriptMessage::new(Role::Assistant, "reply"),
+    ];
+    let commands = crate::transcript::transcript_commands_from_ledger(vec![
+        neenee_contracts::CommandRecord::new("review", "").with_timestamp(123),
+    ]);
+
+    let merged = merge_command_rows(dialogue, commands);
+    let texts: Vec<&str> = merged.iter().map(|m| m.raw.as_str()).collect();
+    assert_eq!(texts, vec!["prompt", "reply", "/review"]);
+}
+
 #[test]
 fn command_result_message_expands_and_round_trips_display() {
     // The command block's collapsed header is the invocation; expansion
@@ -320,6 +392,54 @@ fn command_result_message_expands_and_round_trips_display() {
 
     message.pin_command_result_expanded(true);
     assert_eq!(message.command_result_expanded(), Some(true));
+}
+
+/// ADR-0106: the command row's layout follows the shape of the reply — a
+/// short single line joins inline (` · `), anything longer discloses, and a
+/// missing result renders plain. The classifier is width-aware so an inline
+/// reply is never a truncated fragment.
+#[test]
+fn command_row_layout_classifies_by_result_shape() {
+    use crate::model::document::{CommandRowLayout, TranscriptMessage};
+
+    // No result (shell passthrough / legacy fold) → Plain.
+    let shell = TranscriptMessage::command_result("shell", "!ls -la", None);
+    assert_eq!(
+        shell.command_row_layout(80),
+        Some(CommandRowLayout::Plain),
+        "a result-less record has nothing to disclose"
+    );
+
+    // Short single-line reply fits beside the invocation → Inline.
+    let fresh = TranscriptMessage::command_result(
+        "new",
+        "",
+        Some(neenee_contracts::CommandResult::Text(
+            "Started new session: a1b2c3".to_string(),
+        )),
+    );
+    assert_eq!(fresh.command_row_layout(80), Some(CommandRowLayout::Inline));
+
+    // The same reply in a narrow band must NOT inline — it would truncate.
+    assert_eq!(
+        fresh.command_row_layout(12),
+        Some(CommandRowLayout::Disclose),
+        "an inline reply that would truncate discloses instead"
+    );
+
+    // Multi-line replies always disclose, at any width.
+    let permissions = TranscriptMessage::command_result(
+        "permissions",
+        "",
+        Some(neenee_contracts::CommandResult::PermissionList {
+            allowed: vec!["bash".to_string(), "edit_file".to_string()],
+        }),
+    );
+    assert_eq!(
+        permissions.command_row_layout(200),
+        Some(CommandRowLayout::Disclose),
+        "a multi-line result always earns the disclosure affordance"
+    );
 }
 
 #[test]
@@ -1115,6 +1235,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         in_side_view: false,
         side_session_id: None,
         parent_status: neenee_contracts::ParentStatus::Idle,
+        btw_list: Vec::new(),
+        btw_scroll: 0,
+        btw_modal_follow: true,
         scroll: 0,
         follow_bottom: true,
         content_lines: 0,
@@ -1210,9 +1333,16 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         history_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
+        session_history_backfill: Vec::new(),
+        session_history_backfill_cursor: 0,
         history_clear_confirm: false,
         input_history_dedup: true,
         input_history_record_commands: false,
+        // Tests must not touch the developer's real `history.json`: with the
+        // guard off, `record_input_history` writes (and the clear action
+        // truncates) `$XDG_STATE_HOME/neenee/history.json` — a leak that
+        // polluted the file with synthetic `prompt N` rows.
+        input_history_persist: false,
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
@@ -1240,6 +1370,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         ctrl_c_armed_until: None,
         esc_armed_ticks: 0,
         spinner_epoch: std::time::Instant::now(),
+        carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
         stashed_input: String::new(),
         editor_target: None,
@@ -2043,7 +2174,7 @@ async fn history_recall_restores_staged_images_and_pastes() {
     let session_rows = app.current_session_history();
     assert_eq!(session_rows.len(), 1);
     let orig_idx = session_rows[0];
-    app.input = app.input_history[orig_idx].text.clone();
+    app.input = app.history_entry(orig_idx).expect("row").text.clone();
     app.restore_history_attachments(orig_idx);
 
     assert_eq!(app.input, text, "recalled text keeps its chip labels");
@@ -2080,7 +2211,7 @@ async fn history_recall_clears_staged_attachments_for_plain_entries() {
     app.pending_images.push(image);
 
     let orig_idx = app.current_session_history()[0];
-    app.input = app.input_history[orig_idx].text.clone();
+    app.input = app.history_entry(orig_idx).expect("row").text.clone();
     app.restore_history_attachments(orig_idx);
 
     assert!(
@@ -2211,6 +2342,158 @@ async fn record_input_history_without_dedup_keeps_per_session_entries() {
     assert_eq!(app.input_history.len(), 2);
 }
 
+/// The session-bound ↑/↓ rows come from the union of the tagged persisted
+/// history **and** the transcript-derived backfill. A resumed session whose
+/// prompts were typed in another client (so `history.json` never saw them)
+/// still recalls them: `backfill_session_history` seeds derived rows and
+/// `current_session_history` walks both stores.
+///
+/// Mirrors the event loop's `user_prompt_tail` extraction (kept local because
+/// that one is private to the loop module).
+fn prompt_tail(messages: &[TranscriptMessage]) -> Vec<(String, bool, u64)> {
+    messages
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .map(|m| {
+            (
+                m.raw.clone(),
+                m.origin == UserMessageOrigin::Chat,
+                m.sent_at_ms.unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn resumed_session_backfills_prompt_rows_from_transcript() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    // One prompt this client genuinely recorded (simulating the live tail of
+    // the resumed session typed through this TUI), and a stale prompt that
+    // belongs to a different session entirely.
+    app.record_input_history("live prompt".to_string(), Vec::new(), Vec::new());
+    app.record_input_history("other session's prompt".to_string(), Vec::new(), Vec::new());
+    app.input_history.last_mut().unwrap().session_id = Some("session-b".to_string());
+
+    // The resumed transcript: genuine chat prompts (oldest-first, as the
+    // listener rebuilds it) plus a slash command and a shell passthrough —
+    // neither of which may become a recall row.
+    let transcript = vec![
+        TranscriptMessage::new(Role::User, "first turn").with_sent_at_ms(100),
+        TranscriptMessage::new(Role::Assistant, "ok"),
+        TranscriptMessage::new(Role::User, "live prompt").with_sent_at_ms(200),
+        TranscriptMessage::new(Role::User, "/model").with_origin(UserMessageOrigin::Slash),
+        TranscriptMessage::new(Role::User, "!ls -la").with_origin(UserMessageOrigin::Shell),
+    ];
+    app.backfill_session_history(&prompt_tail(&transcript), 1000);
+
+    // Only the unseen prompt is backfilled; the already-recorded one is not
+    // duplicated, and the derived rows never touch the persisted store.
+    assert_eq!(
+        app.session_history_backfill.len(),
+        1,
+        "only the unrecorded prompt is backfilled"
+    );
+    assert_eq!(app.session_history_backfill[0].text, "first turn");
+    assert_eq!(app.input_history.len(), 2, "persisted history untouched");
+
+    // ↑ walks the union newest-first: the live prompt (ts stamped by the
+    // send), then the backfilled row.
+    let rows = app.current_session_history();
+    assert_eq!(rows.len(), 2, "other session's prompt is filtered out");
+    assert_eq!(app.history_entry(rows[0]).unwrap().text, "live prompt");
+    assert_eq!(app.history_entry(rows[1]).unwrap().text, "first turn");
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "live prompt");
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "first turn");
+
+    // The backfill is incremental: re-running with the same transcript adds
+    // nothing; appending a new turn adds exactly that row.
+    app.backfill_session_history(&prompt_tail(&transcript), 1000);
+    assert_eq!(app.session_history_backfill.len(), 1);
+    let mut grown = transcript.clone();
+    grown.push(TranscriptMessage::new(Role::User, "third turn").with_sent_at_ms(300));
+    app.backfill_session_history(&prompt_tail(&grown), 1000);
+    assert_eq!(app.session_history_backfill.len(), 2);
+}
+
+/// Switching the viewed session must not carry composer state across the
+/// boundary: the ↑/↓ cursor, the stashed draft, staged attachments, and the
+/// backfill all belong to the conversation being left.
+#[tokio::test]
+async fn switching_sessions_resets_navigation_and_backfill() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history("prompt in a".to_string(), Vec::new(), Vec::new());
+    // Simulate a walk into history (cursor armed) with a stashed draft and a
+    // staged image, plus a backfilled row.
+    app.input = "walked row".to_string();
+    app.history_index = Some(0);
+    app.history_draft = "half-typed draft in a".to_string();
+    app.pending_images = vec![neenee_contracts::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    }];
+    app.backfill_session_history(
+        &prompt_tail(&[TranscriptMessage::new(Role::User, "resumed turn").with_sent_at_ms(1)]),
+        1,
+    );
+    assert_eq!(app.session_history_backfill.len(), 1);
+
+    // The event loop's per-frame transition: the id moves, the state resets.
+    app.current_session_id = "session-b".to_string();
+    app.on_viewed_session_changed();
+
+    assert_eq!(
+        app.history_index, None,
+        "cursor does not cross the boundary"
+    );
+    assert!(app.history_draft.is_empty(), "draft does not leak");
+    assert!(app.input.is_empty(), "composer starts clean");
+    assert!(app.pending_images.is_empty(), "attachments do not leak");
+    assert!(
+        app.session_history_backfill.is_empty(),
+        "backfill is rebuilt per conversation"
+    );
+    assert_eq!(app.session_history_backfill_cursor, 0);
+
+    // ↑ in the new session recalls only that session's rows — here none.
+    let rows = app.current_session_history();
+    assert!(rows.is_empty(), "session-b has no recallable rows yet");
+    assert!(!app.history_prev(&rows), "↑ is a no-op with no rows");
+}
+
+/// The ↑/↓ rows follow the **live** session id, not the id the client started
+/// with: `current_session_id` is what stamps new entries, so a prompt sent
+/// after a mid-run `/session open` is tagged with the switched-to session.
+/// (The wiring this guards — the listener updating `UiRuntime::live_session_id`
+/// from `ConversationCleared`/`ConversationReplaced` — lives in the event
+/// loop; here the contract is that stamping and recall agree on one id.)
+#[tokio::test]
+async fn history_rows_are_scoped_by_the_live_session_id() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // The client started attached to session-old…
+    app.current_session_id = "session-old".to_string();
+    app.record_input_history(
+        "typed before the switch".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    // …then `/session open` repointed the harness and the listener tracked it.
+    app.current_session_id = "session-new".to_string();
+    app.on_viewed_session_changed();
+    app.record_input_history("typed after the switch".to_string(), Vec::new(), Vec::new());
+
+    let texts: Vec<&str> = app
+        .current_session_history()
+        .into_iter()
+        .filter_map(|i| app.history_entry(i).map(|e| e.text.as_str()))
+        .collect();
+    assert_eq!(texts, vec!["typed after the switch"]);
+}
+
 /// `/command` invocations are not prompt history: by default they are skipped
 /// entirely (`[input_history] record_commands = false`).
 #[tokio::test]
@@ -2253,6 +2536,38 @@ async fn clear_input_history_wipes_list_and_cache() {
     assert!(app.input_history.is_empty());
     assert!(app.history_attachments.is_empty());
     assert!(!app.history_clear_confirm);
+}
+
+/// `App`'s test constructor keeps disk persistence off, so exercising the
+/// record/clear paths must never touch the *real* `history.json` under
+/// `$XDG_STATE_HOME` (regression: `record_input_history` used to merge
+/// synthetic `prompt N` rows straight into the user's file, and the clear
+/// action truncated it outright). The write/clear happens on a
+/// `spawn_blocking` thread, so poll briefly for a stray write to land.
+#[tokio::test]
+async fn test_app_does_not_touch_disk_history() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(
+        !app.input_history_persist,
+        "test-constructed App must default to no disk persistence"
+    );
+    let path = neenee_persistence::config::Config::history_file_path();
+    let before = std::fs::read(&path).ok();
+
+    app.current_session_id = "session-a".to_string();
+    for i in 0..5 {
+        app.record_input_history(format!("prompt {i}"), Vec::new(), Vec::new());
+    }
+    app.clear_input_history();
+
+    // Give any (buggy) spawned writer a moment, then assert the real history
+    // file is byte-for-byte unchanged (and not newly created).
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let after = std::fs::read(&path).ok();
+    assert_eq!(
+        before, after,
+        "the real history file at {path:?} changed while running with persistence disabled"
+    );
 }
 
 /// ↑ walks toward older entries and ↓ walks back toward the newest,

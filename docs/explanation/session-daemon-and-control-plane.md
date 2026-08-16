@@ -13,7 +13,7 @@ and for day-to-day use see
 ┌─ neenee (the CLI) ──────────────── every verb is a client call
 │    serve / attach / status
 │
-├─ neenee-server (the daemon) ────── one process per user; owns every session
+├─ neenee serve (the daemon) ─────── one process per user; owns every session
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
 │      ├─ Unix socket  (default; file permissions are the auth boundary)
@@ -69,10 +69,9 @@ Two transports carry it:
 - **Unix domain socket** (default, `$XDG_RUNTIME_DIR/neenee/daemon.sock`) —
   the local channel for the CLI and TUI. `0600` in a `0700` runtime dir;
   the filesystem *is* the authentication, so no token.
-- **TCP + bearer token** (`neenee serve --public`; `--expose` on the
-  `neenee-server` binary) — for LAN clients and the web panel. Exposing is
-  always an explicit opt-in that carries a token (ADR-0054's model); TLS is
-  fronted by a reverse proxy. See
+- **TCP + bearer token** (`neenee serve --public`) — for LAN clients and
+  the web panel. Exposing is always an explicit opt-in that carries a token
+  (ADR-0054's model); TLS is fronted by a reverse proxy. See
   [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 
 A web control panel is therefore a static page that opens the monitor stream
@@ -81,7 +80,7 @@ and calls control verbs — no web-specific server exists or is needed.
 ## Lifecycle in one pass
 
 1. Any `neenee` or `neenee attach` finds no live daemon record
-   (`daemon.json`) and spawns `neenee-server` detached; or you run
+   (`daemon.json`) and spawns the daemon detached; or you run
    `neenee serve [--detach]` yourself.
 2. The daemon binds the UDS (always) and a TCP port (loopback by default,
    exposed with `--public`), writes the global discovery record, and waits.

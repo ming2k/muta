@@ -12,7 +12,8 @@ All colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
 | `user_panel_bg` | (17, 22, 19) | Sent user-message band (dimmer than input) |
 | `user_panel_bg_queued` | (9, 12, 11) | User message staged in the send queue (dimmer = "pending") |
 | `panel_bg` | (14, 15, 15) | Modals / sheets |
-| `input_bg` | (18, 19, 19) | Live input box (brighter than `user_panel_bg` = "editable") |
+| `input_bg_active` | (26, 28, 27) | Live input box while it owns the keyboard (brightest interactive surface = "typing lands here") |
+| `input_bg_inactive` | (16, 17, 17) | Live input box while a transcript step owns the keyboard (recessed = inert) |
 | `menu_bg` | (17, 19, 18) | Suggestion / completion menus |
 | `element_bg` | (21, 23, 22) | Footer / option bars |
 | `selected_bg` | (38, 48, 44) | Semantic-selection highlight |
@@ -51,14 +52,23 @@ app_bg (7,8,8)                ← base; entire frame
   user_panel_bg (17,22,19)        ← sent messages (dimmer = read-only)
   user_panel_bg_queued (9,12,11)  ← queued user messages (dimmer = pending)
   panel_bg (14,15,15)             ← modals / sheets
-  input_bg (18,19,19)             ← live input box (brighter = editable)
+  input_bg_inactive (16,17,17)    ← input box, inert (step owns the keyboard)
   menu_bg (17,19,18)              ← menus / suggestion popups
-  element_bg (21,23,22)           ← footer / option bars (brightest panel)
+  element_bg (21,23,22)           ← footer / option bars
+  input_bg_active (26,28,27)      ← input box, focused (brightest interactive)
 selected_bg (38,48,44)        ← selection highlight
 ```
 
-The header is a floating half-block panel on `input_bg` (same as the input
-box), inset from the edges by `app_bg` gutters; no separator rules are drawn.
+The input box owns its own **pair** of related but independent background
+tokens — `input_bg_inactive` / `input_bg_active` — rather than borrowing from
+or sharing with any other surface. `input_bg_inactive` rests just above the
+ambient surfaces; `input_bg_active` jumps clear of every other token so the
+focused prompt cannot be confused with the chrome around it. The two states
+differ by a full luminance step (~10/255), so "where does typing land" is
+legible from the background alone.
+
+The header is a floating half-block panel on its own surface tone, inset from
+the edges by `app_bg` gutters; no separator rules are drawn.
 
 ## Diff banding
 

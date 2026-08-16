@@ -40,15 +40,14 @@ use neenee_persistence::{
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
 use std::collections::HashMap;
-use std::sync::{
-    Arc, RwLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
 use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
-use crate::side::{SideSession, spawn_parent_status_watcher, start_active_turn};
+use crate::side::{
+    SideRegistry, SideSession, publish_btw_list, spawn_parent_status_watcher, start_active_turn,
+};
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
 use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
 
@@ -65,6 +64,39 @@ async fn supersede_for_session_switch(
     lifecycle.cancel_current().await;
 }
 
+/// Session-switch companion to [`supersede_for_session_switch`]: tear down
+/// every live `/btw` aside before the driver repoints at another session
+/// (ADR-0103). Asides are forks of the *outgoing* session — carrying them
+/// across a switch would leave them composing into the wrong parent's store
+/// routing — so each is cancelled (its own lifecycle), dropped from the
+/// registry, and deleted from disk, mirroring the pristine-discard rule: a
+/// switch is an explicit context change, not a "keep it running" leave.
+/// Their files are removed because an aside that is never re-enterable is
+/// exactly the abandoned-`/btw` litter the discard rule exists to prevent.
+pub(crate) async fn teardown_sides_for_session_switch(
+    side: &Arc<AsyncRwLock<SideRegistry>>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+) {
+    let ids: Vec<String> = side.read().await.iter().map(|s| s.id.clone()).collect();
+    if ids.is_empty() {
+        return;
+    }
+    let was_active = side.read().await.active().is_some();
+    for id in ids {
+        if let Some(s) = side.write().await.remove(&id) {
+            s.agent.reject_pending_permissions();
+            s.agent.reject_pending_user_questions();
+            s.agent.reject_pending_inputs();
+            s.lifecycle.cancel_current().await;
+            let _ = s.store.delete(&s.id).await;
+        }
+    }
+    publish_btw_list(side, resp_tx).await;
+    if was_active {
+        let _ = resp_tx.send(AgentResponse::SideViewClosed);
+    }
+}
+
 /// Start a brand-new empty session and switch the live session to it — the
 /// shared body of `/new` and `/session new`.
 ///
@@ -79,6 +111,7 @@ async fn supersede_for_session_switch(
 /// the confirmation lands in the new session's command ledger.
 #[allow(clippy::too_many_arguments)]
 async fn start_fresh_session(
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     session: &Arc<SessionStore>,
     config: &Config,
     agent: &Arc<Agent>,
@@ -90,6 +123,7 @@ async fn start_fresh_session(
     args: &str,
 ) {
     supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+    teardown_sides_for_session_switch(side, resp_tx).await;
     agent.clear_todos();
     match session.reset().await {
         Ok(id) => {
@@ -109,7 +143,9 @@ async fn start_fresh_session(
                 &session.id().await,
                 RoundEvent::TodosUpdated(neenee_contracts::TodoList::default()),
             ));
-            let _ = resp_tx.send(AgentResponse::ConversationCleared);
+            let _ = resp_tx.send(AgentResponse::ConversationCleared {
+                session_id: session.id().await,
+            });
             record_command(
                 session,
                 resp_tx,
@@ -257,8 +293,7 @@ pub async fn dispatch(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     session: &Arc<SessionStore>,
     lifecycle: &Arc<RoundLifecycle>,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
-    active_view_side: &AtomicBool,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     base_tools_for_side: &Arc<Vec<Arc<dyn Tool>>>,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     provider_usage: &mut ProviderUsage,
@@ -552,6 +587,7 @@ pub async fn dispatch(
         }
         Some(BuiltinCmd::Resume) => {
             supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+            teardown_sides_for_session_switch(side, resp_tx).await;
             match resume_session(session, parts.get(1).copied()).await {
                 Ok((id, transcript)) => {
                     // Full restore: todos, disabled tools, round counter, and
@@ -641,6 +677,7 @@ pub async fn dispatch(
             },
             "fork" => {
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+                teardown_sides_for_session_switch(side, resp_tx).await;
                 match session.fork().await {
                     Ok((id, parent_id)) => {
                         agent.restore_round_count(session.round_counter().await);
@@ -675,6 +712,7 @@ pub async fn dispatch(
                     return;
                 };
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+                teardown_sides_for_session_switch(side, resp_tx).await;
                 match session.open(id).await {
                     Ok(()) => {
                         // Full restore of the session-scoped runtime the
@@ -722,6 +760,7 @@ pub async fn dispatch(
             }
             "resume" => {
                 supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+                teardown_sides_for_session_switch(side, resp_tx).await;
                 match resume_session(session, parts.get(2).copied()).await {
                     Ok((id, transcript)) => {
                         // Full restore: todos, disabled tools, round counter,
@@ -769,6 +808,7 @@ pub async fn dispatch(
             }
             "new" => {
                 start_fresh_session(
+                    side,
                     session,
                     config,
                     agent,
@@ -808,28 +848,26 @@ pub async fn dispatch(
             let _ = resp_tx.send(AgentResponse::OpenHostPanel);
         }
         Some(BuiltinCmd::Btw) => {
-            // `/btw [prompt]` opens a side conversation
-            // (ADR-0017): fork the primary into a
-            // self-contained side file, build a fresh side
-            // `Agent` + store + history, and switch the view.
-            // The primary round keeps running untouched —
-            // unlike `/session open`, we deliberately do NOT
-            // bump the generation counter, reject permissions,
-            // or cancel the primary token.
-            let prompt = cmd.strip_prefix("/btw").unwrap_or("").trim();
-            if side.read().await.is_some() {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "A side conversation is already open. \
-                                     Leave it with Esc first.",
-                )
-                .await;
+            // `/btw` grammar (ADR-0103 §4):
+            //   `/btw`        — open a NEW aside view (no round yet);
+            //   `/btw <text>` — open a new aside and auto-send <text> as its
+            //                   first turn;
+            //   `/btw list`   — open the asides modal (same as F5).
+            //
+            // Opening forks the primary into a self-contained side file,
+            // builds a fresh aside `Agent` + store, and switches the view.
+            // The primary round keeps running untouched — unlike
+            // `/session open`, we deliberately do NOT bump the generation
+            // counter, reject permissions, or cancel the primary token.
+            // Existing asides stay live in the registry: each `/btw` creates
+            // an additional aside (ADR-0103 lifts ADR-0017's single slot).
+            let rest = cmd.strip_prefix("/btw").unwrap_or("").trim();
+            if rest == "list" {
+                record_invocation(session, name, args).await;
+                publish_btw_list(side, resp_tx).await;
                 return;
             }
-            let primary_id = session.id().await;
+            let prompt = rest;
             let side_session = match SideSession::build(
                 session,
                 base_tools_for_side,
@@ -862,24 +900,23 @@ pub async fn dispatch(
                     source: neenee_contracts::ContextTokenSource::Projection,
                 }),
             ));
-            *side.write().await = Some(side_session);
-            active_view_side.store(true, Ordering::SeqCst);
-            // Tell the TUI to enter the side view (seeds the
-            // side buffer + records the routing keys) before
-            // the first side round starts streaming.
-            let _ = resp_tx.send(AgentResponse::SideViewOpened {
-                side_id: side_id.clone(),
-                primary_id,
-            });
+            // Register + make it the active view, then tell the TUI to enter
+            // the aside view — `SideViewOpened` carries the aside's full
+            // transcript (inherited parent context included, ADR-0103 §6)
+            // and lands before the first aside round starts streaming.
+            side.write().await.open(side_session);
+            crate::handlers_session::emit_side_view_opened(side, session, resp_tx, &side_id).await;
+            publish_btw_list(side, resp_tx).await;
             record_invocation(session, name, args).await;
-            // Stream coarse primary-status updates to the
-            // side banner while the side is live. Emits an
-            // immediate baseline so the banner is never
-            // empty, then self-terminates on side teardown.
+            // Stream coarse primary-status updates to the aside banner while
+            // any aside is live. The watcher spans the whole registry and
+            // self-terminates when the last aside closes; spawning a second
+            // one while the first is still alive is harmless (both emit only
+            // on change and dedupe through the shared last-value cell on the
+            // TUI side).
             spawn_parent_status_watcher(side.clone(), lifecycle.clone(), resp_tx.clone());
             if !prompt.is_empty() {
                 start_active_turn(
-                    active_view_side,
                     side,
                     agent,
                     session,
@@ -1300,21 +1337,30 @@ pub async fn dispatch(
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Trust) => {
-            // ADR-0085 §5 (+ hooks extension): grant trust for this project,
-            // then activate its project-scope MCP servers AND hooks by
-            // reconfiguring/re-seeding with the merged config. Trust applies to
-            // the git repo root, so subdirectories and worktrees share one
-            // grant.
+            // ADR-0085 §5 (+ hooks/skills/commands extension): grant trust for
+            // this project, then activate its project-scope MCP servers, hooks,
+            // skills, and slash commands by reconfiguring/re-seeding with the
+            // merged config and rescanning. Trust applies to the git repo
+            // root, so subdirectories and worktrees share one grant.
             let project_mcp = Config::load_project_mcp(project_root_for_side);
             let project_hooks = Config::load_project_hooks(project_root_for_side);
-            if project_mcp.is_empty() && project_hooks.is_empty() {
+            let has_project_skills =
+                neenee_skills::discovery::project_skills_present(project_root_for_side);
+            let has_project_commands =
+                crate::commands::project_commands_present(project_root_for_side);
+            if project_mcp.is_empty()
+                && project_hooks.is_empty()
+                && !has_project_skills
+                && !has_project_commands
+            {
                 record_command(
                     session,
                     resp_tx,
                     name,
                     args,
                     CommandResult::Text(
-                        "No MCP servers or hooks declared in .neenee/config.toml. Nothing to trust."
+                        "No MCP servers, hooks, project skills, or project slash commands \
+                         declared in this project. Nothing to trust."
                             .to_string(),
                     ),
                 )
@@ -1334,6 +1380,15 @@ pub async fn dispatch(
                 // config so the untrusted `confirm` rule is dropped now that the
                 // project is trusted.
                 agent.set_bash_policy(&reloaded.bash_policy);
+                // Rescan skills: discovery consults the (just-persisted) trust
+                // store, so the project's Repo-scope skills load now instead of
+                // at the next hourly refresh. Any shadowing of same-named user
+                // skills surfaces through the registry's shadow sink.
+                skills_registry_for_commands.reload().await;
+                // Project slash commands typed from now on resolve through the
+                // dispatcher's trust-checked fallback, so they are runnable
+                // immediately; the completion/`/help` listing refreshes on the
+                // next session start.
                 let connected: Vec<&str> = report
                     .connected
                     .iter()
@@ -1346,20 +1401,26 @@ pub async fn dispatch(
                     } else {
                         format!(" MCP activated: {}.", connected.join(", "))
                     };
-                    format!("Project trusted.{mcp_part} Project hooks loaded.")
+                    format!(
+                        "Project trusted.{mcp_part} Project hooks, skills, and slash commands loaded."
+                    )
                 } else {
-                    "Project already trusted; reloaded its MCP servers and hooks.".to_string()
+                    "Project already trusted; reloaded its MCP servers, hooks, project skills and commands."
+                        .to_string()
                 };
                 record_command(session, resp_tx, name, args, CommandResult::Text(msg)).await;
             }
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Untrust) => {
-            // ADR-0085 §5 (+ hooks extension): revoke trust and disconnect
-            // project-scope MCP by reconfiguring with global-only config
-            // (project servers vanish from the set → reconfigure removes them).
-            // Project hooks are also dropped: re-seeding with global-only hooks
-            // leaves the registry free of any project-supplied commands.
+            // ADR-0085 §5 (+ hooks/skills/commands extension): revoke trust and
+            // disconnect project-scope MCP by reconfiguring with global-only
+            // config (project servers vanish from the set → reconfigure removes
+            // them). Project hooks are dropped by re-seeding with global-only
+            // hooks; project skills drop out on the rescan below (discovery
+            // skips Repo-scope sources for untrusted projects); project slash
+            // commands stop resolving (the dispatcher's fallback is
+            // trust-checked).
             let was_trusted = trust_gate.untrust(project_root_for_side);
             let reloaded = Config::load(); // global only; no project merge now
             let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
@@ -1369,6 +1430,9 @@ pub async fn dispatch(
             // pipe-to-shell commands.
             let hardened = reloaded.bash_policy.clone().with_untrusted_hardening();
             agent.set_bash_policy(&hardened);
+            // Drop the now-untrusted project's skills immediately rather than
+            // at the next hourly refresh.
+            skills_registry_for_commands.reload().await;
             let msg = if was_trusted {
                 let mcp_part = if report.removed.is_empty() {
                     String::new()
@@ -1376,7 +1440,7 @@ pub async fn dispatch(
                     format!(": {}", report.removed.join(", "))
                 };
                 format!(
-                    "Project untrusted. Disconnected project MCP servers{mcp_part}. Project hooks unloaded."
+                    "Project untrusted. Disconnected project MCP servers{mcp_part}. Project hooks, skills, and slash commands unloaded."
                 )
             } else {
                 "Project was not trusted; nothing to revoke.".to_string()
@@ -1463,6 +1527,7 @@ pub async fn dispatch(
             // or `/session open`). The retired `/clear` resolves here through
             // the alias table, so old muscle memory gets the safe semantics.
             start_fresh_session(
+                side,
                 session,
                 config,
                 agent,
@@ -1796,7 +1861,6 @@ pub async fn dispatch(
                     session,
                     lifecycle,
                     side,
-                    active_view_side,
                     base_tools: base_tools_for_side,
                     provider_holder: provider_for_task,
                     provider_usage,
@@ -1813,7 +1877,22 @@ pub async fn dispatch(
                 }
             }
             let (command_name, arguments) = split_custom_command(&cmd);
-            let Some(command) = commands_for_task.get(command_name) else {
+            // Trust-checked fallback (ADR-0085 §5 extended to commands): the
+            // startup-built map is fixed for the session, so a project command
+            // enabled by a mid-session `/trust` is not in it — consult the live
+            // trust gate and rescan the project dir on demand. For an
+            // untrusted project this resolves nothing, keeping planted
+            // `/<name>` templates "unknown command".
+            let command = commands_for_task.get(command_name).cloned().or_else(|| {
+                if trust_gate.is_trusted(project_root_for_side) {
+                    crate::commands::discover_project_commands(project_root_for_side)
+                        .into_iter()
+                        .find(|command| command.name == command_name)
+                } else {
+                    None
+                }
+            });
+            let Some(command) = command else {
                 record_error(
                     session,
                     resp_tx,
@@ -1826,7 +1905,6 @@ pub async fn dispatch(
             };
             record_invocation(session, name, args).await;
             start_active_turn(
-                active_view_side,
                 side,
                 agent,
                 session,
@@ -1834,7 +1912,7 @@ pub async fn dispatch(
                 resp_tx,
                 config,
                 RoundInput {
-                    prompt: expand_command(command, arguments),
+                    prompt: expand_command(&command, arguments),
                     hidden: false,
                     display_prompt: Some(cmd),
                     sent_at_ms: None,

@@ -1113,37 +1113,56 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
 }
 
 fn key_in_view(code: KeyCode, in_envoy_view: bool, input: &mut String) -> InputAction {
+    key_in_side_view_with(code, input, move |ctx| {
+        ctx.in_envoy_view = in_envoy_view;
+        ctx.in_side_view = false;
+    })
+}
+
+/// Key handling inside a `/btw` aside view (ADR-0103 §2), with a context
+/// hook so variants can compose view state.
+fn key_in_side_view_with(
+    code: KeyCode,
+    input: &mut String,
+    tune: impl FnOnce(&mut InputContext),
+) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
+    let mut context = InputContext {
+        active_modal: crate::Modal::None,
+        session_info_detail: false,
+        is_responding: false,
+        completion_kind: crate::CompletionKind::None,
+        suggestion_count: 0,
+        has_exact_suggestion: false,
+        suggestion_index: None,
+        permission_confirm_always: false,
+        permission_show_details: false,
+        in_envoy_view: false,
+        in_side_view: true,
+        has_focused_target: false,
+        has_queued: false,
+        history_searching: false,
+        model_searching: false,
+        modal_keymap_open: false,
+        editor_field: None,
+        custom_provider_field: None,
+        question_other_highlighted: false,
+        history_clear_confirm: false,
+        host_prompting: false,
+    };
+    tune(&mut context);
     process_event(
         Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
         input,
         &mut cursor,
-        InputContext {
-            active_modal: crate::Modal::None,
-            session_info_detail: false,
-            is_responding: false,
-            completion_kind: crate::CompletionKind::None,
-            suggestion_count: 0,
-            has_exact_suggestion: false,
-            suggestion_index: None,
-            permission_confirm_always: false,
-            permission_show_details: false,
-            in_envoy_view,
-            in_side_view: false,
-            has_focused_target: false,
-            has_queued: false,
-            history_searching: false,
-            model_searching: false,
-            modal_keymap_open: false,
-            editor_field: None,
-            custom_provider_field: None,
-            question_other_highlighted: false,
-            history_clear_confirm: false,
-            host_prompting: false,
-        },
+        context,
         &mut drag,
     )
+}
+
+fn key_in_side_view(code: KeyCode, input: &mut String) -> InputAction {
+    key_in_side_view_with(code, input, |_| {})
 }
 
 fn key_with_focus(code: KeyCode) -> InputAction {
@@ -1368,6 +1387,111 @@ fn escape_exits_envoy_view() {
         key_in_view(KeyCode::Esc, false, &mut input),
         InputAction::None
     );
+}
+
+/// Esc inside a `/btw` aside view (ADR-0103 §2): interrupt the viewed
+/// aside — NOT exit. Leaving the view is Ctrl+C's job.
+#[test]
+fn escape_in_side_view_interrupts_the_aside_not_the_view() {
+    let mut input = String::new();
+    assert_eq!(
+        key_in_side_view(KeyCode::Esc, &mut input),
+        InputAction::InterruptSide
+    );
+    // A focused step still loses to the interrupt intent: one Esc inside an
+    // aside always means "stop the aside's round".
+    let mut input = String::new();
+    assert_eq!(
+        key_in_side_view_with(KeyCode::Esc, &mut input, |ctx| {
+            ctx.has_focused_target = true
+        }),
+        InputAction::InterruptSide
+    );
+}
+
+/// Ctrl+C inside a modal is handled by the app loop's `handle_ctrl_c`, so it
+/// never reaches the contextual arm; but a Ctrl+C while the asides modal is
+/// open closes the modal (not the view). The loop-side chain is covered by
+/// the commands tests.
+#[test]
+fn escape_in_btw_modal_closes_the_modal() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::Btw,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: true,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::CloseModal);
+}
+
+/// Enter inside the asides modal jumps into the highlighted aside.
+#[test]
+fn enter_in_btw_modal_focuses_the_selected_aside() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::Btw,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: true,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::BtwFocusSelected);
 }
 
 #[test]

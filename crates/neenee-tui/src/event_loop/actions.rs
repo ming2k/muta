@@ -809,6 +809,8 @@ pub(super) async fn dispatch_action(
                     .iter()
                     .filter(|item| item.session_id == viewed_session_id)
                     .count()
+            } else if app.active_modal == Modal::Btw {
+                app.btw_list.len()
             } else {
                 app.session_tools_len()
             };
@@ -823,13 +825,15 @@ pub(super) async fn dispatch_action(
                 // The queue modal tracks its own follow flag so it can
                 // be scrolled independently of the shared session
                 // scroll the other list modals reuse.
-                if app.active_modal == Modal::Queue {
+                if app.active_modal == Modal::Queue || app.active_modal == Modal::Btw {
                     app.queue_modal_follow = true;
                 } else {
                     app.session_modal_follow = true;
                 }
             } else if app.active_modal == Modal::Queue {
                 // Empty queue: Up/Down is inert.
+            } else if app.active_modal == Modal::Btw {
+                // Empty asides list: Up/Down is inert.
             } else {
                 app.session_scroll = if forward {
                     app.session_scroll.saturating_add(1)
@@ -1324,14 +1328,66 @@ pub(super) async fn dispatch_action(
             app.exit_envoy();
         }
         input::InputAction::ExitSideView => {
-            // `/btw`: return to the primary transcript (ADR-0017).
-            // Optimistically flip the view for snappiness and tell the
-            // harness to tear down the live side session; its
-            // `SideViewClosed` reply is a backstop in case this fires
-            // twice (Esc then Ctrl+C).
+            // `/btw`: detach from the aside view and return to the primary
+            // transcript (ADR-0103). Optimistically flip the view for
+            // snappiness and tell the harness to detach its active pointer —
+            // the aside keeps running. `SideViewClosed` is the backstop in
+            // case this fires twice. The interrupt arm is cleared too so the
+            // main view's next Esc starts a fresh interrupt confirmation
+            // instead of firing a leftover armed state.
             if app.in_side_view {
                 app.exit_side_view();
+                app.esc_armed_ticks = 0;
                 let _ = app.tx.send(AgentRequest::ExitSideView);
+            }
+        }
+        input::InputAction::InterruptSide => {
+            // Esc inside an aside view (ADR-0103 §2): interrupt the viewed
+            // aside's round with the same armed press-twice contract as the
+            // main view's Esc interrupt. Never leaves the view, never closes
+            // the aside.
+            if app.in_side_view && app.esc_armed_ticks > 0 {
+                app.esc_armed_ticks = 0;
+                if let Some(side_id) = app.side_session_id.clone() {
+                    let _ = app.tx.send(AgentRequest::InterruptSide { side_id });
+                }
+            } else {
+                app.esc_armed_ticks = 20;
+            }
+        }
+        input::InputAction::OpenBtwList => {
+            // F5 / `/btw list` (ADR-0103 §5): ask the harness for a fresh
+            // list and pop the modal once the rows land. The open signal is
+            // consumed by the loop's sync stage, so a slow harness reply
+            // simply opens with the last known rows and refreshes in place.
+            let _ = app.tx.send(AgentRequest::QueryBtwList);
+            runtime.open_btw.store(true, Ordering::SeqCst);
+        }
+        input::InputAction::BtwFocusSelected => {
+            // Asides modal Enter (ADR-0103 §5): jump back into the selected
+            // aside. The harness replies with `SideViewOpened` carrying the
+            // full transcript back-fill; the modal closes on arrival.
+            if let Some(row) = app.btw_list.get(app.modal_index) {
+                let side_id = row.id.clone();
+                app.active_modal = Modal::None;
+                app.modal_keymap_open = false;
+                let _ = app.tx.send(AgentRequest::FocusSide { side_id });
+            }
+        }
+        input::InputAction::BtwCloseSelected => {
+            // Asides modal `D` (ADR-0103 §5): close + discard the selected
+            // aside (cancel its round, drop it from the list, delete its
+            // session files). The modal stays open on the refreshed list.
+            if let Some(row) = app.btw_list.get(app.modal_index) {
+                let side_id = row.id.clone();
+                let _ = app.tx.send(AgentRequest::CloseSide { side_id });
+                // Optimistically drop the row so the selection does not
+                // point at a stale entry before the fresh list lands; clamp
+                // the cursor in case the last row was removed.
+                app.btw_list.remove(app.modal_index);
+                if app.modal_index >= app.btw_list.len() {
+                    app.modal_index = app.btw_list.len().saturating_sub(1);
+                }
             }
         }
         input::InputAction::PrevSibling => {

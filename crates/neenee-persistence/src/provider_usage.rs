@@ -172,8 +172,9 @@ impl ProviderUsage {
     }
 
     /// Last-used timestamp (epoch ms) for a model id. `None` when the model
-    /// has never been activated, which sorts as "oldest" in the stage-2 model
-    /// list.
+    /// has never been activated. The Models picker no longer sorts by this
+    /// (its ordering is status-tiered then ASCII), but the timestamp still
+    /// feeds model-restore-at-startup via `last_model_for`.
     pub fn model_last_used_ms(&self, model: &str) -> Option<u64> {
         self.models.get(model).map(|e| e.last_used_ms)
     }

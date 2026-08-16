@@ -37,7 +37,6 @@ pub const MODELS: &[Model] = &[
     // window conservatively for all three tiers and the alias.
     Model {
         id: "gpt-5.6",
-        name: "GPT-5.6",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -49,7 +48,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -61,7 +59,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -73,7 +70,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -90,7 +86,6 @@ pub const MODELS: &[Model] = &[
     // `gpt-5.5`/`gpt-5.4` share a 1M window, `gpt-5.4-mini` a 400K window.
     Model {
         id: "gpt-5.5",
-        name: "GPT-5.5",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -102,7 +97,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.4",
-        name: "GPT-5.4",
         family: "gpt",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -114,7 +108,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
         family: "gpt",
         context_window: 400_000,
         thinking: ThinkingSupport::ReasoningSummary,
@@ -129,7 +122,6 @@ pub const MODELS: &[Model] = &[
     // registered so existing configs and older sessions still resolve metadata.
     Model {
         id: "gpt-4o",
-        name: "GPT-4o",
         family: "gpt",
         context_window: 128_000,
         thinking: ThinkingSupport::None,
@@ -141,7 +133,6 @@ pub const MODELS: &[Model] = &[
     },
     Model {
         id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
         family: "gpt",
         context_window: 128_000,
         thinking: ThinkingSupport::None,

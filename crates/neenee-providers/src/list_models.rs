@@ -195,9 +195,6 @@ pub struct DiscoveredModel {
     /// `think_efforts.valid_efforts`, or Copilot's
     /// `capabilities.supports.reasoning_effort`).
     pub effort_levels: Option<Vec<String>>,
-    /// Display name when the endpoint provides one (Kimi's `display_name`,
-    /// or Copilot's `name`).
-    pub display_name: Option<String>,
 }
 
 impl DiscoveredModel {
@@ -207,7 +204,6 @@ impl DiscoveredModel {
     pub fn remote_metadata(&self) -> RemoteModelMetadata {
         RemoteModelMetadata {
             endpoint: self.endpoint,
-            display_name: self.display_name.clone(),
             family: self.family.clone(),
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -449,10 +445,6 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
         tool_call: None,
         vision: entry.get("supports_image_in").and_then(Value::as_bool),
         effort_levels,
-        display_name: entry
-            .get("display_name")
-            .and_then(Value::as_str)
-            .map(str::to_string),
     })
 }
 
@@ -543,10 +535,6 @@ fn copilot_model_from_capabilities(
             .and_then(|s| s.get("vision"))
             .and_then(Value::as_bool),
         effort_levels,
-        display_name: entry
-            .get("name")
-            .and_then(Value::as_str)
-            .map(str::to_string),
     })
 }
 
@@ -755,7 +743,6 @@ mod tests {
         assert_eq!(k3.reasoning, Some(true));
         assert_eq!(k3.vision, Some(true));
         assert_eq!(k3.effort_levels, Some(vec!["max".to_string()]));
-        assert_eq!(k3.display_name.as_deref(), Some("k3"));
         // The legacy entry has no effort field → None, not an empty vec.
         assert_eq!(models[0].id, "kimi-for-coding");
         assert_eq!(models[0].context_window, Some(262_144));
@@ -841,7 +828,6 @@ mod tests {
                 "high".to_string()
             ])
         );
-        assert_eq!(gpt5.display_name.as_deref(), Some("GPT-5"));
         let gpt4o = models.iter().find(|m| m.id == "gpt-4o").unwrap();
         assert_eq!(gpt4o.context_window, Some(128_000));
         // `adaptive_thinking` explicitly declares reasoning despite the absent
@@ -939,8 +925,9 @@ mod tests {
 
     #[test]
     fn parses_anthropic_data_ids() {
-        // Anthropic's /v1/models returns the same {data:[{id}]} shape plus a
-        // display name; no capability fields are advertised.
+        // Anthropic's /v1/models returns the same {data:[{id}]} shape; no
+        // capability fields are advertised (a display_name may ride along —
+        // it is not consumed: the UI is id-first by policy).
         let json = serde_json::json!({
             "data": [
                 { "id": "claude-opus-4-8", "display_name": "Claude Opus 4.8" },
@@ -951,7 +938,6 @@ mod tests {
         let mut got: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
         got.sort();
         assert_eq!(got, vec!["claude-opus-4-8", "claude-sonnet-5"]);
-        assert_eq!(models[0].display_name.as_deref(), Some("Claude Opus 4.8"));
         assert_eq!(models[0].context_window, None);
         assert_eq!(models[0].reasoning, None);
     }

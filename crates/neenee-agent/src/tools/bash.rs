@@ -4,10 +4,26 @@ use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-use crate::tools::helpers::json_string;
+use crate::tools::helpers::{WorkspaceBase, json_string, workspace_base};
 
 /// Execute a bash command.
-pub struct BashTool;
+///
+/// Commands run in the session's workspace root (captured at factory time),
+/// not the daemon process's cwd — under the unified daemon (ADR-0096) those
+/// differ whenever the daemon was first spawned from another project.
+pub struct BashTool {
+    pub(crate) root: WorkspaceBase,
+}
+
+impl BashTool {
+    /// Build a bash tool bound to an explicit workspace root. The session
+    /// runtime uses this for the `!`-prefix shell path, which bypasses the
+    /// factory-based toolset assembly but must still run in the session's
+    /// project (not the daemon's process cwd, ADR-0096).
+    pub fn new(root: Option<std::path::PathBuf>) -> Self {
+        Self { root }
+    }
+}
 
 #[async_trait]
 impl Tool for BashTool {
@@ -128,15 +144,26 @@ impl Tool for BashTool {
             // pipes this keeps such programs off our screen. Those that then
             // block waiting on a (now-inaccessible) tty are surfaced fast by
             // the idle watchdog (L2) with a remedy footer.
-            Command::new("sh")
+            //
+            // The child runs in the session's workspace root, not this
+            // process's cwd: under the unified daemon (ADR-0096) the daemon
+            // is spawned from whichever client came first, so its cwd belongs
+            // to a different project than the session invoking this tool.
+            // `Command::current_dir` chdirs between fork and exec, so the
+            // rest of the spawn (process group, pipes) is unaffected.
+            let mut invocation = Command::new("sh");
+            invocation
                 .arg("-c")
                 .arg(command)
                 .process_group(0)
                 .kill_on_drop(true)
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
+                .stderr(std::process::Stdio::piped());
+            if let Some(root) = &self.root {
+                invocation.current_dir(root);
+            }
+            invocation.spawn()
         }
         .map_err(|e| format!("Failed to execute: {}", e))?;
 
@@ -298,7 +325,9 @@ impl Tool for BashTool {
     }
 }
 
-neenee_contracts::register_tool!(BashFactory => BashTool);
+neenee_contracts::register_tool!(BashFactory => |ctx| BashTool {
+    root: workspace_base(ctx),
+});
 
 #[cfg(test)]
 mod tests {
@@ -307,7 +336,7 @@ mod tests {
     /// A healthy command captures stdout and exits cleanly with `Exited`.
     #[tokio::test]
     async fn bash_captures_stdout_and_exits() {
-        let tool = BashTool;
+        let tool = BashTool { root: None };
         let out = tool
             .call_structured(r#"{"command":"printf hello"}"#)
             .await
@@ -336,7 +365,7 @@ mod tests {
     /// immediately.
     #[tokio::test]
     async fn bash_closed_stdin_means_eof_not_hang() {
-        let tool = BashTool;
+        let tool = BashTool { root: None };
         // `read line` under `sh -c` with stdin=/dev/null returns non-zero
         // immediately (EOF) rather than blocking.
         let out = tokio::time::timeout(
@@ -359,7 +388,7 @@ mod tests {
     /// them back. This is the L3.5 seam (human/model input injection).
     #[tokio::test]
     async fn bash_prefilled_stdin_feeds_the_child() {
-        let tool = BashTool;
+        let tool = BashTool { root: None };
         let mut on_stream = |_: neenee_contracts::ToolStream| ();
         let out = tool
             .call_structured_with_events(
@@ -389,7 +418,7 @@ mod tests {
     /// over the alternate screen.
     #[tokio::test]
     async fn bash_child_runs_in_its_own_process_group() {
-        let tool = BashTool;
+        let tool = BashTool { root: None };
         // `ps` reports PID and PGID. Under `.process_group(0)` they are equal.
         let out = tool
             .call_structured(r#"{"command":"ps -o pid=,pgid= -p $$ || echo \"ps=$$\""}"#)
@@ -412,7 +441,7 @@ mod tests {
     /// as width 0 and scramble the disclosure band.
     #[tokio::test]
     async fn bash_captures_expanded_tabs() {
-        let tool = BashTool;
+        let tool = BashTool { root: None };
         // printf with a literal tab: the JSON string is `printf 'a\tb\n'`.
         let out = tool
             .call_structured(r#"{"command":"printf 'a\\tb\\n'"}"#)
@@ -425,5 +454,31 @@ mod tests {
             }
             other => panic!("expected Shell, got {:?}", other),
         }
+    }
+
+    /// Regression (ADR-0096 daemon cwd): with a captured workspace root the
+    /// child runs in the *session's* project directory, not this process's
+    /// cwd. The daemon hosting sessions for several projects freezes its own
+    /// cwd at whichever client first spawned it, so a session from project A
+    /// must not have its commands land in project B.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_runs_in_the_session_workspace_root() {
+        let marker = std::env::temp_dir().join(format!("neenee-bash-root-{}", std::process::id()));
+        std::fs::create_dir_all(&marker).expect("mkdir");
+        let tool = BashTool {
+            root: Some(marker.clone()),
+        };
+        let out = tool
+            .call_structured(r#"{"command":"pwd"}"#)
+            .await
+            .expect("ok");
+        match out {
+            neenee_contracts::ToolOutput::Shell { stdout, .. } => {
+                assert_eq!(stdout.trim(), marker.as_os_str().to_string_lossy());
+            }
+            other => panic!("expected Shell, got {:?}", other),
+        }
+        std::fs::remove_dir_all(&marker).ok();
     }
 }

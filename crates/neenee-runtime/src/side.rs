@@ -1,43 +1,58 @@
-//! `/btw` side-conversation machinery (ADR-0017): the live side session, the
-//! primary-status watcher that streams coarse updates to the side banner, and
-//! the active-round router that directs a prompt at whichever session the user
-//! is currently composing into. Extracted verbatim from `main.rs`.
+//! `/btw` aside machinery (ADR-0017, extended by ADR-0103): the live aside
+//! registry, the primary-status watcher that streams coarse updates to the
+//! aside banner, and the active-round router that directs a prompt at
+//! whichever session the user is currently composing into. Extracted verbatim
+//! from `main.rs`.
 //!
-//! The primary round machinery is intentionally untouched here — a side session
-//! peers the primary's per-round state with its own `Agent` + store + history +
-//! [`RoundLifecycle`], so a side round runs concurrently with the primary round
-//! without disturbing the primary's round lifecycle.
+//! The primary round machinery is intentionally untouched here — an aside
+//! peers the primary's per-round state with its own `Agent` + store +
+//! [`RoundLifecycle`], so an aside round runs concurrently with the primary
+//! round without disturbing the primary's round lifecycle. Where ADR-0017
+//! kept at most one live side and tore it down on exit, ADR-0103 lifts the
+//! registry to a map and makes leaving a view a non-destructive *detach*: the
+//! aside keeps running until it is explicitly closed or discarded pristine.
+
+use std::collections::HashMap;
 
 use neenee_agent::orchestration::{
     ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundInput, round_response,
     send_harness_state, start_interactive_round,
 };
 use neenee_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
-use neenee_contracts::{AgentResponse, LoopStatus, ParentStatus, Provider, RoundEvent, Tool};
+use neenee_contracts::{AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool};
 use neenee_persistence::config::Config;
 use neenee_persistence::session::SessionStore;
 use neenee_skills::SkillRegistry;
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
 
-/// A live `/btw` side conversation (ADR-0017). Peers the primary session's
-/// loose per-round state with its own [`Agent`], [`SessionStore`], and
-/// [`RoundLifecycle`], so a side round runs concurrently with the primary round
-/// without disturbing the primary's round lifecycle. The side store is the
-/// single source of truth for the side's message list (ADR-0048); it is pinned
-/// to a self-contained file written by [`SessionStore::fork_to_side`], and
-/// only that file is mutated by side rounds.
+/// A live `/btw` aside (ADR-0017/0103). Peers the primary session's loose
+/// per-round state with its own [`Agent`], [`SessionStore`], and
+/// [`RoundLifecycle`], so an aside round runs concurrently with the primary
+/// round without disturbing the primary's round lifecycle. The aside store is
+/// the single source of truth for the aside's message list (ADR-0048); it is
+/// pinned to a self-contained file written by [`SessionStore::fork_to_side`],
+/// and only that file is mutated by aside rounds.
 pub struct SideSession {
     pub id: String,
     pub agent: Arc<Agent>,
     pub store: Arc<SessionStore>,
     pub lifecycle: Arc<RoundLifecycle>,
+    /// `true` once a round has ever been started in this aside. A pristine
+    /// aside (no round) is discarded — registry entry and session files —
+    /// when the user detaches from its view (ADR-0103 §4), so an opened-then-
+    /// abandoned `/btw` never litters the asides list or `/sessions`.
+    pub has_round: bool,
+    /// How many user prompts the fork inherited from the parent (ADR-0103
+    /// §6): the aside's own first prompt is the one *after* this baseline,
+    /// so the asides list never shows the parent's prompt as an aside title.
+    inherited_user_prompts: usize,
+    /// The epoch-seconds timestamp of the aside's most recent open/re-entry,
+    /// used to order the asides list newest-first.
+    pub touched_at: u64,
 }
 
 impl SideSession {
@@ -54,6 +69,14 @@ impl SideSession {
         identity: AgentIdentity,
     ) -> Result<Self, String> {
         let (side_id, _parent_id) = primary.fork_to_side().await?;
+        // Snapshot the inherited user-prompt count BEFORE any aside round can
+        // run: the aside's own first prompt is the one past this baseline.
+        let inherited_user_prompts = primary
+            .model_window()
+            .await
+            .iter()
+            .filter(|message| message.role == neenee_contracts::Role::User)
+            .count();
         let store = Arc::new(primary.open_side(&side_id).await?);
 
         // Fresh side agent. The provider is shared through the same
@@ -73,11 +96,11 @@ impl SideSession {
         );
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
-        // A side conversation is a quick aside; run it autopilot — without
-        // human intervention — so it never raises a permission modal whose
-        // reply could not be routed back to the side `Agent` through the
-        // shared permission channel. This mirrors the envoy policy
-        // (`envoy_tool.rs` sets `autopilot`).
+        // An aside is a quick aside; run it autopilot — without human
+        // intervention — so it never raises a permission modal whose reply
+        // could not be routed back to the side `Agent` through the shared
+        // permission channel. This mirrors the envoy policy (`envoy_tool.rs`
+        // sets `autopilot`).
         agent.set_autopilot(true);
 
         Ok(Self {
@@ -85,8 +108,206 @@ impl SideSession {
             agent,
             store,
             lifecycle: Arc::new(RoundLifecycle::new()),
+            has_round: false,
+            inherited_user_prompts,
+            touched_at: now_epoch_seconds(),
         })
     }
+}
+
+/// The live `/btw` aside registry (ADR-0103). ADR-0017 kept a single
+/// `Option<SideSession>`; the background-aside redesign lifts it to a map so
+/// several asides can be alive at once, with MRU ordering for the list modal
+/// and an explicit "which aside is the composer targeting" pointer replacing
+/// the old `AtomicBool` view flag.
+#[derive(Default)]
+pub struct SideRegistry {
+    /// Live asides keyed by their session id.
+    sides: HashMap<String, SideSession>,
+    /// MRU order of the keys in `sides` (index 0 = most recent). Kept in lockstep:
+    /// every insert pushes to the front, every remove drops its entry.
+    order: Vec<String>,
+    /// The aside the frontend is currently viewing/composing into, if any.
+    /// `None` means the primary session.
+    active_side: Option<String>,
+}
+
+impl SideRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a freshly built aside and make it the active view. Returns
+    /// its id.
+    pub fn open(&mut self, side: SideSession) -> String {
+        let id = side.id.clone();
+        self.order.retain(|entry| entry != &id);
+        self.order.insert(0, id.clone());
+        self.sides.insert(id.clone(), side);
+        self.active_side = Some(id.clone());
+        id
+    }
+
+    /// Look up a live aside by id.
+    pub fn get(&self, id: &str) -> Option<&SideSession> {
+        self.sides.get(id)
+    }
+
+    /// Clone one live aside's `Arc`s out of the registry (see
+    /// [`SideHandle`]) for out-of-lock operations.
+    pub fn handle(&self, id: &str) -> Option<SideHandle> {
+        self.sides.get(id).map(|side| side.handle())
+    }
+
+    /// Mutably look up a live aside by id.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut SideSession> {
+        self.sides.get_mut(id)
+    }
+
+    /// Remove and return a live aside. Also clears `active_side` when it
+    /// pointed at the removed aside (the caller decides whether to emit
+    /// `SideViewClosed`).
+    pub fn remove(&mut self, id: &str) -> Option<SideSession> {
+        self.order.retain(|entry| entry != id);
+        if self.active_side.as_deref() == Some(id) {
+            self.active_side = None;
+        }
+        self.sides.remove(id)
+    }
+
+    /// The aside the composer is targeting, if any.
+    pub fn active(&self) -> Option<&SideSession> {
+        self.active_side
+            .as_deref()
+            .and_then(|id| self.sides.get(id))
+    }
+
+    /// Point the active view at one live aside. Returns `false` when the id
+    /// is not registered (stale focus request).
+    pub fn focus(&mut self, id: &str) -> bool {
+        if !self.sides.contains_key(id) {
+            return false;
+        }
+        self.order.retain(|entry| entry != id);
+        self.order.insert(0, id.to_string());
+        self.active_side = Some(id.to_string());
+        self.touch(id);
+        true
+    }
+
+    /// Detach from the active aside view back to the primary. The aside
+    /// itself stays registered (ADR-0103 §1). Returns the detached aside's id
+    /// when a view was active.
+    pub fn detach(&mut self) -> Option<String> {
+        self.active_side.take()
+    }
+
+    /// Refresh an aside's MRU timestamp (re-entry bumps it in the list).
+    fn touch(&mut self, id: &str) {
+        if let Some(side) = self.sides.get_mut(id) {
+            side.touched_at = now_epoch_seconds();
+        }
+    }
+
+    /// Whether any live aside has an in-flight round.
+    pub fn any_running(&self) -> bool {
+        self.sides.values().any(|side| side.lifecycle_has_round())
+    }
+
+    /// Build the asides list summary, newest (most recently touched) first
+    /// (ADR-0103 §5). Titles are resolved by the caller
+    /// ([`publish_btw_list`]) because the first-prompt read is async.
+    pub fn summary(&self) -> Vec<BtwAsideSummary> {
+        self.order
+            .iter()
+            .filter_map(|id| self.sides.get(id))
+            .map(|side| BtwAsideSummary {
+                id: side.id.clone(),
+                title: String::new(),
+                running: side.lifecycle_has_round(),
+                updated_at: side.touched_at,
+            })
+            .collect()
+    }
+
+    /// Every live aside, in MRU order.
+    pub fn iter(&self) -> impl Iterator<Item = &SideSession> {
+        self.order.iter().filter_map(|id| self.sides.get(id))
+    }
+}
+
+/// The per-aside handles an out-of-lock operation needs: the `Arc`s that
+/// outlive the registry read guard. Built from a [`SideSession`] peek so
+/// interrupt/close paths can act after the guard drops.
+pub struct SideHandle {
+    pub id: String,
+    pub agent: Arc<Agent>,
+    pub store: Arc<SessionStore>,
+    pub lifecycle: Arc<RoundLifecycle>,
+}
+
+impl SideSession {
+    /// Clone the per-aside `Arc`s out of the registry (see [`SideHandle`]).
+    pub fn handle(&self) -> SideHandle {
+        SideHandle {
+            id: self.id.clone(),
+            agent: self.agent.clone(),
+            store: self.store.clone(),
+            lifecycle: self.lifecycle.clone(),
+        }
+    }
+
+    /// Whether this aside has produced any user content of its own. Only the
+    /// first round flips [`Self::has_round`]; the inherited parent transcript
+    /// does not count — it was copied at fork time and is not this aside's
+    /// work.
+    pub fn is_pristine(&self) -> bool {
+        !self.has_round
+    }
+
+    /// Coarse "does this aside have a round in flight" signal, off the
+    /// lifecycle token (the same source the primary-status watcher uses).
+    /// Synchronous best-effort peek — see
+    /// [`RoundLifecycle::is_running_blocking`].
+    fn lifecycle_has_round(&self) -> bool {
+        self.lifecycle.is_running_blocking()
+    }
+}
+
+/// The aside's display title: its first *own* user-authored prompt
+/// (truncated), skipping the prompts inherited from the parent at fork time
+/// (ADR-0103 §6), or a placeholder for a not-yet-used aside. Async because
+/// the store read is a locked clone.
+pub async fn aside_title(side: &SideSession, max: usize) -> String {
+    let window = side.store.model_window().await;
+    let prompt = window
+        .iter()
+        .filter(|message| message.role == neenee_contracts::Role::User)
+        .nth(side.inherited_user_prompts)
+        .map(|message| message.content.clone());
+    match prompt {
+        Some(text) => {
+            let flat: String = text
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .into();
+            if flat.chars().count() > max {
+                let cut: String = flat.chars().take(max.saturating_sub(1)).collect();
+                format!("{cut}…")
+            } else {
+                flat
+            }
+        }
+        None => "aside".to_string(),
+    }
+}
+
+fn now_epoch_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Coarse primary-session status, derived from the primary's [`RoundLifecycle`]
@@ -100,12 +321,13 @@ pub async fn primary_status(primary_lifecycle: &Arc<RoundLifecycle>) -> ParentSt
     }
 }
 
-/// Watch the primary round while a `/btw` side session is live and stream
-/// coarse [`ParentStatus`] updates to the TUI's side banner (ADR-0017 §5).
-/// Self-terminates once the side session is torn down. Emits only on change
-/// so a long-running primary round does not flood the channel.
+/// Watch the primary round while at least one `/btw` aside is live and stream
+/// coarse [`ParentStatus`] updates to the TUI (ADR-0017 §5, ADR-0103: the
+/// watcher now spans the whole registry, not one slot). Self-terminates once
+/// the registry empties. Emits only on change so a long-running primary round
+/// does not flood the channel.
 pub fn spawn_parent_status_watcher(
-    side: Arc<AsyncRwLock<Option<SideSession>>>,
+    side: Arc<AsyncRwLock<SideRegistry>>,
     primary_lifecycle: Arc<RoundLifecycle>,
     tx: mpsc::UnboundedSender<AgentResponse>,
 ) {
@@ -113,7 +335,7 @@ pub fn spawn_parent_status_watcher(
         let mut last: Option<ParentStatus> = None;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-            if side.read().await.is_none() {
+            if side.read().await.iter().next().is_none() {
                 break;
             }
             let status = primary_status(&primary_lifecycle).await;
@@ -125,16 +347,34 @@ pub fn spawn_parent_status_watcher(
     });
 }
 
+/// Push a fresh asides list to the frontend (ADR-0103 §5). Called on every
+/// registry mutation and on explicit `QueryBtwList`. Titles are resolved
+/// under a short-lived read lock; the stores' in-memory Mutexes make this
+/// cheap.
+pub async fn publish_btw_list(
+    side: &Arc<AsyncRwLock<SideRegistry>>,
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+) {
+    let mut rows = side.read().await.summary();
+    for row in rows.iter_mut() {
+        let title = match side.read().await.get(&row.id) {
+            Some(side_session) => aside_title(side_session, 64).await,
+            None => "aside".to_string(),
+        };
+        row.title = title;
+    }
+    let _ = tx.send(AgentResponse::BtwList(rows));
+}
+
 /// Start an interactive round against whichever session the user is currently
-/// composing into — the primary, or the live `/btw` side session when the
-/// active-view flag is set (ADR-0017). A stale flag (side torn down
-/// concurrently) falls back to the primary so the prompt is never silently
-/// dropped. Compaction/retry knobs are resolved once from the primary agent +
-/// config, which is correct because the side shares the same provider/model.
+/// composing into — the primary, or the active `/btw` aside (ADR-0017,
+/// ADR-0103). A stale active pointer (aside closed concurrently) falls back
+/// to the primary so the prompt is never silently dropped.
+/// Compaction/retry knobs are resolved once from the primary agent + config,
+/// which is correct because the aside shares the same provider/model.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_active_turn(
-    active_view_side: &AtomicBool,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     principal: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     primary_lifecycle: &Arc<RoundLifecycle>,
@@ -145,31 +385,30 @@ pub async fn start_active_turn(
     // Resolve which live session this round belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
     // at the end of this statement, before the round starts.
-    let (agent, session, lifecycle, session_id) = if active_view_side.load(Ordering::SeqCst) {
+    let (agent, session, lifecycle, session_id) = {
         let guard = side.read().await;
-        if let Some(s) = guard.as_ref() {
-            (
+        match guard.active() {
+            Some(s) => (
                 s.agent.clone(),
                 s.store.clone(),
                 s.lifecycle.clone(),
                 s.id.clone(),
-            )
-        } else {
-            (
+            ),
+            None => (
                 principal.clone(),
                 primary_session.clone(),
                 primary_lifecycle.clone(),
                 primary_session.id().await,
-            )
+            ),
         }
-    } else {
-        (
-            principal.clone(),
-            primary_session.clone(),
-            primary_lifecycle.clone(),
-            primary_session.id().await,
-        )
     };
+    // Mark the aside as used before the round starts so a detach racing the
+    // first stream event still sees a non-pristine aside.
+    if let Some(active_id) = side.read().await.active().map(|s| s.id.clone())
+        && let Some(s) = side.write().await.get_mut(&active_id)
+    {
+        s.has_round = true;
+    }
 
     // Refuse up-front when no real provider is configured. The TUI bumps its
     // activity-bar state optimistically (is_responding, activity_status, and
@@ -190,11 +429,11 @@ pub async fn start_active_turn(
     .await;
 }
 
-/// Resolve a live principal or side agent by its stable session id. Keeping
+/// Resolve a live principal or aside agent by its stable session id. Keeping
 /// this lookup explicit prevents an outbox action from following a later view
 /// switch into the wrong conversation.
 pub async fn target_agent(
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     principal: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     target_session_id: &str,
@@ -204,17 +443,16 @@ pub async fn target_agent(
     }
     side.read()
         .await
-        .as_ref()
-        .filter(|session| session.id == target_session_id)
+        .get(target_session_id)
         .map(|session| session.agent.clone())
 }
 
-/// Start a fresh round in one exact live session. Returns `false` when a side
-/// conversation was closed after the message entered the frontend outbox.
+/// Start a fresh round in one exact live session. Returns `false` when the
+/// target aside was closed after the message entered the frontend outbox.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_session_turn(
     target_session_id: &str,
-    side: &Arc<AsyncRwLock<Option<SideSession>>>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     principal: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     primary_lifecycle: &Arc<RoundLifecycle>,
@@ -223,28 +461,32 @@ pub async fn start_session_turn(
     input: RoundInput,
 ) -> bool {
     let primary_id = primary_session.id().await;
-    let resolved = if primary_id == target_session_id {
+    let is_primary = primary_id == target_session_id;
+    let resolved = if is_primary {
         Some((
             principal.clone(),
             primary_session.clone(),
             primary_lifecycle.clone(),
-            primary_id,
+            primary_id.clone(),
         ))
     } else {
-        side.read().await.as_ref().and_then(|session| {
-            (session.id == target_session_id).then(|| {
-                (
-                    session.agent.clone(),
-                    session.store.clone(),
-                    session.lifecycle.clone(),
-                    session.id.clone(),
-                )
-            })
+        side.read().await.get(target_session_id).map(|session| {
+            (
+                session.agent.clone(),
+                session.store.clone(),
+                session.lifecycle.clone(),
+                session.id.clone(),
+            )
         })
     };
     let Some((agent, session, lifecycle, session_id)) = resolved else {
         return false;
     };
+    if *session_id != primary_id
+        && let Some(s) = side.write().await.get_mut(&session_id)
+    {
+        s.has_round = true;
+    }
 
     // Same refusal contract as `start_active_turn`: a queued outbox item
     // cannot run without a real provider. Emitting the session-scoped error
@@ -333,4 +575,96 @@ pub(super) fn refuse_if_no_provider(
     ));
     send_harness_state(tx, session_id, agent, LoopStatus::Idle);
     true
+}
+
+use neenee_contracts::RoundEvent;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal `SideSession` for registry-mechanics tests: no fork, no
+    /// provider — the registry only moves these around.
+    fn fixture(id: &str) -> SideSession {
+        let agent = Arc::new(
+            Agent::builder(Arc::new(NoProvider), Vec::new(), AgentIdentity::default()).build(),
+        );
+        let dir =
+            std::env::temp_dir().join(format!("neenee-side-test-{id}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir fixture");
+        let store = SessionStore::for_path(dir.join(format!("{id}.json")));
+        SideSession {
+            id: id.to_string(),
+            agent,
+            store: Arc::new(store),
+            lifecycle: Arc::new(RoundLifecycle::new()),
+            has_round: false,
+            inherited_user_prompts: 0,
+            touched_at: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_open_focus_detach_and_remove_roundtrip() {
+        let mut registry = SideRegistry::new();
+        let a = registry.open(fixture("a"));
+        assert_eq!(a, "a");
+        assert!(registry.active().is_some_and(|s| s.id == "a"));
+
+        // A second aside: multiple live at once (ADR-0103 §1).
+        registry.open(fixture("b"));
+        assert!(registry.active().is_some_and(|s| s.id == "b"));
+        assert_eq!(registry.summary().len(), 2);
+
+        // Detach is non-destructive: the aside stays registered.
+        let detached = registry.detach();
+        assert_eq!(detached.as_deref(), Some("b"));
+        assert!(registry.active().is_none());
+        assert_eq!(registry.summary().len(), 2);
+
+        // Focus re-enters and moves the aside to the MRU front.
+        assert!(registry.focus("a"));
+        let order: Vec<String> = registry.summary().into_iter().map(|s| s.id).collect();
+        assert_eq!(order, vec!["a".to_string(), "b".to_string()]);
+        assert!(registry.active().is_some_and(|s| s.id == "a"));
+
+        // Focusing an unknown id fails (stale focus request).
+        assert!(!registry.focus("zzz"));
+
+        // Remove drops the entry and clears a matching active pointer.
+        assert!(registry.remove("a").is_some());
+        assert!(registry.active().is_none());
+        assert_eq!(registry.summary().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn detach_does_not_remove_but_pristine_discard_does() {
+        // The registry itself only reports `is_pristine`; the discard decision
+        // lives in `handlers_session::detach_side_view`. Here we pin the
+        // invariant the handler relies on: `is_pristine` flips exactly when a
+        // round is started, never on open/focus/detach.
+        let mut registry = SideRegistry::new();
+        registry.open(fixture("a"));
+        assert!(registry.get("a").is_some_and(SideSession::is_pristine));
+
+        registry.get_mut("a").unwrap().has_round = true;
+        assert!(!registry.get("a").is_some_and(SideSession::is_pristine));
+
+        registry.detach();
+        assert!(registry.get("a").is_some_and(|s| !s.is_pristine()));
+    }
+
+    #[tokio::test]
+    async fn summary_orders_by_mru_and_flags_running() {
+        let mut registry = SideRegistry::new();
+        registry.open(fixture("old"));
+        registry.open(fixture("new"));
+        // Mark "old" as running to exercise the summary flag.
+        registry.get_mut("old").unwrap().lifecycle.begin().await;
+        let rows = registry.summary();
+        assert_eq!(rows[0].id, "new");
+        assert!(!rows[0].running);
+        assert_eq!(rows[1].id, "old");
+        assert!(rows[1].running);
+    }
 }

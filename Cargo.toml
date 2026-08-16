@@ -39,6 +39,16 @@ quote = "1"
 proc-macro2 = "1"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+# TypeScript binding generation for the web panel's wire types: neenee-contracts
+# derives `ts_rs::TS` on the payload types and exports them to
+# apps/web/src/lib/generated/wire.gen.ts when `cargo test -p neenee-contracts`
+# runs (CI fails on drift). serde-compat stays on (it is what maps
+# rename/rename_all/tag/untagged/default onto the generated types);
+# no-serde-warnings only silences the advisory warning for serde attrs that
+# carry no TypeScript meaning — `alias` (deserialize-only legacy spellings)
+# and `transparent` (the generated type already equals the inner type because
+# ts-rs renders single-field newtypes as that field's type).
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is

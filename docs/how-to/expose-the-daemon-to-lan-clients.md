@@ -12,15 +12,15 @@ TCP loopback only, so nothing leaves the machine unless you ask for it.
 neenee serve --port 8765 --public
 ```
 
-(`--public` is the `neenee serve` flag; the `neenee-server` binary spells it
-`--expose`, same semantics.) `--port` is optional — omit it and the OS
+(`--public` makes the daemon bind `0.0.0.0` instead of loopback.)
+`--port` is optional — omit it and the OS
 assigns one. On startup the daemon prints its endpoints to stderr, including
 the generated token:
 
 ```text
 neenee-server: control plane on unix:///run/user/1000/neenee/daemon.sock
 neenee-server: serving sessions on ws://0.0.0.0:8765
-neenee: exposed listener requires Authorization: Bearer 9f2c…
+neenee: exposed listener requires a bearer token; read it from the discovery file …
 ```
 
 Copy the token and treat it as a secret: it grants full session access. The
@@ -47,8 +47,14 @@ socket.send(JSON.stringify({
 ```
 
 A missing or wrong token is rejected with HTTP 401 before any session data
-is exchanged. (Browsers cannot set headers on `new WebSocket()`; use a small
-client that can, or front the daemon with a proxy that injects the header.)
+is exchanged. Browsers cannot set headers on `new WebSocket()`, so they
+present the token as a subprotocol instead (ADR-0105):
+
+```js
+const socket = new WebSocket("ws://daemon-host:8765/", ["bearer.9f2c…"]);
+```
+
+(The daemon echoes the `bearer.<token>` subprotocol when it accepts it.)
 
 Typical roles for a LAN client:
 

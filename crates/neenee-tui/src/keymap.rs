@@ -503,6 +503,9 @@ pub enum Action {
     OpenTodos,
     /// Open the queue overview modal.
     OpenQueue,
+    /// Open the `/btw` asides list modal (ADR-0103 §5): live background
+    /// asides, jump back in, or close one outright.
+    OpenBtwList,
     /// Toggle the user block on the viewed session's outbox. While blocked, no
     /// queued message auto-drains (not even after the round completes).
     ToggleQueueBlock,
@@ -552,6 +555,20 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             gate: Gate::NoModal,
             action: Action::OpenQueue,
             description: "open queue (outbox)",
+        },
+        // F5 opens the `/btw` asides list (ADR-0103). A function key rather
+        // than a Ctrl combo: Ctrl+G is byte-collided with readline's
+        // abort-to-start-of-line in terminals without the Kitty protocol, and
+        // the F-row already hosts the queue family (F2/F3/F4) so this keeps
+        // the "list surfaces live on F-keys" shape.
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::F(5),
+            },
+            gate: Gate::NoModal,
+            action: Action::OpenBtwList,
+            description: "open /btw asides",
         },
         Binding {
             key: Key {
@@ -677,6 +694,7 @@ impl Registry {
                 Action::OpenModels => InputAction::OpenModels,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
+                Action::OpenBtwList => InputAction::OpenBtwList,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
                 Action::InsertIntoRound => InputAction::InsertIntoRound,
                 Action::CopyOrClear => InputAction::CtrlC,
@@ -781,6 +799,20 @@ mod tests {
         assert_eq!(action, Some(InputAction::InsertIntoRound));
 
         let action = registry.resolve(key(KeyCode::F(4), KeyModifiers::NONE), Modal::Queue);
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn f5_opens_the_btw_asides_from_top_level() {
+        // F5 is the global binding for the `/btw` asides list (ADR-0103 §5).
+        // Gated NoModal like the rest of the F-row list family: inside a
+        // modal it is swallowed by the gate — except inside the asides modal
+        // itself, where the contextual arm turns it into a refresh.
+        let registry = Registry::new();
+        let action = registry.resolve(key(KeyCode::F(5), KeyModifiers::NONE), Modal::None);
+        assert_eq!(action, Some(InputAction::OpenBtwList));
+
+        let action = registry.resolve(key(KeyCode::F(5), KeyModifiers::NONE), Modal::Models);
         assert_eq!(action, None);
     }
 

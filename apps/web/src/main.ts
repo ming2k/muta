@@ -1,4 +1,5 @@
 import { mount } from 'svelte'
+import 'highlight.js/styles/github-dark.css'
 import './app.css'
 import App from './App.svelte'
 

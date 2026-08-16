@@ -45,7 +45,8 @@ pub const DEFAULT_REVIEWER_HARD_STOP: usize = 12;
 /// `detail` is the diagnostic's own explanation, surfaced verbatim in the TUI
 /// alert so the user can judge whether to interrupt. Kept free-form because
 /// the valuable signal is the reviewer's reasoning, not a rigid schema.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ReviewVerdict {
     /// Matches the [`SessionReview::id`] this verdict answers.
     pub dimension: String,
@@ -70,7 +71,8 @@ impl ReviewVerdict {
 /// Ordered so that the worst verdict across dimensions wins when the runner
 /// collapses the set into one alert (`Stuck` dominates `Watch` dominates
 /// `Healthy`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ReviewStatus {
     /// No concern detected. Clears any prior alert.
     Healthy,

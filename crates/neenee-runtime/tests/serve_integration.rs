@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use neenee_contracts::{AgentRequest, AgentResponse, MonitorAction, MonitorEvent, RoundEvent};
+use neenee_persistence::session::SessionStore;
 use neenee_runtime::monitor::MonitorTracker;
 use neenee_runtime::registry::{HostedSession, SessionRegistry};
 use neenee_runtime::serve::{self, AttachAction, Wire};
-use neenee_persistence::session::SessionStore;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -100,7 +100,12 @@ async fn prehosted(
 /// distinct roots in one registry, and only the registry's project index
 /// matters for them.
 async fn host_with_project(registry: &SessionRegistry, project: std::path::PathBuf) -> String {
-    let session = Arc::new(SessionStore::load_for_project(project.clone()));
+    // `for_path` keeps every artifact under the given project dir instead of
+    // minting files in the real XDG project bucket; the registry only needs
+    // `project_root` for routing/indexing.
+    let session = Arc::new(SessionStore::for_path(
+        project.join("sessions").join("session.json"),
+    ));
     let id = session.id().await;
     let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
@@ -127,7 +132,10 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
 #[tokio::test]
 async fn test_select_then_attach_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let session_id = session.id().await;
     let (registry, mut req_rx, bc_tx) = prehosted(session).await;
 
@@ -219,7 +227,10 @@ async fn test_select_then_attach_round_trip() {
 #[tokio::test]
 async fn attach_receives_restored_todos_after_welcome() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let session_id = session.id().await;
 
     // Give the session content so its file persists, then a non-empty list.
@@ -294,7 +305,10 @@ async fn attach_receives_restored_todos_after_welcome() {
 #[tokio::test]
 async fn attach_receives_buffered_provider_state_after_welcome() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let (registry, _req_rx, bc_tx) = prehosted(session).await;
 
     // Emit the startup provider sync BEFORE any client subscribes — this is
@@ -364,7 +378,10 @@ async fn attach_receives_buffered_provider_state_after_welcome() {
 #[tokio::test]
 async fn unknown_id_is_an_error() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let (registry, _req_rx, _bc_tx) = prehosted(session).await;
     let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
     let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
@@ -386,7 +403,7 @@ async fn unknown_id_is_an_error() {
         .unwrap();
     let parsed: Wire = serde_json::from_str(frame.to_text().unwrap_or("")).unwrap();
     match parsed {
-        Wire::Error { message } => assert!(message.contains("nope")),
+        Wire::Error { message, .. } => assert!(message.contains("nope")),
         other => panic!("expected Error, got {other:?}"),
     }
 }
@@ -472,12 +489,60 @@ async fn select_without_project_falls_back_to_daemon_cwd() {
     }
 }
 
+/// Regression (the "wrong workspace" bug): a client that *declared* its
+/// project must never be silently auto-bound to the daemon's one hosted
+/// session when that session belongs to a different project. Launching
+/// `neenee resume` from project A with only project B's session live used to
+/// attach straight into B's session — the model then read and edited B while
+/// the header showed A. The declared-project client now gets the picker; the
+/// cross-project session remains an explicit choice.
+#[tokio::test]
+async fn declared_project_is_never_auto_bound_to_a_foreign_session() {
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let project_a = std::env::temp_dir().join(format!("neenee-scope-d-{}", uuid::Uuid::new_v4()));
+    let project_b = std::env::temp_dir().join(format!("neenee-scope-e-{}", uuid::Uuid::new_v4()));
+    let id_b = host_with_project(&registry, project_b.clone()).await;
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+    let _ = handle;
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let select = serde_json::to_string(&Wire::Select {
+        version: None,
+        action: AttachAction::Attach(None),
+        project: Some(project_a),
+    })
+    .unwrap();
+    ws.send(WsMessage::Text(select.into())).await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match serde_json::from_str::<Wire>(msg.to_text().unwrap_or("")).unwrap() {
+        Wire::Pick { sessions } => {
+            // The picker offers exactly the foreign session — an explicit
+            // choice, never an automatic one.
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].id, id_b);
+        }
+        other => panic!("expected Pick (foreign session must not auto-bind), got {other:?}"),
+    }
+}
+
 /// ADR-0093: a monitor client receives a snapshot whose rows reflect the
 /// registry's trackers — and, with `watch`, live diffs as sessions report.
 #[tokio::test]
 async fn monitor_handshake_yields_snapshot_then_diffs() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let session_id = session.id().await;
     let (registry, _req_rx, bc_tx) = prehosted(session).await;
     let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
@@ -539,11 +604,81 @@ async fn monitor_handshake_yields_snapshot_then_diffs() {
     }
 }
 
+/// A rename flows handler → broadcast-tap → monitor diff: the republished row
+/// carries the new title because the tracker's base header is re-seeded from
+/// the sessions-overview snapshot the rename handler pushes.
+#[tokio::test]
+async fn rename_live_session_republishes_monitor_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    // `for_path` keeps every artifact under the tempdir; the session needs
+    // real content so it persists and appears in `list()`.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+    session
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "first prompt",
+        )])
+        .await
+        .unwrap();
+    let session_id = session.id().await;
+    let (registry, _req_rx, bc_tx) = prehosted(session.clone()).await;
+
+    // Subscribe before the rename so the diff is captured.
+    let mut monitor_rx = registry.subscribe_monitor();
+
+    // Drive the production handler; forward its replies onto the session
+    // broadcast exactly like the driver's response channel does.
+    let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
+    let forward = bc_tx.clone();
+    tokio::spawn(async move {
+        while let Some(response) = resp_rx.recv().await {
+            let _ = forward.send(response);
+        }
+    });
+    neenee_runtime::handlers_session::rename(
+        &session,
+        &resp_tx,
+        session_id.clone(),
+        Some("panel rename".to_string()),
+    )
+    .await;
+
+    let row = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match monitor_rx.recv().await {
+                Ok(MonitorEvent::SessionUpdated(row)) if row.id == session_id => break row,
+                Ok(_) => continue,
+                Err(error) => panic!("monitor stream ended before the rename diff: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the rename must republish the session's monitor row");
+    assert_eq!(row.overview, "panel rename");
+
+    // A fresh monitor subscriber sees the renamed row in the snapshot too.
+    let snapshot = registry
+        .monitor_snapshot(MonitorAction {
+            watch: false,
+            include_idle: true,
+        })
+        .await;
+    let row = snapshot
+        .sessions
+        .iter()
+        .find(|row| row.id == session_id)
+        .unwrap();
+    assert_eq!(row.overview, "panel rename");
+}
+
 /// Without `watch` the daemon closes the connection after the snapshot.
 #[tokio::test]
 async fn monitor_one_shot_closes_after_snapshot() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let (registry, _req_rx, _bc_tx) = prehosted(session).await;
     let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
     let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
@@ -762,7 +897,9 @@ async fn host_bare(
 /// A fresh project dir + SessionStore that has never persisted (empty).
 fn fresh_empty_store(tag: &str) -> (std::path::PathBuf, Arc<SessionStore>) {
     let dir = std::env::temp_dir().join(format!("neenee-reaper-{tag}-{}", uuid::Uuid::new_v4()));
-    let store = Arc::new(SessionStore::load_for_project(dir.clone()));
+    // `for_path` keeps every artifact under the throwaway dir; nothing lands
+    // in the real XDG project bucket.
+    let store = Arc::new(SessionStore::for_path(dir.join("session.json")));
     (dir, store)
 }
 
@@ -907,7 +1044,10 @@ async fn shutdown_control_verb_replies_then_stops_accepting() {
 #[tokio::test]
 async fn version_skew_is_refused_with_both_versions() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = Arc::new(SessionStore::load_for_project(tmp.path().to_path_buf()));
+    // `for_path` keeps every artifact (session json/jsonl + blobs) inside the
+    // tempdir; `load_for_project` would instead resolve the real XDG project
+    // bucket and mint files under ~/.local/share/neenee.
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
     let (registry, _req_rx, _tx) = prehosted(session).await;
     let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
     let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
@@ -933,7 +1073,7 @@ async fn version_skew_is_refused_with_both_versions() {
 
     // Skewed: refused with a message naming both builds and the fix.
     match first_frame(port, Some("0.0.1-not-real")).await {
-        Wire::Error { message } => {
+        Wire::Error { message, .. } => {
             assert!(
                 message.contains("0.0.1-not-real"),
                 "names the client build: {message}"
@@ -949,7 +1089,7 @@ async fn version_skew_is_refused_with_both_versions() {
     // Absent version: served (legacy-tolerant; the error is the normal
     // unknown-session one, not a version refusal).
     match first_frame(port, None).await {
-        Wire::Error { message } => {
+        Wire::Error { message, .. } => {
             assert!(
                 !message.contains("version mismatch"),
                 "absent version must be served, got: {message}"

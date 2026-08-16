@@ -109,6 +109,21 @@ impl RoundLifecycle {
             Some(token) if !token.is_cancelled()
         )
     }
+
+    /// Synchronous best-effort variant of [`Self::is_running`] for render-side
+    /// summaries (e.g. the `/btw` asides list's `running` flag, ADR-0103).
+    /// Uses `try_read`: when the lock is momentarily contended the answer is
+    /// `false`, which a 400 ms-later refresh corrects — these are display
+    /// hints, not protocol state.
+    pub fn is_running_blocking(&self) -> bool {
+        match self.token_slot.try_read() {
+            Ok(slot) => matches!(
+                slot.as_ref(),
+                Some(token) if !token.is_cancelled()
+            ),
+            Err(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]
