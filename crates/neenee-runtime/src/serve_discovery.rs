@@ -243,7 +243,7 @@ mod tests {
             project_root: "/home/me/proj".to_string(),
             started_at: 1_755_000_000,
             uds_path: None,
-            version: Some("0.25.0".to_string()),
+            version: Some("0.25.1".to_string()),
         }
     }
 
@@ -308,7 +308,7 @@ mod tests {
         // And a versioned record roundtrips.
         let json = serde_json::to_string(&sample_record()).unwrap();
         let back: Discovery = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.version.as_deref(), Some("0.25.0"));
+        assert_eq!(back.version.as_deref(), Some("0.25.1"));
         // `version` is skipped when None so legacy readers see their own shape.
         let none_version = Discovery {
             version: None,
