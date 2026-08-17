@@ -149,6 +149,43 @@ pub enum ProviderDeleteChoice {
     Delete,
 }
 
+/// Transient state representing an ongoing provider retry countdown or execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRetryState {
+    pub attempt: usize,
+    pub max_attempts: usize,
+    pub retry_at: std::time::Instant,
+    pub failure: String,
+}
+
+impl ProviderRetryState {
+    pub fn summary(&self, now: std::time::Instant) -> String {
+        let retry = self.attempt.saturating_sub(1);
+        let max_retries = self.max_attempts.saturating_sub(1).max(retry);
+        let timing = if now < self.retry_at {
+            format!(
+                "next in {}",
+                format_retry_duration(self.retry_at.saturating_duration_since(now))
+            )
+        } else {
+            format!(
+                "running · {}",
+                format_retry_duration(now.saturating_duration_since(self.retry_at))
+            )
+        };
+        format!("retry {retry}/{max_retries} · {timing}")
+    }
+}
+
+pub fn format_retry_duration(duration: std::time::Duration) -> String {
+    let millis = duration.as_millis() as u64;
+    if millis >= 10_000 {
+        format!("{}s", millis.div_ceil(1_000))
+    } else {
+        format!("{:.1}s", millis as f64 / 1_000.0)
+    }
+}
+
 pub struct App {
     pub input: String,
     /// Structured transcript messages (semantic document model).
@@ -396,6 +433,7 @@ pub struct App {
     pub session_context: Option<neenee_contracts::SessionContextSnapshot>,
     pub loop_status: LoopStatus,
     pub activity_status: String,
+    pub provider_retry: Option<ProviderRetryState>,
     /// Whether write-tool permission prompts are bypassed this session
     /// (`--autopilot` / `/autopilot on`). Mirrored from the harness
     /// snapshot; surfaced by the state bar's flat `autopilot` label (warning
@@ -1489,44 +1527,77 @@ impl App {
     ) -> bool {
         let pinned_to_top = self.sticky_step == Some(mi);
         let sticky_summary_line = self.sticky_summary_line;
+
+        let transcript_top_y = self
+            .layout_map
+            .transcript_content_rect()
+            .map(|r| r.y)
+            .unwrap_or(0);
+        let prev_region = self.layout_map.first_region_for_message(mi);
+        let summary_screen_y = prev_region.map(|r| r.rect.y);
+        let msg_line_index = summary_screen_y.map(|y| {
+            self.scroll as usize + (y.saturating_sub(transcript_top_y) as usize)
+        });
+
         let toggled = resolve_focused_mut(messages, &self.focus_stack, mi)
-            .map(|message| {
+            .and_then(|message| {
                 if let Some(expanded) = message.tool_step_expanded() {
                     message.pin_tool_step_expanded(!expanded);
-                    true
+                    Some(!expanded)
                 } else if let Some(expanded) = message.command_result_expanded() {
                     message.pin_command_result_expanded(!expanded);
-                    true
+                    Some(!expanded)
                 } else if let Some(expanded) = message.thinking_expanded() {
                     message.pin_thinking_expanded(!expanded);
-                    true
+                    Some(!expanded)
                 } else if let Some(expanded) = message.provider_retry_expanded() {
                     message.pin_provider_retry_expanded(!expanded);
-                    true
+                    Some(!expanded)
+                } else if let Some(expanded) = message.notice_expanded() {
+                    message.pin_notice_expanded(!expanded);
+                    Some(!expanded)
                 } else {
-                    false
+                    None
                 }
-            })
-            .unwrap_or(false);
-        if toggled {
-            self.follow_bottom = false;
-            if pinned_to_top {
-                if let Some(summary_line) = sticky_summary_line {
-                    self.scroll = summary_line.min(u16::MAX as usize) as u16;
-                    // Remember the line so the per-frame clamp (which runs after
-                    // this, once the collapsed body has shrunk the stream) keeps
-                    // allowing scroll up to it instead of yanking the summary
-                    // back down to `max_scroll`.
-                    self.pin_summary_line = Some(summary_line);
+            });
+
+        let Some(newly_expanded) = toggled else {
+            return false;
+        };
+
+        self.follow_bottom = false;
+
+        if newly_expanded {
+            // When expanding, if the summary line was not already at the top of the viewport,
+            // scroll down so that the summary line shifts up toward the top of the viewport (row 0 or 1),
+            // giving maximum vertical space for the newly revealed body content to be visible.
+            if let Some(y) = summary_screen_y
+                && let Some(line_idx) = msg_line_index
+            {
+                let rel_y = y.saturating_sub(transcript_top_y);
+                if rel_y > 1 {
+                    self.scroll = line_idx.saturating_sub(1).min(u16::MAX as usize) as u16;
                 }
+            }
+            self.pin_summary_line = None;
+        } else if pinned_to_top {
+            if let Some(summary_line) = sticky_summary_line {
+                self.scroll = summary_line.min(u16::MAX as usize) as u16;
+                self.pin_summary_line = Some(summary_line);
+            }
+        } else if let Some(line_idx) = msg_line_index {
+            // If collapsing a step that was scrolled above the viewport, keep the collapsed summary visible
+            if line_idx < self.scroll as usize {
+                self.scroll = line_idx.min(u16::MAX as usize) as u16;
+                self.pin_summary_line = Some(line_idx);
             } else {
-                // Any other toggle (e.g. expanding) is no longer pinning a
-                // collapsed summary at the top: drop a stale pin so normal
-                // clamping resumes.
                 self.pin_summary_line = None;
             }
+        } else {
+            self.pin_summary_line = None;
         }
-        toggled
+
+        true
     }
 
     pub(crate) fn visible_interactive_targets(&self) -> Vec<InteractiveTarget> {

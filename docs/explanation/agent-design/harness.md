@@ -115,12 +115,15 @@ of a newer task.
 ## Provider retry
 
 Transient HTTP 408, 429, 5xx, connection, and timeout failures are retried up
-to `provider_retry_max_attempts` (default 6, hard maximum 10). Provider
+to `provider_retry_max_attempts` (default 30, hard maximum 60). Provider
 `Retry-After` or `retry-after-ms` headers take priority; otherwise the delay is
 bounded exponential backoff using `provider_retry_base_ms` and
-`provider_retry_max_ms`.
+`provider_retry_max_ms` (default 10s ceiling, preventing overly sparse polling).
 
-The TUI shows the next attempt and countdown without adding transcript noise.
+The TUI surfaces live retry state directly on the activity bar (`● retry 4/30 · next in 6.6s`)
+and detailed failure error messages in the Activity modal without adding transcript noise.
+When retry attempts are exhausted or a terminal error occurs, the transcript presents an
+expandable notice component (collapsed summary header by default, expandable to formatted JSON body).
 `Esc`, session switching, or a newer request cancels the wait.
 Partial streamed assistant text is withdrawn before retry. A completed
 tool-bearing turn is a checkpoint: its results stay in history while only the

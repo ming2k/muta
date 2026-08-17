@@ -1071,18 +1071,39 @@ async fn version_skew_is_refused_with_both_versions() {
         serde_json::from_str(msg.to_text().unwrap_or("")).unwrap()
     }
 
-    // Skewed: refused with a message naming both builds and the fix.
-    match first_frame(port, Some("0.0.1-not-real")).await {
+    // Skewed older client: refused with a message recommending client update.
+    match first_frame(port, Some("0.0.1")).await {
         Wire::Error { message, .. } => {
             assert!(
-                message.contains("0.0.1-not-real"),
+                message.contains("0.0.1"),
                 "names the client build: {message}"
             );
             assert!(
                 message.contains(serve::daemon_version()),
                 "names the daemon build: {message}"
             );
-            assert!(message.contains("neenee stop"), "names the fix: {message}");
+            assert!(
+                message.contains("update your neenee client"),
+                "names the client update recommendation: {message}"
+            );
+        }
+        other => panic!("expected Error for a skewed version, got {other:?}"),
+    }
+    // Skewed newer client: refused with a message recommending daemon stop/restart.
+    match first_frame(port, Some("99.0.0")).await {
+        Wire::Error { message, .. } => {
+            assert!(
+                message.contains("99.0.0"),
+                "names the client build: {message}"
+            );
+            assert!(
+                message.contains(serve::daemon_version()),
+                "names the daemon build: {message}"
+            );
+            assert!(
+                message.contains("neenee stop"),
+                "names the daemon restart fix: {message}"
+            );
         }
         other => panic!("expected Error for a skewed version, got {other:?}"),
     }

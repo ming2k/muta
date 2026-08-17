@@ -238,7 +238,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.kimi.com/coding/v1/chat/completions"),
-        user_agent: Some("opencode/0.1.0"),
+        user_agent: Some(neenee_providers::OPENCODE_USER_AGENT),
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
@@ -252,7 +252,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         url_hint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
         needs_model: false,
         default_url: Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"),
-        user_agent: Some("opencode/1.17.10"),
+        user_agent: Some(neenee_providers::ZCODE_USER_AGENT),
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
     ProviderTemplate {

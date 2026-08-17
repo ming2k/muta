@@ -22,8 +22,8 @@ use neenee_persistence::config::{
 use neenee_persistence::provider_usage::ProviderUsage;
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, ProviderTemplateSpec,
-    ZAI_CODE_MODELS, provider_template_spec,
+    NEENEE_USER_AGENT, OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, OPENCODE_USER_AGENT,
+    ProviderTemplateSpec, ZAI_CODE_MODELS, ZCODE_USER_AGENT, provider_template_spec,
 };
 use std::collections::HashSet;
 
@@ -344,7 +344,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         "Kimi Code",
         UserTransport::OpenAi,
         "https://api.kimi.com/coding/v1/chat/completions",
-        Some("opencode/0.1.0"),
+        Some(OPENCODE_USER_AGENT),
         KIMI_CODE_MODELS,
         kimi_key,
         legacy_model.as_deref(),
@@ -368,7 +368,7 @@ pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {
         "ZAI Code (CN)",
         UserTransport::OpenAi,
         "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-        Some("opencode/1.17.10"),
+        Some(ZCODE_USER_AGENT),
         ZAI_CODE_MODELS,
         zai_key,
         legacy_model.as_deref(),
@@ -576,6 +576,7 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
                 changed = true;
             }
             // Migrate zai-code instances from api.z.ai to the domestic open.bigmodel.cn endpoint
+            // and refresh outdated user-agent strings.
             if tid == "zai-code" {
                 for channel in &mut provider.channels {
                     if channel.base_url.as_deref()
@@ -585,6 +586,21 @@ pub fn reconcile_provider_models(config: &mut Config) -> bool {
                             "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
                                 .to_string(),
                         );
+                        changed = true;
+                    }
+                    if channel.user_agent.as_deref() == Some("opencode/1.17.10")
+                        || channel.user_agent.as_deref() == Some("opencode/0.1.0")
+                        || channel.user_agent.as_deref() == Some(OPENCODE_USER_AGENT)
+                    {
+                        channel.user_agent = Some(ZCODE_USER_AGENT.to_string());
+                        changed = true;
+                    }
+                }
+            }
+            if tid == "kimi-code" {
+                for channel in &mut provider.channels {
+                    if channel.user_agent.as_deref() == Some("opencode/0.1.0") {
+                        channel.user_agent = Some(OPENCODE_USER_AGENT.to_string());
                         changed = true;
                     }
                 }
@@ -1951,8 +1967,16 @@ mod tests {
             Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")
         );
         assert_eq!(
+            config.providers[0].channels[0].user_agent.as_deref(),
+            Some(ZCODE_USER_AGENT)
+        );
+        assert_eq!(
             config.providers[0].channels[1].base_url.as_deref(),
             Some("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions")
+        );
+        assert_eq!(
+            config.providers[0].channels[1].user_agent.as_deref(),
+            Some(ZCODE_USER_AGENT)
         );
         let usage = ProviderUsage::default();
         let picker = build_picker_state(&config, &usage);
@@ -2542,7 +2566,7 @@ mod tests {
         // The preset borrows a recognized coding-agent UA as the zero-risk
         // default (the endpoint tolerates any UA under OAuth, untested for
         // API-key auth).
-        assert_eq!(user_agent, "opencode/0.1.0");
+        assert_eq!(user_agent, OPENCODE_USER_AGENT);
     }
 
     #[test]

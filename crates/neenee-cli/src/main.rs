@@ -448,6 +448,9 @@ async fn run_dashboard(
          (or open a session first — bare `neenee` spawns one on demand)."
             .to_string()
     })?;
+    if !client::versions_compatible(&info) {
+        return Err(client::version_mismatch(&info).into());
+    }
     // One-shot monitor snapshot to pick the carrier session: the
     // most-recently-active hosted session (ADR-0096: every row is hosted).
     let mut rx = client::monitor_stream(

@@ -45,8 +45,8 @@ fn display_width_u16(s: &str) -> u16 {
 ///
 fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     // The anchor is the first token of the header (the round provenance), drawn
-    // in info-tone bold. Empty when there is no anchor (legacy message or a
-    // queued message, which renders its own pending marker instead).
+    // in info-tone bold. Empty when there is no anchor (e.g. a queued message,
+    // which renders its own pending marker instead).
     if is_queued {
         return String::new();
     }
@@ -56,7 +56,11 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     if let Some(round) = msg.round {
         format!("round {}", round)
     } else {
-        String::new()
+        match msg.origin {
+            crate::model::document::UserMessageOrigin::Slash => "cmd".to_string(),
+            crate::model::document::UserMessageOrigin::Shell => "shell".to_string(),
+            _ => "prompt".to_string(),
+        }
     }
 }
 
@@ -75,15 +79,11 @@ fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
             }
             (Some(turn), None) => format!("round {turn}"),
             (None, Some(sent_at_ms)) => sent_time_label(sent_at_ms),
-            (None, None) => "Sent".to_string(),
+            (None, None) => String::new(),
         };
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
         sent_time_label(sent_at_ms)
-    } else if msg.turn.is_none() {
-        // No turn stamp and no send time (e.g. a legacy session): fall back
-        // to a neutral marker so the header row is never blank.
-        "Sent".to_string()
     } else {
         String::new()
     }
@@ -352,10 +352,8 @@ pub fn draw_message_body(
                                     .anchor(sent_header_anchor(msg, is_queued))
                                     .fill_tail(theme.surface());
                                 let meta = sent_header_meta(msg, is_queued);
-                                if msg.round.is_some() {
+                                if !meta.is_empty() {
                                     strip = strip.detail(meta);
-                                } else {
-                                    strip = strip.status(meta, MetaTone::Muted);
                                 }
                                 strip
                             };

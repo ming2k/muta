@@ -35,6 +35,9 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
             project_root.display()
         ));
     };
+    if !client::versions_compatible(&info) {
+        return Err(client::version_mismatch(&info));
+    }
     let action = MonitorAction {
         watch: opts.watch,
         include_idle: opts.include_idle,

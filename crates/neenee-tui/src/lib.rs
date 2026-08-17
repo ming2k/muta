@@ -87,7 +87,7 @@ pub(crate) mod providers;
 #[cfg(test)]
 mod snapshot_tests;
 
-pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice};
+pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{ActivityTab, Modal, Recess};
 pub(crate) use providers::{
@@ -292,6 +292,8 @@ pub async fn run_tui(
     let round_started_at_clone = round_started_at.clone();
     let activity_status = Arc::new(Mutex::new(String::new()));
     let activity_clone = activity_status.clone();
+    let provider_retry: Arc<Mutex<Option<ProviderRetryState>>> = Arc::new(Mutex::new(None));
+    let provider_retry_clone = provider_retry.clone();
     let pending_permission = Arc::new(Mutex::new(VecDeque::<PermissionRequest>::new()));
     let pending_permission_clone = pending_permission.clone();
     let pending_question = Arc::new(Mutex::new(VecDeque::<UserQuestionRequest>::new()));
@@ -599,10 +601,11 @@ pub async fn run_tui(
                         RoundEvent::Text(t) => {
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
                             let mut message = TranscriptMessage::new(Role::Assistant, t)
-                                .with_attribution(provider, model);
+                                .with_attribution(provider, model)
+                                .with_sent_at_ms(crate::now_epoch_ms());
                             if let Some((round, turn)) =
                                 positions_by_session.get(&session_id).copied()
                             {
@@ -634,10 +637,11 @@ pub async fn run_tui(
                             // compact command block, never assistant prose.
                             // Content-bearing like `Text` — same idle-only
                             // activity-surface handling.
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
                             let mut message =
-                                TranscriptMessage::command_result(name, args, Some(result));
+                                TranscriptMessage::command_result(name, args, Some(result))
+                                    .with_sent_at_ms(crate::now_epoch_ms());
                             if let Some((round, turn)) =
                                 positions_by_session.get(&session_id).copied()
                             {
@@ -714,8 +718,8 @@ pub async fn run_tui(
                                 drop(msgs);
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
+                                *provider_retry_clone.lock().await = None;
                                 let mut msgs = buf.write().await;
-                                clear_provider_retry(&mut msgs);
                                 let mut message = TranscriptMessage::new(Role::Assistant, delta)
                                     .with_attribution(provider, model);
                                 if let Some((round, turn)) = position {
@@ -733,8 +737,8 @@ pub async fn run_tui(
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
                             if let Some(message) = msgs.last_mut().filter(|message| {
                                 message.role == Role::Assistant
                                     && matches!(&message.kind, MessageKind::Text)
@@ -762,6 +766,7 @@ pub async fn run_tui(
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
                             // With lazy stream-item creation, a hidden reasoning stream may
                             // have no visible message to discard. Never pop an assistant item
@@ -782,8 +787,8 @@ pub async fn run_tui(
                             // the prompt back to the loop via the unsend signal
                             // so it can restore the composer for re-editing.
                             {
+                                *provider_retry_clone.lock().await = None;
                                 let mut msgs = buf.write().await;
-                                clear_provider_retry(&mut msgs);
                                 if msgs.last().is_some_and(|m| m.role == Role::User) {
                                     msgs.pop();
                                 }
@@ -933,8 +938,8 @@ pub async fn run_tui(
                             // position map.
                             let position = positions_by_session.get(&session_id).copied();
                             let sent_at_ms = event_loop::now_epoch_ms();
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
                             // A tool step starts collapsed: there's no result to show
                             // yet. The lifecycle-aware default (see `step_interaction`)
                             // expands it on completion — Ok follows per-tool density,
@@ -1219,10 +1224,10 @@ pub async fn run_tui(
                             let duration_ms = reasoning_start
                                 .take()
                                 .map(|started| started.elapsed().as_millis() as u64);
-                            let mut msgs = buf.write().await;
                             if !running {
-                                clear_provider_retry(&mut msgs);
+                                *provider_retry_clone.lock().await = None;
                             }
+                            let mut msgs = buf.write().await;
                             finalize_streaming_reasoning(&mut msgs, duration_ms);
                         }
                         RoundEvent::TodosUpdated(list) => {
@@ -1241,22 +1246,22 @@ pub async fn run_tui(
                             delay_ms,
                             message,
                         } => {
-                            let mut msgs = buf.write().await;
-                            upsert_provider_retry(
-                                &mut msgs,
+                            let delay = std::time::Duration::from_millis(delay_ms);
+                            let retry_at = std::time::Instant::now() + delay;
+                            *provider_retry_clone.lock().await = Some(ProviderRetryState {
                                 attempt,
                                 max_attempts,
-                                delay_ms,
-                                message,
-                            );
+                                retry_at,
+                                failure: message,
+                            });
                             if !routes_to_side {
                                 *activity_clone.lock().await = "waiting to retry".to_string();
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
                         RoundEvent::Error(e) => {
+                            *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            clear_provider_retry(&mut msgs);
                             push_local_notice(&mut msgs, NoticeSeverity::Error, e);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
@@ -1577,6 +1582,7 @@ pub async fn run_tui(
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
+        provider_retry: None,
         autopilot: false,
         todos: None,
         round_count: 0,
@@ -1728,6 +1734,7 @@ pub async fn run_tui(
             round_tps,
             harness,
             activity_status,
+            provider_retry,
             pending_permission,
             pending_question,
             pending_input,
@@ -1843,42 +1850,10 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &neenee_contr
     ));
 }
 
-/// Create the live provider-retry disclosure, or refresh the existing one in
-/// place. There is deliberately at most one such message in a transcript.
-fn upsert_provider_retry(
-    messages: &mut Vec<TranscriptMessage>,
-    attempt: usize,
-    max_attempts: usize,
-    delay_ms: u64,
-    failure: String,
-) {
-    let delay = std::time::Duration::from_millis(delay_ms);
-    if let Some(existing) = messages
-        .iter_mut()
-        .rfind(|message| message.is_provider_retry())
-    {
-        existing.update_provider_retry(attempt, max_attempts, delay, failure);
-        return;
-    }
-    messages.push(TranscriptMessage::provider_retry(
-        attempt,
-        max_attempts,
-        delay,
-        failure,
-    ));
-}
-
-/// Retry state is a live UI component, not durable conversation history.
-fn clear_provider_retry(messages: &mut Vec<TranscriptMessage>) {
-    messages.retain(|message| !message.is_provider_retry());
-}
-
 /// Apply the visible transcript effect of a stream-start signal. The signal
-/// retires transient retry state but deliberately creates no message: transport
-/// lifecycle alone must not influence transcript geometry.
-fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
-    clear_provider_retry(messages);
-}
+/// deliberately creates no message: transport lifecycle alone must not influence
+/// transcript geometry.
+fn begin_stream(_messages: &mut Vec<TranscriptMessage>) {}
 
 /// Append a streamed assistant-text delta to the current turn, creating the
 /// message only when the first visible text arrives. Returning `None` means the

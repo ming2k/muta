@@ -181,13 +181,25 @@ pub enum Wire {
 }
 
 /// Refuse a version-skewed attach with an actionable both-versions message
-/// (ADR-0100 rule 4). Returned before any session work happens.
+/// (ADR-0100 rule 4), with directional recommendations. Returned before any session work happens.
 fn version_mismatch_error(client: &str, daemon: &str) -> String {
-    format!(
-        "client/daemon version mismatch: client {client} vs daemon {daemon}. \
-         Stop the daemon and let it restart on demand: `neenee stop`, then rerun \
-         this command (or `neenee serve --detach` to bring it up explicitly)."
-    )
+    use crate::client::{VersionRelation, compare_versions};
+    match compare_versions(client, daemon) {
+        VersionRelation::ClientOlder => format!(
+            "client/daemon version mismatch: client ({client}) is older than daemon ({daemon}). \
+             Please update your neenee client to version {daemon} or newer."
+        ),
+        VersionRelation::ClientNewer => format!(
+            "client/daemon version mismatch: daemon ({daemon}) is older than client ({client}). \
+             Stop the daemon and let it restart on demand: `neenee stop`, then rerun \
+             this command (or `neenee serve --detach` to bring it up explicitly)."
+        ),
+        VersionRelation::Equal | VersionRelation::Unknown => format!(
+            "client/daemon version mismatch: client {client} vs daemon {daemon}. \
+             Stop the daemon and let it restart on demand: `neenee stop`, then rerun \
+             this command (or `neenee serve --detach` to bring it up explicitly)."
+        ),
+    }
 }
 
 /// Per-connection registry (ADR-0101): every accepted socket's task is

@@ -86,7 +86,7 @@ session.
 | `bash` | `running command` |
 | MCP tools (`mcp__*`) | `using MCP` |
 | Finalizing stream | `finalizing response` |
-| Provider retry | `retry 1/4 in 3s · <reason>` — the reason tail is the truncated error message |
+| Provider retry | `retry 1/15 · next in 6.6s` (or `running · 1.2s` once active) — error details displayed in Activity modal |
 
 ## Source
 

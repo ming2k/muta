@@ -215,6 +215,7 @@ pub(super) async fn handle_send_slash(
     }
     app.follow_bottom = true;
     app.pin_summary_line = None;
+    let sent_at_ms = now_epoch_ms();
     runtime
         .messages
         .write()
@@ -225,7 +226,9 @@ pub(super) async fn handle_send_slash(
         // handles it directly. Tag it so the Activity modal
         // does not mistake it for the round's prompt.
         .push(
-            TranscriptMessage::new(Role::User, cmd.clone()).with_origin(UserMessageOrigin::Slash),
+            TranscriptMessage::new(Role::User, cmd.clone())
+                .with_origin(UserMessageOrigin::Slash)
+                .with_sent_at_ms(sent_at_ms),
         );
     app.record_input_history(cmd.clone(), Vec::new(), Vec::new());
     // `/serve` is a pure frontend concern (hot-attach a
@@ -238,7 +241,8 @@ pub(super) async fn handle_send_slash(
                 "Sessions are managed by the unified daemon; to manage daemons use 'neenee daemon' or '/host'."
                     .to_string(),
             )
-            .with_origin(UserMessageOrigin::Slash),
+            .with_origin(UserMessageOrigin::Slash)
+            .with_sent_at_ms(sent_at_ms),
         );
         if !session_busy {
             runtime.is_responding.store(false, Ordering::SeqCst);
@@ -275,6 +279,7 @@ pub(super) async fn handle_send_shell(
     }
     app.follow_bottom = true;
     app.pin_summary_line = None;
+    let sent_at_ms = now_epoch_ms();
     let display = format!("!{}", command);
     runtime
         .messages
@@ -286,7 +291,8 @@ pub(super) async fn handle_send_shell(
         // Activity modal does not mistake it for one.
         .push(
             TranscriptMessage::new(Role::User, display.clone())
-                .with_origin(UserMessageOrigin::Shell),
+                .with_origin(UserMessageOrigin::Shell)
+                .with_sent_at_ms(sent_at_ms),
         );
     app.record_input_history(display, Vec::new(), Vec::new());
     let _ = app.tx.send(AgentRequest::ShellCommand { command });

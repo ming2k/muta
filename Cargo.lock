@@ -1545,6 +1545,7 @@ dependencies = [
  "neenee-providers",
  "neenee-skills",
  "neenee-web-assets",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

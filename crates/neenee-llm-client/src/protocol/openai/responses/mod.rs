@@ -133,6 +133,11 @@ impl OpenAiResponsesProvider {
         if is_copilot_vision {
             req = req.header("Copilot-Vision-Request", "true");
         }
+        for (name, value) in self.endpoint.client_identity().headers() {
+            if !self.copilot || !crate::COPILOT_CLIENT_HEADERS.iter().any(|(k, _)| *k == name) {
+                req = req.header(name, value);
+            }
+        }
         req
     }
 

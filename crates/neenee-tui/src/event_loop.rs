@@ -178,6 +178,7 @@ pub(super) struct UiRuntime {
     pub round_tps: Arc<Mutex<HashMap<String, neenee_contracts::RoundSummary>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     pub activity_status: Arc<Mutex<String>>,
+    pub provider_retry: Arc<Mutex<Option<crate::app::ProviderRetryState>>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
     pub pending_question: Arc<Mutex<VecDeque<UserQuestionRequest>>>,
     pub pending_input: Arc<Mutex<VecDeque<neenee_contracts::InputRequest>>>,
@@ -832,6 +833,7 @@ async fn sync_runtime_state(
     app.loop_status = harness.loop_status;
     app.autopilot = harness.autopilot;
     app.activity_status = runtime.activity_status.lock().await.clone();
+    app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.session_context = runtime.session_context.lock().await.clone();
     app.todos = runtime.todos.lock().await.clone();
     app.round_count = *runtime.round_count.lock().await;

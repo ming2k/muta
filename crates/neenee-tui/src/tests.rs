@@ -678,25 +678,25 @@ fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
 }
 
 #[test]
-fn provider_retry_updates_one_transcript_component() {
-    let mut messages = vec![TranscriptMessage::new(Role::User, "hello")];
-    upsert_provider_retry(&mut messages, 2, 4, 3_000, "first failure".into());
-    let retry = messages.last_mut().expect("retry component");
-    retry.pin_provider_retry_expanded(true);
+fn provider_retry_state_formats_summary_and_timing() {
+    let now = std::time::Instant::now();
+    let state = ProviderRetryState {
+        attempt: 2,
+        max_attempts: 16,
+        retry_at: now + std::time::Duration::from_millis(6_600),
+        failure: "HTTP 429: rate limited".to_string(),
+    };
+    let summary = state.summary(now);
+    assert_eq!(summary, "retry 1/15 · next in 6.6s");
 
-    upsert_provider_retry(&mut messages, 3, 4, 1_000, "second failure".into());
-
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|message| message.is_provider_retry())
-            .count(),
-        1,
-        "later failures must refresh the existing component"
-    );
-    let retry = messages.last().expect("retry component");
-    assert_eq!(retry.raw, "second failure");
-    assert_eq!(retry.provider_retry_expanded(), Some(true));
+    let running_state = ProviderRetryState {
+        attempt: 4,
+        max_attempts: 16,
+        retry_at: now - std::time::Duration::from_millis(1_200),
+        failure: "HTTP 503: overloaded".to_string(),
+    };
+    let running_summary = running_state.summary(now);
+    assert_eq!(running_summary, "retry 3/15 · running · 1.2s");
 }
 
 /// Build a small conversation with two sibling envoy tasks, each with a
@@ -1293,6 +1293,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
+        provider_retry: None,
         autopilot: false,
         todos: None,
         round_count: 0,

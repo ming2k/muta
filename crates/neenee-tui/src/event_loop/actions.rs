@@ -1303,6 +1303,16 @@ pub(super) async fn dispatch_action(
                             app.selection = SelectionState::None;
                         }
                     }
+                    InteractiveTargetKind::Notice => {
+                        // Enter mirrors the mouse click on a notice header:
+                        // toggle its expandable detail/JSON body.
+                        let mut messages = runtime.messages.write().await;
+                        let toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
+                        drop(messages);
+                        if toggled {
+                            app.selection = SelectionState::None;
+                        }
+                    }
                 }
             }
         }

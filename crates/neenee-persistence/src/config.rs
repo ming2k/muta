@@ -800,7 +800,7 @@ pub struct Config {
     /// Maximum number of attempts for a single model request when the provider returns a
     /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
     /// counts as the first attempt, so this is the *total* attempts, not extra
-    /// retries. Clamped to `[1, 10]` at the call site.
+    /// retries. Clamped to `[1, 60]` at the call site.
     pub provider_retry_max_attempts: usize,
     /// Base delay (ms) for the bounded exponential backoff between retries:
     /// `base_ms * 2^(attempt-1)`, capped by `provider_retry_max_ms`.
@@ -1119,9 +1119,9 @@ impl Default for Config {
             compaction_summarize: true,
             compaction_prune: true,
             compaction_prune_protect_tokens: 6_000,
-            provider_retry_max_attempts: 6,
+            provider_retry_max_attempts: 30,
             provider_retry_base_ms: 1_000,
-            provider_retry_max_ms: 30_000,
+            provider_retry_max_ms: 10_000,
             openai_api_key: None,
             openai_model: None,
             google_api_key: None,

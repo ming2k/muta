@@ -378,11 +378,7 @@ pub async fn dispatch(
                 if enabled { "ON" } else { "OFF" },
                 if enabled { "will" } else { "won't" },
             );
-            record_ack(session, name, args, ack.clone()).await;
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Notice(AgentNotice::command_ack(ack)),
-            ));
+            record_command(session, resp_tx, name, args, CommandResult::Ack { title: ack }).await;
             let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::AutopilotChanged(enabled),

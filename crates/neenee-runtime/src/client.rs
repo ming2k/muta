@@ -48,21 +48,68 @@ fn discover_at(path: &Path) -> Option<DaemonInfo> {
     Some(info)
 }
 
+/// Directional relation between client version and daemon version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionRelation {
+    Equal,
+    ClientNewer,
+    ClientOlder,
+    Unknown,
+}
+
+/// Compare client and daemon version strings using SemVer.
+pub fn compare_versions(client: &str, daemon: &str) -> VersionRelation {
+    if client == daemon {
+        return VersionRelation::Equal;
+    }
+    match (semver::Version::parse(client), semver::Version::parse(daemon)) {
+        (Ok(c), Ok(d)) => {
+            if c > d {
+                VersionRelation::ClientNewer
+            } else if c < d {
+                VersionRelation::ClientOlder
+            } else {
+                VersionRelation::Equal
+            }
+        }
+        _ => VersionRelation::Unknown,
+    }
+}
+
 /// The actionable version-skew error (ADR-0100 rule 4), naming both builds
-/// and the fix. Public so `neenee`-level commands can surface it uniformly
+/// and the directional fix (server behind -> stop/restart server; client behind -> update client).
+/// Public so `neenee`-level commands can surface it uniformly
 /// wherever a discovered daemon is about to be spoken to.
 pub fn version_mismatch(info: &DaemonInfo) -> String {
-    let daemon = info
-        .version
-        .as_deref()
-        .unwrap_or("unknown (older than 0.24)");
-    format!(
-        "client/daemon version mismatch: this neenee is {} but the running daemon (pid {}) is {}. \
-         Stop it with `neenee stop` and rerun — the daemon restarts on demand at the new version.",
-        crate::serve::daemon_version(),
-        info.pid,
-        daemon
-    )
+    let client_ver = crate::serve::daemon_version();
+    let Some(daemon_ver) = info.version.as_deref() else {
+        return format!(
+            "client/daemon version mismatch: this client is {client_ver} but the running daemon (pid {}) is unknown (older than 0.24). \
+             Stop it with `neenee stop` and rerun — the daemon restarts on demand at the new version.",
+            info.pid
+        );
+    };
+
+    match compare_versions(client_ver, daemon_ver) {
+        VersionRelation::ClientNewer => format!(
+            "client/daemon version mismatch: running daemon (pid {}, version {daemon_ver}) is older than this client ({client_ver}). \
+             Stop it with `neenee stop` and rerun — the daemon restarts on demand at the new version.",
+            info.pid
+        ),
+        VersionRelation::ClientOlder => format!(
+            "client/daemon version mismatch: this client ({client_ver}) is older than the running daemon (pid {}, version {daemon_ver}). \
+             Please update your neenee client to {daemon_ver} or newer.",
+            info.pid
+        ),
+        VersionRelation::Equal => format!(
+            "client/daemon version mismatch: client and daemon both report {client_ver} but failed compatibility check."
+        ),
+        VersionRelation::Unknown => format!(
+            "client/daemon version mismatch: this client is {client_ver} but the running daemon (pid {}) is {daemon_ver}. \
+             If the daemon is outdated, stop it with `neenee stop` and rerun; if the client is outdated, update your client.",
+            info.pid
+        ),
+    }
 }
 
 /// Whether a discovered daemon speaks this client's version (ADR-0100
@@ -539,6 +586,57 @@ pub fn upsert_session_row(rows: &mut Vec<MonitoredSession>, row: MonitoredSessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_compare_versions() {
+        assert_eq!(compare_versions("0.25.0", "0.25.0"), VersionRelation::Equal);
+        assert_eq!(compare_versions("0.26.0", "0.25.0"), VersionRelation::ClientNewer);
+        assert_eq!(compare_versions("0.24.0", "0.25.0"), VersionRelation::ClientOlder);
+        assert_eq!(compare_versions("1.0.0", "0.25.0"), VersionRelation::ClientNewer);
+        assert_eq!(compare_versions("not-a-semver", "0.25.0"), VersionRelation::Unknown);
+    }
+
+    #[test]
+    fn test_version_mismatch_messages() {
+        let daemon_older = DaemonInfo {
+            pid: 1234,
+            port: 9800,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            version: Some("0.24.0".to_string()),
+        };
+        let msg = version_mismatch(&daemon_older);
+        assert!(msg.contains("is older than this client"));
+        assert!(msg.contains("neenee stop"));
+
+        let daemon_newer = DaemonInfo {
+            pid: 1234,
+            port: 9800,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            version: Some("99.0.0".to_string()),
+        };
+        let msg = version_mismatch(&daemon_newer);
+        assert!(msg.contains("older than the running daemon"));
+        assert!(msg.contains("update your neenee client"));
+
+        let daemon_none = DaemonInfo {
+            pid: 1234,
+            port: 9800,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            version: None,
+        };
+        let msg = version_mismatch(&daemon_none);
+        assert!(msg.contains("unknown (older than 0.24)"));
+        assert!(msg.contains("neenee stop"));
+    }
 
     fn record(port: u16, token: Option<String>) -> DaemonInfo {
         DaemonInfo {

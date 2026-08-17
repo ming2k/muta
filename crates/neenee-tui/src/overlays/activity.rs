@@ -8,9 +8,11 @@ use neenee_tui_engine::{
 };
 
 use super::common::todo_status_glyph_color;
+use crate::components::modal::modal_body_width;
 use crate::design::{MODAL_BODY_LEADING_INDENT, MODAL_TITLE_META_GAP};
 use crate::primitives::{
-    FixedModalSpec, FooterHint, keyvocab, modal_area, modal_frame, render_body, render_modal_footer,
+    ContentModalSpec, FooterHint, content_modal_area, keyvocab, modal_chrome_rows, modal_frame,
+    render_body, render_modal_footer,
 };
 use crate::text_layout::{indented_wrapped_lines, wrap_text};
 use crate::view::Theme;
@@ -44,8 +46,9 @@ pub struct ActivityModalView<'a> {
 }
 
 /// The Activity modal: a scrollable overview of a single section (Activity or
-/// Todos). The active section is determined by which activity-bar segment the
-/// user clicked — there is no tab strip inside the modal.
+/// Todos). Sized to its content with min/max viewport limits. The active section
+/// is determined by which activity-bar segment the user clicked — there is no tab
+/// strip inside the modal.
 pub fn draw_activity_modal(
     frame: &mut Frame,
     view: ActivityModalView<'_>,
@@ -64,34 +67,9 @@ pub fn draw_activity_modal(
         activity,
     } = view;
 
-    let area = modal_area(frame, FixedModalSpec::ACTIVITY);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
+    let geometry = ContentModalSpec::ACTIVITY;
+    let body_width = modal_body_width(frame, geometry);
     let muted = theme.muted();
-
-    // ── Header: section title, plus a trailing meta counter for Todos ──
-    // The Todos `done/total` counter sits beside the title instead of being
-    // re-emitted as a second "Todos" body line, so the label shows once.
-    if let Some(h) = f.header {
-        let mut header_spans: Vec<Span<'static>> = vec![Span::styled(
-            active_tab.title(),
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD),
-        )];
-        if let crate::modal::ActivityTab::Todos = active_tab
-            && let Some(list) = todos.filter(|l| !l.items.is_empty())
-        {
-            use neenee_contracts::TodoStatus;
-            let done = list.count(TodoStatus::Completed);
-            let total = list.items.len();
-            header_spans.push(Span::styled(
-                format!("{}{done}/{total}", " ".repeat(MODAL_TITLE_META_GAP)),
-                Style::default().fg(muted),
-            ));
-        }
-        frame.render_widget(Paragraph::new(Line::from(header_spans)), h);
-    }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -122,7 +100,7 @@ pub fn draw_activity_modal(
                 lines.extend(indented_wrapped_lines(
                     prompt,
                     MODAL_BODY_LEADING_INDENT,
-                    f.body.width as usize,
+                    body_width,
                     Style::default().fg(theme.fg()),
                 ));
             }
@@ -163,7 +141,7 @@ pub fn draw_activity_modal(
                 lines.extend(indented_wrapped_lines(
                     &detail,
                     MODAL_BODY_LEADING_INDENT,
-                    f.body.width as usize,
+                    body_width,
                     Style::default().fg(muted),
                 ));
             }
@@ -183,14 +161,14 @@ pub fn draw_activity_modal(
             lines.extend(indented_wrapped_lines(
                 &status_label,
                 MODAL_BODY_LEADING_INDENT,
-                f.body.width as usize,
+                body_width,
                 status_style,
             ));
             if !review_alert.is_empty() {
                 lines.extend(indented_wrapped_lines(
                     &format!("⚠ {review_alert}"),
                     MODAL_BODY_LEADING_INDENT,
-                    f.body.width as usize,
+                    body_width,
                     Style::default().fg(theme.warn()),
                 ));
             }
@@ -206,8 +184,7 @@ pub fn draw_activity_modal(
                 // the body's right edge.
                 let glyph_col = MODAL_BODY_LEADING_INDENT + 1;
                 let content_col = glyph_col + 1;
-                let body_w = f.body.width as usize;
-                let content_wrap_w = body_w.saturating_sub(content_col).max(1);
+                let content_wrap_w = body_width.saturating_sub(content_col).max(1);
                 for item in &list.items {
                     let glyph_color = todo_status_glyph_color(item.status, theme, muted);
                     let glyph = item.status.glyph();
@@ -249,6 +226,34 @@ pub fn draw_activity_modal(
                 )));
             }
         }
+    }
+
+    let desired = lines.len() as u16 + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    // ── Header: section title, plus a trailing meta counter for Todos ──
+    // The Todos `done/total` counter sits beside the title instead of being
+    // re-emitted as a second "Todos" body line, so the label shows once.
+    if let Some(h) = f.header {
+        let mut header_spans: Vec<Span<'static>> = vec![Span::styled(
+            active_tab.title(),
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        )];
+        if let crate::modal::ActivityTab::Todos = active_tab
+            && let Some(list) = todos.filter(|l| !l.items.is_empty())
+        {
+            use neenee_contracts::TodoStatus;
+            let done = list.count(TodoStatus::Completed);
+            let total = list.items.len();
+            header_spans.push(Span::styled(
+                format!("{}{done}/{total}", " ".repeat(MODAL_TITLE_META_GAP)),
+                Style::default().fg(muted),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(header_spans)), h);
     }
 
     // Wrapping is disabled: every wrappable block above was pre-wrapped by the

@@ -15,8 +15,8 @@
 use crate::config::{TuiConfig, tool_default_expanded};
 use crate::model::document::ToolStepStatus;
 use crate::model::layout::{
-    InteractiveTarget, PROVIDER_RETRY_BLOCK_IDX, SemanticCursor, THINKING_BLOCK_IDX,
-    TOOL_STEP_BLOCK_IDX,
+    COMMAND_RESULT_BLOCK_IDX, InteractiveTarget, NOTICE_BLOCK_IDX, PROVIDER_RETRY_BLOCK_IDX,
+    SemanticCursor, THINKING_BLOCK_IDX, TOOL_STEP_BLOCK_IDX,
 };
 
 /// Which kind of step a pointer hit resolved to.
@@ -28,6 +28,10 @@ pub enum StepKind {
     Thinking,
     /// The live provider-retry summary.
     ProviderRetry,
+    /// A command invocation with expandable result.
+    CommandResult,
+    /// An expandable notice (e.g. error with JSON).
+    Notice,
 }
 
 impl StepKind {
@@ -37,6 +41,8 @@ impl StepKind {
             StepKind::ToolStep => InteractiveTarget::tool_step(mi),
             StepKind::Thinking => InteractiveTarget::thinking(mi),
             StepKind::ProviderRetry => InteractiveTarget::provider_retry(mi),
+            StepKind::CommandResult => InteractiveTarget::command_result(mi),
+            StepKind::Notice => InteractiveTarget::notice(mi),
         }
     }
 }
@@ -53,6 +59,8 @@ pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
         TOOL_STEP_BLOCK_IDX => StepKind::ToolStep,
         THINKING_BLOCK_IDX => StepKind::Thinking,
         PROVIDER_RETRY_BLOCK_IDX => StepKind::ProviderRetry,
+        COMMAND_RESULT_BLOCK_IDX => StepKind::CommandResult,
+        NOTICE_BLOCK_IDX => StepKind::Notice,
         _ => return None,
     };
     Some((cursor.message_idx, kind))

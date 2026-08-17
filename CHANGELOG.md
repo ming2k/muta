@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Provider retry moved from transcript disclosures to the Activity Bar and Activity Modal.**
+  - Transient provider retry countdowns and running attempt timers (`retry 4/15 · next in 6.6s`)
+    are now rendered dynamically on the Activity Bar instead of inserting synthetic mutating
+    messages into the conversation transcript.
+  - The Activity modal (`Tab` / click Activity Bar) now displays the full "Last failure:" error
+    details and diagnostics under the Status section.
+  - Increased default `provider_retry_max_attempts` from 6 to 30 (and clamped limit from 10 to 60)
+    for resilient long-horizon autonomous runs during upstream load spikes.
+  - Lowered default `provider_retry_max_ms` from 30s to 10s to keep backoff polling frequency
+    responsive once upstream providers recover.
+  - Aligned `EnvoyTool` (subagent tasks) to inherit the session's provider retry policy,
+    equal jitter, and minimum backoff floor guard, replacing the previous hardcoded 3-attempt limit.
+  - Replaced bulky "Gave up after X attempt(s)..." boilerplate with raw clean error messages upon retry budget exhaustion.
+  - Introduced expandable Notice components in the TUI: provider HTTP errors (e.g. 429/5xx) default to a concise header and expand to formatted, indented JSON details.
+
 ## [0.25.0] - 2026-08-16
 
 ### Fixed

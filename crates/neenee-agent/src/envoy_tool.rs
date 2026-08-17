@@ -48,25 +48,22 @@ for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
-/// Maximum attempts (initial run + retries) an envoy makes when the provider
-/// fails with a *transient* error mid-run. Mirrors the spirit of the
-/// top-level `provider_retry_max_attempts` loop in `orchestration`, but fixed
-/// and deliberately tighter: an envoy is a bounded sub-task, so it should not
-/// spend unbounded wall-clock on a flaky upstream the parent can re-dispatch.
-const ENVOY_TRANSIENT_RETRY_LIMIT: usize = 3;
+/// Retry settings for an envoy subagent, inherited from the session's provider retry configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvoyRetryConfig {
+    pub max_attempts: usize,
+    pub base_ms: u64,
+    pub max_ms: u64,
+}
 
-/// Backoff for an envoy transient-provider retry: exponential base with a
-/// cap, honouring a server-provided `retry_after_ms` when present (the same
-/// contract as the top-level loop's `retry_delay_ms`).
-fn envoy_retry_delay_ms(attempt: usize, retry_after_ms: Option<u64>) -> u64 {
-    const BASE_MS: u64 = 1_000;
-    const MAX_MS: u64 = 15_000;
-    if let Some(after) = retry_after_ms {
-        return after.min(MAX_MS);
+impl Default for EnvoyRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 30,
+            base_ms: 1_000,
+            max_ms: 10_000,
+        }
     }
-    BASE_MS
-        .saturating_mul(1_u64 << (attempt - 1).min(4))
-        .min(MAX_MS)
 }
 
 /// Live envoy handles keyed by the parent tool-call id — the lookup table
@@ -173,6 +170,7 @@ pub struct EnvoyTool {
     /// project — not the daemon process's cwd (ADR-0096). `None` falls back
     /// to the process cwd (tests, single-project processes).
     workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
+    retry_config: std::sync::Mutex<EnvoyRetryConfig>,
 }
 
 #[derive(Clone)]
@@ -194,12 +192,7 @@ impl EnvoyTool {
     ) -> Self {
         Self::named(provider, toolset, profile, "envoy", ENVOY_TOOL_DESCRIPTION)
     }
-    /// of creating a fresh one. Used when a second dispatch tool (e.g. a
-    /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
-    /// children reachable from the *same* harness reply path: the driver holds
-    /// one `Arc<EnvoyRegistry>`, and tool-call ids are globally unique, so two
-    /// dispatch tools lodging their children into one table never collide. See
-    /// ADR-0029.
+
     /// Like [`new`](Self::new) but shares an existing [`EnvoyRegistry`] instead
     /// of creating a fresh one. Used when a second dispatch tool (e.g. a
     /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
@@ -247,6 +240,7 @@ impl EnvoyTool {
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_root: std::sync::Mutex::new(None),
+            retry_config: std::sync::Mutex::new(EnvoyRetryConfig::default()),
         }
     }
 
@@ -272,6 +266,7 @@ impl EnvoyTool {
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_root: std::sync::Mutex::new(None),
+            retry_config: std::sync::Mutex::new(EnvoyRetryConfig::default()),
         }
     }
 
@@ -325,6 +320,16 @@ impl EnvoyTool {
             .as_ref()
             .map(|h| h.lock().unwrap_or_else(|e| e.into_inner()).clone())
             .unwrap_or_default()
+    }
+
+    /// Bind the parent's provider retry settings so spawned envoys inherit
+    /// the session's retry budget and backoff parameters.
+    pub fn bind_retry_policy(&self, max_attempts: usize, base_ms: u64, max_ms: u64) {
+        *self.retry_config.lock().unwrap_or_else(|e| e.into_inner()) = EnvoyRetryConfig {
+            max_attempts: max_attempts.clamp(1, 60),
+            base_ms,
+            max_ms,
+        };
     }
 
     /// The shared handle registry for envoys spawned by this tool. The
@@ -640,6 +645,8 @@ impl EnvoyTool {
         // reuse the same round state across attempts so completed turns are
         // not replayed, back off exponentially, and never retry an
         // interruption, a hard terminal error, or a non-retryable one.
+        let retry_config = *self.retry_config.lock().unwrap_or_else(|e| e.into_inner());
+        let retry_limit = retry_config.max_attempts.clamp(1, 60);
         let mut round = envoy.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {
@@ -660,10 +667,20 @@ impl EnvoyTool {
                 Err(neenee_contracts::HarnessError::Retryable {
                     message,
                     retry_after_ms,
-                }) if attempt < ENVOY_TRANSIENT_RETRY_LIMIT => {
+                }) if attempt < retry_limit => {
+                    let base_ms = crate::orchestration::retry_delay_ms(
+                        attempt,
+                        retry_after_ms,
+                        retry_config.base_ms,
+                        retry_config.max_ms,
+                    );
+                    let delay_ms = crate::orchestration::apply_jitter_ms(base_ms, |_| {
+                        fastrand::u64(0..base_ms)
+                    });
                     tracing::warn!(
                         attempt,
-                        max_attempts = ENVOY_TRANSIENT_RETRY_LIMIT,
+                        max_attempts = retry_limit,
+                        delay_ms,
                         error = %message,
                         "envoy hit a transient provider error; retrying"
                     );
@@ -673,17 +690,25 @@ impl EnvoyTool {
                             neenee_contracts::NoticeSeverity::Warning,
                             format!(
                                 "Envoy retrying after transient provider error \
-                                 ({attempt}/{ENVOY_TRANSIENT_RETRY_LIMIT})"
+                                 ({attempt}/{retry_limit})"
                             ),
                             neenee_contracts::NoticeSource::Harness,
-                        ),
+                        )
+                        .with_body(format!(
+                            "Waiting {}s before retrying: {}",
+                            delay_ms.div_ceil(1_000),
+                            crate::orchestration::public_retry_reason(&message),
+                        )),
                     ));
-                    let base_ms = envoy_retry_delay_ms(attempt, retry_after_ms);
+                    on_event(neenee_contracts::EnvoyEvent::Activity(format!(
+                        "waiting to retry ({}s)",
+                        delay_ms.div_ceil(1_000)
+                    )));
                     tokio::select! {
                         _ = child_cancel.cancelled() => {
                             break Err(neenee_contracts::HarnessError::Interrupted)
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(base_ms)) => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
                     }
                 }
                 Err(error) => break Err(error),
@@ -1071,6 +1096,30 @@ mod tests {
             2,
             "exactly one transient failure then one success"
         );
+    }
+
+    #[tokio::test]
+    async fn envoy_inherits_and_respects_custom_retry_policy() {
+        let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
+        let tool = EnvoyTool::new(
+            std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
+            neenee_contracts::ToolSet::from_tools([
+                std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
+            ]),
+            &EXPLORE,
+        );
+        tool.bind_retry_policy(1, 10, 10); // only 1 attempt
+
+        let output = tool
+            .call(r#"{"description":"find files","prompt":"where are the handlers?"}"#)
+            .await
+            .expect("tool call returns error string in outcome");
+
+        assert!(
+            output.starts_with("Error:"),
+            "should return error string when retry limit is 1 and first call fails: {output}"
+        );
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

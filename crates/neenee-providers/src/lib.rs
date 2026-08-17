@@ -18,9 +18,10 @@ pub use list_models::{
     models_endpoint_for,
 };
 pub use neenee_llm_client::{
-    AnthropicMessagesProvider, Effort, Endpoint, GOOGLE_DEFAULT_BASE_URL, GoogleProvider,
-    NEENEE_USER_AGENT, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
-    ThinkingMode, TurnState,
+    AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ClientIdentity, Effort, Endpoint,
+    GOOGLE_DEFAULT_BASE_URL, GoogleProvider, NEENEE_USER_AGENT, OPENCODE_USER_AGENT,
+    OPENCODE_VERSION, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
+    ThinkingMode, TurnState, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_SUB2API_MODELS, CHATGPT_BUILTIN_MODELS,

@@ -281,11 +281,10 @@ pub(super) async fn handle_selection_start(
                             drop(messages);
                         }
                     }
-                    StepKind::Thinking => {
-                        app.toggle_step_pinned(&mut messages, mi);
-                        drop(messages);
-                    }
-                    StepKind::ProviderRetry => {
+                    StepKind::Thinking
+                    | StepKind::ProviderRetry
+                    | StepKind::CommandResult
+                    | StepKind::Notice => {
                         app.toggle_step_pinned(&mut messages, mi);
                         drop(messages);
                     }

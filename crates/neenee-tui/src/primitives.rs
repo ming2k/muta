@@ -150,7 +150,6 @@ impl FixedModalSpec {
     pub const SESSIONS: Self = Self::new(80, 64);
     pub const PERMISSIONS: Self = Self::new(64, 60);
     pub const SKILLS: Self = Self::new(64, 60);
-    pub const ACTIVITY: Self = Self::new(72, 70);
 }
 
 /// Geometry for a modal whose height follows its rendered content.
@@ -185,6 +184,7 @@ impl ContentModalSpec {
     pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);
     pub const CONFIG_THEME: Self = Self::new(78, 14, 84);
     pub const CONFIG_THEME_CUSTOM: Self = Self::new(70, 18, 90);
+    pub const ACTIVITY: Self = Self::new(72, 8, 80);
     /// The unified provider/model editor (`draw_model_editor`). Sizes to its
     /// content — at most three rows (API key, reasoning effort, extended
     /// thinking) — instead of reserving a fixed 30% slab that left most of

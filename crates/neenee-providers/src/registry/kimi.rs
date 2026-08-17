@@ -17,7 +17,7 @@ pub const KIMI_CODE_MODELS: &[&str] = &["k3", "kimi-k2.7-code"];
 // context, always-on thinking); its live `GET /models` also lists the
 // legacy `kimi-for-coding` (K2.7) ids, kept selectable via
 // [`KIMI_CODE_MODELS`]. API key env still uses the MOONSHOT_API_KEY
-// legacy name for config compatibility. The `opencode/0.1.0` User-Agent
+// legacy name for config compatibility. The [`OPENCODE_USER_AGENT`]
 // is borrowed on purpose: the endpoint was live-tested (2026-07) to
 // accept any UA — including none — under OAuth auth, but whether the
 // API-key path gates on a recognized coding-agent UA is unknown, so the
@@ -29,7 +29,7 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
     env_api_key: "MOONSHOT_API_KEY",
     env_model: "MOONSHOT_MODEL",
     fixed_model: Some("k3"),
-    default_user_agent: Some("opencode/0.1.0"),
+    default_user_agent: Some(neenee_llm_client::OPENCODE_USER_AGENT),
 };
 
 /// Baseline capability metadata for the models this provider serves,
@@ -129,7 +129,7 @@ mod tests {
         );
         assert_eq!(provider.endpoint.model_id(), "k3");
         // The Kimi Code platform requires a recognized coding-agent UA.
-        assert_eq!(provider.endpoint.user_agent(), "opencode/0.1.0");
+        assert_eq!(provider.endpoint.user_agent(), crate::OPENCODE_USER_AGENT);
         // The registry stamps the preset id onto the concrete provider so
         // assistant responses can be attributed to "kimi-code".
         assert_eq!(provider.endpoint.id(), "kimi-code");

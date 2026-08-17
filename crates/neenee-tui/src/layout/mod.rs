@@ -409,10 +409,14 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.frame,
                 self.band,
                 msg,
+                mi,
+                self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
                 self.theme,
+                self.hovered_step == Some(mi),
+                self.focused_target == Some(InteractiveTarget::notice(mi)),
             );
         } else if msg.is_envoy_task() {
             super::disclosure::draw_envoy_inline_step(

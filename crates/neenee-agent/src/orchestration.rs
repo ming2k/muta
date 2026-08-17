@@ -803,7 +803,7 @@ pub async fn execute_round(
     let tool_activity = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let streamed_text = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut attempt: usize = 0;
-    let retry_limit = retry_max_attempts.clamp(1, 10);
+    let retry_limit = retry_max_attempts.clamp(1, 60);
     let mut compacted_after_overflow = false;
     // Keep the ReAct turn alive across network attempts. Completed prior turns
     // are already durably checkpointed above; retaining this state means a
@@ -895,11 +895,7 @@ pub async fn execute_round(
             break Err(error);
         };
         if attempt >= retry_limit {
-            break Err(HarnessError::Other(format!(
-                "{message}\n\nGave up after {retry_limit} attempt(s); the upstream \
-                 service appears overloaded. Resend the message to try again, or \
-                 raise `provider_retry_max_attempts` for more attempts."
-            )));
+            break Err(HarnessError::Other(message));
         }
         if streamed_text.swap(false, Ordering::SeqCst) {
             let _ = tx.send(round_response(&session_id, RoundEvent::StreamDiscard));
@@ -1120,9 +1116,11 @@ pub fn retry_delay_ms(
     max_ms: u64,
 ) -> u64 {
     let exponent = attempt.saturating_sub(1).min(20) as u32;
-    retry_after_ms
-        .unwrap_or_else(|| base_ms.saturating_mul(2u64.saturating_pow(exponent)))
-        .min(max_ms.max(1))
+    let exp_backoff = base_ms.saturating_mul(2u64.saturating_pow(exponent));
+    match retry_after_ms {
+        Some(ms) => ms.max(base_ms).min(max_ms.max(1)),
+        None => exp_backoff.min(max_ms.max(1)),
+    }
 }
 
 /// Apply "equal jitter" to a backoff delay, the variant recommended for
@@ -1145,7 +1143,7 @@ pub fn apply_jitter_ms(base: u64, roll: impl Fn(u64) -> u64) -> u64 {
     half + roll(base - half).min(base - half)
 }
 
-fn public_retry_reason(message: &str) -> String {
+pub fn public_retry_reason(message: &str) -> String {
     let first = message
         .lines()
         .map(str::trim)

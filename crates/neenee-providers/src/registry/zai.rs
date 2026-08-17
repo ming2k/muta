@@ -23,7 +23,7 @@ pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
     env_api_key: "ZAI_API_KEY",
     env_model: "ZAI_MODEL",
     fixed_model: None,
-    default_user_agent: Some("opencode/1.17.10"),
+    default_user_agent: Some(neenee_llm_client::ZCODE_USER_AGENT),
 };
 
 /// Baseline capability metadata for the models this provider serves,
@@ -86,6 +86,28 @@ pub const MODELS: &[Model] = &[
         model_guidance: "",
         effort_levels: &[],
     },
+    Model {
+        id: "glm-4.6",
+        family: "glm",
+        context_window: 200_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
+    Model {
+        id: "glm-4.5",
+        family: "glm",
+        context_window: 200_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: &[],
+    },
 ];
 
 inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
@@ -109,5 +131,16 @@ mod tests {
         let spec = openai_provider_spec("zai-code").expect("zai-code spec");
         assert_eq!(spec.resolve_model(None), "glm-5.3");
         assert_eq!(spec.resolve_model(Some("glm-5.1".to_string())), "glm-5.1");
+    }
+
+    #[test]
+    fn zai_code_uses_zcode_user_agent_and_identity() {
+        let spec = openai_provider_spec("zai-code").expect("zai-code spec");
+        let provider = spec.build("test-key".to_string(), None, None);
+        assert_eq!(provider.endpoint.user_agent(), crate::ZCODE_USER_AGENT);
+        let identity = provider.endpoint.client_identity();
+        assert_eq!(identity, crate::ClientIdentity::ZCode);
+        assert!(identity.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Z Code"));
+        assert!(identity.headers().iter().any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm"));
     }
 }

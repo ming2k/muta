@@ -30,7 +30,10 @@ pub mod transport;
 // facade reach it as `crate::{Endpoint, ensure_success, …}` rather than through
 // the owning module.
 pub use client::Client;
-pub use endpoint::{COPILOT_CLIENT_HEADERS, Endpoint, NEENEE_USER_AGENT, TurnState};
+pub use endpoint::{
+    COPILOT_CLIENT_HEADERS, ClientIdentity, Endpoint, NEENEE_USER_AGENT, OPENCODE_USER_AGENT,
+    OPENCODE_VERSION, TurnState, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
+};
 pub use transport::{decode_response_json, ensure_success, retry_after_ms, transport_error};
 
 // Re-export the concrete provider types at the crate root for ergonomic access

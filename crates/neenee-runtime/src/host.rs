@@ -364,6 +364,9 @@ async fn run_inner(
     // Phase 2 — stop accepting, close live connections, confirm the loops.
     handle.cancel.cancel();
     registry.publish_host_event(neenee_contracts::MonitorEvent::DaemonDraining);
+    registry
+        .broadcast_all_sessions(neenee_contracts::AgentResponse::Exit)
+        .await;
     if !gate.forced() {
         handle.conns.drain().await;
     }

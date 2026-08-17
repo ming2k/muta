@@ -444,6 +444,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Envoys resolve relative write-grants against the session's project
     // root, not the daemon process's cwd (ADR-0096).
     envoy_tool.set_workspace_root(Some(project_root.clone()));
+    // Envoys inherit the session's provider retry configuration.
+    envoy_tool.bind_retry_policy(
+        config.provider_retry_max_attempts,
+        config.provider_retry_base_ms,
+        config.provider_retry_max_ms,
+    );
     // Full-duplex (ADR-0029): capture the envoy tool's envoy registry so the
     // request loop can route a user's permission / ask_user reply down into the
     // specific live child that surfaced the request (looked up by the parent

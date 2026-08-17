@@ -13,6 +13,8 @@ pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
 /// ADR-0091 command-result header rows: same disclosure interaction as tool
 /// steps, own block index so focus/click resolution routes to the command.
 pub const COMMAND_RESULT_BLOCK_IDX: usize = usize::MAX - 3;
+/// Expandable notice header rows (e.g. provider error with formatted JSON).
+pub const NOTICE_BLOCK_IDX: usize = usize::MAX - 4;
 
 /// Identifies a specific position inside the document model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -52,6 +54,7 @@ pub enum InteractiveTargetKind {
     Thinking,
     ProviderRetry,
     CommandResult,
+    Notice,
 }
 
 impl InteractiveTarget {
@@ -84,6 +87,14 @@ impl InteractiveTarget {
             message_idx,
             block_idx: COMMAND_RESULT_BLOCK_IDX,
             kind: InteractiveTargetKind::CommandResult,
+        }
+    }
+
+    pub fn notice(message_idx: usize) -> Self {
+        Self {
+            message_idx,
+            block_idx: NOTICE_BLOCK_IDX,
+            kind: InteractiveTargetKind::Notice,
         }
     }
 }
@@ -353,6 +364,11 @@ impl LayoutMap {
         })
     }
 
+    /// Return the first block region recorded for a given message index.
+    pub fn first_region_for_message(&self, message_idx: usize) -> Option<&BlockRegion> {
+        self.regions.iter().find(|r| r.message_idx == message_idx)
+    }
+
     /// Return visible activatable targets in screen order.
     pub fn interactive_targets(&self) -> Vec<InteractiveTarget> {
         let mut regions: Vec<&BlockRegion> = self
@@ -365,6 +381,7 @@ impl LayoutMap {
                         | THINKING_BLOCK_IDX
                         | PROVIDER_RETRY_BLOCK_IDX
                         | COMMAND_RESULT_BLOCK_IDX
+                        | NOTICE_BLOCK_IDX
                 )
             })
             .collect();
@@ -377,6 +394,7 @@ impl LayoutMap {
                 THINKING_BLOCK_IDX => InteractiveTarget::thinking(region.message_idx),
                 PROVIDER_RETRY_BLOCK_IDX => InteractiveTarget::provider_retry(region.message_idx),
                 COMMAND_RESULT_BLOCK_IDX => InteractiveTarget::command_result(region.message_idx),
+                NOTICE_BLOCK_IDX => InteractiveTarget::notice(region.message_idx),
                 _ => continue,
             };
             if !targets.contains(&target) {

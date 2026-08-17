@@ -1062,24 +1062,3 @@ fn different_tool_turns_have_one_vertical_gap() {
         "turn header → tool needs one blank row:\n{grid}"
     );
 }
-
-#[test]
-fn provider_retry_is_one_expandable_transcript_component() {
-    let mut retry = TranscriptMessage::provider_retry(
-        2,
-        4,
-        std::time::Duration::from_secs(30),
-        "HTTP 429: rate limited by upstream",
-    );
-    retry.pin_provider_retry_expanded(true);
-
-    let grid = render_transcript_grid(&[retry], 72, 14);
-    assert!(
-        grid.contains("provider retry 1/3 · next in"),
-        "summary should expose current/max retry and live countdown:\n{grid}"
-    );
-    assert!(
-        grid.contains("Last failure") && grid.contains("HTTP 429: rate limited by upstream"),
-        "expanded body should expose the most recent failure:\n{grid}"
-    );
-}

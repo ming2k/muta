@@ -84,8 +84,8 @@ Notes:
   chat-completions URL. The dated ids (`-0731` / `-0813`) pin a snapshot; the
   bare ids float with the upstream latest.
 - `zai-code` targets the Zhipu BigModel / Z.AI coding-plan platform (CN) and serves the
-  GLM-5 family; it sends a `opencode/1.17.10` User-Agent so the platform
-  recognises a coding agent.
+  GLM-5 family; it sends a `ZCode/3.5.3` User-Agent along with native ZCode identity headers
+  (`X-Title`, `X-ZCode-Agent`, `HTTP-Referer`) so the platform recognises its native coding client.
 - `kimi-code` tracks the Kimi Code platform's live `GET /models` list at
   startup (`k3` by default); model overrides are ignored. It is the first
   **fitting** template: platform-native ids the client registry does not know
@@ -179,9 +179,9 @@ not a provider decorator. Configuration:
 
 | Config key | Default | Hard maximum |
 |------------|---------|--------------|
-| `provider_retry_max_attempts` | `6` | `10` |
+| `provider_retry_max_attempts` | `30` | `60` |
 | `provider_retry_base_ms` | `1000` | — |
-| `provider_retry_max_ms` | `30000` | — |
+| `provider_retry_max_ms` | `10000` | — |
 
 Backoff is computed by `retry_delay_ms` as exponential
 `base_ms * 2^(attempt-1)` capped at `max_ms`. Server `Retry-After` or

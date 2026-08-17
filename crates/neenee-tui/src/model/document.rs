@@ -129,6 +129,8 @@ pub enum MessageKind {
     /// severity→color/icon mapping and lets callers stop string-sniffing.
     Notice {
         severity: NoticeSeverity,
+        expanded: bool,
+        user_pinned: bool,
     },
     /// A slash-command invocation with its typed result (ADR-0091). Rendered
     /// as a compact dimmed header row (the invocation) with an expandable
@@ -1390,6 +1392,25 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::Notice { .. })
     }
 
+    pub fn notice_expanded(&self) -> Option<bool> {
+        match &self.kind {
+            MessageKind::Notice { expanded, .. } => Some(*expanded),
+            _ => None,
+        }
+    }
+
+    pub fn pin_notice_expanded(&mut self, expanded: bool) {
+        if let MessageKind::Notice {
+            expanded: current,
+            user_pinned,
+            ..
+        } = &mut self.kind
+        {
+            *current = expanded;
+            *user_pinned = true;
+        }
+    }
+
     /// Construct a notice message. Replaces the ad-hoc
     /// `TranscriptMessage::new(Role::System, format!("Error: …"))` pattern with
     /// a typed severity so the renderer can pick color/icon from one place.
@@ -1407,7 +1428,11 @@ impl TranscriptMessage {
             role: Role::System,
             blocks,
             raw,
-            kind: MessageKind::Notice { severity },
+            kind: MessageKind::Notice {
+                severity,
+                expanded: false,
+                user_pinned: false,
+            },
             delivery: DeliveryStatus::default(),
             origin: UserMessageOrigin::Chat,
             provider: None,
@@ -3222,12 +3247,19 @@ mod tests {
         assert!(matches!(
             n.kind,
             MessageKind::Notice {
-                severity: NoticeSeverity::Error
+                severity: NoticeSeverity::Error,
+                ..
             }
         ));
         // The raw text is preserved verbatim for the renderer (no "Error: "
         // prefix injection — the glyph is the renderer's job).
         assert_eq!(n.raw, "boom");
+        assert_eq!(n.notice_expanded(), Some(false));
+
+        let mut mut_n = n.clone();
+        mut_n.pin_notice_expanded(true);
+        assert_eq!(mut_n.notice_expanded(), Some(true));
+
         // A text message is not a notice.
         let plain = TranscriptMessage::new(Role::Assistant, "hi");
         assert!(!plain.is_notice());

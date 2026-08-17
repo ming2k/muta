@@ -58,9 +58,7 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
         let mut msg = TranscriptMessage::new(message.role, content);
         msg.provider = provider;
         msg.model = model;
-        if msg.role == Role::User {
-            msg.sent_at_ms = sent_at_ms;
-        }
+        msg.sent_at_ms = sent_at_ms;
         // Infer the turn origin for restored user messages so a resumed
         // session's Activity modal still skips slash/shell turns. The durable
         // `origin` field is consulted first (ADR-0050): a `CommandEcho`

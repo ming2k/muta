@@ -292,6 +292,7 @@ impl SessionRegistry {
             ));
         };
         e.cancel.cancel();
+        let _ = e.events.send(AgentResponse::Exit);
         // SessionEnd observers fire best-effort after the driver is cancelled;
         // the hook context (session id + cwd) does not depend on it. Bounded:
         // an external-process hook that hangs cannot pin the daemon open.
@@ -313,6 +314,14 @@ impl SessionRegistry {
         })
         .await;
         Ok(())
+    }
+
+    /// Broadcast an agent response to every hosted session's event bus.
+    pub async fn broadcast_all_sessions(&self, response: AgentResponse) {
+        let map = self.sessions.lock().await;
+        for session in map.values() {
+            let _ = session.events.send(response.clone());
+        }
     }
 
     /// Graceful daemon shutdown (ADR-0096): tear down every hosted session
