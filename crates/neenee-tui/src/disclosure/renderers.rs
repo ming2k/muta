@@ -2322,9 +2322,19 @@ pub fn draw_command_result(
         .command_row_layout(full_width)
         .unwrap_or(CommandRowLayout::Plain);
 
+    let is_shell = invocation.starts_with('!') || msg.raw.starts_with('!');
+    let lead_symbol = if is_shell { "❯ " } else { "⌘ " };
+    let lead_tone = if is_shell { theme.ok() } else { theme.info() };
+    let time_label = msg.sent_at_ms.map(crate::time::sent_time_label);
+
     if layout == CommandRowLayout::Disclose {
         // The summary is the invocation alone; the marker (`+`/`-`) comes from
         // the shared disclosure header, which also records the clickable rect.
+        let summary_text = if let Some(time) = &time_label {
+            format!("{invocation} · {time}")
+        } else {
+            invocation.clone()
+        };
         let _summary_line_idx = {
             let mut ctx = RenderCtx::from_cursor(
                 frame,
@@ -2341,7 +2351,7 @@ pub fn draw_command_result(
                 mi,
                 expanded,
                 None,
-                &invocation,
+                &summary_text,
                 hovered,
                 focused,
                 COMMAND_RESULT_BLOCK_IDX,
@@ -2387,19 +2397,30 @@ pub fn draw_command_result(
         theme,
     );
     let line = {
-        let mut spans = vec![Span::styled(
-            invocation.clone(),
-            Style::default()
-                .fg(summary_color)
-                .add_modifier(Modifier::BOLD),
-        )];
-        let mut used = invocation.width();
+        let mut spans = vec![
+            Span::styled(
+                lead_symbol,
+                Style::default().fg(lead_tone).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                invocation.clone(),
+                Style::default()
+                    .fg(summary_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+        let mut used = lead_symbol.width() + invocation.width();
+        if let Some(time) = &time_label {
+            let time_span = format!(" · {time}");
+            used += time_span.width();
+            spans.push(Span::styled(time_span, Style::default().fg(theme.muted())));
+        }
         if layout == CommandRowLayout::Inline
             && let Some(reply) = msg.command_result_text()
         {
             let join = JOIN_MODIFY.to_string();
             used += join.width();
-            spans.push(Span::styled(join, Style::default().fg(summary_color)));
+            spans.push(Span::styled(join, Style::default().fg(theme.muted())));
             let budget = full_width.saturating_sub(used);
             let clamped = truncate_to_width(&reply, budget);
             used += clamped.width();

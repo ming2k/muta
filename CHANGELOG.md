@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     equal jitter, and minimum backoff floor guard, replacing the previous hardcoded 3-attempt limit.
   - Replaced bulky "Gave up after X attempt(s)..." boilerplate with raw clean error messages upon retry budget exhaustion.
   - Introduced expandable Notice components in the TUI: provider HTTP errors (e.g. 429/5xx) default to a concise header and expand to formatted, indented JSON details.
+- **Command result rows now render a lead symbol and timestamp.**
+  - Slash command rows lead with `⌘` (info tone) and shell command rows (`!cmd`) lead with `❯` (ok tone).
+  - Both layouts (disclose and inline) append a muted `· HH:MM` sent-time label when a timestamp is present.
+  - Command rows never render the `▌ Sent` fallback marker.
 
 ## [0.25.0] - 2026-08-16
 

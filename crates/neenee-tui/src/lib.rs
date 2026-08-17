@@ -605,7 +605,7 @@ pub async fn run_tui(
                             let mut msgs = buf.write().await;
                             let mut message = TranscriptMessage::new(Role::Assistant, t)
                                 .with_attribution(provider, model)
-                                .with_sent_at_ms(crate::now_epoch_ms());
+                                .with_sent_at_ms(crate::event_loop::now_epoch_ms());
                             if let Some((round, turn)) =
                                 positions_by_session.get(&session_id).copied()
                             {
@@ -641,7 +641,7 @@ pub async fn run_tui(
                             let mut msgs = buf.write().await;
                             let mut message =
                                 TranscriptMessage::command_result(name, args, Some(result))
-                                    .with_sent_at_ms(crate::now_epoch_ms());
+                                    .with_sent_at_ms(crate::event_loop::now_epoch_ms());
                             if let Some((round, turn)) =
                                 positions_by_session.get(&session_id).copied()
                             {

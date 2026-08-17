@@ -1062,3 +1062,69 @@ fn different_tool_turns_have_one_vertical_gap() {
         "turn header → tool needs one blank row:\n{grid}"
     );
 }
+
+#[test]
+fn command_component_renders_lead_symbols_and_timestamps() {
+    let epoch_ms = 1_700_000_000_000; // Produces a deterministic HH:MM label
+    let messages = vec![
+        TranscriptMessage::command_result(
+            "autopilot",
+            "on",
+            Some(neenee_contracts::CommandResult::Ack {
+                title: "Autopilot ON: agent will run without intervention".to_string(),
+            }),
+        )
+        .with_sent_at_ms(epoch_ms),
+        TranscriptMessage::command_result("shell", "!cargo check", None)
+            .with_sent_at_ms(epoch_ms),
+    ];
+
+    let grid = render_transcript_grid(&messages, 80, 18);
+    assert!(
+        grid.contains("⌘ /autopilot on"),
+        "slash command must render with ⌘ lead:\n{grid}"
+    );
+    assert!(
+        grid.contains("Autopilot ON: agent will run without intervention"),
+        "ack title must render inline:\n{grid}"
+    );
+    assert!(
+        grid.contains("❯ !cargo check"),
+        "shell command must render with ❯ lead:\n{grid}"
+    );
+    assert!(
+        !grid.contains("▌ Sent"),
+        "command rows must never render ▌ Sent:\n{grid}"
+    );
+}
+
+#[test]
+fn user_messages_render_timestamps_and_never_sent_marker() {
+    let epoch_ms = 1_700_000_000_000;
+    let round_msg = TranscriptMessage::new(neenee_contracts::Role::User, "Hello with round")
+        .with_round(1)
+        .with_sent_at_ms(epoch_ms);
+    let prompt_msg = TranscriptMessage::new(neenee_contracts::Role::User, "Hello unpositioned")
+        .with_sent_at_ms(epoch_ms);
+
+    let grid_round = render_transcript_grid(&[round_msg], 72, 18);
+    assert!(
+        grid_round.contains("round 1"),
+        "must render round number:\n{grid_round}"
+    );
+    assert!(
+        !grid_round.contains("Sent"),
+        "must not contain Sent fallback:\n{grid_round}"
+    );
+
+    let grid_prompt = render_transcript_grid(&[prompt_msg], 72, 18);
+    assert!(
+        grid_prompt.contains("prompt"),
+        "must render prompt anchor:\n{grid_prompt}"
+    );
+    assert!(
+        !grid_prompt.contains("Sent"),
+        "must not contain Sent fallback:\n{grid_prompt}"
+    );
+}
+
