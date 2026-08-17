@@ -42,17 +42,18 @@ The transcript is formalized as an ordered stream of **Entries** (`TranscriptEnt
   followed by the conversational/reasoning body (thinking traces, tool steps,
   assistant text).
 - **Command Entry**: Initiated by a slash command or shell passthrough. Contains
-  a distinct Header (`⌘ /cmd args · HH:MM` or `❯ !shell · HH:MM`) followed
-  directly by its flat, unfolded result body.
+  a generic Header (`⌘ command · HH:MM` or `❯ command · HH:MM`) where both glyph
+  and label share the indicator color, followed by its body containing the
+  concrete invocation (`/autopilot on`, `!cargo test`) and unfolded result content.
 
 Every Entry shares the universal structure:
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Header: [Glyph/Role] [Input/Action Text] · [HH:MM]          │  ← Boundary & Metadata (e.g. ⌘ /cmd · 00:41)
+│ Header: [Glyph] [Category/Role] · [HH:MM]                   │  ← Boundary & Indicator (e.g. ⌘ command · 00:41)
 ├─────────────────────────────────────────────────────────────┤
 │ (1 blank row gap - universal entry design constraint)       │  ← 1-Row Gap (TURN_HEADER_BODY_GAP_ROWS)
 ├─────────────────────────────────────────────────────────────┤
-│ Body:   [Direct Result / Assistant Stream / Tool Output]    │  ← Unfolded Content
+│ Body:   [Concrete Invocation / Direct Result / Stream]      │  ← Unfolded Content
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -60,16 +61,17 @@ Every Entry shares the universal structure:
 
 Command entries discard both the card identity bar (`┃`) and the collapsible
 folding mechanism (`▸`/`▾`):
-- **Header**: Renders directly as `⌘ /cmd args · HH:MM` (or `❯ !shell · HH:MM`)
-  where the glyph itself is the unambiguous leading mark.
+- **Header**: Renders as `⌘ command · HH:MM` (or `❯ command · HH:MM`)
+  where `⌘ command` shares the bold indicator tone (`info` for slash, `ok` for shell).
 - **Universal Header-Body Gap**: Exactly 1 blank row (`TURN_HEADER_BODY_GAP_ROWS = 1`)
   separates the Entry header and its body content, preserving the universal
   transcript typography rhythm.
-- When **Pending** (`CommandPhase::Pending`), the Entry renders its Header alone
-  in the muted running tone (`⌘ /autopilot on · HH:MM`).
+- **Body**: Displays the concrete command invocation (e.g. `/autopilot on`),
+  followed by the result blocks when completed.
+- When **Pending** (`CommandPhase::Pending`), the Entry renders its Header,
+  the 1-row gap, and the invocation in muted running style.
 - When **Completed** (`CommandPhase::Completed`), the Entry renders its Header,
-  followed by the 1-row gap, and then the full result body through the shared
-  block renderer.
+  the 1-row gap, the invocation in active style, and the result body blocks.
 
 ### 3. Concurrent updates and multi-entry layout mechanics
 

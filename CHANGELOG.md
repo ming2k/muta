@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.2] - 2026-08-18
+
 ### Added
 
 - **Custom OpenAI provider template — any OpenAI-compatible endpoint.**  - A new entry in Connections → `＋ Add connection` for third-party relays, self-hosted gateways, and subscription bundles that expose an OpenAI-compatible `/v1/chat/completions` surface (e.g. `https://chatapi.weixin.qq.com/openai/v1/chat/completions`).
@@ -3388,7 +3390,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.25.1...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.25.2...HEAD
+[0.25.2]: https://github.com/ming2k/neenee/releases/tag/v0.25.2
 [0.25.1]: https://github.com/ming2k/neenee/releases/tag/v0.25.1
 [0.25.0]: https://github.com/ming2k/neenee/releases/tag/v0.25.0
 [0.24.0]: https://github.com/ming2k/neenee/releases/tag/v0.24.0

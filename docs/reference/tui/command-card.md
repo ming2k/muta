@@ -15,32 +15,38 @@ standard header-body spacing.
 
 ## Shapes
 
-One span grammar for the Entry header, followed by a 1-row gap and the unfolded body:
+One span grammar for the Entry header, followed by a 1-row gap, the concrete invocation, and the unfolded body:
 
 ```text
-⌘ /autopilot on · 21:39               pending — input header only
+⌘ command · 21:39                     pending header
+                                      ← 1-row blank gap
+/autopilot on                         concrete command invocation
 
-⌘ /permissions · 21:39                completed header
+⌘ command · 21:39                     completed header
+                                      ← 1-row blank gap
+/permissions                          concrete command invocation
                                       ← 1-row blank gap
 Always-allowed tools: …               …result body through the shared block renderer
 
-❯ !cargo check · 21:39                shell passthrough (plain)
+❯ command · 21:39                     shell passthrough header
+                                      ← 1-row blank gap
+!cargo check                          shell command invocation
 ```
 
 | Attribute | Value |
 |-----------|-------|
-| Glyph | `⌘ ` (slash, info) or `❯ ` (shell, ok), BOLD — the entry's leading identifier |
-| Invocation | After the glyph, BOLD; carries the row's interaction tone ladder |
+| Header Tag | `⌘ command` (slash, info) or `❯ command` (shell, ok), BOLD — indicator tone |
 | Trailing meta | ` · HH:MM` muted, when `sent_at_ms` is present |
 | Gap | 1 blank row (`TURN_HEADER_BODY_GAP_ROWS = 1`) between header and body |
+| Invocation | Concrete command text (`/name args`, `!cmd`), rendered inside the body |
 | Body | Directly rendered beneath the gap (ADR-0111); collapsible folding is eliminated |
 
 ## Lifecycle
 
 | Phase | Render |
 |-------|--------|
-| `Pending` | `⌘ /cmd args · HH:MM` in the muted running tone — dispatched, reply not yet arrived |
-| `Completed` | `⌘ /cmd args · HH:MM` followed by 1-row gap and result body blocks |
+| `Pending` | `⌘ command · HH:MM` header, followed by 1-row gap and invocation in muted running tone |
+| `Completed` | `⌘ command · HH:MM` header, 1-row gap, invocation in active tone, and result body blocks |
 | `Cancelled` | Settled with no reply (e.g. a modal command); reads like a plain entry |
 
 ## Direct body rendering
