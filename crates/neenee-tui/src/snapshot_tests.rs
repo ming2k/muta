@@ -808,7 +808,9 @@ fn command_rows_render_by_shape_without_false_markers() {
 }
 
 /// ADR-0106: expanding a Disclose command row reveals the typed result body
-/// through the shared block renderer, and pinning is respected.
+/// through the shared block renderer, and pinning is respected. ADR-0108: the
+/// disclosure marker now leads the row *with* the command glyph — the two
+/// halves of one component, never a naked `+ /cmd`.
 #[test]
 fn command_row_disclose_expands_to_result_body() {
     let mut message = TranscriptMessage::command_result(
@@ -822,8 +824,8 @@ fn command_row_disclose_expands_to_result_body() {
 
     let grid = render_transcript_grid(&[message], 72, 18);
     assert!(
-        grid.contains("- /permissions"),
-        "an expanded row shows the open marker:\n{grid}"
+        grid.contains("- ⌘ /permissions"),
+        "an expanded row shows the open marker with the command glyph:\n{grid}"
     );
     assert!(
         grid.contains("Always-allowed tools:"),
@@ -861,8 +863,133 @@ fn command_row_inline_falls_back_to_disclose_when_narrow() {
     // Narrow: the reply cannot fit, so the row must disclose instead.
     let narrow = render_transcript_grid(&[message], 40, 18);
     assert!(
-        narrow.contains("+ /search"),
-        "a non-fitting reply discloses rather than truncating inline:\n{narrow}"
+        narrow.contains("+ ⌘ /search"),
+        "a non-fitting reply discloses (marker + glyph) rather than truncating inline:\n{narrow}"
+    );
+}
+
+/// ADR-0108: the command component exists in two states. A pending row shows
+/// the invocation alone — the input half — with no marker (there is no output
+/// to disclose yet) and no reply; settling it in place with the typed result
+/// reuses the same row and produces the completed inline form.
+#[test]
+fn command_component_pending_then_completed() {
+    let mut message = TranscriptMessage::pending_command("autopilot", "on");
+
+    let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
+    assert!(
+        pending.contains("⌘ /autopilot on"),
+        "a pending row shows the invocation with its glyph:\n{pending}"
+    );
+    assert!(
+        !pending.trim_start().starts_with('+') && !pending.contains("\n+"),
+        "a pending row shows no disclosure marker:\n{pending}"
+    );
+    assert!(
+        !pending.contains("Autopilot ON"),
+        "a pending row shows no reply:\n{pending}"
+    );
+
+    // The reply settles the same component in place.
+    assert!(
+        message.settle_command_result(neenee_contracts::CommandResult::Ack {
+            title: "Autopilot ON".to_string(),
+        }),
+        "a pending command settles with its result"
+    );
+    let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
+    assert!(
+        completed.contains("⌘ /autopilot on · Autopilot ON"),
+        "the settled row joins the reply inline on the same row:\n{completed}"
+    );
+
+    // Settling is one-shot: a second reply must not mutate the component.
+    assert!(
+        !message
+            .settle_command_result(neenee_contracts::CommandResult::Text("ignored".to_string(),)),
+        "a completed command cannot settle again"
+    );
+}
+
+/// ADR-0108: two identical commands dispatched in quick succession settle
+/// their own rows (the settle finder targets *pending* rows only, FIFO from
+/// the tail) — the second reply must not bounce off the first's completed
+/// row.
+#[test]
+fn identical_commands_each_settle_their_own_row() {
+    use crate::model::document::{CommandPhase, TranscriptMessage};
+
+    let mut messages = [
+        TranscriptMessage::pending_command("search", "foo"),
+        TranscriptMessage::pending_command("search", "foo"),
+    ];
+    // Mirror the event loop's settle finder: newest pending row with this
+    // invocation.
+    let target = messages.iter_mut().rev().find(|message| {
+        message.is_command_result()
+            && message.raw == "/search foo"
+            && message.command_result_phase() == Some(CommandPhase::Pending)
+    });
+    assert!(
+        target
+            .expect("a pending row exists")
+            .settle_command_result(neenee_contracts::CommandResult::Text("hit 1".to_string())),
+        "the reply settles the newest pending row"
+    );
+    assert_eq!(
+        messages[0].command_result_phase(),
+        Some(CommandPhase::Pending),
+        "the first row keeps waiting for its own reply"
+    );
+    assert_eq!(
+        messages[1].command_result_phase(),
+        Some(CommandPhase::Completed)
+    );
+}
+
+/// ADR-0108: a pending command that will never receive a reply is cancelled —
+/// the row stops promising an output but keeps the invocation readable, and
+/// the cancel transition is idempotent (a completed row is never cancelled).
+#[test]
+fn command_component_cancel_marks_pending_row_settled() {
+    let mut pending = TranscriptMessage::pending_command("models", "");
+    assert!(pending.cancel_pending_command());
+    assert_eq!(
+        pending.command_result_phase(),
+        Some(crate::model::document::CommandPhase::Cancelled)
+    );
+    assert!(
+        !pending.cancel_pending_command(),
+        "cancelling a cancelled row is a no-op"
+    );
+
+    let mut completed = TranscriptMessage::command_result(
+        "new",
+        "",
+        Some(neenee_contracts::CommandResult::Text(
+            "Started new session: a1b2c3".to_string(),
+        )),
+    );
+    assert!(
+        !completed.cancel_pending_command(),
+        "a completed row is never cancelled"
+    );
+    assert_eq!(
+        completed.command_result_phase(),
+        Some(crate::model::document::CommandPhase::Completed)
+    );
+}
+
+/// ADR-0108: a pending row classifies `Plain` regardless of the reply it will
+/// eventually hold — the phase owns presentation until the reply settles, so
+/// the layout never re-flows on settle without the reply being present.
+#[test]
+fn command_component_pending_classifies_plain() {
+    let pending = TranscriptMessage::pending_command("new", "");
+    assert_eq!(
+        pending.command_row_layout(200),
+        Some(crate::model::document::CommandRowLayout::Plain),
+        "a pending row has no result to classify by"
     );
 }
 
@@ -1075,8 +1202,7 @@ fn command_component_renders_lead_symbols_and_timestamps() {
             }),
         )
         .with_sent_at_ms(epoch_ms),
-        TranscriptMessage::command_result("shell", "!cargo check", None)
-            .with_sent_at_ms(epoch_ms),
+        TranscriptMessage::command_result("shell", "!cargo check", None).with_sent_at_ms(epoch_ms),
     ];
 
     let grid = render_transcript_grid(&messages, 80, 18);
@@ -1127,4 +1253,3 @@ fn user_messages_render_timestamps_and_never_sent_marker() {
         "must not contain Sent fallback:\n{grid_prompt}"
     );
 }
-

@@ -47,10 +47,8 @@ pub const CODEX_CLIENT_HEADERS: &[(&str, &str)] = &[
 pub const CLINE_USER_AGENT: &str = "Cline/3.5.0";
 
 /// Client-identity headers used when impersonating Cline.
-pub const CLINE_CLIENT_HEADERS: &[(&str, &str)] = &[
-    ("X-Title", "Cline"),
-    ("HTTP-Referer", "https://cline.bot"),
-];
+pub const CLINE_CLIENT_HEADERS: &[(&str, &str)] =
+    &[("X-Title", "Cline"), ("HTTP-Referer", "https://cline.bot")];
 
 /// User-Agent header value sent when impersonating Cursor.
 pub const CURSOR_USER_AGENT: &str = "Cursor/0.45.0";
@@ -94,10 +92,8 @@ pub const WINDSURF_CLIENT_HEADERS: &[(&str, &str)] = &[
 pub const AIDER_USER_AGENT: &str = "aider/0.74.0";
 
 /// Client-identity headers used when impersonating Aider.
-pub const AIDER_CLIENT_HEADERS: &[(&str, &str)] = &[
-    ("X-Title", "Aider"),
-    ("HTTP-Referer", "https://aider.chat"),
-];
+pub const AIDER_CLIENT_HEADERS: &[(&str, &str)] =
+    &[("X-Title", "Aider"), ("HTTP-Referer", "https://aider.chat")];
 
 /// User-Agent header value sent when impersonating Zhipu ZCode.
 pub const ZCODE_USER_AGENT: &str = "ZCode/3.5.3";
@@ -252,9 +248,10 @@ impl ClientIdentity {
             Self::Aider => AIDER_CLIENT_HEADERS.to_vec(),
             Self::ZCode => ZCODE_CLIENT_HEADERS.to_vec(),
             Self::Copilot => COPILOT_CLIENT_HEADERS.to_vec(),
-            Self::Custom { extra_headers, .. } => {
-                extra_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
-            }
+            Self::Custom { extra_headers, .. } => extra_headers
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect(),
         }
     }
 
@@ -464,7 +461,12 @@ mod tests {
             // from_user_agent detects standard presets
             if *preset != ClientIdentity::Copilot {
                 let detected = ClientIdentity::from_user_agent(preset.user_agent());
-                assert_eq!(&detected, preset, "detected from UA: {}", preset.user_agent());
+                assert_eq!(
+                    &detected,
+                    preset,
+                    "detected from UA: {}",
+                    preset.user_agent()
+                );
             }
         }
     }
@@ -473,16 +475,39 @@ mod tests {
     fn client_identity_headers_attached_for_impersonated_clients() {
         let zcode = ClientIdentity::ZCode;
         let zcode_headers = zcode.headers();
-        assert!(zcode_headers.iter().any(|(k, v)| *k == "X-Title" && *v == "Z Code"));
-        assert!(zcode_headers.iter().any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm"));
+        assert!(
+            zcode_headers
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Z Code")
+        );
+        assert!(
+            zcode_headers
+                .iter()
+                .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
+        );
 
         let claude = ClientIdentity::ClaudeCode;
-        assert!(claude.headers().iter().any(|(k, v)| *k == "x-app" && *v == "claude-code"));
+        assert!(
+            claude
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "x-app" && *v == "claude-code")
+        );
 
         let cline = ClientIdentity::Cline;
-        assert!(cline.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Cline"));
+        assert!(
+            cline
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Cline")
+        );
 
         let cursor = ClientIdentity::Cursor;
-        assert!(cursor.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Cursor"));
+        assert!(
+            cursor
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Cursor")
+        );
     }
 }

@@ -30,6 +30,8 @@ mod commands;
 mod modals;
 mod mouse;
 
+pub(super) use commands::split_command_word;
+
 /// How the event loop proceeds after a dispatched action. Arms that ended in
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
 /// the loop) when the match was inline in `run_app_loop` return these instead;
@@ -92,9 +94,6 @@ pub(super) async fn dispatch_action(
         input::InputAction::SendSlash(cmd) => {
             return commands::handle_send_slash(app, runtime, session, viewed_session_id, cmd)
                 .await;
-        }
-        input::InputAction::SendShell(command) => {
-            commands::handle_send_shell(app, runtime, viewed_session_id, command).await;
         }
         input::InputAction::ProviderPickerActivate => {
             // Activate is a Models-only action: the flat (provider,

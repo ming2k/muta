@@ -220,10 +220,6 @@ pub enum InputAction {
     SendChat(String),
     /// Send a slash command.
     SendSlash(String),
-    /// Run a shell command directly (the `!` prefix path). The `!` is
-    /// stripped and the remaining text is executed through the `bash` tool
-    /// without an LLM roundtrip.
-    SendShell(String),
     /// Activate the highlighted row of the **Models** picker: a flat
     /// (provider, model) pair. Falls through to the API-key setup modal when
     /// the target has no key. The Connections list has no activate concept —
@@ -1441,17 +1437,6 @@ pub fn process_event(
                                     "/config" => InputAction::OpenConfig,
                                     "/exit" => InputAction::Quit,
                                     _ => InputAction::SendSlash(text),
-                                }
-                            } else if let Some(rest) = text.strip_prefix('!') {
-                                // `!<command>` runs the rest directly through the
-                                // bash tool, bypassing the LLM. Leading whitespace
-                                // after the bang is tolerated so `! ls` matches
-                                // the shell convention. A bare `!` is a no-op.
-                                let command = rest.trim_start().to_string();
-                                if command.is_empty() {
-                                    InputAction::None
-                                } else {
-                                    InputAction::SendShell(command)
                                 }
                             } else if !text.is_empty() {
                                 InputAction::SendChat(text)

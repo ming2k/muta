@@ -55,8 +55,8 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
         let prefix = clean[..pos].trim_end_matches([':', ' ', '\n', '\t', '\r']);
         let json_candidate = clean[pos..].trim();
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_candidate) {
-            let pretty_json = serde_json::to_string_pretty(&value)
-                .unwrap_or_else(|_| json_candidate.to_string());
+            let pretty_json =
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| json_candidate.to_string());
             let header = if prefix.is_empty() {
                 "Provider HTTP Error".to_string()
             } else {
@@ -153,6 +153,17 @@ pub(crate) fn draw_notice_view(
 
     *content_lines += header_lines.len().max(1);
 
+    let has_detail = parsed.detail.is_some();
+    let action_hint = if has_detail {
+        if notice.expanded() {
+            Some("click to collapse")
+        } else {
+            Some("click to expand")
+        }
+    } else {
+        None
+    };
+
     for (idx, wl) in header_lines.iter().enumerate() {
         if *skip_rows > 0 {
             *skip_rows = skip_rows.saturating_sub(1);
@@ -172,10 +183,33 @@ pub(crate) fn draw_notice_view(
         spans.push(Span::styled(wl.text.clone(), header_style));
         used += wl.text.width();
 
-        spans.push(Span::styled(
-            padded_tail(full_width, used),
-            Style::default().bg(card_bg),
-        ));
+        if idx == 0
+            && let Some(hint) = action_hint
+        {
+            let hint_len = hint.width();
+            if full_width >= used + hint_len + 3 {
+                let space_cols = full_width.saturating_sub(used + hint_len + 2);
+                spans.push(Span::styled(
+                    " ".repeat(space_cols),
+                    Style::default().bg(card_bg),
+                ));
+                spans.push(Span::styled(
+                    hint,
+                    Style::default().bg(card_bg).fg(theme.muted()),
+                ));
+                spans.push(Span::styled("  ", Style::default().bg(card_bg)));
+            } else {
+                spans.push(Span::styled(
+                    padded_tail(full_width, used),
+                    Style::default().bg(card_bg),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(
+                padded_tail(full_width, used),
+                Style::default().bg(card_bg),
+            ));
+        }
 
         let line_rect = Rect::new(area.x, *current_y, area.width, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
@@ -219,10 +253,7 @@ pub(crate) fn draw_notice_view(
                         dwl.text.clone(),
                         Style::default().bg(card_bg).fg(theme.text),
                     ),
-                    Span::styled(
-                        padded_tail(full_width, used),
-                        Style::default().bg(card_bg),
-                    ),
+                    Span::styled(padded_tail(full_width, used), Style::default().bg(card_bg)),
                 ];
 
                 let line_rect = Rect::new(area.x, *current_y, area.width, 1);
@@ -282,6 +313,9 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         let raw = "Claude HTTP 500 Server Error\nDetails:\nhost unreachable";
         let parsed = parse_notice_content(raw);
         assert_eq!(parsed.header, "Claude HTTP 500 Server Error");
-        assert_eq!(parsed.detail, Some("Details:\nhost unreachable".to_string()));
+        assert_eq!(
+            parsed.detail,
+            Some("Details:\nhost unreachable".to_string())
+        );
     }
 }

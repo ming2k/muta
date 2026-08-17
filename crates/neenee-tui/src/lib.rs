@@ -118,7 +118,8 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 
 use crate::model::document::{
-    MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin, notice_severity_from_core,
+    CommandPhase, MessageKind, NoticeSeverity, TranscriptMessage, UserMessageOrigin,
+    notice_severity_from_core,
 };
 use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
@@ -633,22 +634,55 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::CommandResult { name, args, result } => {
-                            // A typed slash-command result (ADR-0091): render a
-                            // compact command block, never assistant prose.
-                            // Content-bearing like `Text` — same idle-only
-                            // activity-surface handling.
+                            // A typed slash-command result (ADR-0091): settle
+                            // the pending command component in place — one
+                            // row owns both the input and the output
+                            // (ADR-0108). Content-bearing like `Text` — same
+                            // idle-only activity-surface handling.
                             *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
-                            let mut message =
-                                TranscriptMessage::command_result(name, args, Some(result))
-                                    .with_sent_at_ms(crate::event_loop::now_epoch_ms());
-                            if let Some((round, turn)) =
-                                positions_by_session.get(&session_id).copied()
+                            let invocation = if name == "shell" {
+                                args.clone()
+                            } else {
+                                format!("/{} {}", name, args).trim_end().to_string()
+                            };
                             {
-                                message.round = Some(round);
-                                message.turn = Some(turn);
+                                let mut msgs = buf.write().await;
+                                // Prefer the newest *pending* row with this
+                                // invocation: two identical commands run in
+                                // quick succession each settle their own row
+                                // (FIFO), instead of the second reply
+                                // bouncing off the first's completed row.
+                                let settled = msgs
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|message| {
+                                        message.is_command_result()
+                                            && message.raw == invocation.trim()
+                                            && message.command_result_phase()
+                                                == Some(CommandPhase::Pending)
+                                    })
+                                    .map(|message| message.settle_command_result(result.clone()))
+                                    .unwrap_or(false);
+                                if !settled {
+                                    // No pending row matched (the transcript
+                                    // was rebuilt, or the command predates
+                                    // this view): the reply still renders as
+                                    // a complete command component.
+                                    let mut message = TranscriptMessage::command_result(
+                                        name.clone(),
+                                        args.clone(),
+                                        Some(result.clone()),
+                                    )
+                                    .with_sent_at_ms(crate::event_loop::now_epoch_ms());
+                                    if let Some((round, turn)) =
+                                        positions_by_session.get(&session_id).copied()
+                                    {
+                                        message.round = Some(round);
+                                        message.turn = Some(turn);
+                                    }
+                                    msgs.push(message);
+                                }
                             }
-                            msgs.push(message);
                             if !routes_to_side && harness_clone.lock().await.loop_status.is_idle() {
                                 ir_clone.store(false, Ordering::SeqCst);
                                 activity_clone.lock().await.clear();
@@ -1202,6 +1236,18 @@ pub async fn run_tui(
                                 }
                                 ir_clone.store(running, Ordering::SeqCst);
                                 if !running {
+                                    // The dispatch cycle is complete: any
+                                    // command component still Pending will
+                                    // never receive its reply on this pass
+                                    // (modal/picker/side-view commands emit
+                                    // no `RoundEvent::CommandResult`). Mark
+                                    // it Cancelled so the row stops promising
+                                    // an output (ADR-0108) — the invocation
+                                    // stays readable, and the ledger still
+                                    // holds the authoritative record.
+                                    for message in messages_clone.write().await.iter_mut() {
+                                        message.cancel_pending_command();
+                                    }
                                     activity_clone.lock().await.clear();
                                     *current_turn_clone.lock().await = 0;
                                     *review_alert_clone.lock().await = String::new();
@@ -1544,6 +1590,7 @@ pub async fn run_tui(
         modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
+        scroll_settle_pending: false,
         focus_stack: Vec::new(),
         tx,
         should_quit,
@@ -1663,6 +1710,7 @@ pub async fn run_tui(
         custom_color_scheme: tui_config.custom_color_scheme.clone(),
         custom_color_draft: tui_config.custom_color_scheme.clone(),
         click_outside_dismiss: tui_config.click_outside_dismiss,
+        expand_auto_scroll: tui_config.expand_auto_scroll,
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),

@@ -826,7 +826,7 @@ impl EnvoyTool {
                 let status = if turn == 0 {
                     "waiting for model".to_string()
                 } else {
-                    format!("waiting for model · turn {}", turn + 1)
+                    format!("waiting for model (turn {})", turn + 1)
                 };
                 on_event(neenee_contracts::EnvoyEvent::Activity(status));
             }

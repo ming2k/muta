@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-16
+- **Revised by:** [ADR-0108](0108-one-command-component-input-output-lifecycle.md)
+  (§2's placement and per-row view state stand; the row's identity and live
+  lifecycle — one component owning input and output — are revised there)
 - **Revises:** [ADR-0091](0091-command-ledger-and-typed-results.md) (D4 live
   rendering contract — the ledger model is unchanged; only the row's
   presentation and interaction surface are revised)

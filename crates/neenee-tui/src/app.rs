@@ -310,6 +310,19 @@ pub struct App {
     /// content below the collapsed step does not yank the header back down.
     /// Cleared on any manual scroll, view reset, or when auto-follow resumes.
     pub pin_summary_line: Option<usize>,
+    /// Latched when a disclosure toggle (expand/collapse of a tool step,
+    /// command result, thinking, provider-retry, or notice card) changed the
+    /// transcript's height, so the event loop's next frame must be *staged*
+    /// — laid out to measure the new `content_lines` — before the toggle's
+    /// target scroll offset is applied. The staged pass emits no terminal
+    /// bytes, so the terminal only ever sees the final viewport, never an
+    /// intermediate one that gets re-clamped a frame later (the source of the
+    /// expand/collapse flicker).
+    ///
+    /// Cleared by the loop once the settled offset has been painted, by any
+    /// manual scroll, and by view resets — the same lifecycle as
+    /// [`Self::pin_summary_line`].
+    pub scroll_settle_pending: bool,
     /// Stack of nested zoom frames (envoy tasks). Empty means the root
     /// conversation is shown; the top frame is the currently focused view.
     /// Each frame carries the parent's scroll snapshot, restored on exit.
@@ -700,6 +713,15 @@ pub struct App {
     /// resume` startup picker's click-outside still quits. Esc / Ctrl+C always
     /// close/quit regardless of this flag.
     pub click_outside_dismiss: bool,
+    /// Whether a disclosure toggle (expand/collapse) auto-scrolls to keep the
+    /// toggled card well-placed. From `[tui] expand_auto_scroll` (default
+    /// `false`): when false, the toggle changes only the card's height and the
+    /// scroll offset is left exactly where the user put it; when true, the
+    /// expand path shifts the summary toward the viewport top and the collapse
+    /// path keeps a scrolled-past summary visible. Enabled toggles settle
+    /// through the staged measure-then-paint path (`scroll_settle_pending`),
+    /// so the auto-scroll itself never flickers.
+    pub expand_auto_scroll: bool,
     /// Keyboard-focused activatable target in the current frame, and the TUI's
     /// only navigation state — there is no separate "browse mode". `None` means
     /// every key has its ordinary input-box meaning (typing flows into the
@@ -1535,37 +1557,56 @@ impl App {
             .unwrap_or(0);
         let prev_region = self.layout_map.first_region_for_message(mi);
         let summary_screen_y = prev_region.map(|r| r.rect.y);
-        let msg_line_index = summary_screen_y.map(|y| {
-            self.scroll as usize + (y.saturating_sub(transcript_top_y) as usize)
-        });
+        let msg_line_index = summary_screen_y
+            .map(|y| self.scroll as usize + (y.saturating_sub(transcript_top_y) as usize));
 
-        let toggled = resolve_focused_mut(messages, &self.focus_stack, mi)
-            .and_then(|message| {
-                if let Some(expanded) = message.tool_step_expanded() {
-                    message.pin_tool_step_expanded(!expanded);
-                    Some(!expanded)
-                } else if let Some(expanded) = message.command_result_expanded() {
-                    message.pin_command_result_expanded(!expanded);
-                    Some(!expanded)
-                } else if let Some(expanded) = message.thinking_expanded() {
-                    message.pin_thinking_expanded(!expanded);
-                    Some(!expanded)
-                } else if let Some(expanded) = message.provider_retry_expanded() {
-                    message.pin_provider_retry_expanded(!expanded);
-                    Some(!expanded)
-                } else if let Some(expanded) = message.notice_expanded() {
-                    message.pin_notice_expanded(!expanded);
-                    Some(!expanded)
-                } else {
-                    None
-                }
-            });
+        let toggled = resolve_focused_mut(messages, &self.focus_stack, mi).and_then(|message| {
+            if let Some(expanded) = message.tool_step_expanded() {
+                message.pin_tool_step_expanded(!expanded);
+                Some(!expanded)
+            } else if let Some(expanded) = message.command_result_expanded() {
+                message.pin_command_result_expanded(!expanded);
+                Some(!expanded)
+            } else if let Some(expanded) = message.thinking_expanded() {
+                message.pin_thinking_expanded(!expanded);
+                Some(!expanded)
+            } else if let Some(expanded) = message.provider_retry_expanded() {
+                message.pin_provider_retry_expanded(!expanded);
+                Some(!expanded)
+            } else if let Some(expanded) = message.notice_expanded() {
+                message.pin_notice_expanded(!expanded);
+                Some(!expanded)
+            } else {
+                None
+            }
+        });
 
         let Some(newly_expanded) = toggled else {
             return false;
         };
 
         self.follow_bottom = false;
+
+        // `[tui] expand_auto_scroll` (default off): a toggle is a read
+        // interaction, so by default the scroll offset is the user's and
+        // stays put — the card grows or shrinks in place. Only the sticky
+        // header's collapse still re-anchors, because that overlay's row
+        // must land where the summary it covered sits. The settle request
+        // latches either way: the toggle changed the stream's height, so the
+        // clamp must validate the (untouched) offset against the *new*
+        // measurement — a hard collapse can shrink the tail below it.
+        if !self.expand_auto_scroll {
+            if !newly_expanded && pinned_to_top {
+                if let Some(summary_line) = sticky_summary_line {
+                    self.scroll = summary_line.min(u16::MAX as usize) as u16;
+                    self.pin_summary_line = Some(summary_line);
+                }
+            } else {
+                self.pin_summary_line = None;
+            }
+            self.scroll_settle_pending = true;
+            return true;
+        }
 
         if newly_expanded {
             // When expanding, if the summary line was not already at the top of the viewport,
@@ -1597,9 +1638,16 @@ impl App {
             self.pin_summary_line = None;
         }
 
+        // The toggle changed the transcript's height, so the scroll target
+        // computed above is only valid against the *new* layout — which does
+        // not exist until the next frame renders. Latch the settle request so
+        // the event loop stages that frame (measure first, paint the final
+        // offset second) instead of painting an intermediate viewport that
+        // the post-draw clamp then has to correct.
+        self.scroll_settle_pending = true;
+
         true
     }
-
     pub(crate) fn visible_interactive_targets(&self) -> Vec<InteractiveTarget> {
         let mut targets = self.layout_map.interactive_targets();
         if let Some(message_idx) = self.sticky_step
@@ -1696,6 +1744,7 @@ impl App {
         self.sticky_rect = None;
         self.sticky_summary_line = None;
         self.pin_summary_line = None;
+        self.scroll_settle_pending = false;
         self.focused_target = None;
     }
 

@@ -826,7 +826,6 @@ pub fn effort_ignition() -> io::Result<()> {
                     provider_name: Some("kimi-code"),
                     messages: &[],
                     reasoning_effort: Some("max"),
-                    shell_active: false,
                     busy: false,
                     context_tokens: Some(12_400),
                     ignition_elapsed_ms: elapsed_ms,

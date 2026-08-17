@@ -400,24 +400,17 @@ fn print_panel_url() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// `neenee stop` (ADR-0100): stop the running daemon through the `Shutdown`
-/// control verb. Stopping a daemon that is not running (or whose record is
-/// stale) is a success — the operator's desired end state ("no daemon") is
-/// already true. A version-skewed daemon cannot take the verb; the mismatch
-/// is reported with the restart command instead of a protocol error.
+/// `neenee stop` (ADR-0100): stop the running daemon through the tiered
+/// shutdown pipeline (graceful control verb -> OS SIGTERM -> SIGKILL).
+/// Stopping a daemon that is not running (or whose record is stale) is a
+/// success — the operator's desired end state ("no daemon") is already true.
 async fn stop_daemon() -> Result<(), String> {
     let Some(info) = client::discover(std::path::Path::new(".")) else {
         eprintln!("neenee: no daemon is running.");
         return Ok(());
     };
-    if !client::versions_compatible(&info) {
-        return Err(client::version_mismatch(&info));
-    }
-    client::control(&info, neenee_runtime::serve::ControlRequest::Shutdown).await?;
-    eprintln!(
-        "neenee: stop requested (pid {}); draining within its grace budget.",
-        info.pid
-    );
+    client::stop(&info).await?;
+    eprintln!("neenee: daemon stopped (pid {}).", info.pid);
     Ok(())
 }
 

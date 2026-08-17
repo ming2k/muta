@@ -150,6 +150,24 @@ pub struct TuiConfig {
     /// ```
     #[serde(default = "default_click_outside_dismiss")]
     pub click_outside_dismiss: bool,
+    /// Whether expanding or collapsing a disclosure (tool step, command
+    /// result, thinking, provider-retry, or notice card) auto-scrolls the
+    /// transcript so the toggled card's summary stays well-placed in the
+    /// viewport (expanded: the header moves toward the top to reveal the body;
+    /// collapsed: the summary is kept from scrolling off the top).
+    ///
+    /// Defaults to `false` — the toggle leaves the scroll offset untouched, so
+    /// the view never moves as a side effect of a click. Users who want the
+    /// content-maximizing behavior back can enable it. When enabled, the
+    /// scroll is settled through a staged measure-then-paint frame so no
+    /// intermediate viewport is ever shown (no flicker).
+    ///
+    /// ```toml
+    /// [tui]
+    /// expand_auto_scroll = false
+    /// ```
+    #[serde(default = "default_expand_auto_scroll")]
+    pub expand_auto_scroll: bool,
 }
 
 /// Default for [`TuiConfig::click_outside_dismiss`]: **on**. Kept as a named
@@ -157,6 +175,15 @@ pub struct TuiConfig {
 /// `#[serde(default = …)]` attribute in lockstep.
 fn default_click_outside_dismiss() -> bool {
     true
+}
+
+/// Default for [`TuiConfig::expand_auto_scroll`]: **off**. A disclosure
+/// toggle is a read interaction, not a navigation command — by default the
+/// scroll position is the user's and stays put. Kept as a named function so
+/// the manual `Default` impl and the `#[serde(default = …)]` attribute stay
+/// in lockstep.
+fn default_expand_auto_scroll() -> bool {
+    false
 }
 
 impl Default for TuiConfig {
@@ -167,6 +194,7 @@ impl Default for TuiConfig {
             color_scheme: String::new(),
             custom_color_scheme: neenee_contracts::ColorSchemeConfig::default(),
             click_outside_dismiss: default_click_outside_dismiss(),
+            expand_auto_scroll: default_expand_auto_scroll(),
         }
     }
 }
@@ -2093,6 +2121,27 @@ openai = "creds-key"
         "#;
         let cfg: Config = toml::from_str(toml).unwrap();
         assert!(!cfg.tui.click_outside_dismiss);
+    }
+
+    #[test]
+    fn tui_expand_auto_scroll_defaults_off_and_overrides() {
+        // The disclosure auto-scroll pref is OFF by default: toggling a
+        // card's expansion is a read interaction, so the scroll offset stays
+        // where the user put it. Users who want the content-maximizing
+        // behavior (expanded header moves toward the viewport top) opt in.
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(
+            !cfg.tui.expand_auto_scroll,
+            "expand_auto_scroll defaults to false"
+        );
+
+        // Explicit opt-in round-trips.
+        let toml = r#"
+            [tui]
+            expand_auto_scroll = true
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert!(cfg.tui.expand_auto_scroll);
     }
 
     #[test]

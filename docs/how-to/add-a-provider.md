@@ -18,12 +18,49 @@ dispatch `match` to edit for presets or user entries.
 
 | Provider speaks... | Path | Effort |
 |--------------------|------|--------|
-| OpenAI Chat Completions, or any endpoint reachable with a URL + key | User-defined entry in `config.toml` | None (no code) |
+| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom OpenAI template** in the TUI (`/connections` → `＋ Add connection`), or a user-defined entry in `config.toml` | None (no code) |
 | OpenAI Chat Completions, and you want it shipped as a built-in | Per-provider file in `registry/` | Small |
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
 path for a vendor preset every neenee user would want.
+
+## Path 0: The Custom OpenAI template (no code, no config editing)
+
+For any OpenAI-compatible endpoint — a third-party relay, a self-hosted
+gateway, a subscription bundle exposing `/v1/chat/completions` — pick
+**Custom OpenAI** in `/connections` → `＋ Add connection`. The form asks for
+Name, Base URL (the full chat-completions URL), Token, and **Model**: the
+model field offers the registry-known OpenAI ids as fuzzy suggestions plus
+the raw typed id as a custom value, so the exact id the endpoint expects
+becomes the seeded channel.
+
+Two properties worth knowing:
+
+- **Model ids are case-sensitive and travel verbatim.** Some relays serve
+  cased ids (`GLM-5.2`, not `glm-5.2`); nothing in the editor, the config
+  layer, or the request builder normalizes the id.
+- **The instance is never re-seeded.** Unlike curated templates there is no
+  model snapshot to mirror, so a later startup never replaces the typed id.
+
+The equivalent hand-written `config.toml` entry looks like this (see
+[Path 1](#path-1-user-defined-entry-no-code) for the full field reference):
+
+```toml
+default_provider = "wechat"
+default_model = "GLM-5.2"
+
+[[providers]]
+id = "wechat"
+name = "WeChat OpenAI"
+
+[[providers.channels]]
+label = "GLM-5.2"
+transport = "OpenAi"
+base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions"
+api_key = "sk-..."
+model = "GLM-5.2"
+```
 
 ## Path 1: User-defined entry (no code)
 

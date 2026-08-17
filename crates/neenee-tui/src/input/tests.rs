@@ -510,39 +510,30 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
 }
 
 #[test]
-fn bang_prefix_dispatches_a_shell_command() {
+fn bang_prefix_dispatches_as_normal_chat() {
     let mut input = "!git status".to_string();
     assert_eq!(
         enter_shell(&mut input),
-        InputAction::SendShell("git status".to_string())
+        InputAction::SendChat("!git status".to_string())
     );
 }
 
 #[test]
-fn bang_prefix_tolerates_leading_whitespace() {
-    // `! ls` matches the shell convention: the bang is a mode marker,
-    // not part of the command.
+fn bang_prefix_with_whitespace_dispatches_as_chat() {
     let mut input = "!   ls -la".to_string();
     assert_eq!(
         enter_shell(&mut input),
-        InputAction::SendShell("ls -la".to_string())
+        InputAction::SendChat("!   ls -la".to_string())
     );
 }
 
 #[test]
-fn bare_bang_is_a_no_op() {
-    // A bare `!` does not run an empty command.
+fn bare_bang_dispatches_as_chat() {
     let mut input = "!".to_string();
-    assert_eq!(enter_shell(&mut input), InputAction::None);
-    // The input is still consumed (mirrors how `/` on its own is
-    // swallowed), so the user does not get stuck with a stray `!`.
-    assert_eq!(input, "");
-}
-
-#[test]
-fn bang_only_with_whitespace_is_a_no_op() {
-    let mut input = "!   ".to_string();
-    assert_eq!(enter_shell(&mut input), InputAction::None);
+    assert_eq!(
+        enter_shell(&mut input),
+        InputAction::SendChat("!".to_string())
+    );
 }
 
 // Like `enter`, but with `completion_kind: None` and no suggestions, the

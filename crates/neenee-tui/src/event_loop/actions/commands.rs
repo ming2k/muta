@@ -1,5 +1,5 @@
 //! Composer-submission and interrupt handlers for the input dispatch match
-//! (`SendChat` / `InsertIntoRound` / `SendSlash` / `SendShell` / `CtrlC`).
+//! (`SendChat` / `InsertIntoRound` / `SendSlash` / `CtrlC`).
 //! Extracted verbatim from the corresponding arms of `dispatch_action`'s
 //! match; only the arm-level `continue` / `return Ok(())` control flow became
 //! [`ActionFlow`] values (it already was, inside `dispatch_action`).
@@ -14,7 +14,7 @@ use neenee_contracts::{AgentRequest, Role};
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::composer_attachments;
-use crate::model::document::{TranscriptMessage, UserMessageOrigin};
+use crate::model::document::{CommandPhase, TranscriptMessage};
 use crate::model::selection::SelectionState;
 use crate::{App, Modal};
 
@@ -22,6 +22,54 @@ use super::super::{
     UiRuntime, extract_selection_text, now_epoch_ms, resolve_focused_mut, show_local_toast,
 };
 use super::ActionFlow;
+
+/// Split a raw composer command into the ledger identity (`name`, `args`)
+/// used by [`TranscriptMessage::pending_command`]: the command word without
+/// the leading slash, and the raw argument remainder. Mirrors the runtime's
+/// parse in `handlers_slash::dispatch` so the optimistic row and the eventual
+/// `RoundEvent::CommandResult` agree on the invocation text.
+pub(in crate::event_loop) fn split_command_word(cmd: &str) -> (&str, &str) {
+    let trimmed = cmd.trim();
+    let first = trimmed.split_whitespace().next().unwrap_or_default();
+    let name = first.trim_start_matches('/');
+    let args = trimmed.strip_prefix(first).unwrap_or("").trim();
+    (name, args)
+}
+
+/// Settle the most recent pending command row matching `cmd` with `result`
+/// (ADR-0108). When no pending row matches — the transcript was rebuilt, or
+/// the reply arrived for a command dispatched before this view attached — a
+/// fresh completed row is appended instead, so a reply is never dropped.
+pub(in crate::event_loop) fn settle_pending_command(
+    messages: &mut Vec<TranscriptMessage>,
+    cmd: &str,
+    result: neenee_contracts::CommandResult,
+) {
+    // The pending row's `raw` is the display invocation (`/name args`); match
+    // on it (pending rows only) so `/serve on` and `/serve` are distinct rows,
+    // and two identical commands each settle their own row.
+    let invocation = cmd.trim().to_string();
+    let candidate = messages.iter_mut().rev().find(|message| {
+        message.is_command_result()
+            && message.raw == invocation
+            && message.command_result_phase() == Some(CommandPhase::Pending)
+    });
+    match candidate {
+        Some(message) => {
+            if !message.settle_command_result(result.clone()) {
+                // Not pending (already settled or cancelled): the ledger
+                // records both; push a fresh completed row so the newest
+                // reply is not lost.
+                let (name, args) = split_command_word(&invocation);
+                messages.push(TranscriptMessage::command_result(name, args, Some(result)));
+            }
+        }
+        None => {
+            let (name, args) = split_command_word(&invocation);
+            messages.push(TranscriptMessage::command_result(name, args, Some(result)));
+        }
+    }
+}
 
 /// Loop stage (input dispatch): the `SendChat` arm of the action match.
 pub(super) async fn handle_send_chat(
@@ -216,33 +264,36 @@ pub(super) async fn handle_send_slash(
     app.follow_bottom = true;
     app.pin_summary_line = None;
     let sent_at_ms = now_epoch_ms();
+    // The command component owns its input AND its output (ADR-0108): the
+    // optimistic row pushed here is the input half — `⌘ /cmd` in the muted
+    // running tone — and the `RoundEvent::CommandResult` handler settles the
+    // same row in place when the typed reply arrives. A command is therefore
+    // never echoed as a user bubble (the old `▌ cmd` panel duplicated the
+    // invocation in a second row and split the effect across a seam), and the
+    // transcript keeps one row per command, live and after resume alike.
+    // The invocation is still recorded in input history for ↑/Ctrl+R recall.
+    let (cmd_name, cmd_args) = split_command_word(&cmd);
     runtime
         .messages
         .write()
         .await
-        // A slash command is surfaced as a user message in the
-        // transcript (so history recall shows the `/cmd`), but
-        // it is NOT the prompt driving the model — the harness
-        // handles it directly. Tag it so the Activity modal
-        // does not mistake it for the round's prompt.
-        .push(
-            TranscriptMessage::new(Role::User, cmd.clone())
-                .with_origin(UserMessageOrigin::Slash)
-                .with_sent_at_ms(sent_at_ms),
-        );
+        .push(TranscriptMessage::pending_command(cmd_name, cmd_args).with_sent_at_ms(sent_at_ms));
     app.record_input_history(cmd.clone(), Vec::new(), Vec::new());
     // `/serve` is a pure frontend concern (hot-attach a
     // WebSocket listener to the running session). Intercept
     // it here rather than routing through SessionDriver.
     if cmd == "/serve" || cmd.starts_with("/serve ") {
-        runtime.messages.write().await.push(
-            TranscriptMessage::new(
-                Role::Assistant,
-                "Sessions are managed by the unified daemon; to manage daemons use 'neenee daemon' or '/host'."
-                    .to_string(),
-            )
-            .with_origin(UserMessageOrigin::Slash)
-            .with_sent_at_ms(sent_at_ms),
+        // `/serve` is answered inline: settle the pending command row with
+        // the reply as its output half (ADR-0108) — same component, no
+        // assistant bubble beside it.
+        let reply = "Sessions are managed by the unified daemon; to manage daemons use \
+             'neenee daemon' or '/host'."
+            .to_string();
+        let mut msgs = runtime.messages.write().await;
+        settle_pending_command(
+            &mut msgs,
+            &cmd,
+            neenee_contracts::CommandResult::Text(reply),
         );
         if !session_busy {
             runtime.is_responding.store(false, Ordering::SeqCst);
@@ -252,50 +303,6 @@ pub(super) async fn handle_send_slash(
     }
     let _ = app.tx.send(AgentRequest::SlashCommand(cmd));
     ActionFlow::Handled
-}
-
-/// Loop stage (input dispatch): the `SendShell` arm of the action match.
-pub(super) async fn handle_send_shell(
-    app: &mut App,
-    runtime: &UiRuntime,
-    viewed_session_id: &str,
-    command: String,
-) {
-    // `!<command>` runs directly through the bash tool. We
-    // surface the literal `!command` the user typed as the
-    // transcript entry (so history recall shows the bang) but
-    // ship only the stripped command to the harness.
-    app.active_modal = Modal::None;
-    app.suggestion_index = None;
-    app.input_scroll = 0;
-    // The shell path begins its own round (which emits its own
-    // `HarnessState` + ToolCall events). When a round is
-    // already live, that round owns the activity surface — do
-    // not paint an optimistic "queued" over it.
-    let session_busy = app.running_sessions.contains(viewed_session_id);
-    if !session_busy {
-        runtime.is_responding.store(true, Ordering::SeqCst);
-        *runtime.activity_status.lock().await = "queued".to_string();
-    }
-    app.follow_bottom = true;
-    app.pin_summary_line = None;
-    let sent_at_ms = now_epoch_ms();
-    let display = format!("!{}", command);
-    runtime
-        .messages
-        .write()
-        .await
-        // A `!command` shell passthrough runs directly through
-        // the bash tool, bypassing the model entirely — it is
-        // not the round's driving prompt. Tag it so the
-        // Activity modal does not mistake it for one.
-        .push(
-            TranscriptMessage::new(Role::User, display.clone())
-                .with_origin(UserMessageOrigin::Shell)
-                .with_sent_at_ms(sent_at_ms),
-        );
-    app.record_input_history(display, Vec::new(), Vec::new());
-    let _ = app.tx.send(AgentRequest::ShellCommand { command });
 }
 
 /// Loop stage (input dispatch): the `CtrlC` arm of the action match (copy

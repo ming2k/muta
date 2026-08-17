@@ -35,15 +35,8 @@ While a turn is running, the left side explains where the next message lands:
  Enter queue message        k3 max @kimi-code  89.2k (8%)
 ```
 
-With a `!`-prefixed shell command staged, the Enter action becomes
-`run command`:
-
-```text
- Enter run command          k3 max @kimi-code  89.2k (8%)
-```
-
 On narrow terminals the row degrades in a fixed order: the action sentence
-compacts first (`queue` / `run`), then the instance suffix, the reasoning
+compacts first (`queue message` → `queue`), then the instance suffix, the reasoning
 tag, and the context meter drop, then the action shrinks to its tiny form; the model
 name is the last ambient item to disappear. The Enter action itself never
 disappears.

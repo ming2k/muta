@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use neenee_contracts::{
     AgentRequest, HarnessSnapshot, LoopStatus, ParentStatus, PermissionDecision, PermissionRequest,
-    ProviderPickerSnapshot, Role, SessionOverview, TodoList, UserQuestionRequest,
+    ProviderPickerSnapshot, SessionOverview, TodoList, UserQuestionRequest,
 };
 
 use crate::clipboard;
@@ -1607,10 +1607,21 @@ pub(super) async fn run_app_loop(
         // the retained grid without flushing it; the immediate next pass paints
         // at the final scroll offset and is the only frame the terminal sees.
         let stage_bottom_follow = displayed_transcript_changed && app.follow_bottom;
+        // A disclosure toggle (expand/collapse) changes the stream's height, so
+        // the toggle's target scroll offset must be validated against the *new*
+        // layout. Stage the first frame (it measures `content_lines` and emits
+        // no bytes), settle the offset below, and let the next pass paint the
+        // final viewport — the terminal never sees the un-clamped intermediate
+        // frame that used to flash during expand/collapse.
+        let stage_settle = app.scroll_settle_pending && !stage_bottom_follow;
 
         // Draw frame (skipped when nothing changed — see `needs_draw`).
+        // `painted_scroll` is the offset this frame is laid out at, captured
+        // before the post-draw clamp runs — the settle check below compares
+        // against it to detect a clamp-induced move.
+        let painted_scroll = app.scroll;
         if needs_draw {
-            if stage_bottom_follow {
+            if stage_bottom_follow || stage_settle {
                 terminal.stage(|f| render::render_frame(app, f, &viewed_session_id))?;
             } else {
                 terminal.draw(|f| render::render_frame(app, f, &viewed_session_id))?;
@@ -1641,6 +1652,20 @@ pub(super) async fn run_app_loop(
         if stage_bottom_follow && needs_draw {
             if app.scroll != app.max_scroll {
                 app.scroll = app.max_scroll;
+                input_redraw_pending = true;
+                continue;
+            }
+            terminal.commit_staged()?;
+        }
+        // A disclosure toggle's scroll target has now been validated against
+        // the layout the staged pass just measured (the clamp above ran on the
+        // fresh `content_lines`). If the clamp moved the offset, the staged
+        // grid is stale — redraw at the settled position; otherwise commit the
+        // staged grid, which is already laid out at the correct offset,
+        // without a second layout pass.
+        if stage_settle && needs_draw {
+            app.scroll_settle_pending = false;
+            if app.scroll != painted_scroll {
                 input_redraw_pending = true;
                 continue;
             }
@@ -1776,7 +1801,7 @@ pub(super) async fn run_app_loop(
             // …) open with an empty composer and are excluded by the predicate.
             let modal_cmd_history = (!app.input.is_empty())
                 .then(|| app.input.clone())
-                .filter(|_| !app.input.starts_with('!') && matches!(app.active_modal, Modal::None));
+                .filter(|_| matches!(app.active_modal, Modal::None));
             // The provider-delete confirm overlay is a sub-layer over the
             // stage-1 Connections list: when it is open it owns every key, so
             // probe the raw event before the general input mapper and skip
@@ -1859,19 +1884,23 @@ pub(super) async fn run_app_loop(
             // This is the consistency point between the two command families:
             // whether a command surfaces as a modal or as an inline reply, the
             // user's invocation is recorded the same way — recallable from
-            // Ctrl+R history and visible in the scrollback. Modal *outcomes*
-            // (e.g. a provider switch) are emitted separately by the harness
-            // listener as follow-up notices, so the transcript reads as a
-            // natural pair: `> /models` then `↳ Provider switched to …`.
+            // Ctrl+R history and visible in the scrollback as one command
+            // component (`⌘ /models`, ADR-0108). The row is pushed as
+            // pending; a modal command never receives a
+            // `RoundEvent::CommandResult`, so the next idle reconcile marks
+            // it cancelled — the input half stays durable without promising
+            // an output. Modal *outcomes* (e.g. a provider switch) are still
+            // emitted separately by the harness listener as follow-up
+            // notices.
             //
             // The composer text was consumed by `process_event` (the action is
             // data-less), so we replay it from the pre-dispatch snapshot.
             if action.is_text_modal_command()
                 && let Some(entry) = modal_cmd_history
             {
+                let (name, args) = actions::split_command_word(&entry);
                 runtime.messages.write().await.push(
-                    TranscriptMessage::new(Role::User, entry.clone())
-                        .with_origin(UserMessageOrigin::Slash),
+                    TranscriptMessage::pending_command(name, args).with_sent_at_ms(now_epoch_ms()),
                 );
                 app.record_input_history(entry, Vec::new(), Vec::new());
             }

@@ -140,7 +140,17 @@ mod tests {
         assert_eq!(provider.endpoint.user_agent(), crate::ZCODE_USER_AGENT);
         let identity = provider.endpoint.client_identity();
         assert_eq!(identity, crate::ClientIdentity::ZCode);
-        assert!(identity.headers().iter().any(|(k, v)| *k == "X-Title" && *v == "Z Code"));
-        assert!(identity.headers().iter().any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm"));
+        assert!(
+            identity
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-Title" && *v == "Z Code")
+        );
+        assert!(
+            identity
+                .headers()
+                .iter()
+                .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
+        );
     }
 }

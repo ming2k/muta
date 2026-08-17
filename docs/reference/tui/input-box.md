@@ -122,9 +122,8 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
 - **Switching never carries state across.** `/new`, `/resume`, `/session open`,
   and `/fork` reset the pointer, the stashed draft, and the staged attachments:
   the new conversation's composer starts from a clean slate, and what you were
-  typing in the previous conversation never leaks into it. Slash commands and
-  `!shell` passthroughs are never part of the recall rows (they are UI
-  gestures, not prompts).
+  typing in the previous conversation never leaks into it. Slash commands are
+  never part of the recall rows (they are UI gestures, not prompts).
 - `Ctrl+R` stays **global**: it searches every prompt across every session and
   workspace, independent of which conversation is on screen.
 

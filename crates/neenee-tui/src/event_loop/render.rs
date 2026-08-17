@@ -319,9 +319,6 @@ pub(super) fn render_frame(
                 provider_name: hint_instance,
                 messages: view_messages,
                 reasoning_effort: hint_reasoning,
-                shell_active: app.focused_target.is_none()
-                    && app.active_modal == Modal::None
-                    && app.input.starts_with('!'),
                 busy: app.running_sessions.contains(viewed_session_id),
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                 ignition_elapsed_ms: app

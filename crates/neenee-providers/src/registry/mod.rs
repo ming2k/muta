@@ -20,6 +20,7 @@ mod antigravity_oauth;
 mod antigravity_sub2api;
 mod chatgpt;
 mod copilot;
+mod custom_openai;
 mod deepseek;
 mod google;
 mod kimi;
@@ -174,6 +175,10 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
     openai_sub2api::TEMPLATE_SPEC,
     antigravity_sub2api::TEMPLATE_SPEC,
     antigravity_oauth::TEMPLATE_SPEC,
+    // The generic escape hatch: no seeded models — the Model field supplies
+    // the one id, so an arbitrary OpenAI-compatible endpoint (third-party
+    // relay, self-hosted gateway) works without a curated template.
+    custom_openai::TEMPLATE_SPEC,
 ];
 
 /// Look up a template spec by its stable id. Exact match only.
@@ -372,10 +377,22 @@ mod spec_tests {
     fn provider_template_spec_resolves_each_known_id() {
         // The reconciliation layer resolves an instance's template_id back to a
         // spec here; every id in the table must round-trip.
+        // `custom-openai` is the one template allowed to seed no models: the
+        // free-text Model field supplies the one id at create time, so there
+        // is no snapshot to mirror.
+        const NO_SEED_TEMPLATES: &[&str] = &["custom-openai"];
         for spec in PROVIDER_TEMPLATE_SPECS {
             let resolved = provider_template_spec(spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
-            assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
+            if NO_SEED_TEMPLATES.contains(&spec.id) {
+                assert!(
+                    resolved.models.is_empty(),
+                    "{} is a no-seed template and must stay empty",
+                    spec.id
+                );
+            } else {
+                assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
+            }
         }
         // Unknown ids resolve to None (graceful: an unknown template_id leaves
         // the instance untouched).

@@ -6,7 +6,7 @@
 //! or a cloud embedding API, and replace the flat index with an HNSW/vector-DB
 //! backend. The interface stays the same.
 
-use neenee_contracts::{Message, async_trait};
+use neenee_contracts::{CommandRecord, Message, async_trait};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -109,6 +109,43 @@ impl EmbeddingStore {
         for (i, message) in messages.iter().enumerate() {
             self.index_message(message, session_id, i, &mut new_entries)
                 .await?;
+        }
+        if !new_entries.is_empty() {
+            self.index.entries.extend(new_entries);
+            self.save().await?;
+        }
+        Ok(())
+    }
+
+    /// Index every command with substantive result in `commands` that is not already indexed.
+    pub async fn index_commands(
+        &mut self,
+        commands: &[CommandRecord],
+        session_id: &str,
+    ) -> Result<(), String> {
+        let mut new_entries = Vec::new();
+        for (i, record) in commands.iter().enumerate() {
+            if let Some(result) = &record.result {
+                let text = result.to_text();
+                let text = text.trim();
+                if !text.is_empty() && text.len() > 15 {
+                    let indexed_text = if record.args.is_empty() {
+                        format!("/{}\n{}", record.name, text)
+                    } else {
+                        format!("/{} {}\n{}", record.name, record.args, text)
+                    };
+                    let hash = content_hash(&indexed_text);
+                    if self.seen.insert(hash.clone()) {
+                        let embedding = self.provider.embed(&indexed_text).await?;
+                        new_entries.push(Entry {
+                            content_hash: hash,
+                            source: format!("{session_id} / command {i} ({})", record.name),
+                            text: indexed_text,
+                            embedding,
+                        });
+                    }
+                }
+            }
         }
         if !new_entries.is_empty() {
             self.index.entries.extend(new_entries);
@@ -321,6 +358,26 @@ mod tests {
         let results = store.search("password reset", 1).await.unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].0.contains("password"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn store_indexes_and_searches_commands() {
+        let dir =
+            std::env::temp_dir().join(format!("neenee-embedding-cmd-{}", uuid::Uuid::new_v4()));
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(8));
+        let mut store = EmbeddingStore::open(dir.join("index.json"), provider)
+            .await
+            .unwrap();
+        let commands = vec![CommandRecord::new("review", "").with_result(
+            neenee_contracts::CommandResult::Text(
+                "diagnostics verdict: architecture looks sound".to_string(),
+            ),
+        )];
+        store.index_commands(&commands, "sess-2").await.unwrap();
+        let results = store.search("architecture", 1).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].0.contains("diagnostics verdict"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

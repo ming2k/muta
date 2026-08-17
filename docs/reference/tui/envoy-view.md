@@ -35,7 +35,7 @@ Running:
 
 ```text
   [EXPLORE]  Explore the codebase to find the login bug
-    └ Grep "session" · 12s
+    └ running Grep "session"  12s
 ```
 
 Finished:
@@ -61,15 +61,21 @@ content, not by the glyph.
 ### Peek row (running)
 
 `TranscriptMessage::envoy_status_line` derives the peek from the envoy's
-children and `started_at`:
+children, its reported activity, and `started_at`. Every running state is
+prefixed `running` so the row unambiguously reads as *in progress* — a bare
+tool name or `starting` could be either live work or a stuck call, and the
+prefix plus the ticking timer disambiguate at a glance:
 
 | State | Peek shows |
 |-------|-----------|
-| No child activity yet | `starting · 0s` |
-| A child tool in flight | that tool's summary, e.g. `Grep "session" · 12s` |
-| Between tools (assistant streaming) | `thinking · 8s` |
-| Parked on a permission / `ask_user` / input request | `awaiting approval · 45s` (a `awaiting` flag set by `EnvoyEvent::{Permission,UserQuestion,Input}Request` and cleared by the next progress event) |
+| Nothing observable yet | `running  0ms` |
+| No child event, but the envoy reported an activity (`EnvoyEvent::Activity`, e.g. during the first model call) | `running waiting for model  8s` |
+| A child tool in flight | `running <that tool's summary>`, e.g. `running Grep "session"  12s` |
+| Between tools (assistant streaming) | `running thinking  8s` |
+| Parked on a permission / `ask_user` / input request | `awaiting approval  45s` — bare, no `running` prefix, because nothing is moving while the envoy waits on a human (an `awaiting` flag set by `EnvoyEvent::{Permission,UserQuestion,Input}Request` and cleared by the next progress event) |
 
+The activity and its elapsed time are same-rank metadata joined by plain
+whitespace (R2 on the [join ladder](visual-language.md)) — never a `·` glyph.
 The elapsed timer is derived from `started_at` at render time — it stays fresh
 on every animation tick without storing any ticking state.
 

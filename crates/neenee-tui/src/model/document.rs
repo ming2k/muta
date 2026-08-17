@@ -91,6 +91,14 @@ pub enum MessageKind {
         /// Cleared by the next progress event from this envoy (tool call,
         /// tool result, or streamed text) and on any terminal transition.
         awaiting: bool,
+        /// Latest free-text activity line the envoy reported via
+        /// `EnvoyEvent::Activity` (`waiting for model`, `waiting to retry
+        /// (3s)`, …). The peek row prefers it over the derived
+        /// `starting`/`thinking` fallbacks while no child event has landed
+        /// yet, so a long model call reads as alive instead of stuck on
+        /// `starting`. Not serialized — restored sessions render terminal
+        /// steps, which never show a peek.
+        activity: Option<String>,
         /// Child events emitted by an envoy spawned from this tool step.
         children: Vec<TranscriptMessage>,
     },
@@ -132,22 +140,49 @@ pub enum MessageKind {
         expanded: bool,
         user_pinned: bool,
     },
-    /// A slash-command invocation with its typed result (ADR-0091). Rendered
-    /// as a compact dimmed header row (the invocation) with an expandable
-    /// result body — never as assistant prose. `raw` holds the invocation
+    /// A slash-command invocation as **one component that owns both its input
+    /// and its output** (ADR-0108, revising ADR-0091/0106): the row is created
+    /// optimistically when the user dispatches the command and settles when
+    /// the typed result (or its terminal state) arrives — the same
+    /// running→completed lifecycle a tool step has. `raw` holds the invocation
     /// text (`/search foo`, `!ls -la`); `blocks` hold the parsed result text
-    /// (`CommandResult::to_text()`), empty when the record carried no result
-    /// (legacy folds and shell passthroughs).
+    /// (`CommandResult::to_text()`), empty while pending and when the record
+    /// carried no result (legacy folds and shell passthroughs). Never rendered
+    /// as a separate user bubble: the `⌘`/`❯` row *is* the input echo.
     CommandResult {
-        /// The typed result (ADR-0091). `None` when the invocation was
-        /// recorded but the reply was never persisted (legacy echo folds,
-        /// `!command` passthroughs). Boxed to keep this enum variant small
-        /// (`CommandResult` carries `Vec<SearchHit>` / `Vec<ReviewVerdict>`).
+        /// The typed result (ADR-0091). `None` while the command is still
+        /// running, and when the invocation was recorded but the reply was
+        /// never persisted (legacy echo folds, `!command` passthroughs). Boxed
+        /// to keep this enum variant small (`CommandResult` carries
+        /// `Vec<SearchHit>` / `Vec<ReviewVerdict>`).
         result: Option<Box<neenee_contracts::CommandResult>>,
+        /// Lifecycle of the invocation (ADR-0108) — see [`CommandPhase`].
+        phase: CommandPhase,
         expanded: bool,
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
+}
+
+/// Lifecycle of a command component (ADR-0108). Commands are synchronous
+/// control-plane operations, so the lifecycle has exactly two live states plus
+/// the cancel mark — unlike a tool step there is no permission-denied or
+/// interrupted state to represent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandPhase {
+    /// Dispatched, no result yet. The row shows the invocation alone in the
+    /// muted running tone (`⌘ /autopilot`) — the input half of the component
+    /// is already durable in the transcript, so a slow command never leaves
+    /// the user wondering whether it ran.
+    Pending,
+    /// The typed result arrived (or is known not to exist — legacy folds,
+    /// shell passthroughs): the row shows `invocation · reply` per its
+    /// [`CommandRowLayout`].
+    Completed,
+    /// No result will ever arrive (the session view moved on before the reply
+    /// landed, or the runtime errored out of band). Reads as a settled row
+    /// with no reply, never as a promise.
+    Cancelled,
 }
 
 /// How a command row presents its result — derived at render time from the
@@ -587,6 +622,7 @@ impl TranscriptMessage {
                 duration_ms: None,
                 started_at: Some(std::time::Instant::now()),
                 awaiting: false,
+                activity: None,
                 children: Vec::new(),
             },
             delivery: DeliveryStatus::default(),
@@ -604,11 +640,28 @@ impl TranscriptMessage {
     /// A slash-command invocation with its typed result (ADR-0091). `name` is
     /// the command word without the leading slash (`"search"`), `"shell"` for
     /// a `!command` passthrough. The collapsed row shows the invocation; the
-    /// expandable body shows `result.to_text()`.
+    /// expandable body shows `result.to_text()`. The row starts `Completed`.
     pub fn command_result(
         name: impl Into<String>,
         args: impl Into<String>,
         result: Option<neenee_contracts::CommandResult>,
+    ) -> Self {
+        Self::command_result_in_phase(name, args, result, CommandPhase::Completed)
+    }
+
+    /// The optimistic dispatch row (ADR-0108): the user just sent the command
+    /// and no result exists yet. Renders as the pending input half of the
+    /// command component; the `RoundEvent::CommandResult` handler settles it
+    /// in place via [`Self::settle_command_result`].
+    pub fn pending_command(name: impl Into<String>, args: impl Into<String>) -> Self {
+        Self::command_result_in_phase(name, args, None, CommandPhase::Pending)
+    }
+
+    fn command_result_in_phase(
+        name: impl Into<String>,
+        args: impl Into<String>,
+        result: Option<neenee_contracts::CommandResult>,
+        phase: CommandPhase,
     ) -> Self {
         let name = name.into();
         let args = args.into();
@@ -634,6 +687,7 @@ impl TranscriptMessage {
             raw: sanitize_text(&invocation).into_owned(),
             kind: MessageKind::CommandResult {
                 result: result.map(Box::new),
+                phase,
                 expanded: false,
                 user_pinned: false,
             },
@@ -644,6 +698,49 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+        }
+    }
+
+    /// Settle a pending command component with its typed result (ADR-0108):
+    /// this is the *only* live path that turns [`CommandPhase::Pending`] into
+    /// [`CommandPhase::Completed`], and it reuses the existing message id so
+    /// the row is updated in place — one component, input and output, no
+    /// second row and no seam in the transcript. Returns `false` when the
+    /// message is not a pending command (an id mismatch — the pending row was
+    /// dropped by a transcript rebuild — so the caller may push a fresh
+    /// completed row instead).
+    pub fn settle_command_result(&mut self, result: neenee_contracts::CommandResult) -> bool {
+        let MessageKind::CommandResult {
+            result: slot,
+            phase,
+            ..
+        } = &mut self.kind
+        else {
+            return false;
+        };
+        if *phase != CommandPhase::Pending {
+            return false;
+        }
+        // Keep the parsed body in sync with the stored typed result, the same
+        // way the constructor derives it.
+        let result_text = result.to_text();
+        self.blocks = parse_blocks(&result_text);
+        *slot = Some(Box::new(result));
+        *phase = CommandPhase::Completed;
+        true
+    }
+
+    /// Mark a pending command component as never receiving a reply
+    /// (ADR-0108) — the input half stays readable but stops promising an
+    /// output. Returns whether the transition applied.
+    pub fn cancel_pending_command(&mut self) -> bool {
+        if let MessageKind::CommandResult { phase, .. } = &mut self.kind
+            && *phase == CommandPhase::Pending
+        {
+            *phase = CommandPhase::Cancelled;
+            true
+        } else {
+            false
         }
     }
 
@@ -867,6 +964,7 @@ impl TranscriptMessage {
             children,
             profile,
             awaiting,
+            activity,
             ..
         } = &mut self.kind
         else {
@@ -978,7 +1076,11 @@ impl TranscriptMessage {
                     notice.render_text(),
                 ));
             }
-            EnvoyEvent::Activity(_) => {}
+            // The envoy reported a free-text activity line (`waiting for
+            // model`, `waiting to retry (3s)`). Stored for the peek row so a
+            // stretch with no child events still reads as alive. No child
+            // message is produced.
+            EnvoyEvent::Activity(text) => *activity = Some(text.clone()),
             // Full-duplex (ADR-0029): an envoy surfaced a permission /
             // ask_user request up through the envoy tool. The down-direction
             // reply (registry → handle → reply_permission / reply_user_question)
@@ -1010,17 +1112,31 @@ impl TranscriptMessage {
         }
     }
 
+    /// The lifecycle phase of a command component (ADR-0108).
+    pub fn command_result_phase(&self) -> Option<CommandPhase> {
+        match &self.kind {
+            MessageKind::CommandResult { phase, .. } => Some(*phase),
+            _ => None,
+        }
+    }
+
     /// The render layout for this command row (ADR-0106): `Plain` when there
     /// is no result, `Inline` when a single-line reply fits beside the
-    /// invocation, `Disclose` otherwise. `available_width` is the row's usable
-    /// columns.
+    /// invocation, `Disclose` otherwise. A `Pending` row has no result yet and
+    /// always classifies `Plain` — the phase owns its presentation until the
+    /// reply settles. `available_width` is the row's usable columns.
     pub fn command_row_layout(&self, available_width: usize) -> Option<CommandRowLayout> {
         match &self.kind {
-            MessageKind::CommandResult { result, .. } => Some(command_row_layout(
-                result.as_deref(),
-                &self.raw,
-                available_width,
-            )),
+            MessageKind::CommandResult { result, phase, .. } => {
+                if *phase == CommandPhase::Pending {
+                    return Some(CommandRowLayout::Plain);
+                }
+                Some(command_row_layout(
+                    result.as_deref(),
+                    &self.raw,
+                    available_width,
+                ))
+            }
             _ => None,
         }
     }
@@ -1178,8 +1294,8 @@ impl TranscriptMessage {
     }
 
     /// One-line live "peek" at the envoy's current activity, e.g.
-    /// `Grep "foo" · 12s` or `thinking · 8s`. Shown as the step's second row
-    /// while the envoy runs and replaced in place by
+    /// `running Grep "foo"  12s` or `running thinking  8s`. Shown as the
+    /// step's second row while the envoy runs and replaced in place by
     /// [`Self::envoy_outcome_line`] when the step terminates. Returns `None`
     /// for non-task steps and for terminal steps (the outcome row owns the
     /// second row then). The elapsed timer is derived from `started_at` at
@@ -1193,6 +1309,7 @@ impl TranscriptMessage {
             status,
             started_at,
             awaiting,
+            activity,
             children,
             ..
         } = &self.kind
@@ -1214,27 +1331,47 @@ impl TranscriptMessage {
         });
         // A parked human-decision wait outranks replaying the last tool
         // activity: the envoy is blocked on the user, not making progress.
+        // It keeps the bare phrase — no `running` prefix — because nothing
+        // is moving while the envoy waits.
         let activity = if *awaiting {
             "awaiting approval".to_string()
         } else {
-            match children.last() {
+            let current = match children.last() {
                 Some(child)
                     if child.is_tool_step()
                         && child.tool_step_status() == Some(ToolStepStatus::Running) =>
                 {
-                    // A tool step still in flight.
-                    child
-                        .tool_step_summary()
-                        .unwrap_or_else(|| "tool".to_string())
+                    // A tool step still in flight — name the tool so the
+                    // row says *what* is being done, not just that the
+                    // parent is busy.
+                    Some(
+                        child
+                            .tool_step_summary()
+                            .unwrap_or_else(|| "tool".to_string()),
+                    )
                 }
+                // Assistant text has streamed but no tool call followed it:
+                // the envoy is composing between tools. A bare `starting`
+                // here read as "possibly stuck" during long model calls,
+                // which is exactly what the `running` prefix disambiguates.
                 Some(child) if child.role == Role::Assistant && !child.raw.is_empty() => {
-                    "thinking".to_string()
+                    Some("thinking".to_string())
                 }
-                _ => "starting".to_string(),
+                // Nothing observable has landed yet. Prefer the envoy's own
+                // reported activity (`waiting for model`, …) over the
+                // generic `starting`: it proves the envoy is alive during
+                // the model call that precedes the first child event.
+                _ => activity.clone(),
+            };
+            match current {
+                Some(current) => format!("running {current}"),
+                None => "running".to_string(),
             }
         };
+        // The activity and its elapsed time are same-rank metadata — plain
+        // whitespace (R2 on the join ladder), never a `·` glyph.
         Some(match elapsed {
-            Some(elapsed) => format!("{} · {}", activity, elapsed),
+            Some(elapsed) => format!("{activity}  {elapsed}"),
             None => activity,
         })
     }
@@ -1570,6 +1707,7 @@ impl TranscriptMessage {
             duration_ms,
             started_at: _,
             awaiting: _,
+            activity: _,
             children: _,
         } = &self.kind
         else {
@@ -2892,15 +3030,25 @@ mod tests {
         let mut task =
             TranscriptMessage::tool_step("call_9", "envoy", r#"{"description":"d","prompt":"p"}"#);
 
-        // No children yet, still running — the peek row reports `starting`.
+        // No children yet, still running — the peek row opens with the
+        // generic `running` state until the envoy reports more.
         let running = task.envoy_status_line().expect("running status");
-        assert!(running.starts_with("starting"), "got: {running}");
+        assert!(running.starts_with("running"), "got: {running}");
+
+        // A reported activity line (e.g. during the first model call) is
+        // surfaced so the row reads as alive, not stuck on a bare state.
+        task.push_envoy_event(&EnvoyEvent::Activity("waiting for model".into()));
+        let waiting = task.envoy_status_line().expect("waiting status");
+        assert!(
+            waiting.starts_with("running waiting for model"),
+            "got: {waiting}"
+        );
 
         // Streaming assistant text => the peek row reports `thinking`.
         task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
         task.push_envoy_event(&EnvoyEvent::StreamDelta("partial".into()));
         let thinking = task.envoy_status_line().expect("thinking status");
-        assert!(thinking.starts_with("thinking"), "got: {thinking}");
+        assert!(thinking.starts_with("running thinking"), "got: {thinking}");
 
         // An in-flight child tool call surfaces the tool's header.
         task.push_envoy_event(&EnvoyEvent::ToolCall {
@@ -2978,7 +3126,7 @@ mod tests {
         });
         // The in-flight tool normally drives the peek row…
         let peek = task.envoy_status_line().unwrap();
-        assert!(peek.starts_with("Run rm"), "got: {peek}");
+        assert!(peek.starts_with("running Run rm"), "got: {peek}");
 
         // …but a parked permission request takes over the row: the envoy is
         // blocked on a human, not making progress.
@@ -3007,7 +3155,7 @@ mod tests {
         task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
         task.push_envoy_event(&EnvoyEvent::StreamDelta("…".into()));
         let peek = task.envoy_status_line().unwrap();
-        assert!(peek.starts_with("thinking"), "got: {peek}");
+        assert!(peek.starts_with("running thinking"), "got: {peek}");
     }
 
     #[test]

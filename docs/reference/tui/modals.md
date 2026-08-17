@@ -146,6 +146,41 @@ picker. When no instance exists, an empty-state hint prompts the user to press
 | `D` | Delete a custom provider (confirm overlay) |
 | `Esc` | Close |
 
+### Add connection (template chooser)
+
+The secondary page `a` opens, rendered inside the same panel with a
+`Connections › Add connection` breadcrumb. One row per provider template,
+**sorted alphabetically by title**. An unfocused row shows its title alone; the
+focused row additionally reveals the template's one-line description and is
+marked by a full-width brand background highlight (no `›` cursor marker). Each
+row carries a trailing auth-scheme badge — `⚿ oauth` for browser/device-flow
+subscriptions, `⚿ token` for API-key templates — separated from the title by
+whitespace, never a `·`. The wire protocol and the seeded model count are
+deliberately omitted: the models an endpoint actually serves are only knowable
+with a working credential, and the protocol is locked by the template.
+
+```text
+╭──────────────────────────────────────────────────────────────────╮
+│ Connections › Add connection                                      │
+│                                                                   │
+│  Anthropic                                                  ⚿ token │
+│    Claude models over the Anthropic /messages API                │
+│  Anthropic (sub2api)                                        ⚿ token │
+│  Antigravity (sub2api)                                      ⚿ token │
+│  Antigravity OAuth                                          ⚿ oauth │
+│  ChatGPT OAuth                                              ⚿ oauth │
+│  …                                                               │
+│                                                                   │
+│ ↑↓ navigate  Enter select  Esc back                              │
+╰──────────────────────────────────────────────────────────────────╯
+```
+
+| Key | Effect |
+|-----|--------|
+| `↑` / `↓` | Move selection (wraps) |
+| `Enter` | Select — OAuth templates start the browser flow, token templates open the editor |
+| `Esc` | Back to the Connections list |
+
 ## Model editor
 
 Unified API-key + model-id editor (ADR-0002 phase 4). Two fields with `Tab`

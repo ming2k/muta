@@ -345,6 +345,45 @@ fn command_rows_merge_at_their_turn_seams_on_restore() {
     );
 }
 
+/// ADR-0108: a restored slash/shell echo folds into the command ledger
+/// projection — the invocation renders once, on the `⌘` command component,
+/// never twice (a `▌ cmd` user bubble *and* a command row). The echo is
+/// dropped from the dialogue before merge; the ledger row keeps the record.
+#[test]
+fn restored_slash_echoes_fold_into_command_components() {
+    use crate::model::document::UserMessageOrigin;
+    use neenee_contracts::Role;
+
+    let restored = transcript_messages_from_core(
+        vec![
+            Message::new(Role::User, "hello"), // a real prompt: survives
+            Message::new(Role::Assistant, "hi"),
+            // A durable command echo (the legacy live path persisted these).
+            Message::command_echo("/pursue ship it"),
+            // A display-content slash shape (legacy sessions pre-ADR-0050).
+            {
+                let mut m = Message::new(Role::User, "expanded prompt text");
+                m.display_content = Some("/autopilot on".to_string());
+                m
+            },
+            Message::new(Role::User, "and me too"), // another real prompt
+        ],
+        &crate::config::TuiConfig::default(),
+    );
+
+    let raws: Vec<&str> = restored.iter().map(|m| m.raw.as_str()).collect();
+    assert_eq!(
+        raws,
+        vec!["hello", "hi", "and me too"],
+        "command echoes must not render as user bubbles (ADR-0108); the ledger row owns the invocation"
+    );
+    // The projection builder still classifies them correctly when asked
+    // directly (used by Activity-modal prompt gating) — the fold happens at
+    // the list level, not by breaking classification.
+    let echo = transcript_message_from_core(Message::command_echo("/pursue ship it")).unwrap();
+    assert_eq!(echo.origin, UserMessageOrigin::Slash);
+}
+
 /// ADR-0106 §2: dialogue with no user timestamps is never reordered — the
 /// command rows keep ledger order at the tail rather than guessing.
 #[test]
@@ -1259,6 +1298,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,
+        scroll_settle_pending: false,
         focus_stack: Vec::new(),
         tx: new_test_channel(),
         should_quit: Arc::new(AtomicBool::new(false)),
@@ -1361,6 +1401,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_color_scheme: neenee_contracts::ColorSchemeConfig::default(),
         custom_color_draft: neenee_contracts::ColorSchemeConfig::default(),
         click_outside_dismiss: false,
+        expand_auto_scroll: false,
         focused_target: None,
         copy_toast_until: None,
         copy_toast_message: String::new(),
@@ -1610,20 +1651,13 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 #[test]
 fn custom_provider_model_filter_commits_and_offers_custom_id() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let free_model_template = crate::providers::ProviderTemplate {
-        id: "openai",
-        label: "OpenAI",
-        description: "OpenAI relay with a free model id",
-        protocol: "openai",
-        models: &[],
-        needs_url: true,
-        url_hint: "https://relay.example.com/v1/chat/completions",
-        needs_model: true,
-        default_url: None,
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::ApiKey,
-    };
-    app.open_custom_provider_editor(&free_model_template);
+    // The real generic template: it exposes the Model field and seeds no
+    // models, so the flow under test is exactly what ships.
+    let free_model_template = crate::providers::PROVIDER_TEMPLATES
+        .iter()
+        .find(|t| t.id == "custom-openai")
+        .expect("custom-openai template");
+    app.open_custom_provider_editor(free_model_template);
     // The default model is the first candidate of the template's (OpenAI) protocol.
     assert!(
         app.custom_model_candidates()
@@ -1640,6 +1674,58 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
     app.input = "my-private-model".to_string();
     app.on_custom_filter_changed();
     assert_eq!(app.custom_model, "my-private-model");
+}
+
+#[test]
+fn custom_openai_template_submits_with_the_typed_model_and_url() {
+    // End-to-end create flow for the generic template: fields Name/Base
+    // URL/Token/Model, and the submitted `AddProvider` carries the typed
+    // model id (not a seeded list) plus the relay endpoint.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let template = crate::providers::PROVIDER_TEMPLATES
+        .iter()
+        .find(|t| t.id == "custom-openai")
+        .expect("custom-openai template");
+    // The editor's visible fields include the Model filter field.
+    assert_eq!(
+        template.fields(),
+        vec![
+            crate::CustomField::Name,
+            crate::CustomField::BaseUrl,
+            crate::CustomField::Token,
+            crate::CustomField::Model,
+        ]
+    );
+    app.open_custom_provider_editor(template);
+    app.custom_name = "WeChat".to_string();
+    app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
+    app.custom_token = "tok".to_string();
+    // Focus the Model field, type the cased id, and commit it via the
+    // suggestion commit (a cased id is offered as a custom value).
+    app.custom_field = 3;
+    app.load_custom_field();
+    app.input = "GLM-5.2".to_string();
+    app.on_custom_filter_changed();
+    assert_eq!(app.custom_model, "GLM-5.2");
+
+    // Submit: the request must carry the single typed model as the seeded
+    // list, the template id, and the endpoint — a case-sensitive id travels
+    // verbatim (the WeChat endpoint 400s on the lowercase spelling).
+    app.stash_custom_field();
+    let payload = serde_json::json!({
+        "name": app.custom_name,
+        "protocol": app.custom_protocol_wire,
+        "base_url": app.custom_base_url,
+        "models": [app.custom_model],
+        "template_id": template.id,
+    });
+    assert_eq!(payload["models"][0], "GLM-5.2");
+    assert_eq!(payload["template_id"], "custom-openai");
+    assert_eq!(payload["protocol"], "openai");
+    assert_eq!(
+        payload["base_url"],
+        "https://chatapi.weixin.qq.com/openai/v1/chat/completions"
+    );
 }
 
 #[test]
@@ -3978,4 +4064,111 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     // The modal was NOT merely closed (which is what created the empty-session
     // trap): should_quit is set, so the loop exits.
     assert_ne!(app.active_modal, Modal::None, "quit path wins over close");
+}
+
+/// The disclosure-toggle scroll settle: expanding a step must latch
+/// `scroll_settle_pending` so the event loop stages its next frame (measure
+/// the new height) before painting the toggle's target scroll offset. That
+/// staging is what keeps the un-clamped intermediate viewport off the
+/// terminal — the expand/collapse flicker.
+#[test]
+fn disclosure_toggle_latches_scroll_settle() {
+    use crate::model::document::TranscriptMessage;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // The settle path only runs when the auto-scroll behavior is enabled
+    // (`[tui] expand_auto_scroll`, default off).
+    app.expand_auto_scroll = true;
+    let mut messages = vec![
+        TranscriptMessage::new(Role::User, "hi"),
+        TranscriptMessage::tool_step("call_1", "read_text", r#"{"path":"README.md"}"#),
+    ];
+
+    // No toggle happened yet: nothing to settle.
+    assert!(!app.scroll_settle_pending);
+
+    // Expanding (collapsed by default) both flips the pin and latches the
+    // settle request — the loop must not paint the expand's scroll target
+    // against the pre-expand layout.
+    assert!(app.toggle_step_pinned(&mut messages, 1));
+    assert!(messages[1].tool_step_expanded() == Some(true));
+    assert!(
+        app.scroll_settle_pending,
+        "expand must latch the settle request"
+    );
+
+    // Collapsing latches it too: the shrunk stream re-validates the offset.
+    assert!(app.toggle_step_pinned(&mut messages, 1));
+    assert!(messages[1].tool_step_expanded() == Some(false));
+    assert!(
+        app.scroll_settle_pending,
+        "collapse must latch the settle request"
+    );
+
+    // The settle is one frame deep: once the loop has staged and settled the
+    // frame, the latch clears (mirrored here the way the event loop consumes
+    // it — a no-op toggle target keeps the latch off).
+    app.scroll_settle_pending = false;
+
+    // A toggle that resolves to nothing (index out of range) latches nothing
+    // and leaves the messages untouched.
+    let before = app.scroll_settle_pending;
+    assert!(!app.toggle_step_pinned(&mut messages, 9));
+    assert_eq!(app.scroll_settle_pending, before);
+}
+
+/// The default configuration (`[tui] expand_auto_scroll = false`, the
+/// shipping default): a disclosure toggle is a pure read interaction. The
+/// card flips its expansion, but the scroll offset and the follow/pin state
+/// are left exactly as the user had them — the view never moves as a side
+/// effect of a click, which is also what keeps any toggle from disturbing
+/// an in-progress read.
+#[test]
+fn disclosure_toggle_disabled_by_default_leaves_scroll_untouched() {
+    use crate::model::document::TranscriptMessage;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(
+        !app.expand_auto_scroll,
+        "expand_auto_scroll defaults to disabled"
+    );
+    let mut messages = vec![
+        TranscriptMessage::new(Role::User, "hi"),
+        TranscriptMessage::tool_step("call_1", "read_text", r#"{"path":"README.md"}"#),
+    ];
+
+    app.scroll = 12;
+    let scroll_before = app.scroll;
+
+    // Expand: the pin flips, the scroll offset does not move. A settle frame
+    // is still requested — not to scroll, but to re-validate the untouched
+    // offset against the new height.
+    assert!(app.toggle_step_pinned(&mut messages, 1));
+    assert!(messages[1].tool_step_expanded() == Some(true));
+    assert_eq!(app.scroll, scroll_before, "scroll must not move on expand");
+
+    // Collapsing clears follow-bottom (reading history pauses auto-follow,
+    // matching every other transcript interaction) but still leaves the
+    // offset where the user had it.
+    assert!(app.toggle_step_pinned(&mut messages, 1));
+    assert!(messages[1].tool_step_expanded() == Some(false));
+    assert!(!app.follow_bottom, "toggle pauses bottom-follow");
+    assert_eq!(
+        app.scroll, scroll_before,
+        "scroll must not move on collapse"
+    );
+}
+
+/// The view reset that follows a focus change (envoy zoom enter/exit) must
+/// drop a pending settle: the staged frame it was computed for belongs to a
+/// transcript slice that is no longer displayed.
+#[test]
+fn view_reset_clears_pending_scroll_settle() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.scroll_settle_pending = true;
+    app.reset_view_state();
+    assert!(
+        !app.scroll_settle_pending,
+        "reset_view_state must clear a pending settle"
+    );
 }

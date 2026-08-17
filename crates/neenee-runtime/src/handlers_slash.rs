@@ -194,6 +194,36 @@ async fn restore_session_runtime(
     agent.restore_disabled_tools(session.disabled_tools().await);
     agent.restore_round_count(session.round_counter().await);
 
+    // If this session previously had autopilot enabled, notify the user with a toast notice
+    // so they are aware of the prior mode without silently granting full autopilot permissions.
+    let commands = session.commands().await;
+    let was_autopilot_on = commands
+        .iter()
+        .rev()
+        .find_map(|rec| {
+            if rec.name == "autopilot" {
+                if let Some(CommandResult::Ack { title }) = &rec.result {
+                    if title.contains("Autopilot ON") {
+                        return Some(true);
+                    } else if title.contains("Autopilot OFF") {
+                        return Some(false);
+                    }
+                }
+            }
+            None
+        })
+        .unwrap_or(false);
+
+    if was_autopilot_on && !agent.get_autopilot() {
+        let notice = AgentNotice::command_ack(
+            "This session was previously running with autopilot enabled. Use `/autopilot on` to resume unattended mode.",
+        );
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(notice),
+        ));
+    }
+
     // SessionStart hooks (ADR-0025): inject setup context before the first
     // round of the freshly entered session. Persist through the single write
     // path so the session stays the source of truth (ADR-0048).
@@ -223,7 +253,21 @@ async fn record_command(
     args: &str,
     result: CommandResult,
 ) {
-    let record = CommandRecord::new(name, args).with_result(result.clone());
+    record_command_with_duration(session, resp_tx, name, args, result, None).await;
+}
+
+async fn record_command_with_duration(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
+    result: CommandResult,
+    duration_ms: Option<u64>,
+) {
+    let mut record = CommandRecord::new(name, args).with_result(result.clone());
+    if let Some(ms) = duration_ms {
+        record = record.with_duration_ms(ms);
+    }
     if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
         tracing::warn!(?error, name, "could not persist command record");
     }
@@ -242,10 +286,20 @@ async fn record_command(
 /// checkpoint, `ConversationCleared`/`Replaced`, exit) rather than a command
 /// block. The invocation is durable; there is no `CommandResult` to display.
 async fn record_invocation(session: &Arc<SessionStore>, name: &str, args: &str) {
-    if let Err(error) = session
-        .mutate_commands(|c| c.push(CommandRecord::new(name, args)))
-        .await
-    {
+    record_invocation_with_duration(session, name, args, None).await;
+}
+
+async fn record_invocation_with_duration(
+    session: &Arc<SessionStore>,
+    name: &str,
+    args: &str,
+    duration_ms: Option<u64>,
+) {
+    let mut record = CommandRecord::new(name, args);
+    if let Some(ms) = duration_ms {
+        record = record.with_duration_ms(ms);
+    }
+    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
         tracing::warn!(?error, name, "could not persist command invocation");
     }
 }
@@ -255,9 +309,22 @@ async fn record_invocation(session: &Arc<SessionStore>, name: &str, args: &str) 
 /// for resume/export/audit. No `CommandResult` event is emitted, so a command
 /// block never double-renders the toast.
 async fn record_ack(session: &Arc<SessionStore>, name: &str, args: &str, title: impl Into<String>) {
-    let record = CommandRecord::new(name, args).with_result(CommandResult::Ack {
+    record_ack_with_duration(session, name, args, title, None).await;
+}
+
+async fn record_ack_with_duration(
+    session: &Arc<SessionStore>,
+    name: &str,
+    args: &str,
+    title: impl Into<String>,
+    duration_ms: Option<u64>,
+) {
+    let mut record = CommandRecord::new(name, args).with_result(CommandResult::Ack {
         title: title.into(),
     });
+    if let Some(ms) = duration_ms {
+        record = record.with_duration_ms(ms);
+    }
     if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
         tracing::warn!(?error, name, "could not persist command ack");
     }
@@ -273,8 +340,22 @@ async fn record_error(
     args: &str,
     message: impl Into<String>,
 ) {
+    record_error_with_duration(session, resp_tx, name, args, message, None).await;
+}
+
+async fn record_error_with_duration(
+    session: &Arc<SessionStore>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
+    message: impl Into<String>,
+    duration_ms: Option<u64>,
+) {
     let message = message.into();
-    let record = CommandRecord::new(name, args).with_error(message.clone(), None);
+    let mut record = CommandRecord::new(name, args).with_error(message.clone(), None);
+    if let Some(ms) = duration_ms {
+        record = record.with_duration_ms(ms);
+    }
     if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
         tracing::warn!(?error, name, "could not persist command error record");
     }
@@ -311,6 +392,7 @@ pub async fn dispatch(
     if parts.is_empty() {
         return;
     }
+    let start_instant = std::time::Instant::now();
     // The ledger identity of this invocation (ADR-0091): command word without
     // the leading slash, plus the raw argument remainder.
     let name = parts[0].trim_start_matches('/');
@@ -378,7 +460,14 @@ pub async fn dispatch(
                 if enabled { "ON" } else { "OFF" },
                 if enabled { "will" } else { "won't" },
             );
-            record_command(session, resp_tx, name, args, CommandResult::Ack { title: ack }).await;
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Ack { title: ack },
+            )
+            .await;
             let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::AutopilotChanged(enabled),
@@ -519,7 +608,7 @@ pub async fn dispatch(
             // The typed review result is both the durable record and the
             // command-block reply (ADR-0091); the verdicts render through
             // `CommandResult::to_text`, which mirrors `format_review_report`.
-            record_command(
+            record_command_with_duration(
                 session,
                 resp_tx,
                 name,
@@ -528,6 +617,7 @@ pub async fn dispatch(
                     verdicts,
                     turns: turns as u64,
                 },
+                Some(start_instant.elapsed().as_millis() as u64),
             )
             .await;
         }
@@ -544,11 +634,32 @@ pub async fn dispatch(
                 .await;
             } else {
                 let messages = session.full_transcript().await;
+                let commands = session.commands().await;
                 {
                     let mut store = embedding_store_for_commands.write().await;
                     let session_id = session.id().await;
                     if let Err(error) = store.index(&messages, &session_id).await {
-                        record_error(session, resp_tx, name, args, error).await;
+                        record_error_with_duration(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            error,
+                            Some(start_instant.elapsed().as_millis() as u64),
+                        )
+                        .await;
+                        return;
+                    }
+                    if let Err(error) = store.index_commands(&commands, &session_id).await {
+                        record_error_with_duration(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            error,
+                            Some(start_instant.elapsed().as_millis() as u64),
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -563,7 +674,7 @@ pub async fn dispatch(
                             .into_iter()
                             .map(|(text, score)| neenee_contracts::SearchHit { text, score })
                             .collect::<Vec<_>>();
-                        record_command(
+                        record_command_with_duration(
                             session,
                             resp_tx,
                             name,
@@ -572,11 +683,20 @@ pub async fn dispatch(
                                 query: query.to_string(),
                                 hits,
                             },
+                            Some(start_instant.elapsed().as_millis() as u64),
                         )
                         .await;
                     }
                     Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
+                        record_error_with_duration(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            error,
+                            Some(start_instant.elapsed().as_millis() as u64),
+                        )
+                        .await;
                     }
                 }
             }
@@ -1322,12 +1442,13 @@ pub async fn dispatch(
                 }
             }
             lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
-            record_command(
+            record_command_with_duration(
                 session,
                 resp_tx,
                 name,
                 args,
-                CommandResult::Text(format!("Config reloaded.\n{}", lines.join("\n"))),
+                CommandResult::ConfigReload { details: lines },
+                Some(start_instant.elapsed().as_millis() as u64),
             )
             .await;
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
@@ -1941,13 +2062,15 @@ async fn list_scheduled_jobs(
             resp_tx,
             name,
             args,
-            CommandResult::Text("No scheduled jobs.".to_string()),
+            CommandResult::ScheduledList {
+                entries: Vec::new(),
+            },
         )
         .await;
         return;
     }
     jobs.sort_by_key(|j| j.next_fire);
-    let mut lines = vec!["Scheduled jobs:".to_string()];
+    let mut lines = Vec::new();
     for j in &jobs {
         lines.push(format!(
             "  {} · {} · `{}` · next {} · {}",
@@ -1963,7 +2086,7 @@ async fn list_scheduled_jobs(
         resp_tx,
         name,
         args,
-        CommandResult::Text(lines.join("\n")),
+        CommandResult::ScheduledList { entries: lines },
     )
     .await;
 }

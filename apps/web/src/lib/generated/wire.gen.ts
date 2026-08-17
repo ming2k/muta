@@ -123,7 +123,7 @@ trigger: string,
  * Next fire time as `YYYY-MM-DD HH:MM`, plus `" Running now."` for
  * recurring cron jobs.
  */
-next: string, } };
+next: string, } } | { "ConfigReload": { details: Array<string>, } } | { "Compacted": { rounds_compacted: number, } } | { "ScheduledList": { entries: Array<string>, } };
 
 /**
  * Terminal status of a slash-command invocation.

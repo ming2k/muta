@@ -659,7 +659,6 @@ pub struct HintBarView<'a> {
     #[allow(dead_code)]
     pub messages: &'a [TranscriptMessage],
     pub reasoning_effort: Option<&'a str>,
-    pub shell_active: bool,
     pub busy: bool,
     pub context_tokens: Option<usize>,
     pub ignition_elapsed_ms: Option<u128>,
@@ -673,11 +672,10 @@ enum ActionDensity {
 }
 
 /// Build the left side of the bottom row as a short action sentence: send
-/// when idle, queue when the agent is mid-round, or run a shell command. The
-/// persistent queue bar carries the queue affordances (recall, expand), so
-/// this stays a pure "what will Enter do" surface.
+/// when idle, or queue when the agent is mid-round. The persistent queue bar
+/// carries the queue affordances (recall, expand), so this stays a pure "what
+/// will Enter do" surface.
 fn input_action_spans(
-    shell_active: bool,
     busy: bool,
     density: ActionDensity,
     theme: &Theme,
@@ -694,12 +692,7 @@ fn input_action_spans(
     let compact = matches!(density, ActionDensity::Compact | ActionDensity::Tiny);
     let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
 
-    if shell_active {
-        spans.push(Span::styled(
-            if compact { " run" } else { " run command" },
-            hint_style,
-        ));
-    } else if busy {
+    if busy {
         // The agent is mid-round: Enter stages the message in the queue (the
         // queue bar below shows the staged item). The recall affordance lives
         // in the queue bar's keycap legend rather than this sentence.
@@ -736,7 +729,6 @@ pub fn draw_hint_bar(
         provider_name,
         messages: _,
         reasoning_effort,
-        shell_active,
         busy,
         context_tokens,
         ignition_elapsed_ms,
@@ -750,7 +742,7 @@ pub fn draw_hint_bar(
     // round/turn distinction before sending. The queue affordances live in
     // the persistent queue bar, not here.
     let mut action_density = ActionDensity::Full;
-    let mut zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
+    let mut zone_spans = input_action_spans(busy, action_density, theme, bg);
     let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
 
     // --- Right cluster: model name and context bar.
@@ -870,7 +862,7 @@ pub fn draw_hint_bar(
     let mut right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
-        zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
+        zone_spans = input_action_spans(busy, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     // Drop order under width pressure: the instance suffix first (pure
@@ -892,7 +884,7 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
-        zone_spans = input_action_spans(shell_active, busy, action_density, theme, bg);
+        zone_spans = input_action_spans(busy, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     if !fits(zone_pill_width, right_width) && show_model {
@@ -1665,7 +1657,6 @@ mod tests {
                         provider_name: Some("kimi-code"),
                         messages: &messages,
                         reasoning_effort: Some("max"),
-                        shell_active: false,
                         busy: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
@@ -1711,7 +1702,6 @@ mod tests {
                     provider_name: Some("mock-instance"),
                     messages: &messages,
                     reasoning_effort: None,
-                    shell_active: false,
                     busy: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -1735,7 +1725,6 @@ mod tests {
                     provider_name: Some("zai-code"),
                     messages: &[],
                     reasoning_effort: None,
-                    shell_active: false,
                     busy: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -1755,7 +1744,7 @@ mod tests {
 
     #[test]
     fn hint_bar_describes_the_current_enter_action() {
-        fn row_text(terminal: &mut neenee_tui_engine::TestTerminal, shell_active: bool) -> String {
+        fn row_text(terminal: &mut neenee_tui_engine::TestTerminal, busy: bool) -> String {
             let mut captured = String::new();
             terminal.draw(|f| {
                 let view = HintBarView {
@@ -1764,8 +1753,7 @@ mod tests {
                     provider_name: None,
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
-                    shell_active,
-                    busy: false,
+                    busy,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 };
@@ -1782,7 +1770,7 @@ mod tests {
 
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
         assert!(row_text(&mut terminal, false).contains("Enter send"));
-        assert!(row_text(&mut terminal, true).contains("Enter run command"));
+        assert!(row_text(&mut terminal, true).contains("Enter queue message"));
     }
 
     #[test]
@@ -1803,7 +1791,6 @@ mod tests {
                     provider_name: None,
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
-                    shell_active: false,
                     busy: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -1847,7 +1834,6 @@ mod tests {
                     provider_name: None,
                     messages: &[],
                     reasoning_effort: None,
-                    shell_active: false,
                     busy: true,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -1879,7 +1865,6 @@ mod tests {
                     provider_name: None,
                     messages: &[],
                     reasoning_effort: Some("high"),
-                    shell_active: false,
                     busy: true,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -1918,7 +1903,6 @@ mod tests {
                         provider_name: None,
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: effort,
-                        shell_active: false,
                         busy: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
@@ -1965,7 +1949,6 @@ mod tests {
                         provider_name,
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: None,
-                        shell_active: false,
                         busy: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
@@ -2013,7 +1996,6 @@ mod tests {
                     provider_name: Some("kimi-code"),
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: Some("max"),
-                    shell_active: false,
                     busy: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
@@ -2055,7 +2037,6 @@ mod tests {
                         provider_name: Some("kimi-code"),
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: Some("max"),
-                        shell_active: false,
                         busy: false,
                         context_tokens: Some(12_400),
                         ignition_elapsed_ms: elapsed_ms,

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Custom OpenAI provider template — any OpenAI-compatible endpoint.**
+  - A new entry in Connections → `＋ Add connection` for third-party relays, self-hosted gateways, and subscription bundles that expose an OpenAI-compatible `/v1/chat/completions` surface (e.g. `https://chatapi.weixin.qq.com/openai/v1/chat/completions`).
+  - Unlike the curated templates it seeds no model list: the editor shows a free-text **Model** field (registry-known OpenAI ids as fuzzy suggestions, plus the raw typed id as a custom value), so the exact model id the endpoint expects becomes the seeded channel. More models are added afterwards from the Models picker.
+  - Model ids travel verbatim: case-sensitive ids (the WeChat endpoint serves `GLM-5.2` / `Deepseek-v4-flash` and rejects the lowercase spellings with `invalid model`) round-trip unmodified through the editor, config, and requests. Baseline metadata (200K context) is registered for those two cased ids.
+  - Instances stay pure-custom in reconciliation terms: the typed model is never re-seeded or replaced by a template snapshot at startup.
+- **`neenee run` now prints streamed assistant text.**
+  - Streaming providers (the common case) deliver text as `StreamDelta` events; the headless runner previously matched only the non-streamed `Text` backstop, so a streamed round completed with an empty `response`. Both JSON and plain modes now emit the deltas live and the final `round_completed.response` carries the full text.
+
+### Changed
+
+- **Envoy task steps now show what they are doing, not just that they are busy.**
+  - The live peek row (the `└`-edged second line of a running `[EXPLORE]`-style task step) now leads with `running` followed by the current activity — `running thinking`, `running Grep "session"`, `running waiting for model` — instead of a bare `starting`/tool name. A long model call no longer reads as "possibly stuck".
+  - `EnvoyEvent::Activity` reports (e.g. `waiting for model`, `waiting to retry (3s)`) were previously discarded by the TUI; they now drive the peek during stretches with no child events, so the row provably advances even before the first tool call lands.
+  - The activity and its elapsed time are joined by plain whitespace instead of a `·` glyph, per the join ladder (same-rank metadata, R2).
+  - `awaiting approval` keeps its bare form — nothing is moving while the envoy waits on a human.
+- **Command rows are one component with a lifecycle (ADR-0108).**
+  - A slash command is no longer echoed as a separate `▌ cmd` user bubble: dispatching pushes one optimistic command row (`⌘ /cmd`, muted running tone), and the typed reply settles *that same row in place* — input and output are one component, so the transcript keeps one row per command and the reading flow is never split across two unrelated rows.
+  - Command components now have two states: **pending** (`⌘ /autopilot on`, no marker — the output does not exist yet) and **completed** (`⌘ /new · Started new session: a1b2c3` inline, or the `+`/`-` disclosure for long/multi-line replies). Commands that never emit a reply (modal/picker/side-view commands) settle as cancelled rows instead of lingering as promises.
+  - The disclosure layout no longer renders through the reasoning-trace renderer: `+`/`-` now leads the row *with* the command glyph and a muted timestamp (`+ ⌘ /permissions · 21:39`), matching the inline/plain layouts — one span grammar everywhere.
+  - Resume folds durable slash/shell echoes into the ledger rows, so a restored session renders exactly one row per command at its turn seam (no duplicate invocation bubbles).
+- **Redesigned the Connections → Add connection template chooser.**
+  - Rows are now sorted alphabetically by title (previously a fixed curation order), so scanning for a provider reads like a directory.
+  - Unfocused rows show their title only; the focused row reveals the template's one-line description beneath.
+  - Selection is a full-width brand background highlight (the Connections/Models row standard) — the leading `›` cursor marker is gone, freeing the horizontal space it cost.
+  - Removed the `· <protocol> · <N> models` meta suffix: the models an endpoint actually serves are only knowable with a working credential, and the wire protocol is an implementation detail of the locked template.
+  - Each row instead carries a trailing auth-scheme badge — `⚿ oauth` for browser/device-flow subscriptions, `⚿ token` for API-key templates — separated from the title by whitespace, never a `·` glyph.
+  - Renamed the `Google Antigravity OAuth` template title to `Antigravity OAuth` (its id, protocol, and behavior are unchanged).
+- **Removed `!` shell command passthrough.**
+  - `!`-prefixed inputs are no longer intercepted as host shell commands and are now dispatched directly as normal chat prompts to the agent, eliminating modality collisions and preventing false triggers on conversational phrases.
+  - Cleaned up the TUI bottom HintBar to remove the `shell_active` state (`Enter run command`), retaining a clean two-state Enter action (`Enter send` when idle, `Enter queue message` when busy).
+- **Added expand/collapse micro-affordances to NoticeCard headers.**
+  - When a transcript NoticeCard has expandable details (e.g. pretty-printed JSON error response or multiline traceback), its header now renders a subtle, right-aligned indicator (`click to expand` when collapsed, `click to collapse` when expanded) in muted tone.
+  - Notices without detail payloads remain cleanly unadorned to prevent false affordances.
+- **Disclosure auto-scroll is now configurable and disabled by default (`[tui] expand_auto_scroll`).**
+  - Toggling a disclosure (tool step, command result, thinking, provider-retry, or notice card) previously auto-scrolled — "shift the summary line to the top of the viewport" on expand, "keep the collapsed summary visible" on collapse. A toggle is a read interaction, not a navigation command, so the default is now **off**: the card grows or shrinks in place and the scroll offset stays exactly where the user put it. Set `expand_auto_scroll = true` to restore the content-maximizing behavior (only the sticky header's collapse still re-anchors, since its overlay row must land where the covered summary sits).
+  - The old auto-scroll also flickered: its scroll target was computed against the previous frame's layout and painted immediately, then corrected by the post-draw clamp with no redraw scheduled — the terminal showed an un-clamped viewport until the next unrelated frame. With the behavior enabled, toggles now latch a one-frame settle request: the event loop stages the next frame (full layout to measure the new height, zero terminal bytes), validates the target offset against the fresh measurement, and paints only the settled viewport; when the staged offset is already final the staged grid is committed as-is (no second layout, no intermediate frame).
+
 ## [0.25.1] - 2026-08-17
 
 ### Changed

@@ -372,6 +372,28 @@ fn transcript_from_core_inner(
                 }
             }
         }
+        // Fold a restored slash/shell echo into the command ledger
+        // projection (ADR-0108): the invocation belongs to the command
+        // component (`⌘ /cmd`), never to a second user bubble — the ledger
+        // row for the same invocation is merged in later by
+        // `merge_command_rows`, so dropping the echo keeps exactly one row
+        // per command after resume, matching the live path. Classification
+        // mirrors `transcript_message_from_core` exactly: a durable
+        // `CommandEcho` provenance, or the legacy shape signal of a
+        // `display_content` that is the literal `/cmd` (its `content` is the
+        // harness-expanded form). Round bookkeeping is unaffected — echoes
+        // never opened rounds (`opens_round` already excluded them).
+        if message.role == Role::User {
+            let is_echo = message.is_command_echo();
+            let slash_shaped = message
+                .display_content
+                .as_deref()
+                .and_then(|raw| raw.strip_prefix('/'))
+                .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_alphanumeric()));
+            if is_echo || slash_shaped {
+                continue;
+            }
+        }
         if let Some(mut transcript_message) = transcript_message_from_core(message) {
             if track_rounds {
                 if transcript_message.role == Role::Assistant {

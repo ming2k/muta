@@ -62,7 +62,10 @@ pub fn compare_versions(client: &str, daemon: &str) -> VersionRelation {
     if client == daemon {
         return VersionRelation::Equal;
     }
-    match (semver::Version::parse(client), semver::Version::parse(daemon)) {
+    match (
+        semver::Version::parse(client),
+        semver::Version::parse(daemon),
+    ) {
         (Ok(c), Ok(d)) => {
             if c > d {
                 VersionRelation::ClientNewer
@@ -136,16 +139,125 @@ fn is_alive(info: &DaemonInfo) -> bool {
     std::net::TcpStream::connect_timeout(&addr, LIVENESS_TIMEOUT).is_ok()
 }
 
+/// Whether a process with `pid` exists and can receive signals.
+fn is_process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Wait up to `timeout` for process `pid` to exit.
+async fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !is_process_alive(pid) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    !is_process_alive(pid)
+}
+
+/// Stop the daemon through a tiered shutdown pipeline:
+/// 1. Tier 1 (Protocol): If the daemon speaks this client's version, send `Shutdown` control verb.
+/// 2. Tier 2 (OS Signal): If skewed or control fails, send `SIGTERM` to `info.pid`.
+/// 3. Tier 3 (Force): If the daemon remains alive after grace budget, escalate to `SIGKILL`.
+/// 4. Tier 4 (Cleanup): Clean up the discovery record and UDS socket.
+pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
+    let mut stopped = false;
+
+    // Tier 1: Try graceful protocol shutdown if versions are compatible.
+    if versions_compatible(info) {
+        if let Ok(Ok(())) = tokio::time::timeout(
+            Duration::from_millis(1500),
+            control(info, crate::serve::ControlRequest::Shutdown),
+        )
+        .await
+        {
+            stopped = wait_for_process_exit(info.pid, Duration::from_millis(2000)).await;
+        }
+    }
+
+    // Tier 2 & 3: Fall back to OS signals if protocol did not stop it.
+    if !stopped {
+        #[cfg(unix)]
+        {
+            let pid = info.pid as libc::pid_t;
+            if is_process_alive(info.pid) {
+                let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
+                stopped = wait_for_process_exit(info.pid, Duration::from_millis(1500)).await;
+
+                if !stopped && is_process_alive(info.pid) {
+                    let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+                    stopped = wait_for_process_exit(info.pid, Duration::from_millis(1000)).await;
+                }
+            } else {
+                stopped = true;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &info.pid.to_string(), "/F"])
+                .output();
+            stopped = true;
+        }
+    }
+
+    // Tier 4: Cleanup discovery record & socket
+    discovery::remove(&discovery::global_discovery_path());
+    #[cfg(unix)]
+    if let Some(uds) = &info.uds_path {
+        let _ = std::fs::remove_file(uds);
+    }
+
+    if stopped || !is_process_alive(info.pid) {
+        Ok(())
+    } else {
+        Err(format!("could not stop daemon (pid {})", info.pid))
+    }
+}
+
 pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
     if let Some(info) = discover(project_root) {
-        return Ok(info);
+        if versions_compatible(&info) {
+            return Ok(info);
+        }
+        // Discovered an outdated daemon (daemon version < client version, or unknown pre-0.24).
+        // Automatically stop the outdated daemon and spawn the current version on demand.
+        let is_client_newer = match info.version.as_deref() {
+            Some(v) => {
+                compare_versions(crate::serve::daemon_version(), v) == VersionRelation::ClientNewer
+            }
+            None => true,
+        };
+        if is_client_newer {
+            tracing::info!(
+                daemon_pid = info.pid,
+                daemon_ver = ?info.version,
+                client_ver = crate::serve::daemon_version(),
+                "ensure_daemon: running daemon is older than this client; restarting daemon"
+            );
+            let _ = stop(&info).await;
+        } else {
+            // Client is older than running daemon; return info so caller can surface actionable upgrade error.
+            return Ok(info);
+        }
     }
     spawn_daemon()?;
     let deadline = std::time::Instant::now() + SERVER_START_TIMEOUT;
     loop {
         tokio::time::sleep(SERVER_START_POLL).await;
         if let Some(info) = discover(project_root) {
-            return Ok(info);
+            if versions_compatible(&info) {
+                return Ok(info);
+            }
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
@@ -590,10 +702,22 @@ mod tests {
     #[test]
     fn test_compare_versions() {
         assert_eq!(compare_versions("0.25.0", "0.25.0"), VersionRelation::Equal);
-        assert_eq!(compare_versions("0.26.0", "0.25.0"), VersionRelation::ClientNewer);
-        assert_eq!(compare_versions("0.24.0", "0.25.0"), VersionRelation::ClientOlder);
-        assert_eq!(compare_versions("1.0.0", "0.25.0"), VersionRelation::ClientNewer);
-        assert_eq!(compare_versions("not-a-semver", "0.25.0"), VersionRelation::Unknown);
+        assert_eq!(
+            compare_versions("0.26.0", "0.25.0"),
+            VersionRelation::ClientNewer
+        );
+        assert_eq!(
+            compare_versions("0.24.0", "0.25.0"),
+            VersionRelation::ClientOlder
+        );
+        assert_eq!(
+            compare_versions("1.0.0", "0.25.0"),
+            VersionRelation::ClientNewer
+        );
+        assert_eq!(
+            compare_versions("not-a-semver", "0.25.0"),
+            VersionRelation::Unknown
+        );
     }
 
     #[test]
@@ -673,5 +797,20 @@ mod tests {
         std::fs::write(&path, b"not json").unwrap();
         assert!(discover_at(&path).is_none());
         assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn stop_handles_already_dead_process_and_cleans_up() {
+        let info = DaemonInfo {
+            pid: 99999999, // Unused pid
+            port: 1,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            version: Some("0.24.0".to_string()),
+        };
+        let res = stop(&info).await;
+        assert!(res.is_ok());
     }
 }

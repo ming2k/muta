@@ -133,6 +133,22 @@ built-ins:
 
 See [How to use sub2api relays](../how-to/use-sub2api.md).
 
+### custom template
+
+The generic escape hatch for any OpenAI-compatible endpoint the curated
+templates do not cover — third-party relays, self-hosted gateways, or
+subscription bundles that expose a `/v1/chat/completions` surface:
+
+| Template id | Protocol | Notes |
+|-------------|----------|-------|
+| `custom-openai` | `openai` | Seeds **no** model list. The editor shows a free-text Model field (registry-known OpenAI ids as suggestions, plus the raw typed id as a custom value); the typed id becomes the one seeded channel. No live discovery — the instance keeps exactly the id the user typed. |
+
+Model ids travel **verbatim**: an endpoint with case-sensitive ids (e.g. the
+WeChat OpenAI-compatible endpoint serves `GLM-5.2` / `Deepseek-v4-flash` and
+rejects the lowercase spellings) works because nothing normalizes the id. The
+cased WeChat ids carry registered baseline metadata (200K context); ids the
+registry does not know resolve through the conservative fallback.
+
 ## Dispatch sites
 
 Provider construction is split across two layers. The catalog

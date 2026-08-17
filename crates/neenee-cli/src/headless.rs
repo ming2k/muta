@@ -207,6 +207,26 @@ pub async fn run_headless(
                     }
                     return Ok(());
                 }
+                RoundEvent::StreamDelta(delta) => {
+                    // Streaming providers (the common case) deliver the
+                    // assistant text as deltas; the terminal `RoundEvent::Text`
+                    // backstop only fires for non-streamed providers. Without
+                    // this arm a streamed round completes with an empty
+                    // `response`.
+                    if json {
+                        accumulated_text.push_str(&delta);
+                        let event_obj = serde_json::json!({
+                            "type": "text_delta",
+                            "delta": delta,
+                        });
+                        println!("{}", serde_json::to_string(&event_obj)?);
+                        io::stdout().flush()?;
+                    } else {
+                        accumulated_text.push_str(&delta);
+                        print!("{delta}");
+                        io::stdout().flush()?;
+                    }
+                }
                 RoundEvent::Error(err) => {
                     if json {
                         let event_obj = serde_json::json!({
